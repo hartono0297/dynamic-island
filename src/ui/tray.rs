@@ -188,8 +188,13 @@ fn run_command(exe: &Path) -> String {
     format!("\"{}\"", exe.display())
 }
 
-/// Writes or deletes `HKCU\...\Run\DynamicIsland` for the current exe.
+/// Writes or deletes `HKCU\...\Run\DynamicIsland` for the current exe. Debug
+/// builds leave the registry alone, so `cargo run` never points autostart at
+/// `target\debug`.
 pub fn set_autostart(enabled: bool) -> Result<()> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
     unsafe {
         let mut key = HKEY::default();
         RegCreateKeyExW(

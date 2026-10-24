@@ -12,7 +12,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer, MA_NOACTIVATE, MSG,
@@ -39,8 +41,11 @@ use crate::ui::window::IslandWindow;
 const WM_APP_EVENT: u32 = WM_APP + 1;
 /// Posted once the user has answered the notification-access prompt.
 const WM_APP_ACCESS: u32 = WM_APP + 3;
-/// Lives in the Controls feature of `windows`; the value is fixed by Win32.
+/// These live in the Controls feature of `windows`; the values are fixed by Win32.
+const WM_MOUSEHOVER: u32 = 0x02A1;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// How long the pointer must rest on the island before it expands.
+const HOVER_DWELL_MS: u32 = 350;
 
 const TIMER_SYSTEM: usize = 1;
 const TIMER_BATTERY: usize = 2;
@@ -73,7 +78,6 @@ pub fn run() {
     let hwnd = win.hwnd();
     let (tx, rx) = mpsc::channel();
 
-    let onboard = !config.onboarding_done;
     let battery = BatteryMonitor::new(config.battery_threshold);
     let _ = tray::set_autostart(config.start_with_windows);
 
@@ -91,7 +95,7 @@ pub fn run() {
             drawn: View::Hidden,
             fullscreen: false,
             battery,
-            tracking_mouse: false,
+            hover: HoverTracking::default(),
         });
     });
     with_app(|app| {
@@ -111,9 +115,7 @@ pub fn run() {
 
     // Fails when Explorer's taskbar is not up yet; `TaskbarCreated` retries.
     let _ = tray::add_tray(hwnd);
-    if onboard {
-        start_onboarding(hwnd);
-    }
+    request_access_then_onboard(hwnd);
 
     unsafe {
         let mut msg = MSG::default();
@@ -162,7 +164,7 @@ struct App {
     drawn: View,
     fullscreen: bool,
     battery: BatteryMonitor,
-    tracking_mouse: bool,
+    hover: HoverTracking,
 }
 
 impl App {
@@ -290,23 +292,33 @@ impl App {
         }
     }
 
+    /// Arms hover and leave tracking when the pointer enters; the island
+    /// expands only once `WM_MOUSEHOVER` reports a dwell.
     fn on_mouse_move(&mut self) {
-        if self.tracking_mouse {
+        if !self.hover.needs_arming() {
             return;
         }
         let mut track = TRACKMOUSEEVENT {
             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-            dwFlags: TME_LEAVE,
+            dwFlags: TME_HOVER | TME_LEAVE,
             hwndTrack: self.hwnd,
-            dwHoverTime: 0,
+            dwHoverTime: HOVER_DWELL_MS,
         };
-        self.tracking_mouse = unsafe { TrackMouseEvent(&mut track) }.is_ok();
-        self.apply_now(Event::Hover(true));
+        if unsafe { TrackMouseEvent(&mut track) }.is_ok() {
+            self.hover.armed();
+        }
+    }
+
+    fn on_mouse_hover(&mut self) {
+        if let Some(event) = self.hover.on_hover() {
+            self.apply_now(event);
+        }
     }
 
     fn on_mouse_leave(&mut self) {
-        self.tracking_mouse = false;
-        self.apply_now(Event::Hover(false));
+        if let Some(event) = self.hover.on_leave() {
+            self.apply_now(event);
+        }
     }
 
     fn on_click(&mut self, lparam: LPARAM) {
@@ -372,6 +384,39 @@ impl App {
         {
             eprintln!("dynamic-island: draw failed: {error}");
         }
+    }
+}
+
+/// Pointer tracking for hover-to-expand. `TrackMouseEvent` is armed on the
+/// first move inside the window; `WM_MOUSEHOVER` (after `HOVER_DWELL_MS`
+/// without leaving the hover rectangle) expands, so a pointer just passing
+/// over does not. `WM_MOUSELEAVE` ends tracking, so the next move re-arms it.
+#[derive(Default)]
+struct HoverTracking {
+    /// Hover and leave tracking is armed for the pointer's current visit.
+    armed: bool,
+    /// `Hover(true)` was sent for this visit.
+    hovered: bool,
+}
+
+impl HoverTracking {
+    fn needs_arming(&self) -> bool {
+        !self.armed
+    }
+
+    fn armed(&mut self) {
+        self.armed = true;
+    }
+
+    /// `Hover(true)` the first time the pointer dwells during a visit.
+    fn on_hover(&mut self) -> Option<Event> {
+        (!std::mem::replace(&mut self.hovered, true)).then_some(Event::Hover(true))
+    }
+
+    /// `Hover(false)` when this visit expanded the island.
+    fn on_leave(&mut self) -> Option<Event> {
+        self.armed = false;
+        std::mem::take(&mut self.hovered).then_some(Event::Hover(false))
     }
 }
 
@@ -447,13 +492,14 @@ fn hook_notice(outcome: InstallOutcome) -> Notice {
     }
 }
 
-/// First run: asks for notification access when it is missing, then shows
-/// the Do Not Disturb hint once the user has answered.
-fn start_onboarding(hwnd: HWND) {
-    if notifications::access_allowed()
-        || notifications::ask_access(poster(hwnd, WM_APP_ACCESS)).is_err()
-    {
-        finish_onboarding();
+/// Every start: asks for notification access when it is missing (a new
+/// package identity starts without it, even after onboarding). On first run
+/// the Do Not Disturb hint follows once the user has answered.
+fn request_access_then_onboard(hwnd: HWND) {
+    let asking = !notifications::access_allowed()
+        && notifications::ask_access(poster(hwnd, WM_APP_ACCESS)).is_ok();
+    if !asking {
+        onboard_if_needed();
     }
 }
 
@@ -463,12 +509,15 @@ fn on_access_answered() {
     if notifications::access_allowed() {
         with_app(App::spawn_notifications);
     }
-    finish_onboarding();
+    onboard_if_needed();
 }
 
-fn finish_onboarding() {
-    show_dnd_help();
-    with_app(App::finish_onboarding);
+/// Shows the Do Not Disturb hint and Settings page once, on first run.
+fn onboard_if_needed() {
+    if with_app(|app| app.config.onboarding_done) == Some(false) {
+        show_dnd_help();
+        with_app(App::finish_onboarding);
+    }
 }
 
 /// The Do Not Disturb hint as a notice, plus the Settings page it points to.
@@ -585,6 +634,10 @@ unsafe extern "system" fn wnd_proc(
             with_app(App::on_mouse_move);
             LRESULT(0)
         }
+        WM_MOUSEHOVER => {
+            with_app(App::on_mouse_hover);
+            LRESULT(0)
+        }
         WM_MOUSELEAVE => {
             with_app(App::on_mouse_leave);
             LRESULT(0)
@@ -678,6 +731,30 @@ mod tests {
             n.body,
             "Nyalain Do Not Disturb: Settings → System → Notifications"
         );
+    }
+
+    #[test]
+    fn hover_needs_a_dwell_not_just_a_move() {
+        let mut h = HoverTracking::default();
+        // Entering arms tracking once; further moves do not re-arm or expand.
+        assert!(h.needs_arming());
+        h.armed();
+        assert!(!h.needs_arming());
+        // Leaving without a dwell never sent Hover(true), so nothing to undo.
+        assert_eq!(h.on_leave(), None);
+        assert!(h.needs_arming());
+    }
+
+    #[test]
+    fn dwell_expands_once_and_leave_collapses() {
+        let mut h = HoverTracking::default();
+        h.armed();
+        assert_eq!(h.on_hover(), Some(Event::Hover(true)));
+        assert_eq!(h.on_hover(), None);
+        assert!(!h.needs_arming());
+        assert_eq!(h.on_leave(), Some(Event::Hover(false)));
+        // Tracking ends on leave; the next move re-arms it.
+        assert!(h.needs_arming());
     }
 
     #[test]

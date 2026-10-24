@@ -30,7 +30,9 @@ impl Default for Config {
 }
 
 /// Missing or malformed config falls back to defaults rather than failing startup.
+/// A leading UTF-8 BOM (Notepad and PowerShell 5.1 may write one) is skipped.
 pub fn parse(text: &str) -> Config {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     serde_json::from_str(text).unwrap_or_default()
 }
 
@@ -70,6 +72,13 @@ mod tests {
     #[test]
     fn invalid_json_is_default() {
         assert_eq!(parse("{not json"), Config::default());
+    }
+
+    #[test]
+    fn leading_byte_order_mark_is_ignored() {
+        let c = parse("\u{feff}{\"style\":\"Notch\",\"battery_threshold\":30}");
+        assert_eq!(c.style, Style::Notch);
+        assert_eq!(c.battery_threshold, 30);
     }
 
     #[test]
