@@ -253,8 +253,7 @@ pub fn probe() {
         match new_notifications(&listener, &mut tracker) {
             Ok(fresh) => {
                 for notice in fresh.iter().filter_map(to_notice) {
-                    let body = notice.body.replace('\n', " ");
-                    println!("{} | {} | {}", notice.source, notice.title, body);
+                    println!("{} | {} | {}", notice.source, notice.title, notice.body);
                 }
             }
             Err(e) => eprintln!("dynamic-island: reading notifications failed: {e}"),
@@ -290,19 +289,16 @@ fn new_notifications(
         .collect())
 }
 
-/// Maps a toast to a notice; `None` when the toast is too malformed to show.
-/// A toast without text elements is titled with the app name.
+/// Maps a toast to a notice; `None` when it has no readable id.
 fn to_notice(notification: &UserNotification) -> Option<Notice> {
     let key = notification.Id().ok()?.to_string();
-    let source = app_name(notification).ok()?;
-    let mut texts = text_elements(notification).unwrap_or_default().into_iter();
-    let title = texts.next().unwrap_or_else(|| source.clone());
-    let body = texts.collect::<Vec<_>>().join("\n");
     let app_id = notification
         .AppInfo()
         .and_then(|info| info.AppUserModelId())
         .ok()
         .map(|id| id.to_string());
+    let source = source_name(app_name(notification).ok(), app_id.clone());
+    let (title, body) = notice_text(&source, text_elements(notification).unwrap_or_default());
     Some(Notice {
         key,
         source,
@@ -310,6 +306,48 @@ fn to_notice(notification: &UserNotification) -> Option<Notice> {
         body,
         kind: NoticeKind::App { app_id },
     })
+}
+
+/// The app's display name, else its AppUserModelID, else a generic label, so
+/// a toast is never dropped for an unreadable name.
+fn source_name(display_name: Option<String>, app_id: Option<String>) -> String {
+    [display_name, app_id]
+        .into_iter()
+        .flatten()
+        .find(|name| !name.is_empty())
+        .unwrap_or_else(|| "Notifikasi".to_string())
+}
+
+/// Title and body for a toast's text elements, each on a single line: the
+/// island draws them in one-line boxes, where a hard line break would push
+/// the rest out of view. The first element is the title (the app name when
+/// there is none); the rest join with " · ".
+fn notice_text(source: &str, texts: Vec<String>) -> (String, String) {
+    let mut texts = texts.iter().map(|text| one_line(text));
+    let title = texts.next().unwrap_or_else(|| source.to_string());
+    let body = texts
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    (title, body)
+}
+
+/// Replaces each run of `\r` / `\n` with a single space.
+fn one_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_break = false;
+    for c in text.chars() {
+        if c == '\r' || c == '\n' {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            out.push(c);
+            in_break = false;
+        }
+    }
+    out
 }
 
 fn app_name(notification: &UserNotification) -> Result<String> {
@@ -389,6 +427,54 @@ mod tests {
         assert!(!events_not_firing(true, false, true));
         assert!(!events_not_firing(false, true, true));
         assert!(!events_not_firing(false, false, false));
+    }
+
+    fn texts(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn multi_line_elements_become_one_line() {
+        let (title, body) =
+            notice_text("Chrome", texts(&["Ibu", "baris 1\nbaris 2", "via Chrome"]));
+        assert_eq!(title, "Ibu");
+        assert_eq!(body, "baris 1 baris 2 · via Chrome");
+    }
+
+    #[test]
+    fn newline_runs_collapse_to_one_space_in_title_too() {
+        let (title, body) = notice_text("App", texts(&["Judul\r\n\r\nlanjut", "a\n\nb\rc"]));
+        assert_eq!(title, "Judul lanjut");
+        assert_eq!(body, "a b c");
+    }
+
+    #[test]
+    fn empty_body_elements_are_skipped() {
+        let (_, body) = notice_text("App", texts(&["T", "", "x", "\n"]));
+        assert_eq!(body, "x");
+    }
+
+    #[test]
+    fn toast_without_text_is_titled_with_source() {
+        assert_eq!(
+            notice_text("WhatsApp", Vec::new()),
+            ("WhatsApp".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn source_falls_back_to_aumid_then_generic() {
+        assert_eq!(
+            source_name(Some("WhatsApp".into()), Some("5319.WhatsApp!App".into())),
+            "WhatsApp"
+        );
+        assert_eq!(
+            source_name(None, Some("5319.WhatsApp!App".into())),
+            "5319.WhatsApp!App"
+        );
+        assert_eq!(source_name(Some(String::new()), Some("Id".into())), "Id");
+        assert_eq!(source_name(None, None), "Notifikasi");
+        assert_eq!(source_name(None, Some(String::new())), "Notifikasi");
     }
 
     #[test]
