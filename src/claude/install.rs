@@ -65,7 +65,9 @@ pub fn add_island_hooks(settings: &mut Value, command: &str) -> bool {
 fn repoint_stale_hooks(groups: &mut Vec<Value>, command: &str, present: &mut bool) -> bool {
     let mut changed = false;
     groups.retain_mut(|group| {
-        let Some(hooks) = group["hooks"].as_array_mut() else {
+        // `get_mut`, not `group["hooks"]`: IndexMut would insert `"hooks": null`
+        // into foreign groups and panic on groups that are not objects.
+        let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
             return true;
         };
         let before = hooks.len();
@@ -276,6 +278,25 @@ mod tests {
         assert_eq!(stop[0]["hooks"].as_array().unwrap().len(), 1);
         assert_eq!(stop[0]["hooks"][0]["command"], "orca.cmd");
         assert_eq!(stop[1]["hooks"][0]["command"], NEW);
+    }
+
+    #[test]
+    fn odd_foreign_groups_survive_byte_identical() {
+        let foreign = [
+            serde_json::json!({"matcher":"*"}),
+            serde_json::json!("x"),
+            Value::Null,
+        ];
+        let mut stop: Vec<Value> = foreign.to_vec();
+        stop.push(serde_json::json!({"hooks":[{"type":"command","command":OLD}]}));
+        let mut v = serde_json::json!({"hooks":{"Stop":stop}});
+        assert!(add_island_hooks(&mut v, NEW));
+        let stop = v["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 4);
+        for (got, want) in stop.iter().zip(&foreign) {
+            assert_eq!(got.to_string(), want.to_string());
+        }
+        assert_eq!(stop[3]["hooks"][0]["command"], NEW);
     }
 
     #[test]
