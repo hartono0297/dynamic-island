@@ -6,6 +6,7 @@ mod config;
 mod model;
 mod sources;
 mod state;
+mod ui;
 
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 
@@ -37,6 +38,11 @@ fn main() {
         Some("--probe-system") => {
             attach_parent_console();
             sources::battery::probe();
+        }
+        #[cfg(debug_assertions)]
+        Some("--demo") => {
+            attach_parent_console();
+            ui::demo::run();
         }
         Some("--install-hooks") => {
             attach_parent_console();
