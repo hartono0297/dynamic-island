@@ -2,6 +2,7 @@
 
 mod app;
 mod claude;
+mod config;
 mod model;
 mod sources;
 mod state;
