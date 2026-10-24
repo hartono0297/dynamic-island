@@ -21,10 +21,9 @@ fn attach_parent_console() {
 fn main() {
     match std::env::args().nth(1).as_deref() {
         None => app::run(),
-        Some("--hook") => {
-            attach_parent_console();
-            claude::hook::run_hook();
-        }
+        // No console attach: the hook prints nothing, and attaching can swap an
+        // unset stdin for the console's, leaving the hook blocked on keyboard input.
+        Some("--hook") => claude::hook::run_hook(),
         Some("--probe-notifications") => {
             attach_parent_console();
             sources::notifications::probe();
@@ -39,7 +38,10 @@ fn main() {
             attach_parent_console();
             sources::battery::probe();
         }
-        Some("--install-hooks") => claude::install::install_hooks(),
+        Some("--install-hooks") => {
+            attach_parent_console();
+            claude::install::install_hooks();
+        }
         Some(other) => {
             attach_parent_console();
             eprintln!("dynamic-island: unknown argument `{other}`");

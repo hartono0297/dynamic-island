@@ -1,3 +1,293 @@
+use std::fs::{File, OpenOptions};
+use std::io::{self, IsTerminal, Read, Write};
+use std::os::windows::fs::OpenOptionsExt;
+
+use serde::{Deserialize, Serialize};
+use windows::Win32::Foundation::ERROR_PIPE_BUSY;
+use windows::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION;
+use windows::Win32::System::Pipes::WaitNamedPipeW;
+use windows::core::HSTRING;
+
+use super::PIPE_NAME;
+use crate::model::{Event, Notice, NoticeKind};
+
+/// How long to wait for a free pipe instance while the server is mid-handoff.
+const BUSY_WAIT_MS: u32 = 50;
+const OPEN_ATTEMPTS: usize = 3;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum HookKind {
+    Done,
+    Waiting,
+    Activity,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct HookMessage {
+    pub kind: HookKind,
+    pub session_id: String,
+    pub project: String,
+    pub message: Option<String>,
+}
+
+/// The fields of Claude Code's hook stdin payload that the island uses.
+#[derive(Deserialize)]
+struct HookInput {
+    hook_event_name: String,
+    session_id: String,
+    #[serde(default)]
+    cwd: String,
+    message: Option<String>,
+}
+
+pub fn parse_hook_input(json: &str) -> Option<HookMessage> {
+    let input: HookInput = serde_json::from_str(json).ok()?;
+    let (kind, message) = match input.hook_event_name.as_str() {
+        "Stop" => (HookKind::Done, None),
+        "Notification" => (HookKind::Waiting, input.message),
+        "UserPromptSubmit" | "PostToolUse" => (HookKind::Activity, None),
+        _ => return None,
+    };
+    let project = input
+        .cwd
+        .split(['/', '\\'])
+        .rfind(|part| !part.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    Some(HookMessage {
+        kind,
+        session_id: input.session_id,
+        project,
+        message,
+    })
+}
+
+pub fn to_event(msg: HookMessage) -> Event {
+    let HookMessage {
+        kind,
+        session_id,
+        project,
+        message,
+    } = msg;
+    match kind {
+        HookKind::Done => Event::Notice(Notice {
+            key: format!("claude-done-{session_id}"),
+            source: "Claude".to_string(),
+            title: "Claude selesai".to_string(),
+            body: project,
+            kind: NoticeKind::ClaudeDone { session_id },
+        }),
+        HookKind::Waiting => Event::Notice(Notice {
+            key: format!("claude-wait-{session_id}"),
+            source: "Claude".to_string(),
+            title: "Claude butuh respon".to_string(),
+            body: message.unwrap_or(project),
+            kind: NoticeKind::ClaudeWaiting { session_id },
+        }),
+        HookKind::Activity => Event::ClaudeActivity { session_id },
+    }
+}
+
+/// Hands the message to a running island. False when no island is listening.
+pub fn send_to_pipe(msg: &HookMessage) -> bool {
+    let Ok(mut line) = serde_json::to_vec(msg) else {
+        return false;
+    };
+    line.push(b'\n');
+    send_line(PIPE_NAME, &line)
+}
+
+/// Writes `line` to the named pipe. A missing pipe fails at once; a busy one
+/// (server between connections) gets a few short waits.
+pub(super) fn send_line(pipe_name: &str, line: &[u8]) -> bool {
+    for _ in 0..OPEN_ATTEMPTS {
+        match open_pipe(pipe_name) {
+            Ok(mut pipe) => return pipe.write_all(line).is_ok(),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY.0 as i32) => {
+                let _ = unsafe { WaitNamedPipeW(&HSTRING::from(pipe_name), BUSY_WAIT_MS) };
+            }
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// `CreateFileW` with `OPEN_EXISTING`, and identification-only impersonation
+/// so whoever owns the pipe cannot act as this user.
+fn open_pipe(pipe_name: &str) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .security_qos_flags(SECURITY_IDENTIFICATION.0)
+        .open(pipe_name)
+}
+
+/// `--hook` mode: relays Claude Code's stdin payload to the island. Prints
+/// nothing and always exits 0, since hook output can reach Claude's context.
 pub fn run_hook() {
-    todo!("Claude Code hook relay")
+    let stdin = io::stdin();
+    // Claude Code always pipes the payload; a console stdin would block forever.
+    if stdin.is_terminal() {
+        return;
+    }
+    let mut input = Vec::new();
+    if stdin.lock().read_to_end(&mut input).is_err() {
+        return;
+    }
+    if let Some(msg) = parse_hook_input(&String::from_utf8_lossy(&input)) {
+        send_to_pipe(&msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::model::{Notice, NoticeKind};
+
+    #[test]
+    fn parses_stop() {
+        let m = parse_hook_input(
+            r#"{"hook_event_name":"Stop","session_id":"s1","cwd":"D:\\GitHub\\Dynamic Island"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            HookMessage {
+                kind: HookKind::Done,
+                session_id: "s1".into(),
+                project: "Dynamic Island".into(),
+                message: None
+            }
+        );
+    }
+
+    #[test]
+    fn parses_notification_with_message() {
+        let m = parse_hook_input(
+            r#"{"hook_event_name":"Notification","session_id":"s2","cwd":"C:\\work\\api","message":"Claude needs your permission to use Bash"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            HookMessage {
+                kind: HookKind::Waiting,
+                session_id: "s2".into(),
+                project: "api".into(),
+                message: Some("Claude needs your permission to use Bash".into())
+            }
+        );
+    }
+
+    #[test]
+    fn activity_events() {
+        for name in ["UserPromptSubmit", "PostToolUse"] {
+            let json = format!(r#"{{"hook_event_name":"{name}","session_id":"s3","cwd":"C:\\p"}}"#);
+            let m = parse_hook_input(&json).unwrap();
+            assert_eq!(m.kind, HookKind::Activity, "{name}");
+            assert_eq!(m.session_id, "s3");
+        }
+    }
+
+    #[test]
+    fn unknown_event_or_bad_json_is_none() {
+        assert_eq!(
+            parse_hook_input(r#"{"hook_event_name":"PreCompact","session_id":"s","cwd":"C:\\p"}"#),
+            None
+        );
+        assert_eq!(parse_hook_input("{"), None);
+    }
+
+    #[test]
+    fn forward_slash_cwd() {
+        let m =
+            parse_hook_input(r#"{"hook_event_name":"Stop","session_id":"s","cwd":"/home/x/proj"}"#)
+                .unwrap();
+        assert_eq!(m.project, "proj");
+    }
+
+    #[test]
+    fn done_becomes_notice() {
+        let event = to_event(HookMessage {
+            kind: HookKind::Done,
+            session_id: "s1".into(),
+            project: "Dynamic Island".into(),
+            message: None,
+        });
+        assert_eq!(
+            event,
+            Event::Notice(Notice {
+                key: "claude-done-s1".into(),
+                source: "Claude".into(),
+                title: "Claude selesai".into(),
+                body: "Dynamic Island".into(),
+                kind: NoticeKind::ClaudeDone {
+                    session_id: "s1".into()
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn waiting_becomes_notice_with_message_or_project() {
+        let with_message = to_event(HookMessage {
+            kind: HookKind::Waiting,
+            session_id: "s2".into(),
+            project: "api".into(),
+            message: Some("Claude needs your permission to use Bash".into()),
+        });
+        assert_eq!(
+            with_message,
+            Event::Notice(Notice {
+                key: "claude-wait-s2".into(),
+                source: "Claude".into(),
+                title: "Claude butuh respon".into(),
+                body: "Claude needs your permission to use Bash".into(),
+                kind: NoticeKind::ClaudeWaiting {
+                    session_id: "s2".into()
+                },
+            })
+        );
+        let Event::Notice(without_message) = to_event(HookMessage {
+            kind: HookKind::Waiting,
+            session_id: "s2".into(),
+            project: "api".into(),
+            message: None,
+        }) else {
+            panic!("expected a notice");
+        };
+        assert_eq!(without_message.body, "api");
+    }
+
+    #[test]
+    fn activity_becomes_claude_activity() {
+        let event = to_event(HookMessage {
+            kind: HookKind::Activity,
+            session_id: "s3".into(),
+            project: "p".into(),
+            message: None,
+        });
+        assert_eq!(
+            event,
+            Event::ClaudeActivity {
+                session_id: "s3".into()
+            }
+        );
+    }
+
+    #[test]
+    fn send_to_missing_pipe_is_silent_and_fast() {
+        // A name no test server listens on; the real pipe may be live on this machine.
+        let name = format!(r"\\.\pipe\dynamic-island-missing-{}", std::process::id());
+        let msg = HookMessage {
+            kind: HookKind::Done,
+            session_id: "s".into(),
+            project: "p".into(),
+            message: None,
+        };
+        let line = serde_json::to_vec(&msg).unwrap();
+        let t = Instant::now();
+        assert!(!send_line(&name, &line));
+        assert!(t.elapsed() < Duration::from_millis(200));
+    }
 }
