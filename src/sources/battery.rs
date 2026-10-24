@@ -11,15 +11,11 @@ const AC_ONLINE: u8 = 1;
 
 /// Decides when to raise the low-battery notice: once per discharge below the
 /// threshold, re-armed by charging or by rising back above the threshold.
-// Not called outside tests yet; removed when app.rs wires the battery check in (Task 10).
-#[allow(dead_code)]
 pub struct BatteryMonitor {
     threshold: u8,
     alerted: bool,
 }
 
-// Not called outside tests yet; removed when app.rs wires the battery check in (Task 10).
-#[allow(dead_code)]
 impl BatteryMonitor {
     pub fn new(threshold: u8) -> Self {
         Self {
@@ -44,8 +40,6 @@ impl BatteryMonitor {
 
 /// Current charge percentage and whether the charger is connected, or `None`
 /// when there is no battery or its level is unknown.
-// Not called outside the debug probe yet; removed when app.rs wires the battery check in (Task 10).
-#[allow(dead_code)]
 pub fn read_battery() -> Option<(u8, bool)> {
     let mut status = SYSTEM_POWER_STATUS::default();
     unsafe { GetSystemPowerStatus(&mut status) }.ok()?;
@@ -55,8 +49,6 @@ pub fn read_battery() -> Option<(u8, bool)> {
     Some((status.BatteryLifePercent, status.ACLineStatus == AC_ONLINE))
 }
 
-// Not called outside tests yet; removed when app.rs wires the battery check in (Task 10).
-#[allow(dead_code)]
 pub fn battery_notice(percent: u8) -> Notice {
     Notice {
         key: "battery".to_string(),

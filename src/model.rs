@@ -1,6 +1,3 @@
-// Nothing outside tests uses these types yet; removed when app.rs wires them (Task 10).
-#![allow(dead_code)]
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
     /// Identifies the notice for de-duplication and tests; not shown to the user.

@@ -183,8 +183,6 @@ impl Drop for Watcher {
 /// Watches the system media session on a background thread and sends
 /// `Event::Media` whenever what is playing changes: once at start, then on
 /// session, track and play/pause changes. The thread blocks between events.
-// Not called outside the debug probe yet; removed when app.rs wires the watcher in (Task 10).
-#[allow(dead_code)]
 pub fn spawn_watcher(tx: Sender<Event>, wake: impl Fn() + Send + Sync + 'static) {
     std::thread::spawn(move || {
         unsafe {
@@ -226,8 +224,6 @@ fn next_refresh(signals: &Receiver<Signal>) -> Refresh {
 
 /// Sends a transport command to the current media session on a short-lived
 /// thread, so the caller never waits on WinRT. Errors are ignored.
-// Not called yet; removed when app.rs handles `Effect::Media` (Task 10).
-#[allow(dead_code)]
 pub fn send_command(cmd: MediaCommand) {
     std::thread::spawn(move || {
         unsafe {

@@ -24,8 +24,6 @@ const MAX_LINE: u64 = 64 * 1024;
 /// Listens on `\\.\pipe\dynamic-island` on a background thread and turns each
 /// hook message into an `Event`. Gives up quietly if another process already
 /// owns the pipe.
-// Not called yet; removed when app.rs wires the pipe server in (Task 10).
-#[allow(dead_code)]
 pub fn spawn_pipe_server(tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
     let _ = std::thread::Builder::new()
         .name("claude-pipe".to_string())
@@ -34,8 +32,6 @@ pub fn spawn_pipe_server(tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
 
 /// Accepts one connection at a time, reading one JSON line from each. Returns
 /// when the pipe cannot be created or the receiver is gone.
-// Not called outside tests yet; removed when app.rs wires the pipe server in (Task 10).
-#[allow(dead_code)]
 fn serve(pipe_name: &str, tx: Sender<Event>, wake: impl Fn()) {
     let name = HSTRING::from(pipe_name);
     let Some(mut listening) = create_instance(&name, true) else {

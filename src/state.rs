@@ -1,6 +1,3 @@
-// Nothing outside tests uses the reducer yet; removed when app.rs wires it (Task 10).
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 

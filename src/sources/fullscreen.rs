@@ -4,8 +4,6 @@ use windows::Win32::UI::Shell::{
 
 /// True while a fullscreen app, game or presentation is in the foreground.
 /// Returns false when the shell cannot be queried.
-// Not called outside the debug probe yet; removed when app.rs wires the fullscreen check in (Task 10).
-#[allow(dead_code)]
 pub fn is_fullscreen() -> bool {
     let Ok(state) = (unsafe { SHQueryUserNotificationState() }) else {
         return false;

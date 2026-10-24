@@ -41,6 +41,8 @@ struct HookInput {
 }
 
 pub fn parse_hook_input(json: &str) -> Option<HookMessage> {
+    // Windows PowerShell 5.1 prefixes piped stdin with a UTF-8 BOM.
+    let json = json.strip_prefix('\u{feff}').unwrap_or(json);
     let input: HookInput = serde_json::from_str(json).ok()?;
     let (kind, message) = match input.hook_event_name.as_str() {
         "Stop" => (HookKind::Done, None),
@@ -144,6 +146,17 @@ mod tests {
 
     use super::*;
     use crate::model::{Notice, NoticeKind};
+
+    #[test]
+    fn ignores_byte_order_mark() {
+        // Windows PowerShell 5.1 prefixes piped native stdin with a UTF-8 BOM.
+        let m = parse_hook_input(
+            "\u{feff}{\"hook_event_name\":\"Stop\",\"session_id\":\"s1\",\"cwd\":\"D:\\\\a\\\\Proj\"}\r\n",
+        )
+        .unwrap();
+        assert_eq!(m.kind, HookKind::Done);
+        assert_eq!(m.project, "Proj");
+    }
 
     #[test]
     fn parses_stop() {

@@ -48,8 +48,6 @@ impl NotificationTracker {
 }
 
 /// True when any muted entry occurs in `source`, ignoring case.
-// Not called outside tests yet; removed when app.rs wires the poller in (Task 10).
-#[allow(dead_code)]
 pub fn is_muted(source: &str, muted: &[String]) -> bool {
     let source = source.to_lowercase();
     muted.iter().any(|m| source.contains(&m.to_lowercase()))
@@ -58,8 +56,6 @@ pub fn is_muted(source: &str, muted: &[String]) -> bool {
 /// Polls the Action Center once a second on a background thread and sends a
 /// `Event::Notice` for every new toast from an app not in `muted`. Exits
 /// quietly when listener access has not been granted.
-// Not called yet; removed when app.rs wires the poller in (Task 10).
-#[allow(dead_code)]
 pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static, muted: Vec<String>) {
     std::thread::spawn(move || {
         unsafe {
@@ -91,8 +87,6 @@ pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static, muted: 
 }
 
 /// Brings the app with this AppUserModelID to the front, launching it if needed.
-// Not called yet; removed when app.rs handles `Effect::OpenApp` (Task 10).
-#[allow(dead_code)]
 pub fn open_app(app_id: &str) {
     let _ = Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{app_id}"))
