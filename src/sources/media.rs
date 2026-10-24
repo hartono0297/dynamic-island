@@ -19,7 +19,7 @@ const MAX_ART_BYTES: u64 = 2 * 1024 * 1024;
 /// WinRT threads, so they only send one of these and return.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Signal {
-    /// The manager's current session changed.
+    /// The manager's current session, or its set of sessions, changed.
     Session,
     /// The current session's title, artist or thumbnail changed.
     Properties,
@@ -120,6 +120,9 @@ impl Drop for SessionSubscription {
 struct Watcher {
     manager: Manager,
     manager_token: Option<i64>,
+    /// `SessionsChanged`: a session opened or closed, which can change the
+    /// current one without `CurrentSessionChanged` firing.
+    sessions_token: Option<i64>,
     signals: Sender<Signal>,
     subscription: Option<SessionSubscription>,
     properties: Option<Properties>,
@@ -134,9 +137,17 @@ impl Watcher {
                 Ok(())
             }))
             .ok();
+        let s = signals.clone();
+        let sessions_token = manager
+            .SessionsChanged(&TypedEventHandler::new(move |_, _| {
+                let _ = s.send(Signal::Session);
+                Ok(())
+            }))
+            .ok();
         Self {
             manager,
             manager_token,
+            sessions_token,
             signals,
             subscription: None,
             properties: None,
@@ -162,11 +173,16 @@ impl Watcher {
                 self.properties = Some(properties);
             }
         }
+        let playing = shown_playing(
+            session
+                .GetPlaybackInfo()
+                .and_then(|info| info.PlaybackStatus()),
+        )?;
         let properties = self.properties.as_ref()?;
         Some(MediaInfo {
             title: properties.title.clone(),
             artist: properties.artist.clone(),
-            playing: is_playing(session),
+            playing,
             art: properties.art.clone(),
         })
     }
@@ -177,6 +193,20 @@ impl Drop for Watcher {
         if let Some(token) = self.manager_token {
             let _ = self.manager.RemoveCurrentSessionChanged(token);
         }
+        if let Some(token) = self.sessions_token {
+            let _ = self.manager.RemoveSessionsChanged(token);
+        }
+    }
+}
+
+/// Whether a session with this playback status is playing; `None` when it is
+/// closed or stopped and so should not be shown at all. An unreadable status
+/// keeps the session on screen as paused.
+fn shown_playing(status: Result<PlaybackStatus>) -> Option<bool> {
+    match status {
+        Ok(PlaybackStatus::Closed | PlaybackStatus::Stopped) => None,
+        Ok(status) => Some(status == PlaybackStatus::Playing),
+        Err(_) => Some(false),
     }
 }
 
@@ -274,13 +304,6 @@ fn art_size_ok(size: u64) -> bool {
     size > 0 && size <= MAX_ART_BYTES
 }
 
-fn is_playing(session: &Session) -> bool {
-    session
-        .GetPlaybackInfo()
-        .and_then(|info| info.PlaybackStatus())
-        .is_ok_and(|status| status == PlaybackStatus::Playing)
-}
-
 /// Diagnostic mode for `--probe-media`: prints every media update until Ctrl+C.
 #[cfg(debug_assertions)]
 pub fn probe() {
@@ -375,6 +398,36 @@ mod tests {
             }
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn closed_or_stopped_session_shows_nothing() {
+        assert_eq!(shown_playing(Ok(PlaybackStatus::Closed)), None);
+        assert_eq!(shown_playing(Ok(PlaybackStatus::Stopped)), None);
+    }
+
+    #[test]
+    fn live_session_reports_whether_it_plays() {
+        assert_eq!(shown_playing(Ok(PlaybackStatus::Playing)), Some(true));
+        for status in [
+            PlaybackStatus::Paused,
+            PlaybackStatus::Opened,
+            PlaybackStatus::Changing,
+        ] {
+            assert_eq!(shown_playing(Ok(status)), Some(false), "{status:?}");
+        }
+        // An unreadable status keeps the session on screen, paused.
+        assert_eq!(
+            shown_playing(Err(windows::core::Error::empty())),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn sessions_changed_resubscribes() {
+        let mut r = Refresh::default();
+        r.add(Signal::Session);
+        assert!(r.session && r.properties);
     }
 
     #[test]
