@@ -48,8 +48,6 @@ pub fn load() -> Config {
 }
 
 impl Config {
-    // Not called yet; the tray menu and onboarding save settings (Task 11).
-    #[allow(dead_code)]
     pub fn save(&self) -> std::io::Result<()> {
         let path = path();
         if let Some(dir) = path.parent() {

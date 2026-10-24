@@ -202,6 +202,21 @@ pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static, muted: 
     });
 }
 
+/// True when this app may read the Action Center.
+pub fn access_allowed() -> bool {
+    UserNotificationListener::Current()
+        .and_then(|listener| listener.GetAccessStatus())
+        .is_ok_and(|status| status == UserNotificationListenerAccessStatus::Allowed)
+}
+
+/// Asks the user for listener access without blocking; `done` runs (on any
+/// thread) once they have answered. Call from the UI thread.
+pub fn ask_access(done: impl FnOnce() + Send + 'static) -> Result<()> {
+    UserNotificationListener::Current()?
+        .RequestAccessAsync()?
+        .when(move |_| done())
+}
+
 /// Brings the app with this AppUserModelID to the front, launching it if needed.
 pub fn open_app(app_id: &str) {
     let _ = Command::new("explorer.exe")

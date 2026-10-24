@@ -4,7 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
@@ -13,26 +13,32 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, MA_NOACTIVATE, MSG, PostMessageW,
-    PostQuitMessage, SetTimer, TranslateMessage, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_TIMER,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer, MA_NOACTIVATE, MSG,
+    PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetTimer, TranslateMessage, WM_APP, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::w;
 
+use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
-use crate::config::{self, Style};
-use crate::model::{Effect, Event, View};
+use crate::config::{self, Config, Style};
+use crate::model::{Effect, Event, Notice, NoticeKind, View};
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
 use crate::ui::render::Renderer;
+use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
 
 /// Posted by background sources after queueing an event.
 const WM_APP_EVENT: u32 = WM_APP + 1;
+/// Posted once the user has answered the notification-access prompt.
+const WM_APP_ACCESS: u32 = WM_APP + 3;
 /// Lives in the Controls feature of `windows`; the value is fixed by Win32.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -50,6 +56,8 @@ thread_local! {
     /// window procedure mid-handler); done once the outer handler returns.
     static DEFERRED_DRAIN: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
+    /// The tray menu's modal loop is running; a second click must not nest another.
+    static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn run() {
@@ -65,19 +73,24 @@ pub fn run() {
     let hwnd = win.hwnd();
     let (tx, rx) = mpsc::channel();
 
+    let onboard = !config.onboarding_done;
+    let battery = BatteryMonitor::new(config.battery_threshold);
+    let _ = tray::set_autostart(config.start_with_windows);
+
     let rest = shape_for(config.style, ShapeKind::Compact);
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
             hwnd,
             win: Some(win),
             renderer,
-            style: config.style,
+            config,
             state: IslandState::new(),
             rx,
+            tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
             drawn: View::Hidden,
             fullscreen: false,
-            battery: BatteryMonitor::new(config.battery_threshold),
+            battery,
             tracking_mouse: false,
         });
     });
@@ -91,19 +104,16 @@ pub fn run() {
         }
     });
 
-    // HWND is not Send; the sources get the raw value and rebuild it to post.
-    let raw = hwnd.0 as isize;
-    let wake = move || unsafe {
-        let _ = PostMessageW(
-            Some(HWND(raw as *mut c_void)),
-            WM_APP_EVENT,
-            WPARAM(0),
-            LPARAM(0),
-        );
-    };
-    notifications::spawn_poller(tx.clone(), wake, config.muted_apps);
+    let wake = poster(hwnd, WM_APP_EVENT);
+    with_app(App::spawn_notifications);
     media::spawn_watcher(tx.clone(), wake);
     spawn_pipe_server(tx, wake);
+
+    // Fails when Explorer's taskbar is not up yet; `TaskbarCreated` retries.
+    let _ = tray::add_tray(hwnd);
+    if onboard {
+        start_onboarding(hwnd);
+    }
 
     unsafe {
         let mut msg = MSG::default();
@@ -112,6 +122,15 @@ pub fn run() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+/// Posts `msg` to the island from any thread. HWND is not Send, so the
+/// closure keeps the raw value and rebuilds it to post.
+fn poster(hwnd: HWND, msg: u32) -> impl Fn() + Send + Copy + 'static {
+    let raw = hwnd.0 as isize;
+    move || unsafe {
+        let _ = PostMessageW(Some(HWND(raw as *mut c_void)), msg, WPARAM(0), LPARAM(0));
     }
 }
 
@@ -132,9 +151,11 @@ struct App {
     /// Taken out only while `reposition` runs, so no borrow is held across it.
     win: Option<IslandWindow>,
     renderer: Renderer,
-    style: Style,
+    config: Config,
     state: IslandState,
     rx: Receiver<Event>,
+    /// Kept to restart the notification poller once access is granted.
+    tx: Sender<Event>,
     anim: Anim,
     /// The view frames draw: the current one, or the last visible one while
     /// fading out, so the content fades with the shape.
@@ -182,7 +203,7 @@ impl App {
             View::MediaExpanded => Some(ShapeKind::MediaExpanded),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
-        let target = kind.map(|kind| shape_for(self.style, kind));
+        let target = kind.map(|kind| shape_for(self.config.style, kind));
         let retarget = match target {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
             None => self.anim.to_opacity != 0.0,
@@ -297,13 +318,57 @@ impl App {
         }
     }
 
+    /// Starts the notification poller; it exits at once without listener access.
+    fn spawn_notifications(&mut self) {
+        notifications::spawn_poller(
+            self.tx.clone(),
+            poster(self.hwnd, WM_APP_EVENT),
+            self.config.muted_apps.clone(),
+        );
+    }
+
+    /// Saving can only fail on a broken profile; the setting still holds for
+    /// this run and there is nowhere better to report it.
+    fn save_config(&self) {
+        let _ = self.config.save();
+    }
+
+    fn set_style(&mut self, style: Style) {
+        if self.config.style == style {
+            return;
+        }
+        self.config.style = style;
+        self.save_config();
+        let now = Instant::now();
+        if self.state.view() == View::Hidden {
+            // Nothing to morph; rest on the new shape so the next appearance grows from it.
+            self.anim = Anim::settled(shape_for(style, ShapeKind::Compact), 0.0);
+            self.draw(now);
+        }
+        // Visible: morphs from the old style's shape to the new one.
+        self.refresh(now);
+    }
+
+    fn toggle_autostart(&mut self) {
+        let enabled = !self.config.start_with_windows;
+        if tray::set_autostart(enabled).is_ok() {
+            self.config.start_with_windows = enabled;
+            self.save_config();
+        }
+    }
+
+    fn finish_onboarding(&mut self) {
+        self.config.onboarding_done = true;
+        self.save_config();
+    }
+
     fn draw(&mut self, now: Instant) {
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
         let media = self.state.media();
-        if let Err(error) = self
-            .renderer
-            .draw(win, self.style, shape, &self.drawn, media, opacity)
+        if let Err(error) =
+            self.renderer
+                .draw(win, self.config.style, shape, &self.drawn, media, opacity)
         {
             eprintln!("dynamic-island: draw failed: {error}");
         }
@@ -349,6 +414,110 @@ impl Anim {
         let shape = lerp_shape(self.from, self.to, ease_out_back(t));
         let opacity = self.from_opacity + (self.to_opacity - self.from_opacity) * t;
         (shape, opacity)
+    }
+}
+
+/// A temporary notice from the island itself.
+fn island_notice(key: &str, title: &str, body: &str) -> Notice {
+    Notice {
+        key: format!("dynamic-island-{key}"),
+        source: "Dynamic Island".into(),
+        title: title.into(),
+        body: body.into(),
+        kind: NoticeKind::App { app_id: None },
+    }
+}
+
+fn dnd_notice() -> Notice {
+    island_notice(
+        "dnd",
+        "Matiin popup Windows",
+        "Nyalain Do Not Disturb: Settings → System → Notifications",
+    )
+}
+
+fn hook_notice(outcome: InstallOutcome) -> Notice {
+    const SETTINGS: &str = r"~\.claude\settings.json";
+    match outcome {
+        InstallOutcome::Installed => island_notice("hooks", "Hook Claude Code terpasang", SETTINGS),
+        InstallOutcome::AlreadyInstalled => {
+            island_notice("hooks", "Hook sudah terpasang", SETTINGS)
+        }
+        InstallOutcome::Error(e) => island_notice("hooks", "Gagal pasang hook", &e),
+    }
+}
+
+/// First run: asks for notification access when it is missing, then shows
+/// the Do Not Disturb hint once the user has answered.
+fn start_onboarding(hwnd: HWND) {
+    if notifications::access_allowed()
+        || notifications::ask_access(poster(hwnd, WM_APP_ACCESS)).is_err()
+    {
+        finish_onboarding();
+    }
+}
+
+/// The access prompt was answered. The poller started at launch exited
+/// without access, so start it again if access is now granted.
+fn on_access_answered() {
+    if notifications::access_allowed() {
+        with_app(App::spawn_notifications);
+    }
+    finish_onboarding();
+}
+
+fn finish_onboarding() {
+    show_dnd_help();
+    with_app(App::finish_onboarding);
+}
+
+/// The Do Not Disturb hint as a notice, plus the Settings page it points to.
+/// Settings opens outside `with_app`: the shell may pump messages meanwhile.
+fn show_dnd_help() {
+    with_app(|app| app.apply_now(Event::Notice(dnd_notice())));
+    unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            w!("ms-settings:notifications"),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+/// Shows the tray menu and runs the choice. The menu's modal loop dispatches
+/// timer and mouse messages to `wnd_proc`, so no `APP` borrow is held across it.
+fn open_menu(hwnd: HWND) {
+    if MENU_OPEN.get() {
+        return;
+    }
+    let Some(config) = with_app(|app| app.config.clone()) else {
+        return;
+    };
+    MENU_OPEN.set(true);
+    let cmd = tray::show_menu(hwnd, &config);
+    MENU_OPEN.set(false);
+    match cmd {
+        Some(MenuCmd::StylePill) => {
+            with_app(|app| app.set_style(Style::Pill));
+        }
+        Some(MenuCmd::StyleNotch) => {
+            with_app(|app| app.set_style(Style::Notch));
+        }
+        Some(MenuCmd::ToggleAutostart) => {
+            with_app(App::toggle_autostart);
+        }
+        Some(MenuCmd::ShowDndHelp) => show_dnd_help(),
+        Some(MenuCmd::InstallClaudeHooks) => {
+            let notice = hook_notice(install::install_for_current_exe());
+            with_app(|app| app.apply_now(Event::Notice(notice)));
+        }
+        Some(MenuCmd::Exit) => unsafe {
+            let _ = DestroyWindow(hwnd);
+        },
+        None => {}
     }
 }
 
@@ -424,14 +593,32 @@ unsafe extern "system" fn wnd_proc(
             with_app(|app| app.on_click(lparam));
             LRESULT(0)
         }
-        // WM_RBUTTONUP opens the tray menu once it exists (Task 11).
+        WM_RBUTTONUP => {
+            open_menu(hwnd);
+            LRESULT(0)
+        }
+        WM_APP_TRAY => {
+            if tray::is_menu_click(lparam) {
+                open_menu(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_APP_ACCESS => {
+            on_access_answered();
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
             reposition();
             LRESULT(0)
         }
         WM_DESTROY => {
+            tray::remove_tray(hwnd);
             unsafe { PostQuitMessage(0) };
+            LRESULT(0)
+        }
+        _ if tray::is_taskbar_created(msg) => {
+            let _ = tray::add_tray(hwnd);
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -453,6 +640,44 @@ mod tests {
             start,
             running: true,
         }
+    }
+
+    #[test]
+    fn island_notices_are_temporary_and_open_nothing() {
+        for notice in [
+            dnd_notice(),
+            hook_notice(InstallOutcome::Installed),
+            hook_notice(InstallOutcome::AlreadyInstalled),
+            hook_notice(InstallOutcome::Error("x".into())),
+        ] {
+            assert_eq!(notice.source, "Dynamic Island");
+            assert_eq!(notice.kind, NoticeKind::App { app_id: None });
+        }
+    }
+
+    #[test]
+    fn hook_notice_titles() {
+        assert_eq!(
+            hook_notice(InstallOutcome::Installed).title,
+            "Hook Claude Code terpasang"
+        );
+        assert_eq!(
+            hook_notice(InstallOutcome::AlreadyInstalled).title,
+            "Hook sudah terpasang"
+        );
+        let failed = hook_notice(InstallOutcome::Error("rusak".into()));
+        assert_eq!(failed.title, "Gagal pasang hook");
+        assert_eq!(failed.body, "rusak");
+    }
+
+    #[test]
+    fn dnd_notice_text() {
+        let n = dnd_notice();
+        assert_eq!(n.title, "Matiin popup Windows");
+        assert_eq!(
+            n.body,
+            "Nyalain Do Not Disturb: Settings → System → Notifications"
+        );
     }
 
     #[test]

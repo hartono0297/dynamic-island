@@ -1,6 +1,6 @@
-use std::fs;
-use std::io;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -10,9 +10,20 @@ const EVENTS: [&str; 4] = ["Stop", "Notification", "UserPromptSubmit", "PostTool
 const HOOK_TIMEOUT_SECS: u64 = 5;
 const BACKUP_NAME: &str = "settings.json.bak-dynamic-island";
 const TEMP_NAME: &str = "settings.json.tmp-dynamic-island";
+/// Any hook command ending like this was written by some copy of the island.
+const ISLAND_COMMAND_SUFFIX: &str = "dynamic-island.exe\" --hook";
 
-/// Adds a `command` hook group to each island event that lacks one, leaving
-/// every other setting and hook in place. True when anything was added.
+#[derive(Debug, PartialEq)]
+pub enum InstallOutcome {
+    Installed,
+    AlreadyInstalled,
+    Error(String),
+}
+
+/// Makes `command` the island's hook for each island event, leaving every
+/// other setting and hook in place. An island hook pointing at another exe
+/// (the island was moved) is repointed rather than duplicated. True when
+/// anything changed.
 pub fn add_island_hooks(settings: &mut Value, command: &str) -> bool {
     let Some(root) = settings.as_object_mut() else {
         return false;
@@ -33,7 +44,9 @@ pub fn add_island_hooks(settings: &mut Value, command: &str) -> bool {
         else {
             continue;
         };
-        if groups.iter().any(|group| group_has_command(group, command)) {
+        let mut present = groups.iter().any(|group| group_has_command(group, command));
+        changed |= repoint_stale_hooks(groups, command, &mut present);
+        if present {
             continue;
         }
         let entry = json!([{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS}]);
@@ -45,6 +58,41 @@ pub fn add_island_hooks(settings: &mut Value, command: &str) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Points the first stale island hook at `command` (when none is `present`
+/// yet) and drops the others; a group left empty by that is dropped too.
+fn repoint_stale_hooks(groups: &mut Vec<Value>, command: &str, present: &mut bool) -> bool {
+    let mut changed = false;
+    groups.retain_mut(|group| {
+        let Some(hooks) = group["hooks"].as_array_mut() else {
+            return true;
+        };
+        let before = hooks.len();
+        hooks.retain_mut(|hook| {
+            if !is_stale_island_hook(hook, command) {
+                return true;
+            }
+            changed = true;
+            if *present {
+                return false;
+            }
+            hook["command"] = json!(command);
+            *present = true;
+            true
+        });
+        before == 0 || !hooks.is_empty()
+    });
+    changed
+}
+
+fn is_stale_island_hook(hook: &Value, command: &str) -> bool {
+    hook["command"].as_str().is_some_and(|existing| {
+        existing != command
+            && existing
+                .to_ascii_lowercase()
+                .ends_with(ISLAND_COMMAND_SUFFIX)
+    })
 }
 
 fn group_has_command(group: &Value, command: &str) -> bool {
@@ -61,25 +109,43 @@ fn all_events_have_command(settings: &Value, command: &str) -> bool {
     })
 }
 
-/// `--install-hooks` mode: registers this executable as a Claude Code hook in
-/// `%USERPROFILE%\.claude\settings.json`, backing the file up first.
+/// `--install-hooks` mode: prints the outcome of `install_for_current_exe`.
 pub fn install_hooks() {
-    match try_install_hooks() {
-        Ok(true) => println!("Hook Dynamic Island terpasang."),
-        Ok(false) => println!("Sudah terpasang."),
-        Err(e) => eprintln!("Gagal memasang hook: {e}"),
+    match install_for_current_exe() {
+        InstallOutcome::Installed => println!("Hook Dynamic Island terpasang."),
+        InstallOutcome::AlreadyInstalled => println!("Sudah terpasang."),
+        InstallOutcome::Error(e) => eprintln!("Gagal memasang hook: {e}"),
+    }
+}
+
+/// Registers this executable as a Claude Code hook in
+/// `%USERPROFILE%\.claude\settings.json`.
+pub fn install_for_current_exe() -> InstallOutcome {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return InstallOutcome::Error(e.to_string()),
+    };
+    let Some(home) = std::env::var_os("USERPROFILE") else {
+        return InstallOutcome::Error("USERPROFILE tidak diset".into());
+    };
+    let path = PathBuf::from(home).join(".claude").join("settings.json");
+    install_at(&path, &format!("\"{}\" --hook", exe.display()))
+}
+
+/// Adds `command` as the island's hook to the settings file at `path`. The
+/// file as it was before the island first changed it is kept beside it as
+/// `settings.json.bak-dynamic-island`.
+pub fn install_at(path: &Path, command: &str) -> InstallOutcome {
+    match try_install_at(path, command) {
+        Ok(true) => InstallOutcome::Installed,
+        Ok(false) => InstallOutcome::AlreadyInstalled,
+        Err(e) => InstallOutcome::Error(e),
     }
 }
 
 /// True when the hooks were added, false when they were already there.
-fn try_install_hooks() -> Result<bool, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let command = format!("\"{}\" --hook", exe.display());
-    let dir = PathBuf::from(std::env::var_os("USERPROFILE").ok_or("USERPROFILE tidak diset")?)
-        .join(".claude");
-    let path = dir.join("settings.json");
-
-    let original = match fs::read_to_string(&path) {
+fn try_install_at(path: &Path, command: &str) -> Result<bool, String> {
+    let original = match fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("{}: {e}", path.display())),
@@ -90,8 +156,8 @@ fn try_install_hooks() -> Result<bool, String> {
         _ => json!({}),
     };
 
-    let changed = add_island_hooks(&mut settings, &command);
-    if !all_events_have_command(&settings, &command) {
+    let changed = add_island_hooks(&mut settings, command);
+    if !all_events_have_command(&settings, command) {
         return Err(format!("format {} tidak dikenali", path.display()));
     }
     if !changed {
@@ -100,20 +166,48 @@ fn try_install_hooks() -> Result<bool, String> {
 
     let mut text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     text.push('\n');
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     if let Some(original) = original {
-        fs::write(dir.join(BACKUP_NAME), original).map_err(|e| e.to_string())?;
+        write_backup_once(&dir.join(BACKUP_NAME), &original)?;
     }
     // Write beside the target, then swap, so a failed write never truncates settings.json.
     let temp = dir.join(TEMP_NAME);
     fs::write(&temp, text).map_err(|e| e.to_string())?;
-    fs::rename(&temp, &path).map_err(|e| e.to_string())?;
+    fs::rename(&temp, path).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+/// Keeps the oldest backup: the settings as they were before the island
+/// first touched them.
+fn write_backup_once(backup: &Path, original: &str) -> Result<(), String> {
+    match OpenOptions::new().write(true).create_new(true).open(backup) {
+        Ok(mut file) => file
+            .write_all(original.as_bytes())
+            .map_err(|e| format!("{}: {e}", backup.display())),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(format!("{}: {e}", backup.display())),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OLD: &str = "\"C:\\old\\dynamic-island.exe\" --hook";
+    const NEW: &str = "\"D:\\new\\dynamic-island.exe\" --hook";
+
+    fn island_commands(v: &Value, event: &str) -> Vec<String> {
+        v["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap().iter())
+            .filter_map(|hook| hook["command"].as_str())
+            .filter(|c| c.ends_with(ISLAND_COMMAND_SUFFIX))
+            .map(String::from)
+            .collect()
+    }
 
     #[test]
     fn add_hooks_preserves_existing_and_is_idempotent() {
@@ -150,5 +244,171 @@ mod tests {
         assert!(add_island_hooks(&mut v, "di --hook"));
         assert_eq!(v["model"], "opus");
         assert_eq!(v["env"]["A"], "1");
+    }
+
+    #[test]
+    fn moved_exe_repoints_the_old_island_hook() {
+        let mut v = serde_json::json!({});
+        add_island_hooks(&mut v, OLD);
+        assert!(add_island_hooks(&mut v, NEW));
+        for e in EVENTS {
+            assert_eq!(island_commands(&v, e), vec![NEW.to_string()], "{e}");
+            assert_eq!(v["hooks"][e].as_array().unwrap().len(), 1, "{e}");
+        }
+        assert_eq!(v["hooks"]["PostToolUse"][0]["matcher"], "*");
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["timeout"], 5);
+        assert!(!add_island_hooks(&mut v, NEW));
+    }
+
+    #[test]
+    fn stale_island_hook_is_dropped_when_current_one_exists() {
+        let mut v = serde_json::json!({"hooks":{"Stop":[
+            {"hooks":[{"type":"command","command":OLD}]},
+            {"hooks":[{"type":"command","command":"orca.cmd"},{"type":"command","command":OLD}]},
+            {"hooks":[{"type":"command","command":NEW}]}
+        ]}});
+        assert!(add_island_hooks(&mut v, NEW));
+        let stop = v["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(island_commands(&v, "Stop"), vec![NEW.to_string()]);
+        // Every stale copy goes, and so does a group left empty by that;
+        // groups with other hooks stay.
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"].as_array().unwrap().len(), 1);
+        assert_eq!(stop[0]["hooks"][0]["command"], "orca.cmd");
+        assert_eq!(stop[1]["hooks"][0]["command"], NEW);
+    }
+
+    #[test]
+    fn foreign_hooks_that_merely_mention_the_island_stay() {
+        let other = "notepad.exe dynamic-island.exe --hook-log";
+        let mut v =
+            serde_json::json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":other}]}]}});
+        assert!(add_island_hooks(&mut v, NEW));
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], other);
+        assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn island_suffix_match_ignores_case() {
+        let upper = "\"C:\\X\\Dynamic-Island.EXE\" --hook";
+        let mut v =
+            serde_json::json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":upper}]}]}});
+        assert!(add_island_hooks(&mut v, NEW));
+        assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], NEW);
+    }
+
+    /// A fresh directory under the system temp dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("dynamic-island-test-{}-{name}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn settings(&self) -> PathBuf {
+            self.0.join("settings.json")
+        }
+
+        fn backup(&self) -> PathBuf {
+            self.0.join(BACKUP_NAME)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn creates_missing_settings_without_backup() {
+        let dir = TempDir::new("missing");
+        let nested = dir.0.join("nested");
+        let path = nested.join("settings.json");
+        assert_eq!(install_at(&path, NEW), InstallOutcome::Installed);
+        let v = read_json(&path);
+        for e in EVENTS {
+            assert_eq!(island_commands(&v, e), vec![NEW.to_string()]);
+        }
+        assert!(!nested.join(BACKUP_NAME).exists());
+        assert!(!nested.join(TEMP_NAME).exists());
+    }
+
+    #[test]
+    fn installs_into_existing_file_and_backs_it_up() {
+        let dir = TempDir::new("existing");
+        let original = r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}}"#;
+        fs::write(dir.settings(), original).unwrap();
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        let v = read_json(&dir.settings());
+        assert_eq!(v["model"], "opus");
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "orca.cmd");
+        assert_eq!(island_commands(&v, "Stop"), vec![NEW.to_string()]);
+        assert_eq!(fs::read_to_string(dir.backup()).unwrap(), original);
+    }
+
+    #[test]
+    fn second_install_is_already_installed_and_leaves_file_alone() {
+        let dir = TempDir::new("again");
+        fs::write(dir.settings(), "{}").unwrap();
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        let written = fs::read_to_string(dir.settings()).unwrap();
+        assert_eq!(
+            install_at(&dir.settings(), NEW),
+            InstallOutcome::AlreadyInstalled
+        );
+        assert_eq!(fs::read_to_string(dir.settings()).unwrap(), written);
+    }
+
+    #[test]
+    fn existing_backup_is_never_overwritten() {
+        let dir = TempDir::new("backup");
+        fs::write(dir.settings(), r#"{"first":true}"#).unwrap();
+        assert_eq!(install_at(&dir.settings(), OLD), InstallOutcome::Installed);
+        // The exe moved: the next install rewrites settings but keeps the first backup.
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(
+            fs::read_to_string(dir.backup()).unwrap(),
+            r#"{"first":true}"#
+        );
+        let v = read_json(&dir.settings());
+        for e in EVENTS {
+            assert_eq!(island_commands(&v, e), vec![NEW.to_string()]);
+        }
+    }
+
+    #[test]
+    fn invalid_json_is_an_error_and_untouched() {
+        let dir = TempDir::new("invalid");
+        fs::write(dir.settings(), "{not json").unwrap();
+        assert!(matches!(
+            install_at(&dir.settings(), NEW),
+            InstallOutcome::Error(_)
+        ));
+        assert_eq!(fs::read_to_string(dir.settings()).unwrap(), "{not json");
+        assert!(!dir.backup().exists());
+    }
+
+    #[test]
+    fn unrecognised_hooks_shape_is_an_error() {
+        let dir = TempDir::new("shape");
+        fs::write(dir.settings(), r#"{"hooks":[]}"#).unwrap();
+        assert!(matches!(
+            install_at(&dir.settings(), NEW),
+            InstallOutcome::Error(_)
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.settings()).unwrap(),
+            r#"{"hooks":[]}"#
+        );
     }
 }
