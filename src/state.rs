@@ -16,7 +16,8 @@ pub struct IslandState {
     media: Option<MediaInfo>,
     queue: VecDeque<Notice>,
     current: Option<(Notice, Instant)>,
-    waiting: Option<Notice>,
+    /// At most one `ClaudeWaiting` per session, oldest first; the newest is shown.
+    waiting: Vec<Notice>,
     fullscreen: bool,
     hover: bool,
 }
@@ -32,7 +33,15 @@ impl IslandState {
         match event {
             Event::Media(media) => self.media = media,
             Event::Notice(notice) => match &notice.kind {
-                NoticeKind::ClaudeWaiting { .. } => self.waiting = Some(notice),
+                NoticeKind::ClaudeWaiting { session_id } => {
+                    self.clear_waiting(session_id);
+                    // The sticky slot is hidden in fullscreen, so show it briefly like
+                    // any other new notice; it stays in `waiting` for afterwards.
+                    if self.fullscreen {
+                        self.queue.push_back(notice.clone());
+                    }
+                    self.waiting.push(notice);
+                }
                 NoticeKind::ClaudeDone { session_id } => {
                     self.clear_waiting(session_id);
                     self.queue.push_back(notice);
@@ -64,7 +73,7 @@ impl IslandState {
         if self.fullscreen {
             return View::Hidden;
         }
-        if let Some(notice) = &self.waiting {
+        if let Some(notice) = self.waiting.last() {
             return View::Notice(notice.clone());
         }
         match (&self.media, self.hover) {
@@ -95,12 +104,14 @@ impl IslandState {
         }
     }
 
+    /// Removes session's waiting notice, including a brief fullscreen copy that is
+    /// queued or showing, so a resolved wait is never displayed.
     fn clear_waiting(&mut self, session: &str) {
-        if matches!(
-            &self.waiting,
-            Some(Notice { kind: NoticeKind::ClaudeWaiting { session_id }, .. }) if session_id == session
-        ) {
-            self.waiting = None;
+        let is_session = |n: &Notice| waiting_session(n) == Some(session);
+        self.waiting.retain(|n| !is_session(n));
+        self.queue.retain(|n| !is_session(n));
+        if matches!(&self.current, Some((n, _)) if is_session(n)) {
+            self.current = None;
         }
     }
 
@@ -109,13 +120,24 @@ impl IslandState {
         if let Some((notice, _)) = self.current.take() {
             return match notice.kind {
                 NoticeKind::App { app_id: Some(id) } => Some(Effect::OpenApp(id)),
+                NoticeKind::ClaudeWaiting { session_id } => {
+                    self.clear_waiting(&session_id);
+                    None
+                }
                 _ => None,
             };
         }
         if !self.fullscreen {
-            self.waiting = None;
+            self.waiting.pop();
         }
         None
+    }
+}
+
+fn waiting_session(notice: &Notice) -> Option<&str> {
+    match &notice.kind {
+        NoticeKind::ClaudeWaiting { session_id } => Some(session_id),
+        _ => None,
     }
 }
 
@@ -358,6 +380,80 @@ mod tests {
         s.apply(Event::Notice(waiting("s1")), t0);
         assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![]);
         assert_eq!(s.view(), View::MediaCompact);
+    }
+
+    #[test]
+    fn waiting_is_tracked_per_session() {
+        let t0 = Instant::now();
+        let mut s = IslandState::new();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(waiting("s2")), t0);
+        assert_eq!(s.view(), View::Notice(waiting("s2")));
+        s.apply(
+            Event::ClaudeActivity {
+                session_id: "s2".into(),
+            },
+            t0,
+        );
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+    }
+
+    #[test]
+    fn repeated_waiting_moves_session_to_newest() {
+        let t0 = Instant::now();
+        let mut s = IslandState::new();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(waiting("s2")), t0);
+        s.apply(Event::Notice(waiting("s1")), t0);
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+        s.apply(
+            Event::ClaudeActivity {
+                session_id: "s1".into(),
+            },
+            t0,
+        );
+        assert_eq!(s.view(), View::Notice(waiting("s2")));
+    }
+
+    #[test]
+    fn click_dismisses_only_the_visible_waiting_notice() {
+        let t0 = Instant::now();
+        let mut s = IslandState::new();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(waiting("s2")), t0);
+        assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![]);
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+    }
+
+    #[test]
+    fn waiting_during_fullscreen_shows_briefly_and_returns_after() {
+        let t0 = Instant::now();
+        let mut s = IslandState::new();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(waiting("s1")), t0);
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0 + secs(6));
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+    }
+
+    #[test]
+    fn activity_during_fullscreen_clears_brief_waiting_notice() {
+        let t0 = Instant::now();
+        let mut s = IslandState::new();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(
+            Event::ClaudeActivity {
+                session_id: "s1".into(),
+            },
+            t0 + secs(1),
+        );
+        assert_eq!(s.view(), View::Hidden);
+        assert_eq!(s.next_deadline(), None);
+        s.apply(Event::Fullscreen(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Hidden);
     }
 
     #[test]
