@@ -29,6 +29,11 @@ fn main() {
             attach_parent_console();
             sources::notifications::probe();
         }
+        #[cfg(debug_assertions)]
+        Some("--probe-media") => {
+            attach_parent_console();
+            sources::media::probe();
+        }
         Some("--install-hooks") => claude::install::install_hooks(),
         Some(other) => {
             attach_parent_console();
