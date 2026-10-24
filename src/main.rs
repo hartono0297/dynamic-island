@@ -2,7 +2,9 @@
 
 mod app;
 mod claude;
+mod model;
 mod sources;
+mod state;
 
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 
