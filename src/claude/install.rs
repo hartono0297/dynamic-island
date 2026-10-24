@@ -5,7 +5,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 /// Claude Code hook events the island listens to.
-const EVENTS: [&str; 4] = ["Stop", "Notification", "UserPromptSubmit", "PostToolUse"];
+const EVENTS: [&str; 5] = [
+    "Stop",
+    "Notification",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "SessionEnd",
+];
 /// Seconds Claude Code waits for `--hook` before giving up on it.
 const HOOK_TIMEOUT_SECS: u64 = 5;
 const BACKUP_NAME: &str = "settings.json.bak-dynamic-island";
@@ -222,6 +228,34 @@ mod tests {
         assert!(!add_island_hooks(&mut v, "\"C:\\di.exe\" --hook"));
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "orca.cmd");
+    }
+
+    #[test]
+    fn installs_five_events_including_session_end() {
+        assert_eq!(
+            EVENTS,
+            [
+                "Stop",
+                "Notification",
+                "UserPromptSubmit",
+                "PostToolUse",
+                "SessionEnd"
+            ]
+        );
+        let mut v = serde_json::json!({});
+        assert!(add_island_hooks(&mut v, "di --hook"));
+        assert_eq!(v["hooks"].as_object().unwrap().len(), 5);
+        assert!(v["hooks"]["SessionEnd"][0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn four_event_install_gains_session_end() {
+        let mut v = serde_json::json!({});
+        add_island_hooks(&mut v, NEW);
+        v["hooks"].as_object_mut().unwrap().remove("SessionEnd");
+        assert!(add_island_hooks(&mut v, NEW));
+        assert_eq!(island_commands(&v, "SessionEnd"), vec![NEW.to_string()]);
+        assert!(!add_island_hooks(&mut v, NEW));
     }
 
     #[test]

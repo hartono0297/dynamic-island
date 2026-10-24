@@ -22,7 +22,7 @@ Exe-nya satu file (~430 KB) dan jalan langsung dari `target\release`. Kalau exe 
 
 Saat pertama jalan:
 
-- Kalau izin baca notifikasi belum ada, Windows menanyakannya sekali. Pilih **Izinkan**.
+- Kalau izin baca notifikasi belum ada, Windows menanyakannya. Pilih **Izinkan**. (Izin ini dicek setiap island start, jadi setelah exe diberi package identity, lihat "Mode event", izinnya ditanyakan lagi.)
 - Island menampilkan petunjuk Do Not Disturb dan membuka halaman Settings → Notifications.
 - `%APPDATA%\DynamicIsland\config.json` dibuat, dan island didaftarkan untuk jalan otomatis saat login (bisa dimatikan, lihat di bawah).
 
@@ -36,14 +36,14 @@ Petunjuk ini bisa dibuka lagi dari tray → **Cara matiin popup Windows**.
 
 ### 4. Hook Claude Code (opsional)
 
-Tray → **Pasang hook Claude Code**. Ini menambahkan hook `Stop`, `Notification`, `UserPromptSubmit`, dan `PostToolUse` ke `%USERPROFILE%\.claude\settings.json` yang memanggil `"...\dynamic-island.exe" --hook`.
+Tray → **Pasang hook Claude Code**. Ini menambahkan hook `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse`, dan `SessionEnd` ke `%USERPROFILE%\.claude\settings.json` yang memanggil `"...\dynamic-island.exe" --hook`.
 
 - Hook lain yang sudah ada (misalnya dari Orca) tidak diubah; hook island ditambahkan di sebelahnya.
 - Isi `settings.json` sebelum pertama kali diubah disimpan di `settings.json.bak-dynamic-island`.
 - Aman dijalankan berulang kali. Kalau exe dipindah, hook lama diarahkan ke path baru, bukan diduplikasi.
-- Kalau island sedang mati, hook langsung selesai tanpa error (sekitar 15 ms), jadi Claude Code tidak melambat.
+- Biaya per event: exe-nya sendiri sekitar 15 ms (juga saat island sedang mati; hook selesai tanpa error). Claude Code secara default menjalankan hook lewat Git Bash, jadi totalnya sekitar 80–100 ms per event.
 
-Notifikasi "Claude menunggu izin/input" tetap tampil sampai ada event Claude berikutnya untuk sesi yang sama, atau sampai diklik.
+Notifikasi "Claude butuh respon" hanya muncul untuk notifikasi Claude yang memang menunggu kamu (minta izin, menunggu input, atau dialog pertanyaan); notifikasi lain dari Claude Code diabaikan. Notifikasi ini tetap tampil sampai ada event Claude berikutnya untuk sesi yang sama (termasuk sesi ditutup, `SessionEnd`), atau sampai diklik.
 
 ### 5. Jalan otomatis saat login
 
@@ -52,7 +52,7 @@ Tray → **Jalan saat Windows start** (default: nyala). Ini menulis/menghapus va
 ## Pemakaian
 
 - **Tray icon** (klik kiri atau kanan): Gaya Pill / Notch, Jalan saat Windows start, Cara matiin popup Windows, Pasang hook Claude Code, Keluar.
-- **Musik:** hover/klik island untuk memperbesar dan memunculkan tombol prev / play-pause / next.
+- **Musik:** diamkan kursor sebentar (~0,35 detik) di atas island atau klik untuk memperbesar dan memunculkan tombol prev / play-pause / next.
 - **Klik notifikasi:** membuka aplikasi sumbernya (bukan chat spesifiknya) lalu menutup notifikasi dari island. Notifikasinya tetap ada di Notification Center Windows.
 - **Fullscreen** (game, video, presentasi): island ngumpet; notifikasi baru tetap muncul sebentar.
 
@@ -72,7 +72,7 @@ JSON yang rusak dianggap kosong dan semua field kembali ke default.
 
 ## Mode event untuk notifikasi (opsional)
 
-Tanpa package identity, island membaca daftar notifikasi **setiap 1 detik** (polling). Biayanya sekitar 15–25 ms CPU per detik saat idle (1,5–2,5% dari satu core). Fitur lain tidak terpengaruh.
+Tanpa package identity, island membaca daftar notifikasi **setiap 1 detik** (polling). Biayanya sekitar 15–30 ms CPU per detik saat idle (±2–3% satu core). Fitur lain tidak terpengaruh.
 
 Kalau mau idle mendekati 0, exe bisa diberi package identity lewat sparse package; island lalu otomatis berlangganan event `NotificationChanged` dan hanya membaca saat ada perubahan (plus satu pembacaan cadangan tiap 60 detik):
 

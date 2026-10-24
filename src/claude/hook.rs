@@ -38,6 +38,17 @@ struct HookInput {
     #[serde(default)]
     cwd: String,
     message: Option<String>,
+    /// Absent in Claude Code versions that predate it.
+    notification_type: Option<String>,
+}
+
+/// True for a `Notification` that waits on the user. Without a type (older
+/// Claude Code) every notification is assumed to.
+fn needs_user(notification_type: Option<&str>) -> bool {
+    matches!(
+        notification_type,
+        None | Some("permission_prompt" | "idle_prompt" | "elicitation_dialog")
+    )
 }
 
 pub fn parse_hook_input(json: &str) -> Option<HookMessage> {
@@ -46,8 +57,11 @@ pub fn parse_hook_input(json: &str) -> Option<HookMessage> {
     let input: HookInput = serde_json::from_str(json).ok()?;
     let (kind, message) = match input.hook_event_name.as_str() {
         "Stop" => (HookKind::Done, None),
-        "Notification" => (HookKind::Waiting, input.message),
-        "UserPromptSubmit" | "PostToolUse" => (HookKind::Activity, None),
+        "Notification" if needs_user(input.notification_type.as_deref()) => {
+            (HookKind::Waiting, input.message)
+        }
+        // Ending the session clears its waiting notice like any activity.
+        "UserPromptSubmit" | "PostToolUse" | "SessionEnd" => (HookKind::Activity, None),
         _ => return None,
     };
     let project = input
@@ -192,9 +206,46 @@ mod tests {
         );
     }
 
+    fn notification(notification_type: Option<&str>) -> Option<HookMessage> {
+        let type_field = notification_type
+            .map(|t| format!(r#","notification_type":"{t}""#))
+            .unwrap_or_default();
+        parse_hook_input(&format!(
+            r#"{{"hook_event_name":"Notification","session_id":"s","cwd":"C:\\p","message":"m"{type_field}}}"#
+        ))
+    }
+
+    #[test]
+    fn notifications_that_need_the_user_are_waiting() {
+        for t in ["permission_prompt", "idle_prompt", "elicitation_dialog"] {
+            let m = notification(Some(t)).unwrap_or_else(|| panic!("{t} ignored"));
+            assert_eq!(m.kind, HookKind::Waiting, "{t}");
+            assert_eq!(m.message.as_deref(), Some("m"), "{t}");
+        }
+    }
+
+    #[test]
+    fn notification_without_type_is_waiting() {
+        // Claude Code versions before `notification_type` existed.
+        assert_eq!(notification(None).unwrap().kind, HookKind::Waiting);
+    }
+
+    #[test]
+    fn other_notification_types_are_ignored() {
+        for t in [
+            "auth_success",
+            "elicitation_complete",
+            "elicitation_response",
+            "plugin_notification",
+            "something_new",
+        ] {
+            assert_eq!(notification(Some(t)), None, "{t}");
+        }
+    }
+
     #[test]
     fn activity_events() {
-        for name in ["UserPromptSubmit", "PostToolUse"] {
+        for name in ["UserPromptSubmit", "PostToolUse", "SessionEnd"] {
             let json = format!(r#"{{"hook_event_name":"{name}","session_id":"s3","cwd":"C:\\p"}}"#);
             let m = parse_hook_input(&json).unwrap();
             assert_eq!(m.kind, HookKind::Activity, "{name}");
