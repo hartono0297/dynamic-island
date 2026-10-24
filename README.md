@@ -78,15 +78,16 @@ Kalau mau idle mendekati 0, exe bisa diberi package identity lewat sparse packag
 
 1. Jalankan (PowerShell biasa, tanpa admin):
    ```powershell
-   .\scripts\package.ps1
+   powershell -ExecutionPolicy Bypass -File .\scripts\package.ps1
    ```
+   `-ExecutionPolicy Bypass` hanya berlaku untuk perintah ini; execution policy sistem tidak berubah (default Windows `Restricted` menolak menjalankan `.ps1`).
    Pertama kali, script membuat sertifikat self-signed lokal (`packaging\dev-cert\`, tidak di-commit) dan mencetak perintah `Import-Certificate ...`.
 2. Jalankan perintah yang dicetak itu **sekali** di PowerShell **Administrator**:
    ```powershell
    Import-Certificate -FilePath "<repo>\packaging\dev-cert\dev.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople
    ```
    Ini membuat Windows **mempercayai sertifikat self-signed buatan lokal** untuk seluruh komputer (store `LocalMachine\TrustedPeople`). Siapa pun yang memegang `dev.pfx` dan password-nya bisa menandatangani package yang akan dipercaya mesin ini, jadi jaga folder `packaging\dev-cert\`. Untuk membatalkan: hapus sertifikat `CN=DynamicIslandDev` dari store itu, lalu `Get-AppxPackage DynamicIsland | Remove-AppxPackage`.
-3. Jalankan lagi `.\scripts\package.ps1`. Package `DynamicIsland` terdaftar dengan lokasi eksternal `target\release`.
+3. Jalankan lagi `powershell -ExecutionPolicy Bypass -File .\scripts\package.ps1`. Package `DynamicIsland` terdaftar dengan lokasi eksternal `target\release`.
 4. Keluar dari island lalu jalankan lagi `target\release\dynamic-island.exe`.
 
 Cek hasilnya dengan `--probe-notifications` (lihat Troubleshooting): baris `Change events: subscribed` berarti mode event aktif. Kalau berlangganan event gagal, island kembali ke polling 1 detik dengan sendirinya.
@@ -97,7 +98,7 @@ Cek hasilnya dengan `--probe-notifications` (lihat Troubleshooting): baris `Chan
   ```powershell
   .\target\release\dynamic-island.exe --probe-notifications
   ```
-  Probe meminta izin kalau belum ada, mencetak apakah mode event aktif (`Change events: subscribed` / `unavailable`), lalu notifikasi yang masuk selama 60 detik. Kirim toast uji dari terminal lain dengan `.\scripts\send-test-toast.ps1` (atau `-Long` untuk teks 300 karakter dengan emoji).
+  Probe meminta izin kalau belum ada, mencetak apakah mode event aktif (`Change events: subscribed` / `unavailable`), lalu notifikasi yang masuk selama 60 detik. Kirim toast uji dari terminal lain dengan `powershell -ExecutionPolicy Bypass -File .\scripts\send-test-toast.ps1` (tambahkan `-Long` di belakangnya untuk teks 300 karakter dengan emoji).
 - **Probe khusus build debug** (`cargo build`, lalu `.\target\debug\dynamic-island.exe <arg>`):
   - `--probe-media`: cetak media yang sedang diputar setiap kali berubah.
   - `--probe-system`: cetak status baterai dan fullscreen setiap detik.
