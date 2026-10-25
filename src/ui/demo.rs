@@ -15,7 +15,7 @@ use super::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, 
 use super::render::Renderer;
 use super::window::IslandWindow;
 use crate::config::Style;
-use crate::model::{MediaInfo, Notice, NoticeKind, View};
+use crate::model::{MediaInfo, Notice, NoticeKind, Page, View};
 
 const PHASE: Duration = Duration::from_millis(2000);
 const STEPS: u32 = 8;
@@ -53,7 +53,7 @@ pub fn run() {
             let (_, _, from, from_opacity) = step_target((step + STEPS - 1) % STEPS);
             let shape = lerp_shape(from, to, ease_out_back(t));
             let opacity = from_opacity + (to_opacity - from_opacity) * t;
-            let shown = matches!(view, View::MediaCompact | View::MediaExpanded);
+            let shown = matches!(view, View::MediaCompact | View::Panel(_));
             let media = shown.then_some(&media);
             if let Err(error) = renderer.draw(&win, style, shape, &view, media, opacity) {
                 eprintln!("demo: draw failed: {error}");
@@ -78,7 +78,7 @@ fn step_target(step: u32) -> (Style, View, ShapeRect, f32) {
     };
     let view = match kind {
         ShapeKind::Compact => View::MediaCompact,
-        ShapeKind::MediaExpanded => View::MediaExpanded,
+        ShapeKind::MediaExpanded => View::Panel(Page::Media),
         ShapeKind::Notice => View::Notice(demo_notice(style)),
     };
     (style, view, shape_for(style, kind), 1.0)

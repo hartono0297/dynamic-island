@@ -261,11 +261,13 @@ impl HitRegions {
     }
 }
 
-/// Badge fill as 0xRRGGBB: WhatsApp green, Claude orange, battery amber, else grey.
+/// Badge fill as 0xRRGGBB: WhatsApp green, Claude orange, battery amber,
+/// pomodoro red, else grey.
 pub fn badge_color(notice: &Notice) -> u32 {
     match notice.kind {
         NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => 0xD97757,
         NoticeKind::BatteryLow => 0xF5A524,
+        NoticeKind::Pomodoro => 0xEF5350,
         NoticeKind::App { .. } if notice.source.to_lowercase().contains("whatsapp") => 0x25D366,
         NoticeKind::App { .. } => 0x5A5A5E,
     }

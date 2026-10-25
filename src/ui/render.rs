@@ -323,9 +323,11 @@ impl Renderer {
         }
         let content = match view {
             View::MediaCompact => media.map_or(Ok(()), |m| self.paint_compact(shape, m)),
-            View::MediaExpanded => media.map_or(Ok(()), |m| self.paint_expanded(shape, m)),
+            // Task 8 draws each panel page; until then every page shows the media layout.
+            View::Panel(_) => media.map_or(Ok(()), |m| self.paint_expanded(shape, m)),
             View::Notice(notice) => self.paint_notice(shape, notice),
-            View::Hidden => Ok(()),
+            // Empty shapes until Task 8 draws the pomodoro ring.
+            View::Idle | View::PomodoroCompact | View::Hidden => Ok(()),
         };
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };

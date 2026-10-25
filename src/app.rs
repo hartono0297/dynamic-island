@@ -23,8 +23,8 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer, MA_NOACTIVATE, MSG,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetTimer, TranslateMessage, WM_APP, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP,
-    WM_TIMER,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::w;
 
@@ -32,6 +32,7 @@ use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, Style};
 use crate::model::{Effect, Event, Notice, NoticeKind, View};
+use crate::pomodoro::PomoSettings;
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
@@ -92,7 +93,8 @@ pub fn run() {
             win: Some(win),
             renderer,
             config,
-            state: IslandState::new(),
+            // Task 4 adds the saved pomodoro settings to Config.
+            state: IslandState::new(chrono::Local::now().date_naive(), PomoSettings::default()),
             rx,
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
@@ -195,6 +197,14 @@ impl App {
             match effect {
                 Effect::OpenApp(app_id) => notifications::open_app(&app_id),
                 Effect::Media(cmd) => media::send_command(cmd),
+                // Task 10 wires these to the sound, config, Google login,
+                // calendar sync and editor windows.
+                Effect::PlaySound
+                | Effect::SavePomodoro(_)
+                | Effect::ConnectGoogle
+                | Effect::RefreshCalendar { .. }
+                | Effect::OpenNoteEditor(_)
+                | Effect::OpenEventEditor { .. } => {}
             }
         }
     }
@@ -210,8 +220,9 @@ impl App {
         let view = self.state.view();
         let kind = match &view {
             View::Hidden => None,
-            View::MediaCompact => Some(ShapeKind::Compact),
-            View::MediaExpanded => Some(ShapeKind::MediaExpanded),
+            // Task 7/8 give idle, pomodoro and the panel their own shapes.
+            View::Idle | View::MediaCompact | View::PomodoroCompact => Some(ShapeKind::Compact),
+            View::Panel(_) => Some(ShapeKind::MediaExpanded),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
         let target = kind.map(|kind| shape_for(self.config.style, kind));
@@ -717,6 +728,12 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_MOUSELEAVE => {
             with_app(App::on_mouse_leave);
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            // High word of wParam: signed delta, +120 per notch away from the user.
+            let delta = (wparam.0 >> 16) as u16 as i16;
+            with_app(|app| app.apply_now(Event::Wheel(i32::from(delta))));
             LRESULT(0)
         }
         WM_LBUTTONUP => {

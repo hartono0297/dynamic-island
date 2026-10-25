@@ -1,6 +1,3 @@
-// Nothing uses the timer until Task 3 wires it into the reducer.
-#![allow(dead_code)]
-
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -107,6 +104,7 @@ impl Pomodoro {
         self.settings
     }
 
+    #[allow(dead_code)] // Read by the pomodoro renderer (Task 8).
     pub fn phase(&self) -> Phase {
         self.phase
     }
@@ -156,6 +154,7 @@ impl Pomodoro {
         }
     }
 
+    #[allow(dead_code)] // Read by the pomodoro renderer (Task 8).
     pub fn remaining(&self, now: Instant) -> Duration {
         match self.status {
             PomoStatus::Idle | PomoStatus::Ready => self.full_length(),
@@ -165,6 +164,7 @@ impl Pomodoro {
     }
 
     /// Elapsed fraction of the current phase, 0..=1.
+    #[allow(dead_code)] // Read by the pomodoro renderer (Task 8).
     pub fn progress(&self, now: Instant) -> f32 {
         let full = self.full_length().as_secs_f32();
         (1.0 - self.remaining(now).as_secs_f32() / full).clamp(0.0, 1.0)
