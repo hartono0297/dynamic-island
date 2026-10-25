@@ -1,8 +1,10 @@
 //! The running island. One UI thread owns the window, renderer and state;
 //! background sources queue `Event`s on a channel and post `WM_APP_EVENT` to
-//! wake it. Nothing redraws unless an event arrives or an animation runs.
+//! wake it. Nothing redraws unless an event arrives, an animation runs, or a
+//! visible live element (equalizer, pomodoro countdown) needs its next frame.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
@@ -11,9 +13,11 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use chrono::{Local, NaiveDate};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
 };
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -21,22 +25,27 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer, MA_NOACTIVATE, MSG,
-    PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetTimer, TranslateMessage, WM_APP, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONUP, WM_TIMER,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, IsWindow, KillTimer,
+    MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, SW_SHOWNORMAL,
+    SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::w;
 
-use crate::calendar::{CalStatus, CalendarSnapshot};
+use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
+use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, Style};
-use crate::model::{Effect, Event, Notice, NoticeKind, View};
+use crate::model::{Effect, Event, Notice, NoticeKind, Page, View};
+use crate::notes::NotesStore;
+use crate::pomodoro::PomoStatus;
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
+use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
 use crate::ui::render::{Frame, Renderer};
@@ -56,8 +65,21 @@ const HOVER_DWELL_MS: u32 = 350;
 const TIMER_SYSTEM: usize = 1;
 const TIMER_BATTERY: usize = 2;
 const TIMER_DEADLINE: usize = 4;
+/// Equalizer frames, only while the compact media view shows a playing track.
+const TIMER_EQ: usize = 5;
+/// Pomodoro countdown redraws, only while it runs and is on screen.
+const TIMER_POMO: usize = 6;
+/// Date rollover check.
+const TIMER_DAY: usize = 7;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
+/// Values table: ~30 fps equalizer.
+const EQ_MS: u32 = 33;
+const DAY_MS: u32 = 60_000;
+/// Values table: page slide duration (ease-out).
+const SLIDE_MS: f32 = 220.0;
+/// Values table: the open calendar re-asks for its range once data is this old.
+const CALENDAR_FRESH: Duration = Duration::from_secs(60);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -66,6 +88,7 @@ thread_local! {
     static DEFERRED_DRAIN: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
+    static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -88,7 +111,10 @@ pub fn run() {
 
     let rest = shape_for(config.style, ShapeKind::Idle);
     let pomodoro = config.pomodoro;
-    let today = chrono::Local::now().date_naive();
+    let today = Local::now().date_naive();
+    let notes = NotesStore::open(NotesStore::default_path());
+    // Sends the cached calendar at once; the first range is asked for below.
+    let sync = spawn_sync(tx.clone(), poster(hwnd, WM_APP_EVENT), config.clone());
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
             hwnd,
@@ -97,24 +123,34 @@ pub fn run() {
             config,
             state: IslandState::new(today, pomodoro),
             calendar: CalendarSnapshot::empty(CalStatus::NotConfigured, today),
+            notes,
+            sync: Some(sync),
+            calendar_asked: None,
+            editor: None,
             rx,
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
+            slide: None,
             clock: None,
             frame_log: FrameLog::from_env(),
             drawn: View::Hidden,
             fullscreen: false,
             battery,
             hover: HoverTracking::default(),
+            eq_timer: false,
+            pomo_timer: false,
         });
     });
     with_app(|app| {
+        let now = Instant::now();
         app.check_fullscreen();
         app.check_battery();
-        app.draw(Instant::now());
+        app.draw(now);
+        app.request_calendar(app.state.cal_range(), now);
         unsafe {
             SetTimer(Some(hwnd), TIMER_SYSTEM, SYSTEM_MS, None);
             SetTimer(Some(hwnd), TIMER_BATTERY, BATTERY_MS, None);
+            SetTimer(Some(hwnd), TIMER_DAY, DAY_MS, None);
         }
     });
 
@@ -165,13 +201,22 @@ struct App {
     renderer: Renderer,
     config: Config,
     state: IslandState,
-    /// The latest calendar data; Task 10 fills it from the sync thread.
+    /// The latest calendar data from the sync thread.
     calendar: CalendarSnapshot,
+    notes: NotesStore,
+    /// `None` once shut down.
+    sync: Option<SyncHandle>,
+    /// The range last asked of the sync thread, and when.
+    calendar_asked: Option<((NaiveDate, NaiveDate), Instant)>,
+    /// The open note or event editor (at most one).
+    editor: Option<HWND>,
     rx: Receiver<Event>,
     /// Kept to restart the notification poller once access is granted.
     tx: Sender<Event>,
     anim: Anim,
-    /// Paces animation frames; exists only while `anim` runs.
+    /// A panel page switch in progress.
+    slide: Option<Slide>,
+    /// Paces animation frames; exists only while `anim` or `slide` runs.
     clock: Option<FrameClock>,
     frame_log: FrameLog,
     /// The view frames draw: the current one, or the last visible one while
@@ -180,6 +225,9 @@ struct App {
     fullscreen: bool,
     battery: BatteryMonitor,
     hover: HoverTracking,
+    /// `TIMER_EQ` / `TIMER_POMO` are set.
+    eq_timer: bool,
+    pomo_timer: bool,
 }
 
 impl App {
@@ -191,25 +239,199 @@ impl App {
         self.refresh(now);
     }
 
+    /// Runs `event` through the reducer and performs its effects; events an
+    /// effect produces (an editor opened, a notice) follow in order.
     fn apply(&mut self, event: Event, now: Instant) {
-        // A session without metadata yet has nothing to show.
-        let event = match event {
-            Event::Media(Some(m)) if m.title.is_empty() => Event::Media(None),
-            other => other,
-        };
-        for effect in self.state.apply(event, now) {
-            match effect {
-                Effect::OpenApp(app_id) => notifications::open_app(&app_id),
-                Effect::Media(cmd) => media::send_command(cmd),
-                // Task 10 wires these to the sound, config, Google login,
-                // calendar sync and editor windows.
-                Effect::PlaySound
-                | Effect::SavePomodoro(_)
-                | Effect::ConnectGoogle
-                | Effect::RefreshCalendar { .. }
-                | Effect::OpenNoteEditor(_)
-                | Effect::OpenEventEditor { .. } => {}
+        let mut queue = VecDeque::from([event]);
+        while let Some(event) = queue.pop_front() {
+            let event = match event {
+                // A session without metadata yet has nothing to show.
+                Event::Media(Some(m)) if m.title.is_empty() => Event::Media(None),
+                // Only `App` keeps the calendar; the reducer has no use for it.
+                Event::Calendar(snapshot) => {
+                    self.calendar = snapshot;
+                    continue;
+                }
+                other => other,
+            };
+            let page = self.state.page();
+            for effect in self.state.apply(event, now) {
+                queue.extend(self.perform(effect, now));
             }
+            self.follow_page(page, now);
+        }
+    }
+
+    fn perform(&mut self, effect: Effect, now: Instant) -> Option<Event> {
+        match effect {
+            Effect::OpenApp(app_id) => notifications::open_app(&app_id),
+            Effect::Media(cmd) => media::send_command(cmd),
+            Effect::PlaySound => play_phase_sound(),
+            Effect::SavePomodoro(settings) => {
+                self.config.pomodoro = settings;
+                self.save_config();
+            }
+            Effect::ConnectGoogle => return self.connect_google(),
+            Effect::RefreshCalendar { from, to } => self.request_calendar((from, to), now),
+            Effect::OpenNoteEditor(id) => {
+                return self.open_editor(note_editor_kind(&self.notes, id.as_deref()));
+            }
+            Effect::OpenEventEditor { event_id, date } => {
+                let kind = event_editor_kind(&self.calendar.events, event_id.as_deref(), date)?;
+                return self.open_editor(kind);
+            }
+        }
+        None
+    }
+
+    /// Slides in the page the wheel just switched to.
+    fn follow_page(&mut self, before: Page, now: Instant) {
+        let after = self.state.page();
+        if after == before || !matches!(self.state.view(), View::Panel(_)) {
+            return;
+        }
+        let index = |p: Page| Page::ALL.iter().position(|q| *q == p).unwrap_or(0);
+        // A later page comes in from the right.
+        let from = if index(after) > index(before) {
+            1.0
+        } else {
+            -1.0
+        };
+        self.slide = Some(Slide { from, start: now });
+        self.ensure_clock();
+    }
+
+    /// Without a client ID there is nothing to log in to; the notice says
+    /// where to set it. A second click while the browser login waits is ignored.
+    fn connect_google(&self) -> Option<Event> {
+        if self.config.google_client_id.trim().is_empty() {
+            return Some(Event::Notice(client_id_notice()));
+        }
+        if let Some(sync) = &self.sync {
+            sync.connect();
+        }
+        None
+    }
+
+    /// Asks the sync thread for `range` unless `needs_fetch` says the data is fresh.
+    fn request_calendar(&mut self, range: (NaiveDate, NaiveDate), now: Instant) {
+        let snap = &self.calendar;
+        let fetched_age = snap
+            .fetched_at
+            .filter(|_| snap.status == CalStatus::Ok && (snap.from, snap.to) == range)
+            .and_then(|at| (Local::now() - at).to_std().ok());
+        if !needs_fetch(self.calendar_asked, fetched_age, range, now) {
+            return;
+        }
+        let (from, to) = range;
+        if self
+            .sync
+            .as_ref()
+            .is_some_and(|sync| sync.send(SyncRequest::Range { from, to }))
+        {
+            self.calendar_asked = Some((range, now));
+        }
+    }
+
+    /// Opens an editor under the panel. If one is already open, Windows
+    /// brings that one forward instead and nothing else changes.
+    fn open_editor(&mut self, kind: EditorKind) -> Option<Event> {
+        let win = self.win.as_ref()?;
+        let panel = shape_for(self.config.style, ShapeKind::Panel);
+        let anchor = win.to_screen(panel.x + panel.w / 2.0, panel.y + panel.h);
+        match editor::open_editor(self.hwnd, anchor, kind) {
+            Ok(hwnd) if self.editor == Some(hwnd) => None,
+            Ok(hwnd) => {
+                self.editor = Some(hwnd);
+                // Keeps the panel open while the pointer is over the editor.
+                Some(Event::EditorOpen(true))
+            }
+            Err(error) => {
+                eprintln!("dynamic-island: cannot open the editor: {error}");
+                None
+            }
+        }
+    }
+
+    fn on_editor_result(&mut self, result: EditorResult) {
+        let now = Instant::now();
+        let closes = result.closes_editor();
+        match result {
+            EditorResult::NoteSaved { id, text } => self.save_note(id.as_deref(), &text),
+            EditorResult::NoteDeleted { id } => {
+                if self.notes.delete(&id) {
+                    self.persist_notes(now);
+                }
+            }
+            EditorResult::EventSave {
+                event_id,
+                calendar_id,
+                draft,
+            } => {
+                let reply = self.editor.map_or(0, |hwnd| hwnd.0 as isize);
+                let request = SyncRequest::Save {
+                    event_id,
+                    calendar_id,
+                    draft,
+                    reply,
+                };
+                if !self.sync.as_ref().is_some_and(|sync| sync.send(request)) {
+                    // No sync thread to answer: the editor must not wait forever.
+                    let failed = Err("Gagal simpan: sinkron kalender berhenti".to_string());
+                    if let Some(message) = post_status(reply, failed) {
+                        self.apply(Event::Notice(save_failed_notice(message)), now);
+                    }
+                }
+            }
+            EditorResult::Closed => {}
+        }
+        if closes {
+            self.editor = None;
+            self.apply(Event::EditorOpen(false), now);
+        }
+        self.refresh(now);
+    }
+
+    /// An untouched note is not saved: `upsert` would still move it to the top.
+    fn save_note(&mut self, id: Option<&str>, text: &str) {
+        if !note_changed(&self.notes, id, text) {
+            return;
+        }
+        // The note's id from here on is the one `upsert` returns (a new note, or
+        // one deleted meanwhile, gets a fresh one; `None` = emptied and deleted).
+        // The editor is gone, so nothing else holds an id to update.
+        let _id = self.notes.upsert(id, text, Local::now().timestamp());
+        self.persist_notes(Instant::now());
+    }
+
+    fn persist_notes(&mut self, now: Instant) {
+        if let Err(error) = self.notes.save() {
+            let notice = island_notice("notes", "Gagal simpan catatan", &error.to_string());
+            self.apply(Event::Notice(notice), now);
+        }
+    }
+
+    /// The editor died without its last result (never expected): the panel
+    /// must not stay pinned open.
+    fn check_editor(&mut self) {
+        if let Some(hwnd) = self.editor
+            && !unsafe { IsWindow(Some(hwnd)) }.as_bool()
+        {
+            self.editor = None;
+            self.apply_now(Event::EditorOpen(false));
+        }
+    }
+
+    fn check_date(&mut self) {
+        let today = Local::now().date_naive();
+        if today != self.state.today() {
+            self.apply_now(Event::Today(today));
+        }
+    }
+
+    fn stop_sync(&mut self) {
+        if let Some(sync) = self.sync.take() {
+            sync.send(SyncRequest::Shutdown);
         }
     }
 
@@ -251,14 +473,61 @@ impl App {
                 running: true,
             };
             self.frame_log.start(now);
-            if self.clock.is_none() {
-                self.clock = Some(FrameClock::start(self.hwnd.0 as isize));
-            }
-        } else if !self.anim.running {
+            self.ensure_clock();
+        } else if !self.animating() {
             // Same shape, but the content (track, notice text) may have changed.
             self.draw(now);
         }
         self.arm_deadline(now);
+        self.sync_timers(now);
+    }
+
+    fn animating(&self) -> bool {
+        self.anim.running || self.slide.is_some()
+    }
+
+    fn ensure_clock(&mut self) {
+        if self.clock.is_none() {
+            self.clock = Some(FrameClock::start(self.hwnd.0 as isize));
+        }
+    }
+
+    /// Runs the equalizer and countdown timers only while what they animate
+    /// is on screen and moving.
+    fn sync_timers(&mut self, now: Instant) {
+        let view = self.state.view();
+        let eq = view == View::MediaCompact && self.state.media().is_some_and(|m| m.playing);
+        if eq != self.eq_timer {
+            self.eq_timer = eq;
+            unsafe {
+                if eq {
+                    SetTimer(Some(self.hwnd), TIMER_EQ, EQ_MS, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_EQ);
+                }
+            }
+        }
+        let shows_countdown = matches!(view, View::PomodoroCompact | View::Panel(Page::Pomodoro));
+        let running = matches!(self.state.pomodoro().status(), PomoStatus::Running { .. });
+        let pomo = shows_countdown && running;
+        if pomo != self.pomo_timer {
+            self.pomo_timer = pomo;
+            if pomo {
+                self.arm_pomo(now);
+            } else {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_POMO);
+                }
+            }
+        }
+    }
+
+    /// One-shot, re-armed after each redraw, so the shown second ticks over on time.
+    fn arm_pomo(&self, now: Instant) {
+        let wait = ms_to_next_second(self.state.pomodoro().remaining(now));
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_POMO, wait, None);
+        }
     }
 
     fn arm_deadline(&self, now: Instant) {
@@ -275,7 +544,10 @@ impl App {
 
     fn on_timer(&mut self, id: usize) {
         match id {
-            TIMER_SYSTEM => self.check_fullscreen(),
+            TIMER_SYSTEM => {
+                self.check_fullscreen();
+                self.check_editor();
+            }
             TIMER_BATTERY => self.check_battery(),
             TIMER_DEADLINE => {
                 unsafe {
@@ -283,11 +555,27 @@ impl App {
                 }
                 self.apply_now(Event::Tick);
             }
+            // While an animation runs, the frame clock draws anyway.
+            TIMER_EQ => {
+                if !self.animating() {
+                    self.draw(Instant::now());
+                }
+            }
+            TIMER_POMO => {
+                let now = Instant::now();
+                if !self.animating() {
+                    self.draw(now);
+                }
+                if self.pomo_timer {
+                    self.arm_pomo(now);
+                }
+            }
+            TIMER_DAY => self.check_date(),
             _ => {}
         }
     }
 
-    /// One frame-clock tick: draws the animation at the current time.
+    /// One frame-clock tick: draws the shape morph and page slide at the current time.
     fn animate(&mut self) {
         let Some(clock) = &self.clock else {
             // A tick posted just before the clock stopped.
@@ -295,14 +583,21 @@ impl App {
         };
         clock.ack();
         let now = Instant::now();
-        let done = self.anim.progress(now) >= 1.0;
+        let shape_done = self.anim.progress(now) >= 1.0;
+        let slide_done = self.slide.is_none_or(|s| s.progress(now) >= 1.0);
         // The resting t = 1 frame is always drawn before the clock stops, so a
-        // fade-out never leaves faint pixels that still catch clicks.
+        // fade-out never leaves faint pixels that still catch clicks, and the
+        // settled page registers its click regions.
         self.draw(now);
         self.frame_log.frame(now);
-        if done {
+        if shape_done && self.anim.running {
             self.anim.running = false;
             self.frame_log.finish();
+        }
+        if slide_done {
+            self.slide = None;
+        }
+        if !self.animating() {
             // Dropping joins the frame thread, which wakes within one frame.
             self.clock = None;
         }
@@ -415,18 +710,17 @@ impl App {
             media: state.media(),
             pomodoro: state.pomodoro(),
             now,
+            today: state.today(),
             page: state.page(),
             strip: state.waiting_strip(),
             cal_view: state.cal_view(),
             cal_anchor: state.cal_anchor(),
             cal_selected: state.cal_selected(),
             calendar: &self.calendar,
-            // Task 10 passes the notes store's list.
-            notes: &[],
+            notes: self.notes.list(),
             notes_page: state.notes_page(),
             day_page: state.day_page(),
-            // Task 10 animates page switches.
-            page_slide: 0.0,
+            page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
         };
         if let Err(error) = self
             .renderer
@@ -512,6 +806,109 @@ impl Anim {
     }
 }
 
+/// A panel page switch: `page_slide` eases from `from` (±1) to 0 over `SLIDE_MS`.
+#[derive(Clone, Copy)]
+struct Slide {
+    from: f32,
+    start: Instant,
+}
+
+impl Slide {
+    fn progress(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.start).as_secs_f32() * 1000.0;
+        (elapsed / SLIDE_MS).min(1.0)
+    }
+
+    fn offset(&self, now: Instant) -> f32 {
+        let t = self.progress(now);
+        // Cubic ease-out: fast start, gentle landing, no overshoot past the page.
+        self.from * (1.0 - t).powi(3)
+    }
+}
+
+/// Whether the calendar should ask the sync thread for `range`. A different
+/// range than the last one asked (navigation, or the panel opening on another
+/// range) always asks. The same range asks again only once both the request
+/// and the data shown for it (`fetched_age`, `None` if it is not that range or
+/// the fetch failed) are older than `CALENDAR_FRESH`.
+fn needs_fetch(
+    asked: Option<((NaiveDate, NaiveDate), Instant)>,
+    fetched_age: Option<Duration>,
+    range: (NaiveDate, NaiveDate),
+    now: Instant,
+) -> bool {
+    match asked {
+        Some((last, at)) if last == range => {
+            now.saturating_duration_since(at) >= CALENDAR_FRESH
+                && fetched_age.is_none_or(|age| age >= CALENDAR_FRESH)
+        }
+        _ => true,
+    }
+}
+
+/// Milliseconds until the countdown's shown second changes (it rounds up, so
+/// at a whole second), plus 1 ms so the redraw lands after the change.
+fn ms_to_next_second(remaining: Duration) -> u32 {
+    match (remaining.as_millis() % 1000) as u32 {
+        0 => 1001,
+        ms => ms + 1,
+    }
+}
+
+/// False when saving would change nothing: an existing note with the same
+/// text, or an empty new one.
+fn note_changed(notes: &NotesStore, id: Option<&str>, text: &str) -> bool {
+    match id.and_then(|id| notes.get(id)) {
+        Some(note) => note.text != text,
+        None => !text.trim().is_empty(),
+    }
+}
+
+/// The note editor for `id`; an unknown id (deleted meanwhile) opens a new note.
+fn note_editor_kind(notes: &NotesStore, id: Option<&str>) -> EditorKind {
+    let note = id.and_then(|id| notes.get(id));
+    EditorKind::Note {
+        id: note.map(|n| n.id.clone()),
+        text: note.map(|n| n.text.clone()).unwrap_or_default(),
+    }
+}
+
+/// The event editor for `event_id` (read-only unless the event is editable),
+/// or a new event on `date`. `None` when the event is no longer in the data.
+fn event_editor_kind(
+    events: &[CalEvent],
+    event_id: Option<&str>,
+    date: NaiveDate,
+) -> Option<EditorKind> {
+    let Some(id) = event_id else {
+        return Some(EditorKind::Event {
+            event_id: None,
+            calendar_id: None,
+            draft: new_draft(date),
+            read_only: false,
+        });
+    };
+    let ev = events.iter().find(|e| e.id == id)?;
+    Some(EditorKind::Event {
+        event_id: Some(ev.id.clone()),
+        calendar_id: Some(ev.calendar_id.clone()),
+        draft: draft_from(ev),
+        read_only: !ev.editable,
+    })
+}
+
+/// Values table: Windows' default notification sound, once, without blocking;
+/// silent if the sound scheme has none.
+fn play_phase_sound() {
+    unsafe {
+        let _ = PlaySoundW(
+            w!("Notification.Default"),
+            None,
+            SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
+        );
+    }
+}
+
 /// Frame intervals for measuring smoothness, on when `DI_FRAME_LOG=1`. Each
 /// animation's intervals (ms, the first one measured from its start) are kept
 /// in memory and appended to `%TEMP%\di-frames.log` under a marker line once
@@ -570,6 +967,17 @@ fn island_notice(key: &str, title: &str, body: &str) -> Notice {
         source: "Dynamic Island".into(),
         title: title.into(),
         body: body.into(),
+        kind: NoticeKind::App { app_id: None },
+    }
+}
+
+/// "Hubungkan Google" without a client ID in `config.json`.
+fn client_id_notice() -> Notice {
+    Notice {
+        key: "calendar-client-id".into(),
+        source: "Kalender".into(),
+        title: "Isi Google client ID dulu".into(),
+        body: "lihat README".into(),
         kind: NoticeKind::App { app_id: None },
     }
 }
@@ -664,10 +1072,59 @@ fn open_menu(hwnd: HWND) {
             let notice = hook_notice(install::install_for_current_exe());
             with_app(|app| app.apply_now(Event::Notice(notice)));
         }
-        Some(MenuCmd::Exit) => unsafe {
-            let _ = DestroyWindow(hwnd);
-        },
+        Some(MenuCmd::Exit) => shutdown(hwnd),
         None => {}
+    }
+}
+
+/// Closes the island. An open editor is closed first and its last result
+/// (an edited note) handled here: once the island is gone, nobody reads it.
+fn shutdown(hwnd: HWND) {
+    flush_editor();
+    unsafe {
+        let _ = DestroyWindow(hwnd);
+    }
+}
+
+/// Closes an open editor now and handles its last result synchronously.
+/// Called outside `with_app`: destroying the editor sends window messages.
+fn flush_editor() {
+    if let Some(result) = editor::close_open_editor() {
+        deliver_result(result);
+    }
+}
+
+/// Handles an editor result now, or once the handler holding the app returns.
+fn deliver_result(result: EditorResult) {
+    let mut pending = Some(result);
+    with_app(|app| {
+        if let Some(result) = pending.take() {
+            app.on_editor_result(result);
+        }
+    });
+    if let Some(result) = pending {
+        DEFERRED_RESULTS.with_borrow_mut(|results| results.push(result));
+    }
+}
+
+/// Editor results still queued for the island (an editor destroyed along
+/// with it posts its last one); read before the queue goes with the window.
+fn drain_editor_results(hwnd: HWND) {
+    let mut msg = MSG::default();
+    while unsafe {
+        PeekMessageW(
+            &mut msg,
+            Some(hwnd),
+            WM_APP_EDITOR_RESULT,
+            WM_APP_EDITOR_RESULT,
+            PM_REMOVE,
+        )
+    }
+    .as_bool()
+    {
+        if let Some(result) = unsafe { editor::take_result(msg.lParam) } {
+            deliver_result(result);
+        }
     }
 }
 
@@ -714,6 +1171,9 @@ fn run_deferred() {
     }
     if DEFERRED_FRAME.take() {
         with_app(App::animate);
+    }
+    for result in DEFERRED_RESULTS.take() {
+        deliver_result(result);
     }
 }
 
@@ -777,12 +1237,32 @@ unsafe extern "system" fn wnd_proc(
             on_access_answered();
             LRESULT(0)
         }
+        WM_APP_EDITOR_RESULT => {
+            // Each result is taken exactly once, here.
+            if let Some(result) = unsafe { editor::take_result(lparam) } {
+                deliver_result(result);
+            }
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            shutdown(hwnd);
+            LRESULT(0)
+        }
+        // Logoff or shutdown: the process may end right after this returns.
+        WM_ENDSESSION => {
+            if wparam.0 != 0 {
+                flush_editor();
+            }
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
             reposition();
             LRESULT(0)
         }
         WM_DESTROY => {
+            drain_editor_results(hwnd);
+            with_app(App::stop_sync);
             tray::remove_tray(hwnd);
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
@@ -938,6 +1418,159 @@ mod tests {
         assert_eq!(anim.progress(end), 1.0);
         assert_eq!(anim.frame(end), (anim.to, 1.0));
         assert_eq!(anim.frame(end + Duration::from_secs(5)), (anim.to, 1.0));
+    }
+
+    fn date(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
+    }
+
+    #[test]
+    fn calendar_asks_on_start_navigation_and_when_stale() {
+        let t0 = Instant::now();
+        let month = (date(1), date(31));
+        let next = (date(5), date(12));
+        let secs = Duration::from_secs;
+        // Nothing asked yet (start).
+        assert!(needs_fetch(None, None, month, t0));
+        // Reopening the panel on the range just asked: wait.
+        assert!(!needs_fetch(Some((month, t0)), None, month, t0 + secs(59)));
+        // Navigation lands on another range: always ask, however recent.
+        assert!(needs_fetch(Some((month, t0)), None, next, t0));
+        // ...and back again, since the sync thread now holds the other range.
+        assert!(needs_fetch(Some((next, t0)), Some(secs(1)), month, t0));
+        // Same range after 60 s: ask, unless the data shown is fresher
+        // (the sync thread's own 10-minute refresh).
+        assert!(needs_fetch(Some((month, t0)), None, month, t0 + secs(60)));
+        assert!(!needs_fetch(
+            Some((month, t0)),
+            Some(secs(10)),
+            month,
+            t0 + secs(61)
+        ));
+        assert!(needs_fetch(
+            Some((month, t0)),
+            Some(secs(70)),
+            month,
+            t0 + secs(61)
+        ));
+    }
+
+    #[test]
+    fn countdown_redraws_when_the_shown_second_changes() {
+        let ms = Duration::from_millis;
+        // 24:59.5 left shows 25:00 until 24:59.0, half a second away.
+        assert_eq!(ms_to_next_second(ms(1_499_500)), 501);
+        assert_eq!(ms_to_next_second(ms(1_500_000)), 1001);
+        assert_eq!(ms_to_next_second(ms(1)), 2);
+        assert_eq!(ms_to_next_second(ms(999)), 1000);
+    }
+
+    #[test]
+    fn page_slide_eases_out_to_rest() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let right = Slide {
+            from: 1.0,
+            start: t0,
+        };
+        assert_eq!(right.offset(t0), 1.0);
+        let mid = right.offset(ms(110));
+        assert!((mid - 0.125).abs() < 1e-3, "half time, eased: {mid}");
+        assert!(right.offset(ms(50)) > right.offset(ms(60)));
+        assert_eq!(right.progress(ms(220)), 1.0);
+        assert_eq!(right.offset(ms(220)), 0.0);
+        assert_eq!(right.offset(ms(500)), 0.0);
+        let left = Slide {
+            from: -1.0,
+            start: t0,
+        };
+        assert_eq!(left.offset(t0), -1.0);
+        assert!(left.offset(ms(110)) < 0.0);
+    }
+
+    fn temp_notes(name: &str) -> (PathBuf, NotesStore) {
+        let dir =
+            std::env::temp_dir().join(format!("dynamic-island-app-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = NotesStore::open(dir.join("notes.json"));
+        (dir, store)
+    }
+
+    #[test]
+    fn only_changed_notes_are_saved() {
+        let (dir, mut notes) = temp_notes("changed");
+        let id = notes.upsert(None, "beli kopi", 1).unwrap();
+        assert!(!note_changed(&notes, Some(&id), "beli kopi"), "untouched");
+        assert!(note_changed(&notes, Some(&id), "beli teh"));
+        assert!(note_changed(&notes, Some(&id), ""), "emptied: deletes");
+        assert!(!note_changed(&notes, None, "  \n"), "empty new note");
+        assert!(note_changed(&notes, None, "baru"));
+        assert!(note_changed(&notes, Some("n0-gone"), "masih ada"));
+        assert!(!dir.exists(), "nothing written");
+    }
+
+    #[test]
+    fn note_editor_opens_the_note_or_a_new_one() {
+        let (_dir, mut notes) = temp_notes("kind");
+        let id = notes.upsert(None, "isi", 1).unwrap();
+        assert_eq!(
+            note_editor_kind(&notes, Some(&id)),
+            EditorKind::Note {
+                id: Some(id),
+                text: "isi".into()
+            }
+        );
+        let new = EditorKind::Note {
+            id: None,
+            text: String::new(),
+        };
+        assert_eq!(note_editor_kind(&notes, None), new);
+        assert_eq!(note_editor_kind(&notes, Some("n0-gone")), new);
+    }
+
+    #[test]
+    fn event_editor_is_read_only_unless_editable() {
+        use crate::calendar::EventTime;
+        let event = |id: &str, editable| CalEvent {
+            id: id.into(),
+            calendar_id: "team".into(),
+            title: id.into(),
+            start: EventTime::AllDay(date(25)),
+            end: EventTime::AllDay(date(26)),
+            description: String::new(),
+            color: None,
+            editable,
+        };
+        let events = [event("rw", true), event("ro", false)];
+        let open = |id| match event_editor_kind(&events, id, date(27)) {
+            Some(EditorKind::Event {
+                event_id,
+                calendar_id,
+                draft,
+                read_only,
+            }) => (event_id, calendar_id, draft.date, read_only),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(
+            open(Some("rw")),
+            (Some("rw".into()), Some("team".into()), date(25), false)
+        );
+        assert_eq!(
+            open(Some("ro")),
+            (Some("ro".into()), Some("team".into()), date(25), true)
+        );
+        // New: on the selected date, writable, into the primary calendar.
+        assert_eq!(open(None), (None, None, date(27), false));
+        assert_eq!(event_editor_kind(&events, Some("gone"), date(27)), None);
+    }
+
+    #[test]
+    fn client_id_notice_points_to_the_readme() {
+        let n = client_id_notice();
+        assert_eq!(n.source, "Kalender");
+        assert_eq!(n.title, "Isi Google client ID dulu");
+        assert_eq!(n.body, "lihat README");
+        assert_eq!(n.kind, NoticeKind::App { app_id: None });
     }
 
     #[test]

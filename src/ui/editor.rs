@@ -1,6 +1,3 @@
-// Not referenced by the app yet: wired in Task 10.
-#![allow(dead_code)]
-
 //! The note and event editors: small dark Win32 windows under the panel,
 //! because the layered island cannot host native text controls. At most one
 //! editor exists at a time; it lives on the island's UI thread and reports to
@@ -1085,13 +1082,31 @@ impl Editor {
 /// still exist), hands the foreground back if the editor still has it, and
 /// destroys the window.
 fn finish(hwnd: HWND, result: impl FnOnce(&Editor) -> EditorResult) {
-    let Some(mut editor) = take_editor(hwnd) else {
-        return;
-    };
-    if !editor.finished {
-        editor.finished = true;
-        post_result(editor.owner, result(&editor));
+    if let Some((owner, result)) = close(hwnd, result) {
+        post_result(owner, result);
     }
+}
+
+/// Closes the open editor now and returns its final result instead of
+/// posting it, for an owner that is about to be destroyed (a posted result
+/// would never be read). `None` when no editor is open or it already finished.
+pub fn close_open_editor() -> Option<EditorResult> {
+    let hwnd = EDITOR.with(|cell| {
+        cell.try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
+    })?;
+    close(hwnd, Editor::closing_result).map(|(_, result)| result)
+}
+
+/// `finish` without the post: the owner and final result (`None` if it was
+/// already sent), with the window destroyed.
+fn close(hwnd: HWND, result: impl FnOnce(&Editor) -> EditorResult) -> Option<(HWND, EditorResult)> {
+    let mut editor = take_editor(hwnd)?;
+    let last = (!editor.finished).then(|| {
+        editor.finished = true;
+        (editor.owner, result(&editor))
+    });
     unsafe {
         // Only when closed from the keyboard or a button: a click elsewhere
         // already chose the next foreground window.
@@ -1107,6 +1122,7 @@ fn finish(hwnd: HWND, result: impl FnOnce(&Editor) -> EditorResult) {
     LAST_FOCUS.set(0);
     // Dropped after the controls are gone: deletes the fonts they used.
     drop(editor);
+    last
 }
 
 fn on_command(hwnd: HWND, id: i32, code: u32) {
@@ -1679,6 +1695,57 @@ mod tests {
     }
 
     const SIZE_400: SIZE = SIZE { cx: 400, cy: 220 };
+
+    /// Opens a real note editor (briefly on screen) and closes it the way the
+    /// island does on shutdown: the result comes back, nothing is posted.
+    #[test]
+    fn close_open_editor_returns_the_note_without_posting() {
+        use windows::Win32::UI::WindowsAndMessaging::{MSG, PM_REMOVE, PeekMessageW};
+        unsafe {
+            let owner = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("owner window");
+            let kind = EditorKind::Note {
+                id: Some("n1-0".into()),
+                text: "baris 1\nbaris 2".into(),
+            };
+            let anchor = POINT { x: 400, y: 300 };
+            let editor = open_editor(owner, anchor, kind.clone()).expect("editor");
+            // One editor at a time: a second open returns the same window.
+            assert_eq!(open_editor(owner, anchor, kind).ok(), Some(editor));
+            assert_eq!(
+                close_open_editor(),
+                Some(EditorResult::NoteSaved {
+                    id: Some("n1-0".into()),
+                    text: "baris 1\nbaris 2".into(),
+                })
+            );
+            assert!(!IsWindow(Some(editor)).as_bool());
+            assert_eq!(close_open_editor(), None);
+            let mut msg = MSG::default();
+            let posted = PeekMessageW(
+                &mut msg,
+                Some(owner),
+                WM_APP_EDITOR_RESULT,
+                WM_APP_EDITOR_RESULT,
+                PM_REMOVE,
+            );
+            assert!(!posted.as_bool(), "the result was returned, not posted");
+            let _ = DestroyWindow(owner);
+        }
+    }
 
     #[test]
     fn centered_below_anchor() {

@@ -1,6 +1,3 @@
-// Not referenced by the app yet: wired in Task 10.
-#![allow(dead_code)]
-
 //! Calendar data shared by the sync thread, the reducer and the renderer:
 //! events in local time, the snapshot the sync thread sends, and date ranges.
 
@@ -85,6 +82,18 @@ pub fn draft_from(ev: &CalEvent) -> EventDraft {
         start,
         end,
         description: ev.description.clone(),
+    }
+}
+
+/// The editor's starting point for a new event on `date`: timed, 09:00–10:00.
+pub fn new_draft(date: NaiveDate) -> EventDraft {
+    EventDraft {
+        title: String::new(),
+        date,
+        all_day: false,
+        start: DEFAULT_START,
+        end: DEFAULT_END,
+        description: String::new(),
     }
 }
 
@@ -333,6 +342,15 @@ mod tests {
         let d = draft_from(&all_day);
         assert!(d.all_day);
         assert_eq!(d.date, date(2026, 10, 26));
+    }
+
+    #[test]
+    fn new_draft_is_a_timed_hour_on_the_date() {
+        let d = new_draft(date(2026, 10, 25));
+        assert_eq!(d.date, date(2026, 10, 25));
+        assert!(!d.all_day && d.title.is_empty() && d.description.is_empty());
+        assert_eq!((d.start, d.end), (DEFAULT_START, DEFAULT_END));
+        assert!(d.start < d.end);
     }
 
     #[test]

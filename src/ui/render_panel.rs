@@ -74,7 +74,8 @@ const DAYS_SHORT: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
 impl Renderer {
     /// The panel: content laid out for the resting panel shape, clipped to the
     /// current (possibly still morphing) shape and faded in while it grows.
-    /// Clickable regions exist only once the shape has settled.
+    /// Clickable regions exist only once the shape has settled and no page
+    /// is sliding.
     pub(super) fn paint_panel(
         &mut self,
         style: Style,
@@ -133,7 +134,9 @@ impl Renderer {
             self.set_color(if i == active { TEXT } else { DOT_OFF }, 1.0);
             self.fill_round(dot, dot.w / 2.0);
         }
-        if settled {
+        // No clicks on a page still sliding in: its controls are not where
+        // the regions say yet, and the old page's are still under the pointer.
+        if settled && slide == 0.0 {
             let mut hits = regions(s, &layout, strip);
             if matches!(layout, PageLayout::Media(_)) && frame.media.is_none() {
                 hits.retain(|r| !matches!(r.hit, Hit::Prev | Hit::PlayPause | Hit::Next));
@@ -153,7 +156,7 @@ impl Renderer {
             }
             PageLayout::Pomodoro(l) => self.paint_pomodoro(l, frame),
             PageLayout::Notes(l) => {
-                self.paint_notes(l, frame.notes);
+                self.paint_notes(l, frame.notes, frame.today);
                 Ok(())
             }
             PageLayout::Media(l) => self.paint_media(l, frame.media),
@@ -161,7 +164,7 @@ impl Renderer {
     }
 
     fn paint_calendar(&mut self, l: &CalendarLayout, frame: &Frame) {
-        let today = Local::now().date_naive();
+        let today = frame.today;
         let snap = frame.calendar;
         let events = &snap.events;
         let title = match l.view {
@@ -458,7 +461,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn paint_notes(&self, l: &NotesLayout, notes: &[Note]) {
+    fn paint_notes(&self, l: &NotesLayout, notes: &[Note], today: NaiveDate) {
         self.text("Notes", &self.fonts.heading, l.header, 1.0);
         self.text("+ Baru", &self.fonts.body_right, l.new_button, 0.8);
         if notes.is_empty() {
@@ -474,7 +477,6 @@ impl Renderer {
                 0.5,
             );
         }
-        let today = Local::now().date_naive();
         for (id, r) in &l.rows {
             let Some(note) = notes.iter().find(|n| &n.id == id) else {
                 continue;

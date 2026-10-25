@@ -5,6 +5,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -17,7 +19,7 @@ use super::{CalStatus, CalendarSnapshot, EventDraft, api, range_for};
 use crate::config::{self, Config};
 use crate::google::http::Http;
 use crate::google::oauth::{self, AuthError};
-use crate::model::{CalView, Event};
+use crate::model::{CalView, Event, Notice, NoticeKind};
 
 /// Posted to the event editor after a save: `wparam` 1 = saved, 0 = failed with
 /// `lparam` a `Box<String>` raw pointer (Indonesian message) that the receiver
@@ -44,9 +46,48 @@ pub enum SyncRequest {
         draft: EventDraft,
         reply: isize,
     },
-    /// Interactive Google login (opens the browser), then a fetch.
+    /// Interactive Google login (opens the browser), then a fetch. Sent by
+    /// `SyncHandle::connect`, which keeps a second one from queueing.
     Connect,
     Shutdown,
+}
+
+/// The UI thread's end of the sync thread.
+pub struct SyncHandle {
+    requests: Sender<SyncRequest>,
+    /// A `Connect` is queued or its browser login is running.
+    login: Arc<AtomicBool>,
+}
+
+impl SyncHandle {
+    /// False when the sync thread is gone.
+    pub fn send(&self, req: SyncRequest) -> bool {
+        self.requests.send(req).is_ok()
+    }
+
+    /// Starts the Google login unless one is already under way (the login
+    /// waits up to minutes for the browser); false when ignored or the thread is gone.
+    pub fn connect(&self) -> bool {
+        if self.login.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        if self.send(SyncRequest::Connect) {
+            return true;
+        }
+        self.login.store(false, Ordering::Release);
+        false
+    }
+}
+
+/// Shown on the island when a save fails after its editor was closed.
+pub fn save_failed_notice(message: String) -> Notice {
+    Notice {
+        key: "calendar-save-failed".into(),
+        source: "Kalender".into(),
+        title: "Gagal simpan acara".into(),
+        body: message,
+        kind: NoticeKind::App { app_id: None },
+    }
 }
 
 /// `%APPDATA%\DynamicIsland\calendar-cache.json`, next to the config file.
@@ -122,11 +163,7 @@ pub fn save_error_message(e: &AuthError) -> String {
 
 /// Starts the sync thread. It sends the cached snapshot right away (status
 /// `Offline` until a fetch succeeds); the caller asks for the first range.
-pub fn spawn_sync(
-    tx: Sender<Event>,
-    wake: impl Fn() + Send + 'static,
-    cfg: Config,
-) -> Sender<SyncRequest> {
+pub fn spawn_sync(tx: Sender<Event>, wake: impl Fn() + Send + 'static, cfg: Config) -> SyncHandle {
     spawn_with(tx, wake, cfg, cache_path()).0
 }
 
@@ -135,11 +172,17 @@ fn spawn_with(
     wake: impl Fn() + Send + 'static,
     cfg: Config,
     cache: PathBuf,
-) -> (Sender<SyncRequest>, JoinHandle<()>) {
+) -> (SyncHandle, JoinHandle<()>) {
     let (req_tx, req_rx) = mpsc::channel();
-    let handle =
-        std::thread::spawn(move || Worker::new(tx, Box::new(wake), cfg, cache).run(req_rx));
-    (req_tx, handle)
+    let login = Arc::new(AtomicBool::new(false));
+    let mut worker = Worker::new(tx, Box::new(wake), cfg, cache);
+    worker.login = Arc::clone(&login);
+    let handle = std::thread::spawn(move || worker.run(req_rx));
+    let sync = SyncHandle {
+        requests: req_tx,
+        login,
+    };
+    (sync, handle)
 }
 
 struct Worker {
@@ -147,6 +190,8 @@ struct Worker {
     wake: Box<dyn Fn() + Send>,
     cfg: Config,
     cache: PathBuf,
+    /// Shared with `SyncHandle`; cleared once a login attempt ends.
+    login: Arc<AtomicBool>,
     /// Created on first use; WinRT setup failures are retried next time.
     http: Option<Http>,
     snapshot: CalendarSnapshot,
@@ -172,6 +217,7 @@ impl Worker {
             wake,
             cfg,
             cache,
+            login: Arc::new(AtomicBool::new(false)),
             http: None,
             snapshot,
             range: None,
@@ -223,7 +269,11 @@ impl Worker {
                     reply,
                 } => {
                     let result = self.save(event_id.as_deref(), calendar_id.as_deref(), &draft);
-                    post_status(reply, result.map_err(|e| save_error_message(&e)));
+                    let result = result.map_err(|e| save_error_message(&e));
+                    if let Some(message) = post_status(reply, result) {
+                        // The editor was closed while saving: tell the island instead.
+                        self.send(Event::Notice(save_failed_notice(message)));
+                    }
                     fetch = Some(true);
                 }
                 SyncRequest::Connect => {
@@ -290,17 +340,19 @@ impl Worker {
     /// Runs the browser login. True when it succeeded and a fetch should follow;
     /// on failure the snapshot shows why.
     fn connect(&mut self) -> bool {
-        if !configured(&self.cfg) {
-            self.set_status(CalStatus::NotConfigured);
-            return false;
-        }
-        let result = ensure_http(&mut self.http).and_then(|http| {
-            oauth::login(
-                http,
-                &self.cfg.google_client_id,
-                &self.cfg.google_client_secret,
-            )
-        });
+        let result = if configured(&self.cfg) {
+            ensure_http(&mut self.http).and_then(|http| {
+                oauth::login(
+                    http,
+                    &self.cfg.google_client_id,
+                    &self.cfg.google_client_secret,
+                )
+            })
+        } else {
+            Err(AuthError::NotConfigured)
+        };
+        // The attempt is over, before the island hears of it: a new one may start.
+        self.login.store(false, Ordering::Release);
         match result {
             Ok(_) => true,
             Err(e) => {
@@ -316,7 +368,11 @@ impl Worker {
     }
 
     fn emit(&self) {
-        if self.tx.send(Event::Calendar(self.snapshot.clone())).is_ok() {
+        self.send(Event::Calendar(self.snapshot.clone()));
+    }
+
+    fn send(&self, event: Event) {
+        if self.tx.send(event).is_ok() {
             (self.wake)();
         }
     }
@@ -333,10 +389,12 @@ fn ensure_http(slot: &mut Option<Http>) -> Result<&Http, AuthError> {
     Ok(slot.as_ref().expect("just set"))
 }
 
-/// Tells the editor `reply` how the save went; a 0 handle means nobody waits.
-fn post_status(reply: isize, result: Result<(), String>) {
+/// Tells the editor `reply` how the save went. Returns a failure's message
+/// when no editor received it (closed meanwhile, or `reply` is 0).
+pub fn post_status(reply: isize, result: Result<(), String>) -> Option<String> {
+    let undelivered = result.as_ref().err().cloned();
     if reply == 0 {
-        return;
+        return undelivered;
     }
     let (wparam, lparam) = match result {
         Ok(()) => (1, 0),
@@ -351,10 +409,14 @@ fn post_status(reply: isize, result: Result<(), String>) {
             LPARAM(lparam),
         )
     };
-    if posted.is_err() && lparam != 0 {
-        // The editor is gone; nobody else will free the message.
-        drop(unsafe { Box::from_raw(lparam as *mut String) });
+    if posted.is_err() {
+        if lparam != 0 {
+            // The editor is gone; nobody else will free the message.
+            drop(unsafe { Box::from_raw(lparam as *mut String) });
+        }
+        return undelivered;
     }
+    None
 }
 
 #[cfg(test)]
@@ -549,7 +611,8 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let (req, handle) = spawn_with(tx, || {}, Config::default(), cache.clone());
-        let next = || match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+        let recv = || rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let next = || match recv() {
             Event::Calendar(s) => s,
             other => panic!("unexpected {other:?}"),
         };
@@ -557,27 +620,66 @@ mod tests {
         assert_eq!(first.status, CalStatus::NotConfigured);
         assert_eq!(first.events, sample().events, "cache loaded at start");
 
-        req.send(SyncRequest::Range {
+        assert!(req.send(SyncRequest::Range {
             from: date(2026, 10, 19),
             to: date(2026, 10, 26),
-        })
-        .unwrap();
+        }));
         assert_eq!(next().status, CalStatus::NotConfigured);
-        req.send(SyncRequest::Connect).unwrap();
+        assert!(req.connect());
         assert_eq!(next().status, CalStatus::NotConfigured);
-        req.send(SyncRequest::Save {
+        // The attempt ended, so another one may start.
+        assert!(!req.login.load(Ordering::Acquire));
+        assert!(req.send(SyncRequest::Save {
             event_id: None,
             calendar_id: None,
             draft: crate::calendar::draft_from(&sample().events[1]),
             reply: 0,
-        })
-        .unwrap();
+        }));
+        // Nobody waits for this save, so its failure goes to the island.
+        match recv() {
+            Event::Notice(n) => {
+                assert_eq!(n.title, "Gagal simpan acara");
+                assert_eq!(n.body, "Gagal simpan: Google belum diatur");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
         assert_eq!(next().status, CalStatus::NotConfigured);
-        req.send(SyncRequest::Shutdown).unwrap();
+        assert!(req.send(SyncRequest::Shutdown));
         handle.join().unwrap();
+        assert!(!req.send(SyncRequest::Shutdown), "thread gone");
+        assert!(!req.connect());
+        assert!(!req.login.load(Ordering::Acquire));
         let after = std::fs::read(&cache).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(before, after, "cache untouched");
+    }
+
+    #[test]
+    fn second_connect_is_ignored_while_one_runs() {
+        let (requests, rx) = mpsc::channel();
+        let sync = SyncHandle {
+            requests,
+            login: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(sync.connect());
+        assert!(!sync.connect(), "login already under way");
+        assert_eq!(rx.try_iter().count(), 1, "only one Connect queued");
+        // The worker clears the flag when the attempt ends.
+        sync.login.store(false, Ordering::Release);
+        assert!(sync.connect());
+    }
+
+    #[test]
+    fn status_without_a_receiver_returns_the_failure() {
+        assert_eq!(post_status(0, Ok(())), None);
+        assert_eq!(post_status(0, Err("x".into())), Some("x".into()));
+        // A handle that is no window: the post fails and the message comes back.
+        let gone = 0x7FFF_FFF0;
+        assert_eq!(post_status(gone, Err("y".into())), Some("y".into()));
+        assert_eq!(post_status(gone, Ok(())), None);
+        let n = save_failed_notice("Gagal simpan: tidak ada koneksi".into());
+        assert_eq!(n.source, "Kalender");
+        assert_eq!(n.kind, NoticeKind::App { app_id: None });
     }
 
     #[test]

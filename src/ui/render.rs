@@ -61,8 +61,8 @@ const TEXT: u32 = 0xF2F2F2;
 const SECONDARY_ALPHA: f32 = 0.7;
 const BAR_COLOR: u32 = 0x7FD18B;
 const ART_PLACEHOLDER: u32 = 0x2C2C2E;
-/// Album art is decoded once at the largest size drawn (the media page).
-const ART_MAX: f32 = 128.0;
+/// Decoded album art kept at once: one per size drawn (compact and media page).
+const ART_SLOTS: usize = 2;
 /// Glyphs shared by Segoe Fluent Icons and Segoe MDL2 Assets.
 const GLYPH_PREV: &str = "\u{E892}";
 const GLYPH_PLAY: &str = "\u{E768}";
@@ -77,6 +77,8 @@ pub struct Frame<'a> {
     pub pomodoro: &'a Pomodoro,
     /// Drives the pomodoro countdown and the equalizer animation.
     pub now: Instant,
+    /// The local date the island's state is on (today markers, note times).
+    pub today: NaiveDate,
     /// The panel page drawn while the view is `Panel`.
     pub page: Page,
     /// The Claude waiting notice shown as a strip at the top of the panel.
@@ -105,7 +107,8 @@ pub struct Renderer {
     fonts: Fonts,
     surface: Option<Surface>,
     target: Option<Target>,
-    art: Option<CachedArt>,
+    /// Most recently used first; at most `ART_SLOTS`.
+    art: Vec<CachedArt>,
     regions: HitRegions,
     scale: f32,
     /// Round caps for the pomodoro progress arcs.
@@ -162,13 +165,52 @@ impl Drop for Surface {
     }
 }
 
-/// Decoded album art, keyed by byte length and the first 64 bytes so a new
-/// track's thumbnail is noticed without hashing the whole image every frame.
+/// Album art decoded at the size it is drawn (`pixels` on the short side),
+/// keyed by byte length and the first 64 bytes so a new track's thumbnail is
+/// noticed without hashing the whole image every frame. Drawing it is then a
+/// near 1:1 copy, which matters while the equalizer redraws ~30 times a second.
 /// `bitmap` is `None` when decoding failed, so bad bytes are not retried.
-struct CachedArt {
-    key: (usize, Vec<u8>),
+struct CachedArt<B = ID2D1Bitmap> {
+    key: ArtKey,
     pixels: u32,
-    bitmap: Option<ID2D1Bitmap>,
+    bitmap: Option<B>,
+}
+
+type ArtKey = (usize, Vec<u8>);
+
+fn art_key(bytes: &[u8]) -> ArtKey {
+    (bytes.len(), bytes[..bytes.len().min(64)].to_vec())
+}
+
+/// The cached decode of `key` at `pixels` (`Some(None)`: it failed before),
+/// moved to the front as most recently used.
+fn art_lookup<B: Clone>(
+    cache: &mut Vec<CachedArt<B>>,
+    key: &ArtKey,
+    pixels: u32,
+) -> Option<Option<B>> {
+    let i = cache
+        .iter()
+        .position(|a| &a.key == key && a.pixels == pixels)?;
+    let hit = cache.remove(i);
+    let bitmap = hit.bitmap.clone();
+    cache.insert(0, hit);
+    Some(bitmap)
+}
+
+/// Adds a decode in front, dropping other tracks' art (never drawn again)
+/// and the least recently used size beyond `ART_SLOTS`.
+fn art_store<B>(cache: &mut Vec<CachedArt<B>>, key: ArtKey, pixels: u32, bitmap: Option<B>) {
+    cache.retain(|a| a.key == key && a.pixels != pixels);
+    cache.truncate(ART_SLOTS - 1);
+    cache.insert(
+        0,
+        CachedArt {
+            key,
+            pixels,
+            bitmap,
+        },
+    );
 }
 
 impl Renderer {
@@ -198,7 +240,7 @@ impl Renderer {
                 fonts,
                 surface: None,
                 target: None,
-                art: None,
+                art: Vec::new(),
                 regions: HitRegions::default(),
                 scale: 1.0,
                 round_cap,
@@ -227,7 +269,7 @@ impl Renderer {
                 return Err(error);
             }
             self.target = None;
-            self.art = None;
+            self.art.clear();
             self.regions = HitRegions::default();
             self.paint(style, shape, frame, opacity)?;
         }
@@ -464,7 +506,7 @@ impl Renderer {
     /// Album art cropped to a rounded square; a music-note tile when absent or undecodable.
     fn paint_art(&mut self, area: Rect, radius: f32, bytes: Option<&[u8]>) -> Result<()> {
         let bitmap = match bytes {
-            Some(bytes) => self.art_bitmap(bytes)?,
+            Some(bytes) => self.art_bitmap(bytes, area.w.min(area.h))?,
             None => None,
         };
         let target = self.target.as_ref().expect("target ensured by paint");
@@ -501,23 +543,17 @@ impl Renderer {
         Ok(())
     }
 
-    /// The cached bitmap for these bytes, decoding (and downscaling to the
-    /// largest size drawn, `ART_MAX` logical px) only when the art or DPI changed.
-    fn art_bitmap(&mut self, bytes: &[u8]) -> Result<Option<ID2D1Bitmap>> {
-        let key = (bytes.len(), bytes[..bytes.len().min(64)].to_vec());
-        let pixels = (ART_MAX * self.scale).ceil() as u32;
-        if let Some(art) = &self.art
-            && art.key == key
-            && art.pixels == pixels
-        {
-            return Ok(art.bitmap.clone());
+    /// The cached bitmap for these bytes drawn `side` logical px square,
+    /// decoding (and downscaling to that size) only when the art, the size or
+    /// the DPI changed.
+    fn art_bitmap(&mut self, bytes: &[u8], side: f32) -> Result<Option<ID2D1Bitmap>> {
+        let key = art_key(bytes);
+        let pixels = (side * self.scale).ceil().max(1.0) as u32;
+        if let Some(bitmap) = art_lookup(&mut self.art, &key, pixels) {
+            return Ok(bitmap);
         }
         let bitmap = self.decode_art(bytes, pixels).ok();
-        self.art = Some(CachedArt {
-            key,
-            pixels,
-            bitmap: bitmap.clone(),
-        });
+        art_store(&mut self.art, key, pixels, bitmap.clone());
         Ok(bitmap)
     }
 
@@ -776,5 +812,36 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
         g: channel(8),
         b: channel(0),
         a: alpha,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sizes(cache: &[CachedArt<u32>]) -> Vec<(usize, u32)> {
+        cache.iter().map(|a| (a.key.0, a.pixels)).collect()
+    }
+
+    #[test]
+    fn art_is_cached_per_drawn_size() {
+        let mut cache: Vec<CachedArt<u32>> = Vec::new();
+        let track = art_key(&[1; 100]);
+        assert_eq!(art_lookup(&mut cache, &track, 36), None);
+        art_store(&mut cache, track.clone(), 36, Some(1));
+        art_store(&mut cache, track.clone(), 128, Some(2));
+        // Compact and media page both stay decoded: no decode per frame.
+        assert_eq!(art_lookup(&mut cache, &track, 36), Some(Some(1)));
+        assert_eq!(art_lookup(&mut cache, &track, 128), Some(Some(2)));
+        assert_eq!(sizes(&cache), [(100, 128), (100, 36)], "most recent first");
+        // A third size (DPI change) evicts the least recently used one.
+        art_store(&mut cache, track.clone(), 54, Some(3));
+        assert_eq!(sizes(&cache), [(100, 54), (100, 128)]);
+        // A failed decode is remembered, so bad bytes are not retried.
+        let bad = art_key(&[9; 10]);
+        art_store(&mut cache, bad.clone(), 36, None);
+        assert_eq!(art_lookup(&mut cache, &bad, 36), Some(None));
+        // A new track drops the old one's art.
+        assert_eq!(sizes(&cache), [(10, 36)]);
     }
 }

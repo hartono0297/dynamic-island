@@ -1,6 +1,3 @@
-// Nothing calls this module until the calendar sync lands (Tasks 6 and 10).
-#![allow(dead_code)]
-
 //! Google OAuth for an installed app: PKCE (S256) with a loopback redirect,
 //! token refresh, and a DPAPI-encrypted token file. Tokens, codes and the
 //! client secret never appear in logs or error strings.
@@ -204,14 +201,7 @@ fn needs_refresh(tokens: &Tokens, now: i64) -> bool {
     tokens.expires_at_unix - now <= REFRESH_MARGIN_SECS
 }
 
-/// `n_bytes` from the system RNG, base64url encoded.
-///
-/// # Panics
-/// If the system RNG fails, which BCrypt does not do for valid arguments.
-pub fn random_urlsafe(n_bytes: usize) -> String {
-    try_random_urlsafe(n_bytes).expect("system RNG failed")
-}
-
+/// `n_bytes` from the system RNG, base64url encoded; `None` if the RNG fails.
 fn try_random_urlsafe(n_bytes: usize) -> Option<String> {
     let mut buf = vec![0u8; n_bytes];
     let status = unsafe { BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };

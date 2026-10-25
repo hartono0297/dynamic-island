@@ -99,6 +99,14 @@ impl IslandWindow {
         }
     }
 
+    /// A point in the window's logical pixels, in screen coordinates (physical pixels).
+    pub fn to_screen(&self, x: f32, y: f32) -> POINT {
+        POINT {
+            x: self.origin.x + (x * self.scale).round() as i32,
+            y: self.origin.y + (y * self.scale).round() as i32,
+        }
+    }
+
     /// Top-left corner in screen coordinates (physical pixels).
     pub(super) fn origin(&self) -> POINT {
         self.origin

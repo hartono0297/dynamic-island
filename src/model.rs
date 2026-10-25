@@ -52,13 +52,10 @@ pub enum Event {
     /// Raw `WM_MOUSEWHEEL` delta: +120 per notch away from the user.
     Wheel(i32),
     /// A notes or event editor window opened (true) or closed (false).
-    #[allow(dead_code)] // Sent by the editor windows (Task 9/10).
     EditorOpen(bool),
     /// The local date rolled over.
-    #[allow(dead_code)] // Sent by the app's date check (Task 10).
     Today(NaiveDate),
     /// A calendar sync result; `App` keeps it, the reducer ignores it.
-    #[allow(dead_code)] // Sent by the calendar sync thread (wired in Task 10).
     Calendar(CalendarSnapshot),
     Tick,
 }

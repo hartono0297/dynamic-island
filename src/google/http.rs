@@ -1,6 +1,3 @@
-// Nothing calls this module until the calendar sync lands (Tasks 6 and 10).
-#![allow(dead_code)]
-
 //! Blocking JSON/form HTTP over WinRT `HttpClient`. Every call waits on the
 //! async operation with `.join()`, so call it only from worker threads.
 

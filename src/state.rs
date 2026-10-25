@@ -395,6 +395,11 @@ impl IslandState {
         &self.pomodoro
     }
 
+    /// The local date as of the last `Event::Today`.
+    pub fn today(&self) -> NaiveDate {
+        self.today
+    }
+
     pub fn cal_view(&self) -> CalView {
         self.cal_view
     }

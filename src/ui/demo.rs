@@ -231,6 +231,7 @@ pub fn run() {
                 media: Some(&media),
                 pomodoro: &pomodoro,
                 now,
+                today,
                 page,
                 strip: scene.strip.then_some(&strip),
                 cal_view: scene.cal_view,

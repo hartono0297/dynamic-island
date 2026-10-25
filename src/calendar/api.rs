@@ -104,6 +104,8 @@ fn unreadable(status: u16) -> AuthError {
 }
 
 /// Lenient parse for the pure helpers: anything unreadable is an empty page.
+/// The pure helpers exist for the tests; the app reads pages with `read_page`.
+#[cfg(test)]
 fn items<T: DeserializeOwned>(json: &str) -> Vec<T> {
     serde_json::from_str::<Page<T>>(json)
         .map(|page| page.items)
@@ -112,6 +114,7 @@ fn items<T: DeserializeOwned>(json: &str) -> Vec<T> {
 
 /// Calendars marked `selected` (shown in Google Calendar): id, color, and
 /// whether the user may write to it (`accessRole` owner or writer).
+#[cfg(test)]
 pub fn parse_calendar_list(json: &str) -> Vec<CalendarEntry> {
     calendars_from(items(json))
 }
@@ -129,6 +132,7 @@ fn calendars_from(entries: Vec<ListEntry>) -> Vec<CalendarEntry> {
 }
 
 /// Events of one events.list page; cancelled and unreadable ones are skipped.
+#[cfg(test)]
 pub fn parse_events(
     json: &str,
     calendar_id: &str,

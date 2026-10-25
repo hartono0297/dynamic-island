@@ -1,9 +1,6 @@
-// Not referenced by the app yet: wired in Task 10.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Note {
@@ -19,24 +16,57 @@ pub struct NotesStore {
     /// Newest `updated` first.
     notes: Vec<Note>,
     counter: u64,
+    /// The file existed but could not be read or parsed. It is moved aside
+    /// (`notes.json.bak`) before the first save instead of being overwritten.
+    keep_old: bool,
+}
+
+/// The notes in a file read as `read`, and whether the file must be kept
+/// aside: it exists but is unreadable or not a notes list. A missing file is
+/// simply empty.
+fn load(read: io::Result<String>) -> (Vec<Note>, bool) {
+    match read {
+        Ok(text) => {
+            let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+            match serde_json::from_str(text) {
+                Ok(notes) => (notes, false),
+                Err(_) => (Vec::new(), true),
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (Vec::new(), false),
+        Err(_) => (Vec::new(), true),
+    }
+}
+
+/// `notes.json.bak`, or `notes.json.bak2`, `.bak3`… when earlier backups exist.
+fn backup_path(path: &Path) -> PathBuf {
+    let with = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let first = with(".bak");
+    if !first.exists() {
+        return first;
+    }
+    (2..1000)
+        .map(|n| with(&format!(".bak{n}")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
 }
 
 impl NotesStore {
     /// A missing, unreadable or malformed file yields an empty store. The file itself
-    /// is left untouched until the next `save`.
+    /// is left untouched until the next `save`, which first renames an unreadable or
+    /// malformed one to `notes.json.bak`.
     pub fn open(path: PathBuf) -> Self {
-        let mut notes: Vec<Note> = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| {
-                let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-                serde_json::from_str(text).ok()
-            })
-            .unwrap_or_default();
+        let (mut notes, keep_old) = load(std::fs::read_to_string(&path));
         notes.sort_by_key(|n| std::cmp::Reverse(n.updated));
         NotesStore {
             path,
             notes,
             counter: 0,
+            keep_old,
         }
     }
 
@@ -88,10 +118,20 @@ impl NotesStore {
     }
 
     /// Writes pretty JSON to a sibling `.tmp` file, then renames it over the real
-    /// file so a crash mid-write never leaves a truncated store.
-    pub fn save(&self) -> io::Result<()> {
+    /// file so a crash mid-write never leaves a truncated store. A file that could
+    /// not be loaded is renamed to a backup first; if that fails, nothing is written.
+    pub fn save(&mut self) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
+        }
+        if self.keep_old {
+            match std::fs::rename(&self.path, backup_path(&self.path)) {
+                Ok(()) => {}
+                // Gone meanwhile: nothing left to keep.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            self.keep_old = false;
         }
         let json = serde_json::to_string_pretty(&self.notes).map_err(io::Error::other)?;
         let mut tmp = self.path.clone().into_os_string();
@@ -253,5 +293,57 @@ mod tests {
         );
         store.save().unwrap();
         assert_eq!(NotesStore::open(tmp.file()).list().len(), 1);
+        // ...which keeps the corrupt file as a backup instead of losing it.
+        let bak = tmp.0.join("notes.json.bak");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{not json at all");
+        // Only once: the next save just replaces the good file.
+        store.upsert(None, "second", 2);
+        store.save().unwrap();
+        assert!(!tmp.0.join("notes.json.bak2").exists());
+        assert_eq!(NotesStore::open(tmp.file()).list().len(), 2);
+    }
+
+    #[test]
+    fn load_decides_what_to_keep() {
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        assert_eq!(load(Err(missing)), (vec![], false));
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(load(Err(denied)), (vec![], true), "unreadable is kept");
+        assert_eq!(load(Ok("{not json".into())), (vec![], true));
+        assert_eq!(load(Ok(String::new())), (vec![], true));
+        assert_eq!(load(Ok("\u{feff}[]".into())), (vec![], false));
+        let one = r#"[{"id":"n1-0","text":"a","updated":1}]"#;
+        let (notes, keep) = load(Ok(one.into()));
+        assert_eq!((notes.len(), keep), (1, false));
+    }
+
+    #[test]
+    fn existing_backups_are_not_overwritten() {
+        let tmp = TempDir::new("backups");
+        std::fs::write(tmp.0.join("notes.json.bak"), "older").unwrap();
+        std::fs::write(tmp.file(), "garbage").unwrap();
+        let mut store = NotesStore::open(tmp.file());
+        store.save().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.0.join("notes.json.bak")).unwrap(),
+            "older"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.0.join("notes.json.bak2")).unwrap(),
+            "garbage"
+        );
+    }
+
+    #[test]
+    fn good_file_is_never_backed_up() {
+        let tmp = TempDir::new("nobackup");
+        let mut store = NotesStore::open(tmp.file());
+        store.upsert(None, "a", 1);
+        store.save().unwrap();
+        let mut store = NotesStore::open(tmp.file());
+        store.upsert(None, "b", 2);
+        store.save().unwrap();
+        assert!(!tmp.0.join("notes.json.bak").exists());
+        assert_eq!(NotesStore::open(tmp.file()).list().len(), 2);
     }
 }
