@@ -136,12 +136,14 @@ Island memakai Google Calendar API resmi lewat OAuth "Desktop app", dengan proje
    "google_client_id": "1234567890-abc...apps.googleusercontent.com",
    "google_client_secret": "GOCSPX-..."
    ```
+   Kalau field-nya belum ada (config dari v1), tambahkan kedua baris itu di dalam `{ }` dan **jangan lupa koma** di akhir baris sebelumnya; tanpa koma JSON-nya tidak valid (lihat [config.json dan file data](#configjson-dan-file-data)).
    Island tidak perlu ditutup atau dijalankan ulang: `config.json` dibaca lagi setiap kali kamu klik Hubungkan Google.
 7. Hover island → halaman **Kalender** → **Hubungkan Google**. Browser default terbuka:
    - Pilih akun yang tadi didaftarkan sebagai test user.
    - Google menampilkan layar "Google hasn't verified this app" karena app-nya milikmu sendiri dan belum diverifikasi. Pilih **Continue**.
    - Izinkan dua akses yang diminta: **lihat dan ubah acara** di kalendermu (scope `https://www.googleapis.com/auth/calendar.events`) dan **lihat daftar kalender** yang kamu ikuti (scope `https://www.googleapis.com/auth/calendar.calendarlist.readonly`, supaya island tahu kalender mana yang dicentang).
-   - Browser menampilkan "Berhasil terhubung. Kembali ke island ya." dan acaramu muncul di panel. Login ditunggu sampai 5 menit; lewat dari itu, klik Hubungkan Google lagi.
+   - Browser menampilkan "Berhasil terhubung. Kembali ke island ya." dan acaramu muncul di panel.
+   - Island menunggu login paling lama 5 menit. Selama itu klik Hubungkan Google berikutnya diabaikan. Kalau login tidak selesai dalam 5 menit (tab browser ditutup, dibatalkan, atau Google menampilkan halaman error), tombol Hubungkan Google tetap ada: klik lagi saja.
 
 Kalau client ID masih kosong, klik Hubungkan Google memunculkan "Isi Google client ID dulu · lihat README".
 
@@ -149,7 +151,7 @@ Kalau client ID masih kosong, klik Hubungkan Google memunculkan "Isi Google clie
 
 Selama publishing status project masih **Testing**, Google memberi refresh token yang **kedaluwarsa setelah 7 hari** untuk scope kalender. Setelah itu halaman Kalender menampilkan **Hubungkan ulang Google**; klik dan login lagi seperti langkah 7.
 
-Supaya tidak perlu login ulang tiap minggu: Google Auth Platform → **Audience** → **Publish app** → status jadi **In production**. Untuk pemakaian pribadi kamu tidak perlu mengajukan verifikasi; konsekuensinya layar "Google hasn't verified this app" tetap muncul setiap login (pilih **Advanced** → lanjutkan ke app-mu). Setelah pindah status, klik **Hubungkan ulang Google** sekali supaya dapat token baru tanpa batas 7 hari.
+Supaya tidak perlu login ulang tiap minggu: Google Auth Platform → **Audience** → **Publish app** → status jadi **In production**. Untuk pemakaian pribadi kamu tidak perlu mengajukan verifikasi; konsekuensinya layar "Google hasn't verified this app" tetap muncul setiap login (pilih **Advanced** → lanjutkan ke app-mu). Token yang didapat selama status masih Testing tetap kedaluwarsa di hari ke-7; setelah itu island menampilkan **Hubungkan ulang Google**, dan login sekali lagi memberi token tanpa batas 7 hari. Mau langsung pindah tanpa menunggu: keluar dari island, hapus `%APPDATA%\DynamicIsland\google-token.bin`, jalankan island lagi, lalu klik **Hubungkan Google**.
 
 ### Di mana kredensialnya disimpan
 
@@ -168,7 +170,12 @@ Semua data island ada di `%APPDATA%\DynamicIsland\`:
 | `calendar-cache.json` | Salinan terakhir data kalender, untuk mode offline |
 | `google-token.bin` | Token Google, terenkripsi DPAPI |
 
-`config.json` dibaca saat island start; `google_client_id` dan `google_client_secret` dibaca lagi setiap klik Hubungkan Google. Field lain yang diedit manual baru berlaku setelah island dijalankan ulang (tray → Keluar, lalu jalankan lagi). Island juga menulis file ini sendiri saat gaya, autostart, atau durasi pomodoro diubah, tapi hanya mengganti field miliknya; isian manualmu tidak tertimpa.
+`config.json` dibaca saat island start. Field-nya ada dua jenis:
+
+- **Boleh diedit manual walau island sedang jalan:** `google_client_id`, `google_client_secret`, `muted_apps`, `battery_threshold`. Island tidak pernah menimpa isianmu. Field Google dibaca lagi setiap klik Hubungkan Google; `muted_apps` dan `battery_threshold` paling lambat berlaku setelah island dijalankan ulang.
+- **Milik island:** `style`, `start_with_windows`, `pomodoro`, `onboarding_done`. Ubah dari island (tray atau halaman Pomodoro), atau edit saat island tidak jalan (tray → Keluar → edit → jalankan lagi). Island menulis field ini sendiri setiap kali kamu mengubahnya dari tray atau panel, jadi editan manual saat island jalan bisa tertimpa.
+
+Kalau `config.json` bukan JSON yang valid (misalnya koma ketinggalan), island menyalinnya ke `config.json.bak` (atau `.bak2`, `.bak3`… kalau sudah ada), menulis file baru saat menyimpan berikutnya, dan menampilkan notice "config.json tidak valid". Klik Hubungkan Google dengan file yang tidak valid juga memunculkan notice itu. Salin lagi isianmu dari file `.bak` ke file baru.
 
 | Field | Default | Keterangan |
 |---|---|---|
@@ -181,7 +188,7 @@ Semua data island ada di `%APPDATA%\DynamicIsland\`:
 | `google_client_id` | `""` | Client ID OAuth Desktop app (lihat Setup Google Calendar) |
 | `google_client_secret` | `""` | Client secret pasangannya |
 
-JSON yang rusak dianggap kosong dan semua field kembali ke default. Field yang tidak ada (misalnya config dari v1) memakai default-nya.
+Selama file tidak valid, island memakai default untuk semua field. Field yang tidak ada (misalnya config dari v1) memakai default-nya.
 
 ## Mode event untuk notifikasi (opsional)
 
@@ -235,7 +242,8 @@ Saat idle tidak ada gambar ulang sama sekali. Equalizer musik menggambar ulang ~
 - **Island tidak terlihat sama sekali:** notch kosong selalu tampil kecuali saat ada aplikasi fullscreen. Kalau tidak ada, cek tray icon; hanya satu instance yang bisa jalan.
 - **Hook Claude tidak memunculkan apa-apa:** pastikan island jalan dan `settings.json` berisi hook dengan path exe yang benar (pasang ulang dari tray).
 - **"Isi Google client ID dulu":** `google_client_id` di `config.json` masih kosong, atau filenya belum disimpan. Isi, simpan, lalu klik Hubungkan Google lagi.
-- **Kalender tetap "Hubungkan Google" setelah login, atau Google menolak client:** cek client ID dan secret tersalin utuh, tipenya **Desktop app**, Google Calendar API sudah di-enable di project yang sama, dan akunmu ada di daftar Test users.
+- **Kalender tetap "Hubungkan Google" setelah login, atau Google menampilkan halaman error (misalnya "Access blocked" / Error 403: access_denied):** penyebab yang paling sering adalah **akun belum ditambahkan sebagai test user** (Google Auth Platform → Audience → Test users). Cek juga client ID dan secret tersalin utuh, tipenya **Desktop app**, dan Google Calendar API sudah di-enable di project yang sama. Setelah diperbaiki, klik Hubungkan Google lagi (kalau login sebelumnya masih ditunggu, klik lagi setelah 5 menit).
+- **"config.json tidak valid":** ada salah ketik di `config.json`, biasanya koma yang ketinggalan atau berlebih. Perbaiki salah ketiknya; kalau island sudah membuat `config.json.bak` dan menulis file baru, salin field-mu dari `.bak` ke `config.json`.
 - **Kalender bertanda "offline":** island gagal mengambil data (tidak ada internet, Wi-Fi hotel minta login, atau Google sedang bermasalah). Data terakhir tetap tampil; island mencoba lagi saat halaman Kalender dibuka atau tiap 10 menit.
 - **Animasi terasa patah-patah:** jalankan island dengan `$env:DI_FRAME_LOG = "1"` di PowerShell yang sama sebelum `.\target\release\dynamic-island.exe`. Jarak antar frame setiap animasi (ms) ditulis ke `%TEMP%\di-frames.log`.
 

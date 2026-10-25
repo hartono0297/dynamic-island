@@ -141,6 +141,18 @@ pub fn merge_fetch(
     }
 }
 
+/// The status after a browser login that did not succeed. With a client ID
+/// set, every failure (cancelled, timed out after five minutes, never
+/// redirected, or the code exchange failed) is `NeedsLogin`, so the connect
+/// button stays on screen; `Offline` would hide it. Events are kept either way.
+fn login_failure_status(configured: bool) -> CalStatus {
+    if configured {
+        CalStatus::NeedsLogin
+    } else {
+        CalStatus::NotConfigured
+    }
+}
+
 fn status_for(e: &AuthError) -> CalStatus {
     match e {
         AuthError::NotConfigured => CalStatus::NotConfigured,
@@ -359,8 +371,10 @@ impl Worker {
         self.login.store(false, Ordering::Release);
         match result {
             Ok(_) => true,
-            Err(e) => {
-                self.set_status(status_for(&e));
+            // The error itself is not shown: whatever went wrong, the next
+            // step is another click on the connect button.
+            Err(_) => {
+                self.set_status(login_failure_status(configured(&self.cfg)));
                 false
             }
         }
@@ -540,6 +554,26 @@ mod tests {
             assert_eq!(merged.status, status);
             assert_eq!(merged.events, prev.events);
         }
+    }
+
+    #[test]
+    fn failed_login_keeps_the_connect_button_and_the_events() {
+        // A timed-out or unredirected login is a network error; it must not
+        // read as Offline, which hides the connect button.
+        assert_eq!(login_failure_status(true), CalStatus::NeedsLogin);
+        assert_eq!(login_failure_status(false), CalStatus::NotConfigured);
+
+        let dir = temp_dir();
+        let (mut w, rx, _) = worker(dir.join("calendar-cache.json"));
+        w.snapshot = sample();
+        w.set_status(login_failure_status(true));
+        let shown = rx.try_iter().last();
+        let Some(Event::Calendar(shown)) = shown else {
+            panic!("no snapshot sent: {shown:?}");
+        };
+        assert_eq!(shown.status, CalStatus::NeedsLogin);
+        assert_eq!(shown.events, sample().events, "cached events stay");
+        assert!(!dir.exists(), "nothing written");
     }
 
     #[test]
