@@ -61,6 +61,12 @@ const WM_APP_ACCESS: u32 = WM_APP + 3;
 /// These live in the Controls feature of `windows`; the values are fixed by Win32.
 const WM_MOUSEHOVER: u32 = 0x02A1;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// The system clock or time zone changed.
+const WM_TIMECHANGE: u32 = 0x001E;
+const WM_POWERBROADCAST: u32 = 0x0218;
+/// `WM_POWERBROADCAST` codes for waking from sleep (with or without a user).
+const PBT_APMRESUMESUSPEND: usize = 0x0007;
+const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
 /// How long the pointer must rest on the island before it expands. Long
 /// enough that a pointer crossing the notch on its way elsewhere doesn't
 /// open it, short enough that a deliberate hover feels immediate.
@@ -572,6 +578,18 @@ impl App {
         }
     }
 
+    /// The wall clock jumped (time or zone changed, or the PC woke up): a
+    /// showing clock redraws now and re-aligns to the new minute boundary.
+    fn on_clock_jump(&mut self) {
+        if !self.clock_timer {
+            return;
+        }
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+        self.arm_clock();
+    }
+
     /// One-shot to just past the next minute boundary, re-armed after each redraw.
     fn arm_clock(&self) {
         let wait = ms_to_next_minute(Local::now().time());
@@ -1060,6 +1078,15 @@ fn ms_to_next_second(remaining: Duration) -> u32 {
     }
 }
 
+/// Messages after which the wall clock may have jumped.
+fn is_clock_jump(msg: u32, wparam: WPARAM) -> bool {
+    match msg {
+        WM_TIMECHANGE => true,
+        WM_POWERBROADCAST => matches!(wparam.0, PBT_APMRESUMESUSPEND | PBT_APMRESUMEAUTOMATIC),
+        _ => false,
+    }
+}
+
 /// The idle clock's minute timer runs only while the idle island shows it.
 fn clock_timer_wanted(view: &View, idle_clock: bool) -> bool {
     idle_clock && *view == View::Idle
@@ -1493,6 +1520,12 @@ unsafe extern "system" fn wnd_proc(
             with_app(|app| app.on_timer(wparam.0));
             LRESULT(0)
         }
+        WM_TIMECHANGE | WM_POWERBROADCAST => {
+            if is_clock_jump(msg, wparam) {
+                with_app(App::on_clock_jump);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         WM_MOUSEMOVE => {
             with_app(App::on_mouse_move);
             LRESULT(0)
@@ -1758,6 +1791,23 @@ mod tests {
         assert_eq!(ms_to_next_minute(at(23, 59, 59, 999)), 2);
         // A leap second (1_000+ ms) waits like the last millisecond, never 0.
         assert_eq!(ms_to_next_minute(at(23, 59, 59, 1_500)), 2);
+    }
+
+    #[test]
+    fn time_changes_and_wake_ups_are_clock_jumps() {
+        assert!(is_clock_jump(WM_TIMECHANGE, WPARAM(0)));
+        assert!(is_clock_jump(
+            WM_POWERBROADCAST,
+            WPARAM(PBT_APMRESUMEAUTOMATIC)
+        ));
+        assert!(is_clock_jump(
+            WM_POWERBROADCAST,
+            WPARAM(PBT_APMRESUMESUSPEND)
+        ));
+        // Going to sleep (PBT_APMSUSPEND) or a power-source change is not.
+        assert!(!is_clock_jump(WM_POWERBROADCAST, WPARAM(0x0004)));
+        assert!(!is_clock_jump(WM_POWERBROADCAST, WPARAM(0x000A)));
+        assert!(!is_clock_jump(WM_TIMER, WPARAM(0)));
     }
 
     #[test]

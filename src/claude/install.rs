@@ -155,19 +155,6 @@ fn all_events_have_command(settings: &Value, command: &str) -> bool {
     })
 }
 
-/// True when every island event has a hook from some copy of the island.
-fn has_island_hooks(settings: &Value) -> bool {
-    EVENTS.iter().all(|event| {
-        settings["hooks"][*event].as_array().is_some_and(|groups| {
-            groups.iter().any(|group| {
-                group["hooks"]
-                    .as_array()
-                    .is_some_and(|hooks| hooks.iter().any(is_island_hook))
-            })
-        })
-    })
-}
-
 /// True when any island event has a hook from some copy of the island: a
 /// partial install still has something to remove.
 fn any_island_hooks(settings: &Value) -> bool {
@@ -185,9 +172,11 @@ fn any_island_hooks(settings: &Value) -> bool {
 /// The island's hooks as found in a Claude Code settings file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HookState {
-    /// Every island event has an island hook (`has_island_hooks`).
+    /// Every island event runs this exe's command. Hooks of a moved exe (or
+    /// of the other build) do not count, so installing can repoint them.
     pub complete: bool,
-    /// At least one does (`any_island_hooks`).
+    /// Some island event has a hook from any copy of the island
+    /// (`any_island_hooks`): there is something to remove.
     pub any: bool,
 }
 
@@ -197,9 +186,9 @@ impl HookState {
         any: false,
     };
 
-    fn of(settings: &Value) -> Self {
+    fn of(settings: &Value, command: &str) -> Self {
         HookState {
-            complete: has_island_hooks(settings),
+            complete: all_events_have_command(settings, command),
             any: any_island_hooks(settings),
         }
     }
@@ -211,22 +200,29 @@ fn user_settings_path() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".claude").join("settings.json"))
 }
 
-/// The island's hooks in the settings file at `path`; read only. `None`
-/// when the file exists but cannot be read or is not JSON.
-pub fn hook_state_at(path: &Path) -> Option<HookState> {
+/// The island's hooks in the settings file at `path`, measured against the
+/// hook `command` of the running exe; read only. `None` when the file exists
+/// but cannot be read or is not JSON.
+pub fn hook_state_at(path: &Path, command: &str) -> Option<HookState> {
     match fs::read_to_string(path) {
         Ok(text) if text.trim().is_empty() => Some(HookState::NONE),
         Ok(text) => serde_json::from_str::<Value>(&text)
             .ok()
-            .map(|v| HookState::of(&v)),
+            .map(|v| HookState::of(&v, command)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Some(HookState::NONE),
         Err(_) => None,
     }
 }
 
-/// `hook_state_at` for the current user's Claude Code settings.
+/// `hook_state_at` for the current user's Claude Code settings and this exe.
 pub fn hook_state() -> Option<HookState> {
-    hook_state_at(&user_settings_path()?)
+    hook_state_at(&user_settings_path()?, &current_command().ok()?)
+}
+
+/// The hook command for the running exe: `"<exe>" --hook`.
+fn current_command() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(format!("\"{}\" --hook", exe.display()))
 }
 
 #[derive(Debug, PartialEq)]
@@ -265,14 +261,14 @@ pub fn install_hooks() {
 /// Registers this executable as a Claude Code hook in
 /// `%USERPROFILE%\.claude\settings.json`.
 pub fn install_for_current_exe() -> InstallOutcome {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => return InstallOutcome::Error(e.to_string()),
+    let command = match current_command() {
+        Ok(command) => command,
+        Err(e) => return InstallOutcome::Error(e),
     };
     let Some(path) = user_settings_path() else {
         return InstallOutcome::Error(tr(Key::UserProfileUnset).into());
     };
-    install_at(&path, &format!("\"{}\" --hook", exe.display()))
+    install_at(&path, &command)
 }
 
 /// Adds `command` as the island's hook to the settings file at `path`. The
@@ -692,23 +688,47 @@ mod tests {
         any: true,
     });
 
+    /// The hook state as the exe at `NEW` sees it.
+    fn state(dir: &TempDir) -> Option<HookState> {
+        hook_state_at(&dir.settings(), NEW)
+    }
+
     #[test]
     fn status_check_reads_without_writing() {
         let dir = TempDir::new("status");
-        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS, "no file");
+        assert_eq!(state(&dir), NO_HOOKS, "no file");
         fs::write(dir.settings(), "  ").unwrap();
-        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS, "empty");
+        assert_eq!(state(&dir), NO_HOOKS, "empty");
         let foreign = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}}"#;
         fs::write(dir.settings(), foreign).unwrap();
-        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
-        assert_eq!(install_at(&dir.settings(), OLD), InstallOutcome::Installed);
-        // Any copy of the island counts, wherever its exe is.
-        assert_eq!(hook_state_at(&dir.settings()), ALL_HOOKS);
+        assert_eq!(state(&dir), NO_HOOKS);
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(state(&dir), ALL_HOOKS);
         let before = fs::read_to_string(dir.settings()).unwrap();
-        hook_state_at(&dir.settings());
+        state(&dir);
         assert_eq!(fs::read_to_string(dir.settings()).unwrap(), before);
         fs::write(dir.settings(), "{not json").unwrap();
-        assert_eq!(hook_state_at(&dir.settings()), None);
+        assert_eq!(state(&dir), None);
+    }
+
+    #[test]
+    fn hooks_of_a_moved_exe_need_installing_again() {
+        let dir = TempDir::new("stale");
+        // A full set written by the exe at its old path (moved, or the other build).
+        assert_eq!(install_at(&dir.settings(), OLD), InstallOutcome::Installed);
+        let stale = Some(HookState {
+            complete: false,
+            any: true,
+        });
+        assert_eq!(state(&dir), stale, "Pasang stays on, Hapus too");
+        assert_eq!(hook_state_at(&dir.settings(), OLD), ALL_HOOKS, "old exe");
+        // Installing from the new path repoints every hook instead of adding more.
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(state(&dir), ALL_HOOKS);
+        let v = read_json(&dir.settings());
+        for event in EVENTS {
+            assert_eq!(island_commands(&v, event), [NEW], "{event}");
+        }
     }
 
     #[test]
@@ -722,7 +742,7 @@ mod tests {
         fs::write(dir.settings(), partial.to_string()).unwrap();
         let before = fs::read_to_string(dir.settings()).unwrap();
         assert_eq!(
-            hook_state_at(&dir.settings()),
+            state(&dir),
             Some(HookState {
                 complete: false,
                 any: true
@@ -736,10 +756,10 @@ mod tests {
             serde_json::json!({"hooks":{"Stop":[{"hooks":7}]}}),
             serde_json::json!([]),
         ] {
-            assert_eq!(HookState::of(&odd), HookState::NONE, "{odd}");
+            assert_eq!(HookState::of(&odd, NEW), HookState::NONE, "{odd}");
         }
         assert_eq!(uninstall_at(&dir.settings()), Ok(true));
-        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
+        assert_eq!(state(&dir), NO_HOOKS);
     }
 
     #[test]
@@ -754,7 +774,7 @@ mod tests {
             uninstall_outcome_at(&dir.settings()),
             UninstallOutcome::Removed
         );
-        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
+        assert_eq!(state(&dir), NO_HOOKS);
         fs::write(dir.settings(), "{not json").unwrap();
         assert!(matches!(
             uninstall_outcome_at(&dir.settings()),
