@@ -1,5 +1,6 @@
 #[cfg(debug_assertions)]
 pub mod demo;
+pub mod editor;
 pub mod frame_clock;
 pub mod geometry;
 pub mod panel_layout;

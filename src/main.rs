@@ -48,6 +48,11 @@ fn main() {
             attach_parent_console();
             ui::demo::run();
         }
+        #[cfg(debug_assertions)]
+        Some("--demo-editor") => {
+            attach_parent_console();
+            ui::editor::run_demo(std::env::args().nth(2).as_deref());
+        }
         Some("--install-hooks") => {
             attach_parent_console();
             claude::install::install_hooks();
