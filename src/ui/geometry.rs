@@ -4,8 +4,8 @@
 use crate::config::Style;
 use crate::model::{Hit, Notice, NoticeKind};
 
-pub const WINDOW_W: f32 = 440.0;
-pub const WINDOW_H: f32 = 150.0;
+pub const WINDOW_W: f32 = 620.0;
+pub const WINDOW_H: f32 = 330.0;
 pub const ANIM_MS: u64 = 380;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(
             shape_for(Style::Pill, ShapeKind::Compact),
             ShapeRect {
-                x: 125.0,
+                x: 215.0,
                 y: 8.0,
                 w: 190.0,
                 h: 34.0,

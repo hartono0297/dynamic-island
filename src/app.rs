@@ -4,6 +4,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
+use std::fmt::Write as _;
+use std::fs::OpenOptions;
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -32,6 +36,7 @@ use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
+use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
 use crate::ui::render::Renderer;
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
@@ -49,11 +54,9 @@ const HOVER_DWELL_MS: u32 = 350;
 
 const TIMER_SYSTEM: usize = 1;
 const TIMER_BATTERY: usize = 2;
-const TIMER_ANIM: usize = 3;
 const TIMER_DEADLINE: usize = 4;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
-const FRAME_MS: u32 = 16;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -61,6 +64,7 @@ thread_local! {
     /// window procedure mid-handler); done once the outer handler returns.
     static DEFERRED_DRAIN: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
+    static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -92,6 +96,8 @@ pub fn run() {
             rx,
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
+            clock: None,
+            frame_log: FrameLog::from_env(),
             drawn: View::Hidden,
             fullscreen: false,
             battery,
@@ -159,6 +165,9 @@ struct App {
     /// Kept to restart the notification poller once access is granted.
     tx: Sender<Event>,
     anim: Anim,
+    /// Paces animation frames; exists only while `anim` runs.
+    clock: Option<FrameClock>,
+    frame_log: FrameLog,
     /// The view frames draw: the current one, or the last visible one while
     /// fading out, so the content fades with the shape.
     drawn: View,
@@ -225,8 +234,9 @@ impl App {
                 start: now,
                 running: true,
             };
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_ANIM, FRAME_MS, None);
+            self.frame_log.start(now);
+            if self.clock.is_none() {
+                self.clock = Some(FrameClock::start(self.hwnd.0 as isize));
             }
         } else if !self.anim.running {
             // Same shape, but the content (track, notice text) may have changed.
@@ -251,7 +261,6 @@ impl App {
         match id {
             TIMER_SYSTEM => self.check_fullscreen(),
             TIMER_BATTERY => self.check_battery(),
-            TIMER_ANIM => self.animate(),
             TIMER_DEADLINE => {
                 unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_DEADLINE);
@@ -262,17 +271,24 @@ impl App {
         }
     }
 
+    /// One frame-clock tick: draws the animation at the current time.
     fn animate(&mut self) {
+        let Some(clock) = &self.clock else {
+            // A tick posted just before the clock stopped.
+            return;
+        };
+        clock.ack();
         let now = Instant::now();
         let done = self.anim.progress(now) >= 1.0;
-        // The resting t = 1 frame is always drawn before the timer stops, so a
+        // The resting t = 1 frame is always drawn before the clock stops, so a
         // fade-out never leaves faint pixels that still catch clicks.
         self.draw(now);
+        self.frame_log.frame(now);
         if done {
             self.anim.running = false;
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), TIMER_ANIM);
-            }
+            self.frame_log.finish();
+            // Dropping joins the frame thread, which wakes within one frame.
+            self.clock = None;
         }
     }
 
@@ -462,6 +478,57 @@ impl Anim {
     }
 }
 
+/// Frame intervals for measuring smoothness, on when `DI_FRAME_LOG=1`. Each
+/// animation's intervals (ms, the first one measured from its start) are kept
+/// in memory and appended to `%TEMP%\di-frames.log` under a marker line once
+/// it ends, so logging adds no file I/O between frames.
+struct FrameLog {
+    path: Option<PathBuf>,
+    /// Time of the previous frame while an animation is being logged.
+    last: Option<Instant>,
+    intervals: Vec<f32>,
+}
+
+impl FrameLog {
+    fn from_env() -> Self {
+        let on = std::env::var_os("DI_FRAME_LOG").is_some_and(|v| v == "1");
+        Self {
+            path: on.then(|| std::env::temp_dir().join("di-frames.log")),
+            last: None,
+            intervals: Vec::new(),
+        }
+    }
+
+    /// An animation starts (or retargets, which ends the previous one).
+    fn start(&mut self, now: Instant) {
+        if self.path.is_some() {
+            self.finish();
+            self.last = Some(now);
+        }
+    }
+
+    fn frame(&mut self, now: Instant) {
+        let Some(last) = self.last else { return };
+        let ms = now.saturating_duration_since(last).as_secs_f32() * 1000.0;
+        self.intervals.push(ms);
+        self.last = Some(now);
+    }
+
+    /// Appends the current animation's intervals; a write failure only loses the log.
+    fn finish(&mut self) {
+        let (Some(path), Some(_)) = (&self.path, self.last.take()) else {
+            return;
+        };
+        let mut text = String::from("# animation\n");
+        for ms in self.intervals.drain(..) {
+            let _ = writeln!(text, "{ms:.2}");
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(text.as_bytes());
+        }
+    }
+}
+
 /// A temporary notice from the island itself.
 fn island_notice(key: &str, title: &str, body: &str) -> Notice {
     Notice {
@@ -611,6 +678,9 @@ fn run_deferred() {
     if DEFERRED_DRAIN.take() {
         with_app(App::drain);
     }
+    if DEFERRED_FRAME.take() {
+        with_app(App::animate);
+    }
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -623,6 +693,13 @@ unsafe extern "system" fn wnd_proc(
         WM_APP_EVENT => {
             if with_app(App::drain).is_none() {
                 DEFERRED_DRAIN.set(true);
+            }
+            LRESULT(0)
+        }
+        WM_APP_FRAME => {
+            // The clock posts nothing more until this tick is handled, so it must not be lost.
+            if with_app(App::animate).is_none() {
+                DEFERRED_FRAME.set(true);
             }
             LRESULT(0)
         }
@@ -693,6 +770,47 @@ mod tests {
             start,
             running: true,
         }
+    }
+
+    #[test]
+    fn frame_log_appends_intervals_per_animation() {
+        let path = std::env::temp_dir().join(format!("di-frames-test-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut log = FrameLog {
+            path: Some(path.clone()),
+            last: None,
+            intervals: Vec::new(),
+        };
+        let t0 = Instant::now();
+        // A frame outside any animation is not logged.
+        log.frame(t0);
+        log.start(t0);
+        log.frame(t0 + Duration::from_millis(10));
+        log.frame(t0 + Duration::from_millis(26));
+        // A retarget ends the running animation's entry.
+        log.start(t0 + Duration::from_millis(30));
+        log.frame(t0 + Duration::from_millis(37));
+        log.finish();
+        log.finish();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            text, "# animation\n10.00\n16.00\n# animation\n7.00\n",
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn frame_log_off_records_nothing() {
+        let mut log = FrameLog {
+            path: None,
+            last: None,
+            intervals: Vec::new(),
+        };
+        let t0 = Instant::now();
+        log.start(t0);
+        log.frame(t0 + Duration::from_millis(10));
+        assert!(log.last.is_none() && log.intervals.is_empty());
     }
 
     #[test]
