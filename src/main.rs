@@ -3,6 +3,7 @@
 mod app;
 mod claude;
 mod config;
+mod google;
 mod model;
 mod notes;
 mod pomodoro;
