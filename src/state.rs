@@ -212,6 +212,15 @@ impl IslandState {
             Hit::NoteNew => effects.push(Effect::OpenNoteEditor(None)),
             Hit::NoteOpen(id) => effects.push(Effect::OpenNoteEditor(Some(id))),
             Hit::NotesMore => self.notes_page += 1,
+            // The strip shows the newest waiting notice; clicking it dismisses that one.
+            Hit::Strip => {
+                if matches!(self.view(), View::Panel(_))
+                    && let Some(session) = self.waiting.last().and_then(waiting_session)
+                {
+                    let session = session.to_owned();
+                    self.clear_waiting(&session);
+                }
+            }
         }
     }
 
@@ -904,6 +913,27 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![]);
         assert_eq!(s.waiting_strip(), Some(&waiting("s1")));
+    }
+
+    #[test]
+    fn clicking_strip_dismisses_waiting() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(waiting("s2")), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.waiting_strip(), Some(&waiting("s2")));
+        assert_eq!(s.apply(Event::Click(Hit::Strip), t0), vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Calendar), "panel stays open");
+        assert_eq!(
+            s.waiting_strip(),
+            Some(&waiting("s1")),
+            "older one shows next"
+        );
+        s.apply(Event::Click(Hit::Strip), t0);
+        assert_eq!(s.waiting_strip(), None);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle);
     }
 
     #[test]

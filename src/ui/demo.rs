@@ -72,13 +72,15 @@ fn step_target(step: u32) -> (Style, View, ShapeRect, f32) {
             let (style, _, shape, _) = step_target((step + STEPS - 1) % STEPS);
             return (style, View::Hidden, shape, 0.0);
         }
-        1 => ShapeKind::Compact,
-        2 => ShapeKind::MediaExpanded,
+        1 => ShapeKind::MediaCompact,
+        2 => ShapeKind::Panel,
         _ => ShapeKind::Notice,
     };
     let view = match kind {
-        ShapeKind::Compact => View::MediaCompact,
-        ShapeKind::MediaExpanded => View::Panel(Page::Media),
+        ShapeKind::Idle => View::Idle,
+        ShapeKind::MediaCompact => View::MediaCompact,
+        ShapeKind::PomodoroCompact => View::PomodoroCompact,
+        ShapeKind::Panel => View::Panel(Page::Media),
         ShapeKind::Notice => View::Notice(demo_notice(style)),
     };
     (style, view, shape_for(style, kind), 1.0)

@@ -63,8 +63,6 @@ pub enum Event {
     Tick,
 }
 
-// The panel's hit regions (Task 7) produce the calendar, pomodoro and notes hits.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
     Body,
@@ -89,6 +87,8 @@ pub enum Hit {
     /// Note id.
     NoteOpen(String),
     NotesMore,
+    /// The Claude waiting strip at the top of the open panel.
+    Strip,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -144,7 +144,6 @@ impl Page {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalView {
     Day,
-    #[allow(dead_code)] // Chosen with the view selector (Task 7).
     Week,
     Month,
 }

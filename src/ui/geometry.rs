@@ -1,6 +1,7 @@
 //! Layout math for the island, in logical pixels (96 DPI). Pure functions, so
 //! the renderer only draws what this module decides.
 
+use super::panel_layout::Region;
 use crate::config::Style;
 use crate::model::{Hit, Notice, NoticeKind};
 
@@ -19,9 +20,11 @@ pub struct ShapeRect {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShapeKind {
-    Compact,
-    MediaExpanded,
+    Idle,
+    MediaCompact,
+    PomodoroCompact,
     Notice,
+    Panel,
 }
 
 /// Pill floats this far below the top edge; Notch is flush with it.
@@ -29,14 +32,22 @@ const PILL_TOP: f32 = 8.0;
 
 pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     let (w, h) = match kind {
-        ShapeKind::Compact => (190.0, 34.0),
-        ShapeKind::MediaExpanded => (380.0, 110.0),
+        ShapeKind::Idle | ShapeKind::MediaCompact => (190.0, 34.0),
+        ShapeKind::PomodoroCompact => (210.0, 34.0),
         ShapeKind::Notice => (360.0, 76.0),
+        ShapeKind::Panel => (560.0, 290.0),
     };
-    let compact = kind == ShapeKind::Compact;
+    let compact = h == 34.0;
     let (y, radius) = match style {
         Style::Pill => (PILL_TOP, if compact { h / 2.0 } else { 26.0 }),
-        Style::Notch => (0.0, if compact { 16.0 } else { 22.0 }),
+        Style::Notch => (
+            0.0,
+            match kind {
+                _ if compact => 16.0,
+                ShapeKind::Panel => 26.0,
+                _ => 22.0,
+            },
+        ),
     };
     ShapeRect {
         x: (WINDOW_W - w) / 2.0,
@@ -241,10 +252,12 @@ pub fn notice_layout(s: ShapeRect) -> NoticeLayout {
 }
 
 /// What the last frame drew, for mapping clicks back to targets.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitRegions {
     pub shape: Option<(Style, ShapeRect)>,
     pub buttons: Option<[Rect; 3]>,
+    /// Panel regions from `panel_layout::regions`; checked before `buttons`.
+    pub regions: Vec<Region>,
 }
 
 impl HitRegions {
@@ -252,6 +265,9 @@ impl HitRegions {
         let (style, shape) = self.shape?;
         if !shape_contains(style, shape, x, y) {
             return None;
+        }
+        if let Some(region) = self.regions.iter().find(|r| r.rect.contains(x, y)) {
+            return Some(region.hit.clone());
         }
         let targets = [Hit::Prev, Hit::PlayPause, Hit::Next];
         let button = self
@@ -304,6 +320,55 @@ mod tests {
             && r.bottom() <= outer.y + outer.h
     }
 
+    /// The v1 expanded media shape, which `expanded_layout` was made for.
+    fn v1_expanded(style: Style) -> ShapeRect {
+        let (y, radius) = match style {
+            Style::Pill => (8.0, 26.0),
+            Style::Notch => (0.0, 22.0),
+        };
+        ShapeRect {
+            x: (WINDOW_W - 380.0) / 2.0,
+            y,
+            w: 380.0,
+            h: 110.0,
+            radius,
+        }
+    }
+
+    #[test]
+    fn panel_centered_both_styles() {
+        let p = shape_for(Style::Pill, ShapeKind::Panel);
+        assert_eq!(
+            p,
+            ShapeRect {
+                x: 30.0,
+                y: 8.0,
+                w: 560.0,
+                h: 290.0,
+                radius: 26.0
+            }
+        );
+        let n = shape_for(Style::Notch, ShapeKind::Panel);
+        assert_eq!(
+            (n.x, n.y, n.w, n.h, n.radius),
+            (30.0, 0.0, 560.0, 290.0, 26.0)
+        );
+        // The panel fits the window with the Pill's top gap.
+        assert!(p.y + p.h <= WINDOW_H);
+        assert_eq!(corner_radius(Style::Notch, n), 26.0);
+    }
+
+    #[test]
+    fn idle_matches_v1_compact_size() {
+        for style in [Style::Pill, Style::Notch] {
+            let idle = shape_for(style, ShapeKind::Idle);
+            assert_eq!(idle, shape_for(style, ShapeKind::MediaCompact));
+            assert_eq!((idle.w, idle.h), (190.0, 34.0));
+        }
+        assert_eq!(shape_for(Style::Pill, ShapeKind::Idle).radius, 17.0);
+        assert_eq!(shape_for(Style::Notch, ShapeKind::Idle).radius, 16.0);
+    }
+
     #[test]
     fn radius_is_clamped_for_small_shapes() {
         let mut s = shape_for(Style::Pill, ShapeKind::Notice);
@@ -311,7 +376,7 @@ mod tests {
         assert_eq!(corner_radius(Style::Pill, s), 10.0);
         // Notch sides start below the shoulder, so the radius leaves room for it.
         assert_eq!(corner_radius(Style::Notch, s), 20.0 - SHOULDER);
-        let c = shape_for(Style::Pill, ShapeKind::Compact);
+        let c = shape_for(Style::Pill, ShapeKind::Idle);
         assert_eq!(corner_radius(Style::Pill, c), 17.0);
     }
 
@@ -330,7 +395,7 @@ mod tests {
     #[test]
     fn layouts_fit_inside_their_shapes() {
         for style in [Style::Pill, Style::Notch] {
-            let c = shape_for(style, ShapeKind::Compact);
+            let c = shape_for(style, ShapeKind::MediaCompact);
             let l = compact_layout(c);
             for r in [l.art, l.text, l.bars] {
                 assert!(inside(c, r), "{style:?} compact {r:?}");
@@ -338,7 +403,7 @@ mod tests {
             assert_eq!(l.art.w, 22.0);
             assert!(l.text.x >= l.art.right() && l.text.right() <= l.bars.x);
 
-            let e = shape_for(style, ShapeKind::MediaExpanded);
+            let e = v1_expanded(style);
             let l = expanded_layout(e);
             for r in [
                 l.art,
@@ -367,11 +432,12 @@ mod tests {
 
     #[test]
     fn hit_maps_buttons_body_and_outside() {
-        let e = shape_for(Style::Pill, ShapeKind::MediaExpanded);
+        let e = v1_expanded(Style::Pill);
         let l = expanded_layout(e);
         let regions = HitRegions {
             shape: Some((Style::Pill, e)),
             buttons: Some(l.buttons),
+            ..Default::default()
         };
         let center = |r: Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
         let (x, y) = center(l.buttons[0]);
@@ -384,6 +450,28 @@ mod tests {
         assert_eq!(regions.hit(x, y), Some(Hit::Body));
         assert_eq!(regions.hit(2.0, 2.0), None);
         assert_eq!(HitRegions::default().hit(x, y), None);
+    }
+
+    #[test]
+    fn hit_maps_panel_regions() {
+        let p = shape_for(Style::Notch, ShapeKind::Panel);
+        let strip = Rect {
+            x: p.x + 20.0,
+            y: 8.0,
+            w: 100.0,
+            h: 24.0,
+        };
+        let regions = HitRegions {
+            shape: Some((Style::Notch, p)),
+            regions: vec![Region {
+                rect: strip,
+                hit: Hit::Strip,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(regions.hit(strip.x + 1.0, strip.y + 1.0), Some(Hit::Strip));
+        assert_eq!(regions.hit(p.x + p.w / 2.0, 200.0), Some(Hit::Body));
+        assert_eq!(regions.hit(p.x - 5.0, 200.0), None);
     }
 
     #[test]
@@ -416,7 +504,7 @@ mod tests {
     #[test]
     fn pill_compact_is_centered_below_top() {
         assert_eq!(
-            shape_for(Style::Pill, ShapeKind::Compact),
+            shape_for(Style::Pill, ShapeKind::MediaCompact),
             ShapeRect {
                 x: 215.0,
                 y: 8.0,
@@ -435,26 +523,29 @@ mod tests {
     #[test]
     fn sizes_match_plan() {
         for style in [Style::Pill, Style::Notch] {
-            let e = shape_for(style, ShapeKind::MediaExpanded);
-            assert_eq!((e.w, e.h), (380.0, 110.0));
-            let n = shape_for(style, ShapeKind::Notice);
-            assert_eq!((n.w, n.h), (360.0, 76.0));
-            let c = shape_for(style, ShapeKind::Compact);
-            assert_eq!((c.w, c.h), (190.0, 34.0));
-            for s in [e, n, c] {
+            let size = |kind| {
+                let s = shape_for(style, kind);
                 assert_eq!(s.x * 2.0 + s.w, WINDOW_W, "{style:?} {s:?} not centered");
-            }
+                (s.w, s.h)
+            };
+            assert_eq!(size(ShapeKind::Idle), (190.0, 34.0));
+            assert_eq!(size(ShapeKind::MediaCompact), (190.0, 34.0));
+            assert_eq!(size(ShapeKind::PomodoroCompact), (210.0, 34.0));
+            assert_eq!(size(ShapeKind::Notice), (360.0, 76.0));
+            assert_eq!(size(ShapeKind::Panel), (560.0, 290.0));
         }
     }
 
     #[test]
     fn radii_match_plan() {
-        assert_eq!(shape_for(Style::Pill, ShapeKind::Notice).radius, 26.0);
-        assert_eq!(shape_for(Style::Notch, ShapeKind::Compact).radius, 16.0);
-        assert_eq!(
-            shape_for(Style::Notch, ShapeKind::MediaExpanded).radius,
-            22.0
-        );
+        let radius = |style, kind| shape_for(style, kind).radius;
+        assert_eq!(radius(Style::Pill, ShapeKind::Notice), 26.0);
+        assert_eq!(radius(Style::Pill, ShapeKind::Panel), 26.0);
+        assert_eq!(radius(Style::Pill, ShapeKind::PomodoroCompact), 17.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::MediaCompact), 16.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::PomodoroCompact), 16.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::Notice), 22.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::Panel), 26.0);
     }
 
     #[test]
@@ -469,8 +560,8 @@ mod tests {
 
     #[test]
     fn lerp_halfway() {
-        let a = shape_for(Style::Pill, ShapeKind::Compact);
-        let b = shape_for(Style::Pill, ShapeKind::MediaExpanded);
+        let a = shape_for(Style::Pill, ShapeKind::Idle);
+        let b = shape_for(Style::Pill, ShapeKind::Panel);
         let m = lerp_shape(a, b, 0.5);
         assert_eq!(m.w, (a.w + b.w) / 2.0);
         assert_eq!(m.x * 2.0 + m.w, WINDOW_W);

@@ -85,7 +85,7 @@ pub fn run() {
     let battery = BatteryMonitor::new(config.battery_threshold);
     let _ = tray::set_autostart(config.start_with_windows);
 
-    let rest = shape_for(config.style, ShapeKind::Compact);
+    let rest = shape_for(config.style, ShapeKind::Idle);
     let pomodoro = config.pomodoro;
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
@@ -219,9 +219,10 @@ impl App {
         let view = self.state.view();
         let kind = match &view {
             View::Hidden => None,
-            // Task 7/8 give idle, pomodoro and the panel their own shapes.
-            View::Idle | View::MediaCompact | View::PomodoroCompact => Some(ShapeKind::Compact),
-            View::Panel(_) => Some(ShapeKind::MediaExpanded),
+            View::Idle => Some(ShapeKind::Idle),
+            View::MediaCompact => Some(ShapeKind::MediaCompact),
+            View::PomodoroCompact => Some(ShapeKind::PomodoroCompact),
+            View::Panel(_) => Some(ShapeKind::Panel),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
         let target = kind.map(|kind| shape_for(self.config.style, kind));
@@ -380,7 +381,7 @@ impl App {
         let now = Instant::now();
         if self.state.view() == View::Hidden {
             // Nothing to morph; rest on the new shape so the next appearance grows from it.
-            self.anim = Anim::settled(shape_for(style, ShapeKind::Compact), 0.0);
+            self.anim = Anim::settled(shape_for(style, ShapeKind::Idle), 0.0);
             self.draw(now);
         }
         // Visible: morphs from the old style's shape to the new one.
@@ -779,7 +780,7 @@ mod tests {
 
     fn morph(start: Instant) -> Anim {
         Anim {
-            from: shape_for(Style::Pill, ShapeKind::Compact),
+            from: shape_for(Style::Pill, ShapeKind::Idle),
             from_opacity: 0.0,
             to: shape_for(Style::Pill, ShapeKind::Notice),
             to_opacity: 1.0,
@@ -893,7 +894,7 @@ mod tests {
 
     #[test]
     fn settled_anim_rests_on_its_shape() {
-        let shape = shape_for(Style::Notch, ShapeKind::MediaExpanded);
+        let shape = shape_for(Style::Notch, ShapeKind::Panel);
         let anim = Anim::settled(shape, 0.0);
         assert_eq!(anim.progress(Instant::now()), 1.0);
         assert_eq!(anim.frame(Instant::now()), (shape, 0.0));
