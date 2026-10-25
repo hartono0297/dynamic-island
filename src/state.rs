@@ -36,6 +36,8 @@ pub struct IslandState {
     /// Wheel delta not yet worth a whole page; cleared when the panel closes.
     wheel: i32,
     notes_page: usize,
+    /// Day view: which chunk of the day's events "+N lagi" has paged to.
+    day_page: usize,
     today: NaiveDate,
     cal_view: CalView,
     cal_anchor: NaiveDate,
@@ -56,6 +58,7 @@ impl IslandState {
             page: Page::Calendar,
             wheel: 0,
             notes_page: 0,
+            day_page: 0,
             today,
             cal_view: CalView::Month,
             cal_anchor: today,
@@ -66,6 +69,7 @@ impl IslandState {
     pub fn apply(&mut self, event: Event, now: Instant) -> Vec<Effect> {
         let calendar_was_shown = self.view() == View::Panel(Page::Calendar);
         let calendar_was = (self.cal_view, self.cal_anchor);
+        let selected_was = self.cal_selected;
         let panel_was_open = self.panel_open();
         let mut effects = Vec::new();
         // Finish a phase whose end has passed before handling the input, so a
@@ -110,6 +114,14 @@ impl IslandState {
             self.notes_page = 0;
         }
         let calendar_shown = self.view() == View::Panel(Page::Calendar);
+        // Any navigation, a view change, or the calendar leaving the screen
+        // (panel closed or another page) starts the day list from the top.
+        if calendar_was != (self.cal_view, self.cal_anchor)
+            || selected_was != self.cal_selected
+            || !calendar_shown
+        {
+            self.day_page = 0;
+        }
         if (calendar_shown && !calendar_was_shown)
             || calendar_was != (self.cal_view, self.cal_anchor)
         {
@@ -194,6 +206,15 @@ impl IslandState {
                 if self.cal_view == CalView::Day {
                     self.cal_anchor = date;
                 }
+            }
+            // In the day view on that date it pages through the day's events
+            // (the layout wraps the count); elsewhere it opens that day.
+            Hit::CalMore(date)
+                if self.cal_view == CalView::Day
+                    && self.cal_anchor == date
+                    && self.cal_selected == date =>
+            {
+                self.day_page += 1
             }
             Hit::CalMore(date) => {
                 self.cal_view = CalView::Day;
@@ -357,8 +378,6 @@ impl IslandState {
 }
 
 /// What the panel draws.
-// The panel renderer (Task 8) is the first reader outside the tests.
-#[allow(dead_code)]
 impl IslandState {
     pub fn page(&self) -> Page {
         self.page
@@ -397,6 +416,12 @@ impl IslandState {
     /// layout wraps it around the list.
     pub fn notes_page(&self) -> usize {
         self.notes_page
+    }
+
+    /// How many times the day view's "+N lagi" was clicked on the open day;
+    /// the day layout wraps it around that day's events.
+    pub fn day_page(&self) -> usize {
+        self.day_page
     }
 }
 
@@ -1342,6 +1367,56 @@ mod tests {
             effects,
             vec![refresh(date(2026, 10, 14), date(2026, 10, 15))]
         );
+    }
+
+    #[test]
+    fn cal_more_in_day_view_pages_through_that_day() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Calendar, t0);
+        let d = date(2026, 10, 14);
+        s.apply(Event::Click(Hit::CalMore(d)), t0);
+        assert_eq!((s.cal_view(), s.day_page()), (CalView::Day, 0));
+        // Already on that day: next chunk, no new fetch.
+        assert_eq!(s.apply(Event::Click(Hit::CalMore(d)), t0), vec![]);
+        s.apply(Event::Click(Hit::CalMore(d)), t0);
+        assert_eq!(s.day_page(), 2);
+        assert_eq!(s.cal_anchor(), d);
+    }
+
+    #[test]
+    fn day_page_resets_on_navigation_view_change_and_close() {
+        let t0 = Instant::now();
+        let d = date(2026, 10, 25);
+        let paged = |s: &mut IslandState| {
+            s.apply(Event::Click(Hit::CalViewSel(CalView::Day)), t0);
+            s.apply(Event::Click(Hit::CalMore(d)), t0);
+            assert_eq!(s.day_page(), 1);
+        };
+        let mut s = st();
+        open_on(&mut s, Page::Calendar, t0);
+        paged(&mut s);
+        s.apply(Event::Click(Hit::CalNext), t0);
+        assert_eq!(s.day_page(), 0, "next day");
+
+        s.apply(Event::Click(Hit::CalPrev), t0);
+        paged(&mut s);
+        s.apply(Event::Click(Hit::CalViewSel(CalView::Week)), t0);
+        assert_eq!(s.day_page(), 0, "view change");
+
+        paged(&mut s);
+        s.apply(Event::Click(Hit::CalDate(date(2026, 10, 26))), t0);
+        assert_eq!(s.day_page(), 0, "another date");
+
+        s.apply(Event::Click(Hit::CalDate(d)), t0);
+        paged(&mut s);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.day_page(), 0, "page left the calendar");
+
+        s.apply(Event::Wheel(120), t0);
+        paged(&mut s);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.day_page(), 0, "panel closed");
     }
 
     #[test]

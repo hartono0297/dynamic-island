@@ -4,20 +4,22 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FIGURE_END_CLOSED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
-    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_ELLIPSE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION,
-    D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
-    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush,
-    ID2D1DCRenderTarget, ID2D1Factory, ID2D1PathGeometry, ID2D1SolidColorBrush,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
+    D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_ROUND,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
+    ID2D1Bitmap, ID2D1Brush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry, ID2D1Layer,
+    ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -35,27 +37,64 @@ use windows::Win32::UI::WindowsAndMessaging::{ULW_ALPHA, UpdateLayeredWindow};
 use windows::core::{BOOL, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
+use std::time::Instant;
+
+use chrono::NaiveDate;
+
 use super::geometry::{
-    BAR_COUNT, BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
-    compact_layout, corner_radius, expanded_layout, notice_layout,
+    BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
+    compact_layout, corner_radius, equalizer_heights, notice_layout,
 };
 use super::window::IslandWindow;
+use crate::calendar::CalendarSnapshot;
 use crate::config::Style;
-use crate::model::{Hit, MediaInfo, Notice, View};
+use crate::model::{CalView, Hit, MediaInfo, Notice, Page, View};
+use crate::notes::Note;
+use crate::pomodoro::Pomodoro;
+
+// Page drawing lives in its own file; as a child module it shares the
+// renderer's private state and helpers.
+#[path = "render_panel.rs"]
+mod panel;
 
 const TEXT: u32 = 0xF2F2F2;
 const SECONDARY_ALPHA: f32 = 0.7;
 const BAR_COLOR: u32 = 0x7FD18B;
 const ART_PLACEHOLDER: u32 = 0x2C2C2E;
-/// Equalizer heights: a static "playing" silhouette, flat while paused.
-const BARS_PLAYING: [f32; BAR_COUNT] = [6.0, 12.0, 9.0, 14.0];
-const BARS_PAUSED: [f32; BAR_COUNT] = [3.0; BAR_COUNT];
+/// Album art is decoded once at the largest size drawn (the media page).
+const ART_MAX: f32 = 128.0;
 /// Glyphs shared by Segoe Fluent Icons and Segoe MDL2 Assets.
 const GLYPH_PREV: &str = "\u{E892}";
 const GLYPH_PLAY: &str = "\u{E768}";
 const GLYPH_PAUSE: &str = "\u{E769}";
 const GLYPH_NEXT: &str = "\u{E893}";
 const GLYPH_MUSIC: &str = "\u{E8D6}";
+
+/// Everything a frame draws besides the shape: the view and the data behind it.
+pub struct Frame<'a> {
+    pub view: &'a View,
+    pub media: Option<&'a MediaInfo>,
+    pub pomodoro: &'a Pomodoro,
+    /// Drives the pomodoro countdown and the equalizer animation.
+    pub now: Instant,
+    /// The panel page drawn while the view is `Panel`.
+    pub page: Page,
+    /// The Claude waiting notice shown as a strip at the top of the panel.
+    pub strip: Option<&'a Notice>,
+    pub cal_view: CalView,
+    pub cal_anchor: NaiveDate,
+    pub cal_selected: NaiveDate,
+    pub calendar: &'a CalendarSnapshot,
+    pub notes: &'a [Note],
+    pub notes_page: usize,
+    /// Day view: chunk of the day's events ("+N lagi" clicks).
+    pub day_page: usize,
+    /// -1..1 during a page transition, 0 at rest: the page is drawn shifted
+    /// right by `page_slide × panel width`, with the neighbouring page it
+    /// came from beside it. Positive = it came in from the right (scrolled to
+    /// a later page).
+    pub page_slide: f32,
+}
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
 /// layered window. Pixels outside the shape stay alpha 0, so they are
@@ -69,20 +108,40 @@ pub struct Renderer {
     art: Option<CachedArt>,
     regions: HitRegions,
     scale: f32,
+    /// Round caps for the pomodoro progress arcs.
+    round_cap: ID2D1StrokeStyle,
+    /// Origin of the equalizer animation's clock.
+    epoch: Instant,
 }
 
 struct Fonts {
     title: IDWriteTextFormat,
     secondary: IDWriteTextFormat,
     icon: IDWriteTextFormat,
-    icon_large: IDWriteTextFormat,
     badge: IDWriteTextFormat,
+    /// Page titles ("Oktober 2026", "Pomodoro", "Notes").
+    heading: IDWriteTextFormat,
+    small: IDWriteTextFormat,
+    small_center: IDWriteTextFormat,
+    small_center_bold: IDWriteTextFormat,
+    tiny: IDWriteTextFormat,
+    tiny_center: IDWriteTextFormat,
+    body_center: IDWriteTextFormat,
+    body_right: IDWriteTextFormat,
+    big_time: IDWriteTextFormat,
+    media_title: IDWriteTextFormat,
+    media_artist: IDWriteTextFormat,
+    icon_small: IDWriteTextFormat,
+    icon_panel: IDWriteTextFormat,
+    icon_panel_large: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
 struct Target {
     rt: ID2D1DCRenderTarget,
     brush: ID2D1SolidColorBrush,
+    /// Clips panel content to the rounded shape.
+    layer: ID2D1Layer,
 }
 
 /// 32-bpp top-down DIB selected into a memory DC; the render target draws here.
@@ -121,6 +180,18 @@ impl Renderer {
                 CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let fonts = Fonts::new(&dwrite)?;
+            let round_cap = d2d.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_SOLID,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
             Ok(Self {
                 d2d,
                 wic,
@@ -130,6 +201,8 @@ impl Renderer {
                 art: None,
                 regions: HitRegions::default(),
                 scale: 1.0,
+                round_cap,
+                epoch: Instant::now(),
             })
         }
     }
@@ -141,8 +214,7 @@ impl Renderer {
         win: &IslandWindow,
         style: Style,
         shape: ShapeRect,
-        view: &View,
-        media: Option<&MediaInfo>,
+        frame: &Frame,
         opacity: f32,
     ) -> Result<()> {
         let opacity = opacity.clamp(0.0, 1.0);
@@ -150,13 +222,14 @@ impl Renderer {
         self.regions = HitRegions::default();
         self.ensure_surface(win.size())?;
         // A lost target is rebuilt once; a second failure is reported.
-        if let Err(error) = self.paint(style, shape, view, media, opacity) {
+        if let Err(error) = self.paint(style, shape, frame, opacity) {
             if error.code() != D2DERR_RECREATE_TARGET {
                 return Err(error);
             }
             self.target = None;
             self.art = None;
-            self.paint(style, shape, view, media, opacity)?;
+            self.regions = HitRegions::default();
+            self.paint(style, shape, frame, opacity)?;
         }
         let surface = self.surface.as_ref().expect("surface ensured above");
         let blend = BLENDFUNCTION {
@@ -244,19 +317,13 @@ impl Renderer {
             // Layered windows cannot use ClearType: it has no alpha channel.
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let brush = rt.CreateSolidColorBrush(&color(TEXT, 1.0), None)?;
-            self.target = Some(Target { rt, brush });
+            let layer = rt.CreateLayer(None)?;
+            self.target = Some(Target { rt, brush, layer });
         }
         Ok(())
     }
 
-    fn paint(
-        &mut self,
-        style: Style,
-        shape: ShapeRect,
-        view: &View,
-        media: Option<&MediaInfo>,
-        opacity: f32,
-    ) -> Result<()> {
+    fn paint(&mut self, style: Style, shape: ShapeRect, frame: &Frame, opacity: f32) -> Result<()> {
         self.ensure_target()?;
         let surface = self.surface.as_ref().expect("surface ensured by draw");
         let target = self.target.as_ref().expect("target ensured above");
@@ -275,7 +342,7 @@ impl Renderer {
             rt.Clear(Some(&color(0, 0.0)));
         }
         let painted = if opacity > 0.0 {
-            self.paint_island(style, shape, view, media)
+            self.paint_island(style, shape, frame)
         } else {
             Ok(())
         };
@@ -285,13 +352,8 @@ impl Renderer {
         unsafe { rt.EndDraw(None, None) }.and(painted)
     }
 
-    fn paint_island(
-        &mut self,
-        style: Style,
-        shape: ShapeRect,
-        view: &View,
-        media: Option<&MediaInfo>,
-    ) -> Result<()> {
+    fn paint_island(&mut self, style: Style, shape: ShapeRect, frame: &Frame) -> Result<()> {
+        let view = frame.view;
         let radius = corner_radius(style, shape);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
@@ -315,6 +377,9 @@ impl Renderer {
             return Ok(());
         }
         self.regions.shape = Some((style, shape));
+        if let View::Panel(_) = view {
+            return self.paint_panel(style, shape, frame);
+        }
         unsafe {
             target.rt.PushAxisAlignedClip(
                 &d2d_rect(shape_rect(shape)),
@@ -322,19 +387,20 @@ impl Renderer {
             );
         }
         let content = match view {
-            View::MediaCompact => media.map_or(Ok(()), |m| self.paint_compact(shape, m)),
-            // Task 8 draws each panel page; until then every page shows the media layout.
-            View::Panel(_) => media.map_or(Ok(()), |m| self.paint_expanded(shape, m)),
+            View::MediaCompact => frame
+                .media
+                .map_or(Ok(()), |m| self.paint_compact(shape, m, frame.now)),
+            View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             View::Notice(notice) => self.paint_notice(shape, notice),
-            // Empty shapes until Task 8 draws the pomodoro ring.
-            View::Idle | View::PomodoroCompact | View::Hidden => Ok(()),
+            // Idle is the empty shape; the panel returned above.
+            View::Idle | View::Panel(_) | View::Hidden => Ok(()),
         };
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
         content
     }
 
-    fn paint_compact(&mut self, shape: ShapeRect, media: &MediaInfo) -> Result<()> {
+    fn paint_compact(&mut self, shape: ShapeRect, media: &MediaInfo, now: Instant) -> Result<()> {
         let layout = compact_layout(shape);
         self.paint_art(layout.art, 5.0, media.art.as_deref())?;
         let label = if media.artist.is_empty() {
@@ -344,11 +410,10 @@ impl Renderer {
         };
         let target = self.target.as_ref().expect("target ensured by paint");
         self.text(label, &self.fonts.secondary, layout.text, SECONDARY_ALPHA);
-        let heights = if media.playing {
-            BARS_PLAYING
-        } else {
-            BARS_PAUSED
-        };
+        // Every bar's frequency × 10 s is a whole number of cycles, so the
+        // clock can wrap at 10 s without a jump and stays precise for f32.
+        let t = (now.saturating_duration_since(self.epoch).as_secs_f64() % 10.0) as f32;
+        let heights = equalizer_heights(t, media.playing);
         unsafe { target.brush.SetColor(&color(BAR_COLOR, 1.0)) };
         for (i, h) in heights.into_iter().enumerate() {
             let bar = Rect {
@@ -359,29 +424,6 @@ impl Renderer {
             };
             self.fill_round(bar, 1.0);
         }
-        Ok(())
-    }
-
-    fn paint_expanded(&mut self, shape: ShapeRect, media: &MediaInfo) -> Result<()> {
-        let layout = expanded_layout(shape);
-        self.paint_art(layout.art, 8.0, media.art.as_deref())?;
-        self.text(&media.title, &self.fonts.title, layout.title, 1.0);
-        self.text(
-            &media.artist,
-            &self.fonts.secondary,
-            layout.artist,
-            SECONDARY_ALPHA,
-        );
-        let play = if media.playing {
-            GLYPH_PAUSE
-        } else {
-            GLYPH_PLAY
-        };
-        let [prev, middle, next] = layout.buttons;
-        self.text(GLYPH_PREV, &self.fonts.icon, prev, 1.0);
-        self.text(play, &self.fonts.icon_large, middle, 1.0);
-        self.text(GLYPH_NEXT, &self.fonts.icon, next, 1.0);
-        self.regions.buttons = Some(layout.buttons);
         Ok(())
     }
 
@@ -460,10 +502,10 @@ impl Renderer {
     }
 
     /// The cached bitmap for these bytes, decoding (and downscaling to the
-    /// largest size drawn, 40 logical px) only when the art or DPI changed.
+    /// largest size drawn, `ART_MAX` logical px) only when the art or DPI changed.
     fn art_bitmap(&mut self, bytes: &[u8]) -> Result<Option<ID2D1Bitmap>> {
         let key = (bytes.len(), bytes[..bytes.len().min(64)].to_vec());
-        let pixels = (40.0 * self.scale).ceil() as u32;
+        let pixels = (ART_MAX * self.scale).ceil() as u32;
         if let Some(art) = &self.art
             && art.key == key
             && art.pixels == pixels
@@ -551,6 +593,23 @@ impl Renderer {
         }
     }
 
+    /// The shape's outline as a geometry (for clipping panel content).
+    fn shape_geometry(&self, style: Style, s: ShapeRect) -> Result<ID2D1Geometry> {
+        let radius = corner_radius(style, s);
+        match style {
+            Style::Pill => unsafe {
+                self.d2d
+                    .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(shape_rect(s)),
+                        radiusX: radius,
+                        radiusY: radius,
+                    })?
+                    .cast()
+            },
+            Style::Notch => self.notch_path(s, radius)?.cast(),
+        }
+    }
+
     /// Fills a rounded rect with the shared brush's current color.
     fn fill_round(&self, r: Rect, radius: f32) {
         let target = self.target.as_ref().expect("target ensured by paint");
@@ -611,17 +670,33 @@ impl Fonts {
         let icon_family =
             first_installed(dwrite, &[w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")])?;
         let line = |weight, size| line_format(dwrite, text_family, weight, size);
-        let centered = |family, weight, size| -> Result<IDWriteTextFormat> {
+        let aligned = |family, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
             let format = line_format(dwrite, family, weight, size)?;
-            unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
+            unsafe { format.SetTextAlignment(align)? };
             Ok(format)
         };
+        let centered =
+            |family, weight, size| aligned(family, weight, size, DWRITE_TEXT_ALIGNMENT_CENTER);
+        let (normal, semi) = (DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD);
         Ok(Self {
-            title: line(DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?,
-            secondary: line(DWRITE_FONT_WEIGHT_NORMAL, 12.0)?,
-            icon: centered(icon_family, DWRITE_FONT_WEIGHT_NORMAL, 16.0)?,
-            icon_large: centered(icon_family, DWRITE_FONT_WEIGHT_NORMAL, 22.0)?,
+            title: line(semi, 13.0)?,
+            secondary: line(normal, 12.0)?,
+            icon: centered(icon_family, normal, 16.0)?,
             badge: centered(text_family, DWRITE_FONT_WEIGHT_BOLD, 17.0)?,
+            heading: line(semi, 15.0)?,
+            small: line(normal, 11.0)?,
+            small_center: centered(text_family, normal, 11.0)?,
+            small_center_bold: centered(text_family, semi, 11.0)?,
+            tiny: line(normal, 10.0)?,
+            tiny_center: centered(text_family, normal, 10.0)?,
+            body_center: centered(text_family, normal, 12.0)?,
+            body_right: aligned(text_family, normal, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            big_time: centered(text_family, semi, 32.0)?,
+            media_title: line(semi, 17.0)?,
+            media_artist: line(normal, 13.0)?,
+            icon_small: centered(icon_family, normal, 12.0)?,
+            icon_panel: centered(icon_family, normal, 20.0)?,
+            icon_panel_large: centered(icon_family, normal, 28.0)?,
         })
     }
 }

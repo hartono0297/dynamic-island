@@ -28,6 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
+use crate::calendar::{CalStatus, CalendarSnapshot};
 use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, Style};
@@ -38,7 +39,7 @@ use crate::sources::{media, notifications};
 use crate::state::IslandState;
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
-use crate::ui::render::Renderer;
+use crate::ui::render::{Frame, Renderer};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
 
@@ -87,13 +88,15 @@ pub fn run() {
 
     let rest = shape_for(config.style, ShapeKind::Idle);
     let pomodoro = config.pomodoro;
+    let today = chrono::Local::now().date_naive();
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
             hwnd,
             win: Some(win),
             renderer,
             config,
-            state: IslandState::new(chrono::Local::now().date_naive(), pomodoro),
+            state: IslandState::new(today, pomodoro),
+            calendar: CalendarSnapshot::empty(CalStatus::NotConfigured, today),
             rx,
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
@@ -162,6 +165,8 @@ struct App {
     renderer: Renderer,
     config: Config,
     state: IslandState,
+    /// The latest calendar data; Task 10 fills it from the sync thread.
+    calendar: CalendarSnapshot,
     rx: Receiver<Event>,
     /// Kept to restart the notification poller once access is granted.
     tx: Sender<Event>,
@@ -404,10 +409,28 @@ impl App {
     fn draw(&mut self, now: Instant) {
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
-        let media = self.state.media();
-        if let Err(error) =
-            self.renderer
-                .draw(win, self.config.style, shape, &self.drawn, media, opacity)
+        let state = &self.state;
+        let frame = Frame {
+            view: &self.drawn,
+            media: state.media(),
+            pomodoro: state.pomodoro(),
+            now,
+            page: state.page(),
+            strip: state.waiting_strip(),
+            cal_view: state.cal_view(),
+            cal_anchor: state.cal_anchor(),
+            cal_selected: state.cal_selected(),
+            calendar: &self.calendar,
+            // Task 10 passes the notes store's list.
+            notes: &[],
+            notes_page: state.notes_page(),
+            day_page: state.day_page(),
+            // Task 10 animates page switches.
+            page_slide: 0.0,
+        };
+        if let Err(error) = self
+            .renderer
+            .draw(win, self.config.style, shape, &frame, opacity)
         {
             eprintln!("dynamic-island: draw failed: {error}");
         }

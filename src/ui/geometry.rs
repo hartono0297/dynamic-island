@@ -148,7 +148,7 @@ pub struct CompactLayout {
     pub bars: Rect,
 }
 
-/// Expanded media: album art, title over artist, transport buttons.
+/// Media page: album art, title over artist, transport buttons.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpandedLayout {
     pub art: Rect,
@@ -171,6 +171,22 @@ pub const BAR_COUNT: usize = 4;
 pub const BAR_W: f32 = 3.0;
 pub const BAR_GAP: f32 = 2.0;
 pub const BAR_MAX_H: f32 = 14.0;
+
+/// Equalizer bar heights `t` seconds into playback: each bar follows
+/// `BAR_MAX_H × (0.35 + 0.65 × |sin(2π·f·t + φ)|)`. Paused bars rest at the
+/// middle of that range.
+pub fn equalizer_heights(t: f32, playing: bool) -> [f32; BAR_COUNT] {
+    const FREQ: [f32; BAR_COUNT] = [1.7, 2.3, 1.3, 2.9];
+    const PHASE: [f32; BAR_COUNT] = [0.0, 1.1, 2.3, 0.6];
+    std::array::from_fn(|i| {
+        let wave = if playing {
+            (std::f32::consts::TAU * FREQ[i] * t + PHASE[i]).sin().abs()
+        } else {
+            0.5
+        };
+        BAR_MAX_H * (0.35 + 0.65 * wave)
+    })
+}
 
 /// Text box between `left` and `right`; never negative while a shape is still small.
 fn text_box(left: f32, right: f32, y: f32, h: f32) -> Rect {
@@ -206,34 +222,6 @@ pub fn compact_layout(s: ShapeRect) -> CompactLayout {
     };
     let text = text_box(art.right() + GAP, bars.x - GAP, s.y, s.h);
     CompactLayout { art, text, bars }
-}
-
-pub fn expanded_layout(s: ShapeRect) -> ExpandedLayout {
-    const ART: f32 = 40.0;
-    const PAD: f32 = 14.0;
-    const PAD_R: f32 = 18.0;
-    const BUTTON_W: f32 = 48.0;
-    const BUTTON_H: f32 = 36.0;
-    const BUTTON_STEP: f32 = 60.0;
-    let art = square(s.x + PAD, s.y + PAD, ART);
-    let left = art.right() + 12.0;
-    let right = s.x + s.w - PAD_R;
-    let title = text_box(left, right, art.y, 20.0);
-    let artist = text_box(left, right, art.y + 20.0, 18.0);
-    let cx = s.x + s.w / 2.0;
-    let cy = s.y + s.h - 26.0;
-    let button = |dx: f32| Rect {
-        x: cx + dx - BUTTON_W / 2.0,
-        y: cy - BUTTON_H / 2.0,
-        w: BUTTON_W,
-        h: BUTTON_H,
-    };
-    ExpandedLayout {
-        art,
-        title,
-        artist,
-        buttons: [button(-BUTTON_STEP), button(0.0), button(BUTTON_STEP)],
-    }
 }
 
 pub fn notice_layout(s: ShapeRect) -> NoticeLayout {
@@ -320,21 +308,6 @@ mod tests {
             && r.bottom() <= outer.y + outer.h
     }
 
-    /// The v1 expanded media shape, which `expanded_layout` was made for.
-    fn v1_expanded(style: Style) -> ShapeRect {
-        let (y, radius) = match style {
-            Style::Pill => (8.0, 26.0),
-            Style::Notch => (0.0, 22.0),
-        };
-        ShapeRect {
-            x: (WINDOW_W - 380.0) / 2.0,
-            y,
-            w: 380.0,
-            h: 110.0,
-            radius,
-        }
-    }
-
     #[test]
     fn panel_centered_both_styles() {
         let p = shape_for(Style::Pill, ShapeKind::Panel);
@@ -403,23 +376,6 @@ mod tests {
             assert_eq!(l.art.w, 22.0);
             assert!(l.text.x >= l.art.right() && l.text.right() <= l.bars.x);
 
-            let e = v1_expanded(style);
-            let l = expanded_layout(e);
-            for r in [
-                l.art,
-                l.title,
-                l.artist,
-                l.buttons[0],
-                l.buttons[1],
-                l.buttons[2],
-            ] {
-                assert!(inside(e, r), "{style:?} expanded {r:?}");
-            }
-            assert_eq!(l.art.w, 40.0);
-            assert!(l.buttons[0].right() <= l.buttons[1].x);
-            assert!(l.buttons[1].right() <= l.buttons[2].x);
-            assert!(l.buttons[1].y >= l.art.bottom());
-
             let n = shape_for(style, ShapeKind::Notice);
             let l = notice_layout(n);
             for r in [l.badge, l.title, l.body] {
@@ -432,8 +388,8 @@ mod tests {
 
     #[test]
     fn hit_maps_buttons_body_and_outside() {
-        let e = v1_expanded(Style::Pill);
-        let l = expanded_layout(e);
+        let e = shape_for(Style::Pill, ShapeKind::Panel);
+        let l = super::super::panel_layout::media_panel_layout(e, false);
         let regions = HitRegions {
             shape: Some((Style::Pill, e)),
             buttons: Some(l.buttons),
@@ -546,6 +502,28 @@ mod tests {
         assert_eq!(radius(Style::Notch, ShapeKind::PomodoroCompact), 16.0);
         assert_eq!(radius(Style::Notch, ShapeKind::Notice), 22.0);
         assert_eq!(radius(Style::Notch, ShapeKind::Panel), 26.0);
+    }
+
+    #[test]
+    fn equalizer_follows_formula_and_rests_when_paused() {
+        let at0 = equalizer_heights(0.0, true);
+        let expect = |phase: f32| BAR_MAX_H * (0.35 + 0.65 * phase.sin().abs());
+        for (h, phase) in at0.iter().zip([0.0, 1.1, 2.3, 0.6]) {
+            assert!((h - expect(phase)).abs() < 1e-4);
+        }
+        // Bar 0 (1.7 Hz) peaks a quarter period in.
+        let peak = equalizer_heights(1.0 / (4.0 * 1.7), true)[0];
+        assert!((peak - BAR_MAX_H).abs() < 1e-3);
+        for i in 0..200 {
+            for h in equalizer_heights(i as f32 * 0.033, true) {
+                assert!((0.35 * BAR_MAX_H - 1e-4..=BAR_MAX_H + 1e-4).contains(&h));
+            }
+        }
+        let paused = equalizer_heights(12.3, false);
+        for h in paused {
+            assert!((h - BAR_MAX_H * 0.675).abs() < 1e-4);
+        }
+        assert_eq!(paused, equalizer_heights(0.0, false), "static");
     }
 
     #[test]

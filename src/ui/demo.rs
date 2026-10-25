@@ -1,9 +1,16 @@
-//! `--demo` (debug builds only): cycles Hidden → compact → expanded → notice
-//! every 2 s, Pill then Notch, with long text, so the window and renderer can
-//! be checked by eye and by screen capture. Runs until the process is killed.
+//! `--demo` (debug builds only): cycles through every view, 2 s each, Pill
+//! then Notch, with long text and fake calendar, notes and pomodoro data, so
+//! the window and renderer can be checked by eye and by screen capture. Runs
+//! until the process is killed.
+//!
+//! Environment knobs for screenshots:
+//! - `DI_DEMO_STEP=n` holds step `n` (see `SCENES`; Notch adds `SCENES.len()`).
+//! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
+//! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
 
 use std::time::{Duration, Instant};
 
+use chrono::{Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -11,14 +18,138 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
-use super::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
-use super::render::Renderer;
+use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_for};
+use super::render::{Frame, Renderer};
 use super::window::IslandWindow;
+use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::config::Style;
-use crate::model::{MediaInfo, Notice, NoticeKind, Page, View};
+use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
+use crate::notes::Note;
+use crate::pomodoro::{PomoSettings, Pomodoro};
 
 const PHASE: Duration = Duration::from_millis(2000);
-const STEPS: u32 = 8;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Pomo {
+    Idle,
+    Running,
+    Paused,
+    Ready,
+}
+
+#[derive(Clone, Copy)]
+struct Scene {
+    name: &'static str,
+    kind: ShapeKind,
+    view: View0,
+    pomo: Pomo,
+    cal_view: CalView,
+    status: CalStatus,
+    day_page: usize,
+    notes: usize,
+    strip: bool,
+}
+
+/// `View` without its payloads, so scenes can be `const`.
+#[derive(Clone, Copy, PartialEq)]
+enum View0 {
+    Idle,
+    MediaCompact,
+    PomodoroCompact,
+    Panel(Page),
+}
+
+const BASE: Scene = Scene {
+    name: "",
+    kind: ShapeKind::Panel,
+    view: View0::Idle,
+    pomo: Pomo::Idle,
+    cal_view: CalView::Month,
+    status: CalStatus::Ok,
+    day_page: 0,
+    notes: 5,
+    strip: false,
+};
+
+const fn panel(name: &'static str, page: Page) -> Scene {
+    Scene {
+        name,
+        view: View0::Panel(page),
+        ..BASE
+    }
+}
+
+const SCENES: [Scene; 15] = [
+    Scene {
+        name: "idle",
+        kind: ShapeKind::Idle,
+        ..BASE
+    },
+    Scene {
+        name: "pomo-running",
+        kind: ShapeKind::PomodoroCompact,
+        view: View0::PomodoroCompact,
+        pomo: Pomo::Running,
+        ..BASE
+    },
+    Scene {
+        name: "pomo-paused",
+        kind: ShapeKind::PomodoroCompact,
+        view: View0::PomodoroCompact,
+        pomo: Pomo::Paused,
+        ..BASE
+    },
+    Scene {
+        name: "pomo-ready",
+        kind: ShapeKind::PomodoroCompact,
+        view: View0::PomodoroCompact,
+        pomo: Pomo::Ready,
+        ..BASE
+    },
+    Scene {
+        name: "media-compact",
+        kind: ShapeKind::MediaCompact,
+        view: View0::MediaCompact,
+        ..BASE
+    },
+    panel("cal-month", Page::Calendar),
+    Scene {
+        cal_view: CalView::Week,
+        ..panel("cal-week", Page::Calendar)
+    },
+    Scene {
+        cal_view: CalView::Day,
+        ..panel("cal-day", Page::Calendar)
+    },
+    Scene {
+        status: CalStatus::NeedsLogin,
+        ..panel("cal-needslogin", Page::Calendar)
+    },
+    Scene {
+        cal_view: CalView::Day,
+        status: CalStatus::Offline,
+        day_page: 1,
+        ..panel("cal-day-offline-p1", Page::Calendar)
+    },
+    Scene {
+        pomo: Pomo::Running,
+        ..panel("pomodoro", Page::Pomodoro)
+    },
+    panel("notes-5", Page::Notes),
+    Scene {
+        notes: 30,
+        ..panel("notes-30", Page::Notes)
+    },
+    panel("media", Page::Media),
+    Scene {
+        strip: true,
+        ..panel("strip", Page::Calendar)
+    },
+];
+
+fn env<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.parse().ok()
+}
 
 pub fn run() {
     unsafe {
@@ -32,80 +163,259 @@ pub fn run() {
         playing: true,
         art: Some(test_art()),
     };
-    println!("demo: 2 s per view, Pill then Notch; kill the process to stop");
+    let today = Local::now().date_naive();
+    let calendar = demo_calendar(today);
+    let notes5 = demo_notes(today);
+    let notes30 = many_notes(today);
+    let strip = Notice {
+        key: "demo-wait".into(),
+        source: "Claude".into(),
+        title: "Claude butuh respon".into(),
+        body: "Dynamic Island".into(),
+        kind: NoticeKind::ClaudeWaiting {
+            session_id: "demo".into(),
+        },
+    };
+    let hold: Option<usize> = env("DI_DEMO_STEP");
+    let frozen_t: Option<f32> = env("DI_DEMO_T");
+    let slide: f32 = env("DI_DEMO_SLIDE").unwrap_or(0.0);
+    let steps = 2 * SCENES.len();
+    println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
-    // Step whose resting (t = 1) frame was drawn last; frames stop until the next step.
-    let mut settled = u32::MAX;
+    let mut settled = usize::MAX;
     loop {
         if !pump_messages() {
             return;
         }
         let elapsed = start.elapsed();
-        let step = (elapsed.as_millis() / PHASE.as_millis()) as u32 % STEPS;
-        let into = elapsed.as_millis() % PHASE.as_millis();
-        let t = (into as f32 / ANIM_MS as f32).min(1.0);
-        // Redraw only while animating, as the app will, always ending on the resting frame.
-        if step != settled {
+        let (step, into) = match hold {
+            Some(n) => (n % steps, elapsed.as_millis()),
+            None => (
+                (elapsed.as_millis() / PHASE.as_millis()) as usize % steps,
+                elapsed.as_millis() % PHASE.as_millis(),
+            ),
+        };
+        let t = frozen_t.unwrap_or((into as f32 / ANIM_MS as f32).min(1.0));
+        let (style, scene) = scene(step);
+        // The equalizer animates; everything else redraws only while morphing.
+        let animated = scene.view == View0::MediaCompact;
+        if step != settled || animated {
             if t >= 1.0 {
+                if settled != step {
+                    println!("demo: step {step} {:?} {}", style, scene.name);
+                }
                 settled = step;
             }
-            let (style, view, to, to_opacity) = step_target(step);
-            let (_, _, from, from_opacity) = step_target((step + STEPS - 1) % STEPS);
-            let shape = lerp_shape(from, to, ease_out_back(t));
-            let opacity = from_opacity + (to_opacity - from_opacity) * t;
-            let shown = matches!(view, View::MediaCompact | View::Panel(_));
-            let media = shown.then_some(&media);
-            if let Err(error) = renderer.draw(&win, style, shape, &view, media, opacity) {
+            let (prev_style, prev) = self::scene((step + steps - 1) % steps);
+            let from = shape_for(prev_style, prev.kind);
+            let shape = lerp_shape(from, shape_for(style, scene.kind), ease_out_back(t));
+            let now = Instant::now();
+            let pomodoro = demo_pomodoro(scene.pomo, now);
+            let view = match scene.view {
+                View0::Idle => View::Idle,
+                View0::MediaCompact => View::MediaCompact,
+                View0::PomodoroCompact => View::PomodoroCompact,
+                View0::Panel(page) => View::Panel(page),
+            };
+            let page = match scene.view {
+                View0::Panel(page) => page,
+                _ => Page::Calendar,
+            };
+            let snapshot = CalendarSnapshot {
+                status: scene.status,
+                ..calendar.clone()
+            };
+            let notes: &[Note] = if scene.notes == 30 { &notes30 } else { &notes5 };
+            let frame = Frame {
+                view: &view,
+                media: Some(&media),
+                pomodoro: &pomodoro,
+                now,
+                page,
+                strip: scene.strip.then_some(&strip),
+                cal_view: scene.cal_view,
+                cal_anchor: today,
+                cal_selected: today,
+                calendar: &snapshot,
+                notes,
+                notes_page: 0,
+                day_page: scene.day_page,
+                page_slide: slide,
+            };
+            if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
             }
         }
-        std::thread::sleep(Duration::from_millis(16));
+        std::thread::sleep(Duration::from_millis(if animated { 33 } else { 16 }));
     }
 }
 
-/// Style, view, resting shape and opacity of a demo step. A hidden step keeps
-/// the previous step's style and shape and fades it out.
-fn step_target(step: u32) -> (Style, View, ShapeRect, f32) {
-    let style = if step < 4 { Style::Pill } else { Style::Notch };
-    let kind = match step % 4 {
-        0 => {
-            let (style, _, shape, _) = step_target((step + STEPS - 1) % STEPS);
-            return (style, View::Hidden, shape, 0.0);
+fn scene(step: usize) -> (Style, Scene) {
+    let style = if step < SCENES.len() {
+        Style::Pill
+    } else {
+        Style::Notch
+    };
+    (style, SCENES[step % SCENES.len()])
+}
+
+/// Focus session 2 of 4 with 18:42 left (running or paused), or a short break
+/// ready to start.
+fn demo_pomodoro(which: Pomo, now: Instant) -> Pomodoro {
+    let mut p = Pomodoro::new(PomoSettings::default());
+    if which == Pomo::Idle {
+        return p;
+    }
+    if which == Pomo::Ready {
+        p.skip(now);
+        return p;
+    }
+    // Focus 1 → short break → focus 2.
+    p.skip(now);
+    p.skip(now);
+    let started = now.checked_sub(Duration::from_secs(378)).unwrap_or(now);
+    p.start_pause(started);
+    if which == Pomo::Paused {
+        p.start_pause(now);
+    }
+    p
+}
+
+fn local(d: NaiveDate, h: u32, m: u32) -> EventTime {
+    let t = d.and_time(NaiveTime::from_hms_opt(h, m, 0).expect("valid time"));
+    EventTime::At(
+        Local
+            .from_local_datetime(&t)
+            .earliest()
+            .expect("local time"),
+    )
+}
+
+/// Six events on today: all-day, multi-day all-day, three timed (one past
+/// midnight), and one with a very long title.
+fn demo_calendar(today: NaiveDate) -> CalendarSnapshot {
+    let day = |n: i64| {
+        if n >= 0 {
+            today + Days::new(n as u64)
+        } else {
+            today - Days::new(n.unsigned_abs())
         }
-        1 => ShapeKind::MediaCompact,
-        2 => ShapeKind::Panel,
-        _ => ShapeKind::Notice,
     };
-    let view = match kind {
-        ShapeKind::Idle => View::Idle,
-        ShapeKind::MediaCompact => View::MediaCompact,
-        ShapeKind::PomodoroCompact => View::PomodoroCompact,
-        ShapeKind::Panel => View::Panel(Page::Media),
-        ShapeKind::Notice => View::Notice(demo_notice(style)),
+    let ev = |id: &str, title: &str, start, end, color| CalEvent {
+        id: id.into(),
+        calendar_id: "primary".into(),
+        title: title.into(),
+        start,
+        end,
+        description: String::new(),
+        color,
+        editable: true,
     };
-    (style, view, shape_for(style, kind), 1.0)
+    let events = vec![
+        ev(
+            "bday",
+            "Ulang tahun Rani",
+            EventTime::AllDay(today),
+            EventTime::AllDay(day(1)),
+            Some(0xF5A524),
+        ),
+        ev(
+            "expo",
+            "Pameran arsitektur Jakarta",
+            EventTime::AllDay(day(-1)),
+            EventTime::AllDay(day(3)),
+            Some(0x9B59B6),
+        ),
+        ev(
+            "review",
+            "Review desain klien",
+            local(today, 10, 0),
+            local(today, 11, 30),
+            None,
+        ),
+        ev(
+            "rapat",
+            "Rapat koordinasi kontraktor, struktur, MEP dan pemilik proyek gedung kantor",
+            local(today, 14, 0),
+            local(today, 15, 0),
+            None,
+        ),
+        ev(
+            "dinner",
+            "Makan malam keluarga",
+            local(today, 19, 0),
+            local(today, 21, 0),
+            Some(0x2ECC71),
+        ),
+        ev(
+            "render",
+            "Render final malam",
+            local(today, 22, 0),
+            local(day(1), 2, 0),
+            Some(0xEF5350),
+        ),
+    ];
+    CalendarSnapshot {
+        status: CalStatus::Ok,
+        events,
+        from: day(-30),
+        to: day(30),
+        fetched_at: Some(Local::now()),
+    }
 }
 
-fn demo_notice(style: Style) -> Notice {
-    match style {
-        Style::Pill => Notice {
-            key: "demo-wa".into(),
-            source: "WhatsApp".into(),
-            title: "Ibu (Grup Keluarga Besar Bani Hartono Sedunia)".into(),
-            body: "udah makan belum? jangan lupa minum obat ya nak, nanti malam telepon ibu".into(),
-            kind: NoticeKind::App { app_id: None },
-        },
-        Style::Notch => Notice {
-            key: "demo-claude".into(),
-            source: "Claude".into(),
-            title: "Claude selesai".into(),
-            body: "D:\\GitHub\\Dynamic Island with a very long project path that must be trimmed"
-                .into(),
-            kind: NoticeKind::ClaudeDone {
-                session_id: "demo".into(),
-            },
-        },
-    }
+fn stamp(t: NaiveDateTime) -> i64 {
+    Local
+        .from_local_datetime(&t)
+        .earliest()
+        .map_or(0, |t| t.timestamp())
+}
+
+fn demo_notes(today: NaiveDate) -> Vec<Note> {
+    let at = |d: NaiveDate, h, m| stamp(d.and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap()));
+    let note = |id: &str, text: &str, updated| Note {
+        id: id.into(),
+        text: text.into(),
+        updated,
+    };
+    vec![
+        note(
+            "n1",
+            "Revisi denah lantai 2 — geser tangga ke timur",
+            at(today, 9, 12),
+        ),
+        note(
+            "n2",
+            "Beli tinta printer A3",
+            at(today - Days::new(1), 16, 0),
+        ),
+        note(
+            "n3",
+            "\n  Ide: fasad pakai roster bata ekspos\ndetail menyusul",
+            at(today - Days::new(2), 8, 0),
+        ),
+        note(
+            "n4",
+            "Catatan rapat: klien minta jendela lebih besar di semua kamar tidur dan ruang keluarga menghadap taman belakang",
+            at(today - Days::new(9), 11, 0),
+        ),
+        note(
+            "n5",
+            "Perpanjang lisensi software",
+            at(today - Days::new(400), 11, 0),
+        ),
+    ]
+}
+
+fn many_notes(today: NaiveDate) -> Vec<Note> {
+    let base = stamp(today.and_time(NaiveTime::from_hms_opt(12, 0, 0).unwrap()));
+    (0..30)
+        .map(|i| Note {
+            id: format!("m{i}"),
+            text: format!("Catatan nomor {}", i + 1),
+            updated: base - i64::from(i) * 7 * 3600,
+        })
+        .collect()
 }
 
 /// A 64×40 orange-to-purple gradient BMP, non-square to exercise the crop.

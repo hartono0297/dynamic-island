@@ -1,6 +1,3 @@
-// Drawn and hit-tested by the panel renderer (Task 8).
-#![allow(dead_code)]
-
 //! Layout of the open panel's pages, the waiting strip, the page dots and the
 //! compact pomodoro, in window logical pixels. Pure and deterministic: text is
 //! trimmed by the renderer inside the rects given here.
@@ -49,7 +46,9 @@ pub struct CalendarLayout {
     pub caption: Option<Rect>,
     /// Event id and row.
     pub rows: Vec<(String, Rect)>,
-    /// Month and day list: hidden event count and the "+N lagi" rect.
+    /// Month and day list: events after the shown rows and the "+N lagi"
+    /// rect; in the day view a count of 0 means the last chunk ("Kembali ke
+    /// atas").
     pub more: Option<(usize, Rect)>,
     /// "+ Tambah acara".
     pub add: Rect,
@@ -205,6 +204,19 @@ pub fn waiting_strip(s: ShapeRect) -> Rect {
     rect(left(s), s.y + STRIP_TOP, s.w - 2.0 * PAD_X, STRIP_H)
 }
 
+/// Which `shown` items of `n` to list when `k` fit: chunk `page` (wrapping)
+/// once they do not all fit. Returns `(start, shown)`.
+fn chunk(n: usize, k: usize, page: usize) -> (usize, usize) {
+    if n <= k {
+        (0, n)
+    } else if k == 0 {
+        (0, 0)
+    } else {
+        let start = (page % n.div_ceil(k)) * k;
+        (start, k.min(n - start))
+    }
+}
+
 /// Event rows stacked from `y` down to `bottom`: optional connect button,
 /// rows, "+N lagi" if they do not all fit, then "+ Tambah acara".
 struct Stack {
@@ -214,7 +226,16 @@ struct Stack {
     add: Rect,
 }
 
-fn stack(x: f32, w: f32, mut y: f32, bottom: f32, ids: Vec<String>, connect: bool) -> Stack {
+/// `page` picks the chunk of rows shown when they do not all fit.
+fn stack(
+    x: f32,
+    w: f32,
+    mut y: f32,
+    bottom: f32,
+    ids: Vec<String>,
+    page: usize,
+    connect: bool,
+) -> Stack {
     let connect = if connect {
         let r = rect(x, y, w.min(CONNECT_W), CONNECT_H);
         y = r.bottom() + CONNECT_GAP;
@@ -224,9 +245,11 @@ fn stack(x: f32, w: f32, mut y: f32, bottom: f32, ids: Vec<String>, connect: boo
     };
     let avail = bottom - y - ADD_GAP - ADD_H;
     let total = ids.len();
-    let shown = rows_that_fit(total, avail, ROW_H, 0.0, MORE_H);
+    let k = rows_that_fit(total, avail, ROW_H, 0.0, MORE_H);
+    let (start, shown) = chunk(total, k, page);
     let rows: Vec<(String, Rect)> = ids
         .into_iter()
+        .skip(start)
         .take(shown)
         .enumerate()
         .map(|(i, id)| (id, rect(x, y + i as f32 * ROW_H, w, ROW_H)))
@@ -235,7 +258,7 @@ fn stack(x: f32, w: f32, mut y: f32, bottom: f32, ids: Vec<String>, connect: boo
     let more = if shown < total {
         let r = rect(x, y, w.min(MORE_W), MORE_H);
         y = r.bottom();
-        Some((total - shown, r))
+        Some((total - start - shown, r))
     } else {
         None
     };
@@ -248,8 +271,10 @@ fn stack(x: f32, w: f32, mut y: f32, bottom: f32, ids: Vec<String>, connect: boo
 }
 
 /// Month: grid on the left, the selected day's events on the right. Week:
-/// seven columns of up to three events. Day: the selected day's events.
-/// `events` is the whole snapshot; each day's share comes from `events_on`.
+/// seven columns of up to three events. Day: the selected day's events, chunk
+/// `day_page` (wrapping) when they do not all fit. `events` is the whole
+/// snapshot; each day's share comes from `events_on`.
+#[allow(clippy::too_many_arguments)]
 pub fn calendar_layout(
     s: ShapeRect,
     view: CalView,
@@ -257,6 +282,7 @@ pub fn calendar_layout(
     selected: NaiveDate,
     events: &[CalEvent],
     status: &CalStatus,
+    day_page: usize,
     strip: bool,
 ) -> CalendarLayout {
     let top = content_top(s, strip);
@@ -282,7 +308,12 @@ pub fn calendar_layout(
             .map(|e| e.id.clone())
             .collect()
     };
-    let wants_connect = matches!(status, CalStatus::NeedsLogin | CalStatus::Reconnect);
+    // Not configured also offers the button: clicking it tells the owner to
+    // fill in the client ID, instead of an empty calendar saying nothing.
+    let wants_connect = matches!(
+        status,
+        CalStatus::NotConfigured | CalStatus::NeedsLogin | CalStatus::Reconnect
+    );
     let mut layout = CalendarLayout {
         view,
         selected,
@@ -326,6 +357,7 @@ pub fn calendar_layout(
                 caption.bottom() + 4.0,
                 bottom,
                 ids_on(selected),
+                0,
                 wants_connect,
             );
             layout.list = list;
@@ -343,6 +375,7 @@ pub fn calendar_layout(
                 list.y,
                 bottom,
                 ids_on(selected),
+                day_page,
                 wants_connect,
             );
             layout.list = list;
@@ -376,8 +409,10 @@ pub fn calendar_layout(
             }
             layout.list = rect(l, body, r - l, col_h);
             layout.add = rect(l, layout.list.bottom() + 6.0, ADD_W, ADD_H);
-            layout.connect = wants_connect
-                .then(|| rect(layout.add.right() + 12.0, layout.add.y, CONNECT_W, ADD_H));
+            // As tall as in the other views, centered on the "+ Tambah acara" row.
+            let y = layout.add.y + (ADD_H - CONNECT_H) / 2.0;
+            layout.connect =
+                wants_connect.then(|| rect(layout.add.right() + 12.0, y, CONNECT_W, CONNECT_H));
         }
     }
     layout
@@ -448,12 +483,7 @@ pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool
     let pitch = NOTE_H + NOTE_GAP;
     let n = notes.len();
     let k = rows_that_fit(n, bottom - list_y, pitch, NOTE_GAP, MORE_H).max(1);
-    let (start, shown) = if n <= k {
-        (0, n)
-    } else {
-        let start = (notes_page % n.div_ceil(k)) * k;
-        (start, k.min(n - start))
-    };
+    let (start, shown) = chunk(n, k, notes_page);
     let rows = notes[start..start + shown]
         .iter()
         .enumerate()
@@ -541,10 +571,8 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             for (id, r) in &l.rows {
                 add(*r, Hit::CalEvent(id.clone()));
             }
-            // In the day view "+N lagi" is only a label: that day is already open.
-            if l.view == CalView::Month
-                && let Some((_, r)) = l.more
-            {
+            // Month: opens that day. Day: shows the day's next chunk of events.
+            if let Some((_, r)) = l.more {
                 add(r, Hit::CalMore(l.selected));
             }
             for (d, _, r) in &l.week_more {
@@ -643,11 +671,14 @@ mod tests {
         let mut out = Vec::new();
         for view in [CalView::Day, CalView::Week, CalView::Month] {
             for status in [CalStatus::Ok, CalStatus::Reconnect] {
-                let l = calendar_layout(s, view, oct25(), oct25(), &events, &status, strip);
-                out.push((
-                    format!("calendar {view:?} {status:?}"),
-                    PageLayout::Calendar(l),
-                ));
+                for page in [0, 1, 9] {
+                    let l =
+                        calendar_layout(s, view, oct25(), oct25(), &events, &status, page, strip);
+                    out.push((
+                        format!("calendar {view:?} {status:?} p{page}"),
+                        PageLayout::Calendar(l),
+                    ));
+                }
             }
         }
         out.push((
@@ -714,6 +745,7 @@ mod tests {
             date(2026, 10, 25),
             &[],
             &CalStatus::Ok,
+            0,
             false,
         );
         assert_eq!(l.month_cells.len(), 42);
@@ -753,6 +785,7 @@ mod tests {
             oct25(),
             &events,
             &CalStatus::Ok,
+            0,
             false,
         );
         let days: Vec<NaiveDate> = l.week_columns.iter().map(|(d, _)| *d).collect();
@@ -777,6 +810,7 @@ mod tests {
             oct25(),
             &events,
             &CalStatus::Ok,
+            0,
             false,
         );
         assert!(!l.rows.is_empty());
@@ -796,6 +830,7 @@ mod tests {
             oct25(),
             &events[..2],
             &CalStatus::Ok,
+            0,
             false,
         );
         assert_eq!(l.rows.len(), 2);
@@ -806,11 +841,73 @@ mod tests {
     fn connect_only_when_login_needed() {
         let s = panel(Style::Notch);
         let layout =
-            |status| calendar_layout(s, CalView::Month, oct25(), oct25(), &[], &status, false);
+            |status| calendar_layout(s, CalView::Month, oct25(), oct25(), &[], &status, 0, false);
+        assert!(layout(CalStatus::NotConfigured).connect.is_some());
         assert!(layout(CalStatus::NeedsLogin).connect.is_some());
         assert!(layout(CalStatus::Reconnect).connect.is_some());
         assert!(layout(CalStatus::Ok).connect.is_none());
         assert!(layout(CalStatus::Offline).connect.is_none());
+    }
+
+    #[test]
+    fn connect_button_26_high_in_every_view() {
+        let s = panel(Style::Pill);
+        for view in [CalView::Day, CalView::Week, CalView::Month] {
+            let l = calendar_layout(
+                s,
+                view,
+                oct25(),
+                oct25(),
+                &[],
+                &CalStatus::NeedsLogin,
+                0,
+                false,
+            );
+            assert_eq!(l.connect.expect("connect").h, 26.0, "{view:?}");
+        }
+    }
+
+    #[test]
+    fn day_list_pages_through_chunks_and_wraps() {
+        let s = panel(Style::Pill);
+        let events = many_events(20, oct25());
+        let day = |page| {
+            calendar_layout(
+                s,
+                CalView::Day,
+                oct25(),
+                oct25(),
+                &events,
+                &CalStatus::Ok,
+                page,
+                false,
+            )
+        };
+        let first = day(0);
+        let k = first.rows.len();
+        assert!((1..20).contains(&k));
+        assert_eq!(first.rows[0].0, "ev0");
+        assert_eq!(first.more.map(|m| m.0), Some(20 - k));
+        let second = day(1);
+        assert_eq!(second.rows[0].0, format!("ev{k}"));
+        assert_eq!(second.rows[0].1, first.rows[0].1, "same row slots");
+        let chunks = 20usize.div_ceil(k);
+        let last = day(chunks - 1);
+        assert_eq!(last.rows.last().unwrap().0, "ev19");
+        assert_eq!(last.more.map(|m| m.0), Some(0), "last chunk: back to top");
+        assert_eq!(day(chunks).rows[0].0, "ev0", "wraps");
+        // The month list always shows the first chunk.
+        let month = calendar_layout(
+            s,
+            CalView::Month,
+            oct25(),
+            oct25(),
+            &events,
+            &CalStatus::Ok,
+            3,
+            false,
+        );
+        assert_eq!(month.rows[0].0, "ev0");
     }
 
     #[test]
@@ -863,6 +960,7 @@ mod tests {
                     oct25(),
                     &[],
                     &CalStatus::Ok,
+                    0,
                     strip,
                 )
             };
@@ -915,6 +1013,7 @@ mod tests {
             oct25(),
             &events,
             &CalStatus::NeedsLogin,
+            0,
             false,
         );
         let r = regions(s, &PageLayout::Calendar(l), false);
@@ -940,13 +1039,14 @@ mod tests {
             oct25(),
             &events,
             &CalStatus::Ok,
+            0,
             false,
         );
         let r = regions(s, &PageLayout::Calendar(l), false);
         assert!(has(&r, Hit::CalDate(date(2026, 10, 19))));
         assert!(has(&r, Hit::CalMore(oct25())));
 
-        // Day view's "+N lagi" is a label: the day is already open.
+        // Day view's "+N lagi" pages through the open day.
         let l = calendar_layout(
             s,
             CalView::Day,
@@ -954,11 +1054,12 @@ mod tests {
             oct25(),
             &events,
             &CalStatus::Ok,
+            0,
             false,
         );
         assert!(l.more.is_some());
         let r = regions(s, &PageLayout::Calendar(l), false);
-        assert!(!r.iter().any(|r| matches!(r.hit, Hit::CalMore(_))));
+        assert!(has(&r, Hit::CalMore(oct25())));
 
         let r = regions(s, &PageLayout::Pomodoro(pomodoro_layout(s, false)), false);
         for hit in [
