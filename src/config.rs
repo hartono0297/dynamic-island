@@ -31,6 +31,8 @@ pub struct Config {
     pub surface: Surface,
     /// Editors and settings window: follow Windows, or always dark / light.
     pub window_theme: WindowTheme,
+    /// The idle island shows the local time instead of an empty shape.
+    pub idle_clock: bool,
 }
 
 impl Default for Config {
@@ -48,6 +50,7 @@ impl Default for Config {
             accent: Accent::Blue,
             surface: Surface::Black,
             window_theme: WindowTheme::System,
+            idle_clock: true,
         }
     }
 }
@@ -95,7 +98,7 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language, theme) over everything else as it is on disk (Google client, muted
+/// language, theme, idle clock) over everything else as it is on disk (Google client, muted
 /// apps, battery threshold), which the owner may have edited by hand while the
 /// island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
@@ -108,6 +111,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         accent: mem.accent,
         surface: mem.surface,
         window_theme: mem.window_theme,
+        idle_clock: mem.idle_clock,
         ..disk
     }
 }
@@ -275,6 +279,7 @@ mod tests {
         assert_eq!(c.accent, Accent::Blue);
         assert_eq!(c.surface, Surface::Black);
         assert_eq!(c.window_theme, WindowTheme::System);
+        assert!(c.idle_clock);
     }
 
     #[test]
@@ -297,6 +302,7 @@ mod tests {
             accent: Accent::Orange,
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
+            idle_clock: false,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -381,6 +387,7 @@ mod tests {
         Accent,
         Surface,
         WindowTheme,
+        bool,
     );
 
     fn owned(c: &Config) -> Owned {
@@ -393,6 +400,7 @@ mod tests {
             c.accent,
             c.surface,
             c.window_theme,
+            c.idle_clock,
         )
     }
 
@@ -411,6 +419,7 @@ mod tests {
             accent: Accent::Blue,
             surface: Surface::Black,
             window_theme: WindowTheme::System,
+            idle_clock: true,
             ..Config::default()
         };
         let mem = Config {
@@ -425,6 +434,7 @@ mod tests {
             accent: Accent::Red,
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
+            idle_clock: false,
             ..Config::default()
         };
         (disk, mem)

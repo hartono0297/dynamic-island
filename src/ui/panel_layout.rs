@@ -6,7 +6,7 @@ use chrono::{Days, NaiveDate};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, events_on, range_for};
-use crate::model::{CalView, Hit, Page, PomoField};
+use crate::model::{CalView, Hit, Page};
 use crate::notes::Note;
 
 /// A clickable rect and what clicking it means.
@@ -53,15 +53,17 @@ pub struct CalendarLayout {
     pub connect: Option<Rect>,
 }
 
+/// The timer and its controls only; durations are set in Settings → Pomodoro.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PomodoroLayout {
-    /// "Pomodoro" on the left, the session label on the right.
+    /// "Pomodoro".
     pub header: Rect,
     pub ring_center: (f32, f32),
     pub ring_radius: f32,
-    /// Field, minus button, plus button, label. The value is drawn between
-    /// the buttons (`stepper_value`).
-    pub steppers: [(PomoField, Rect, Rect, Rect); 4],
+    /// The phase ("Fokus · dijeda"), right of the ring.
+    pub phase: Rect,
+    /// "Sesi 2 dari 4", under the phase.
+    pub session: Rect,
     pub start_pause: Rect,
     pub reset: Rect,
     pub skip: Rect,
@@ -81,6 +83,9 @@ pub struct NotesLayout {
 }
 
 /// One page's layout, for `regions`.
+// Built on the stack for one frame and dropped; boxing the calendar would
+// only add an allocation per frame.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum PageLayout {
     Calendar(CalendarLayout),
@@ -128,15 +133,18 @@ pub const WEEK_HEAD_H: f32 = 20.0;
 const WEEK_ROWS: usize = 3;
 
 const RING_RADIUS: f32 = 70.0;
-const RING_X: f32 = 122.0;
-const CONTROLS_X: f32 = 232.0;
-const STEP_H: f32 = 26.0;
-const STEP_GAP: f32 = 8.0;
-const STEP_BUTTON: f32 = 22.0;
-const STEP_LABEL_W: f32 = 128.0;
-const STEP_VALUE_W: f32 = 60.0;
-const ACTION_GAP: f32 = 14.0;
-const ACTION_H: f32 = 28.0;
+/// Between the ring and the column of labels and buttons.
+const RING_GAP: f32 = 48.0;
+const PHASE_H: f32 = 24.0;
+const SESSION_H: f32 = 18.0;
+const SESSION_GAP: f32 = 2.0;
+const ACTION_GAP: f32 = 18.0;
+const ACTION_H: f32 = 30.0;
+const START_W: f32 = 84.0;
+const ACTION_W: f32 = 72.0;
+const ACTION_SPACING: f32 = 8.0;
+/// The buttons' row: the widest thing in the column.
+const COLUMN_W: f32 = START_W + 2.0 * (ACTION_SPACING + ACTION_W);
 
 const NEW_W: f32 = 64.0;
 const NOTE_H: f32 = 40.0;
@@ -415,57 +423,45 @@ pub fn calendar_layout(
     layout
 }
 
-/// Big ring on the left; four steppers and the action buttons on the right.
+/// Big ring on the left; the phase, the session and the three buttons in a
+/// column on its right, centred on the ring. Ring and column together are
+/// centred in the panel.
 pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
-    let l = left(s);
-    let header = rect(l, top, right(s) - l, HEADER_H);
+    let (l, r) = (left(s), right(s));
+    let header = rect(l, top, r - l, HEADER_H);
     let body = header.bottom() + 8.0;
     let body_h = bottom - body;
-    let ring_center = (l + RING_X, body + body_h / 2.0);
+    let group_w = 2.0 * RING_RADIUS + RING_GAP + COLUMN_W;
+    let group_x = l + ((r - l) - group_w) / 2.0;
+    let cy = body + body_h / 2.0;
+    let ring_center = (group_x + RING_RADIUS, cy);
 
-    let steps_h = 4.0 * STEP_H + 3.0 * STEP_GAP;
-    let block_h = steps_h + ACTION_GAP + ACTION_H;
-    let block_y = body + (body_h - block_h) / 2.0;
-    let x = l + CONTROLS_X;
-    let fields = [
-        PomoField::Focus,
-        PomoField::ShortBreak,
-        PomoField::LongBreak,
-        PomoField::Sessions,
-    ];
-    let steppers = std::array::from_fn(|i| {
-        let y = block_y + i as f32 * (STEP_H + STEP_GAP);
-        let button_y = y + (STEP_H - STEP_BUTTON) / 2.0;
-        let label = rect(x, y, STEP_LABEL_W, STEP_H);
-        let minus = rect(label.right() + 8.0, button_y, STEP_BUTTON, STEP_BUTTON);
-        let plus = rect(
-            minus.right() + STEP_VALUE_W,
-            button_y,
-            STEP_BUTTON,
-            STEP_BUTTON,
-        );
-        (fields[i], minus, plus, label)
-    });
-    let action_y = block_y + steps_h + ACTION_GAP;
-    let start_pause = rect(x, action_y, 72.0, ACTION_H);
-    let reset = rect(start_pause.right() + 8.0, action_y, 64.0, ACTION_H);
-    let skip = rect(reset.right() + 8.0, action_y, 64.0, ACTION_H);
+    let x = group_x + 2.0 * RING_RADIUS + RING_GAP;
+    let column_h = PHASE_H + SESSION_GAP + SESSION_H + ACTION_GAP + ACTION_H;
+    let y = cy - column_h / 2.0;
+    let phase = rect(x, y, COLUMN_W, PHASE_H);
+    let session = rect(x, phase.bottom() + SESSION_GAP, COLUMN_W, SESSION_H);
+    let action_y = session.bottom() + ACTION_GAP;
+    let start_pause = rect(x, action_y, START_W, ACTION_H);
+    let reset = rect(
+        start_pause.right() + ACTION_SPACING,
+        action_y,
+        ACTION_W,
+        ACTION_H,
+    );
+    let skip = rect(reset.right() + ACTION_SPACING, action_y, ACTION_W, ACTION_H);
     PomodoroLayout {
         header,
         ring_center,
         ring_radius: RING_RADIUS,
-        steppers,
+        phase,
+        session,
         start_pause,
         reset,
         skip,
     }
-}
-
-/// Where a stepper's value ("25 mnt") goes: between its minus and plus.
-pub fn stepper_value(minus: Rect, plus: Rect) -> Rect {
-    rect(minus.right(), minus.y, plus.x - minus.right(), minus.h)
 }
 
 /// Rows of 40 px, as many as fit. When they do not all fit, the list shows
@@ -581,10 +577,6 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             }
         }
         PageLayout::Pomodoro(l) => {
-            for (field, minus, plus, _) in l.steppers {
-                add(minus, Hit::PomoAdjust(field, -1));
-                add(plus, Hit::PomoAdjust(field, 1));
-            }
             add(l.start_pause, Hit::PomoStartPause);
             add(l.reset, Hit::PomoReset);
             add(l.skip, Hit::PomoSkip);
@@ -1058,15 +1050,11 @@ mod tests {
         assert!(has(&r, Hit::CalMore(oct25())));
 
         let r = regions(s, &PageLayout::Pomodoro(pomodoro_layout(s, false)), false);
-        for hit in [
-            Hit::PomoStartPause,
-            Hit::PomoReset,
-            Hit::PomoSkip,
-            Hit::PomoAdjust(PomoField::Focus, -1),
-            Hit::PomoAdjust(PomoField::Sessions, 1),
-        ] {
+        for hit in [Hit::PomoStartPause, Hit::PomoReset, Hit::PomoSkip] {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
+        // Durations are set in the settings window only.
+        assert!(!r.iter().any(|r| matches!(r.hit, Hit::PomoAdjust(..))));
 
         let r = regions(
             s,
@@ -1153,10 +1141,7 @@ mod tests {
                                 w: 2.0 * r,
                                 h: 2.0 * r,
                             });
-                            for (_, minus, plus, label) in l.steppers {
-                                drawn.extend([label, stepper_value(minus, plus)]);
-                                assert!(label.right() <= minus.x);
-                            }
+                            drawn.extend([l.phase, l.session]);
                         }
                         PageLayout::Notes(l) => drawn.push(l.header),
                         PageLayout::Media(l) => drawn.extend([l.art, l.title, l.artist]),
@@ -1171,25 +1156,39 @@ mod tests {
 
     #[test]
     fn pomodoro_ring_left_controls_right() {
-        let s = panel(Style::Pill);
-        let l = pomodoro_layout(s, false);
-        assert_eq!(l.ring_radius, 70.0);
-        assert!(l.ring_center.0 < s.x + s.w / 3.0);
-        let fields: Vec<PomoField> = l.steppers.iter().map(|t| t.0).collect();
-        assert_eq!(
-            fields,
-            [
-                PomoField::Focus,
-                PomoField::ShortBreak,
-                PomoField::LongBreak,
-                PomoField::Sessions
-            ]
-        );
-        for (_, minus, plus, label) in l.steppers {
-            assert!(label.x > l.ring_center.0 + l.ring_radius);
-            assert!(minus.right() < plus.x);
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                let l = pomodoro_layout(s, strip);
+                assert_eq!(l.ring_radius, 70.0);
+                let (cx, cy) = l.ring_center;
+                assert!(cx < s.x + s.w / 2.0, "ring in the left half");
+                // Ring and column together sit centred in the panel.
+                let group_l = cx - l.ring_radius;
+                let group_r = l.skip.right();
+                let (ml, mr) = (group_l - left(s), right(s) - group_r);
+                assert!((ml - mr).abs() < 0.01, "{style:?}: margins {ml} / {mr}");
+                // The column starts right of the ring, top to bottom.
+                for r in [l.phase, l.session, l.start_pause] {
+                    assert!(r.x >= cx + l.ring_radius + 8.0, "{r:?} right of the ring");
+                }
+                assert!(l.phase.bottom() <= l.session.y);
+                assert!(l.session.bottom() <= l.start_pause.y);
+                // The buttons share a row, in order, without touching.
+                for b in [l.reset, l.skip] {
+                    assert_eq!((b.y, b.h), (l.start_pause.y, l.start_pause.h));
+                }
+                assert!(l.start_pause.right() < l.reset.x && l.reset.right() < l.skip.x);
+                // Labels span the buttons' row, so centred text lines up over it.
+                assert_eq!(l.phase.x, l.start_pause.x);
+                assert_eq!(l.phase.right(), l.skip.right());
+                // The column is centred on the ring, below the header.
+                let mid = (l.phase.y + l.skip.bottom()) / 2.0;
+                assert!((mid - cy).abs() < 0.01);
+                assert!(l.phase.y >= l.header.bottom());
+                assert!(cy - l.ring_radius - 4.0 >= l.header.bottom() - 0.01);
+            }
         }
-        assert!(l.start_pause.right() <= l.reset.x && l.reset.right() <= l.skip.x);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
 //! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
+//! - `DI_CLOCK=0` draws the idle island without its clock.
 
 use std::time::{Duration, Instant};
 
@@ -188,6 +189,7 @@ pub fn run() {
         Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
         Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
     );
+    let clock_on = std::env::var("DI_CLOCK").map_or(true, |v| v != "0");
     let steps = 2 * SCENES.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -252,6 +254,7 @@ pub fn run() {
                 day_page: scene.day_page,
                 page_slide: slide,
                 palette,
+                clock: clock_on.then(|| Local::now().format("%H:%M").to_string()),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");

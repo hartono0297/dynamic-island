@@ -79,6 +79,7 @@ pub enum Hit {
     PomoStartPause,
     PomoReset,
     PomoSkip,
+    /// From the settings window; the panel page has no steppers.
     PomoAdjust(PomoField, i32),
     NoteNew,
     /// Note id.
@@ -116,7 +117,7 @@ pub enum Effect {
     },
 }
 
-/// A Pomodoro setting the panel's steppers can change.
+/// A Pomodoro setting the settings window's steppers can change.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PomoField {
     Focus,

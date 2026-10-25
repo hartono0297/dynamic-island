@@ -168,28 +168,65 @@ fn has_island_hooks(settings: &Value) -> bool {
     })
 }
 
+/// True when any island event has a hook from some copy of the island: a
+/// partial install still has something to remove.
+fn any_island_hooks(settings: &Value) -> bool {
+    EVENTS.iter().any(|event| {
+        settings["hooks"][*event].as_array().is_some_and(|groups| {
+            groups.iter().any(|group| {
+                group["hooks"]
+                    .as_array()
+                    .is_some_and(|hooks| hooks.iter().any(is_island_hook))
+            })
+        })
+    })
+}
+
+/// The island's hooks as found in a Claude Code settings file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookState {
+    /// Every island event has an island hook (`has_island_hooks`).
+    pub complete: bool,
+    /// At least one does (`any_island_hooks`).
+    pub any: bool,
+}
+
+impl HookState {
+    const NONE: HookState = HookState {
+        complete: false,
+        any: false,
+    };
+
+    fn of(settings: &Value) -> Self {
+        HookState {
+            complete: has_island_hooks(settings),
+            any: any_island_hooks(settings),
+        }
+    }
+}
+
 /// `%USERPROFILE%\.claude\settings.json`.
 fn user_settings_path() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .map(|home| PathBuf::from(home).join(".claude").join("settings.json"))
 }
 
-/// Whether the island's hooks are in the settings file at `path`; read only.
-/// `None` when the file exists but cannot be read or is not JSON.
-pub fn hooks_present_at(path: &Path) -> Option<bool> {
+/// The island's hooks in the settings file at `path`; read only. `None`
+/// when the file exists but cannot be read or is not JSON.
+pub fn hook_state_at(path: &Path) -> Option<HookState> {
     match fs::read_to_string(path) {
-        Ok(text) if text.trim().is_empty() => Some(false),
+        Ok(text) if text.trim().is_empty() => Some(HookState::NONE),
         Ok(text) => serde_json::from_str::<Value>(&text)
             .ok()
-            .map(|v| has_island_hooks(&v)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Some(false),
+            .map(|v| HookState::of(&v)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Some(HookState::NONE),
         Err(_) => None,
     }
 }
 
-/// `hooks_present_at` for the current user's Claude Code settings.
-pub fn hooks_present() -> Option<bool> {
-    hooks_present_at(&user_settings_path()?)
+/// `hook_state_at` for the current user's Claude Code settings.
+pub fn hook_state() -> Option<HookState> {
+    hook_state_at(&user_settings_path()?)
 }
 
 #[derive(Debug, PartialEq)]
@@ -646,23 +683,63 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.settings()).unwrap(), "{not json");
     }
 
+    const NO_HOOKS: Option<HookState> = Some(HookState {
+        complete: false,
+        any: false,
+    });
+    const ALL_HOOKS: Option<HookState> = Some(HookState {
+        complete: true,
+        any: true,
+    });
+
     #[test]
     fn status_check_reads_without_writing() {
         let dir = TempDir::new("status");
-        assert_eq!(hooks_present_at(&dir.settings()), Some(false), "no file");
+        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS, "no file");
         fs::write(dir.settings(), "  ").unwrap();
-        assert_eq!(hooks_present_at(&dir.settings()), Some(false), "empty");
+        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS, "empty");
         let foreign = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}}"#;
         fs::write(dir.settings(), foreign).unwrap();
-        assert_eq!(hooks_present_at(&dir.settings()), Some(false));
+        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
         assert_eq!(install_at(&dir.settings(), OLD), InstallOutcome::Installed);
         // Any copy of the island counts, wherever its exe is.
-        assert_eq!(hooks_present_at(&dir.settings()), Some(true));
+        assert_eq!(hook_state_at(&dir.settings()), ALL_HOOKS);
         let before = fs::read_to_string(dir.settings()).unwrap();
-        hooks_present_at(&dir.settings());
+        hook_state_at(&dir.settings());
         assert_eq!(fs::read_to_string(dir.settings()).unwrap(), before);
         fs::write(dir.settings(), "{not json").unwrap();
-        assert_eq!(hooks_present_at(&dir.settings()), None);
+        assert_eq!(hook_state_at(&dir.settings()), None);
+    }
+
+    #[test]
+    fn partial_install_has_hooks_but_is_not_complete() {
+        let dir = TempDir::new("partial");
+        // One island hook (an older install, or a hand edit), beside a foreign one.
+        let partial = serde_json::json!({"hooks":{
+            "Stop":[{"hooks":[{"type":"command","command":OLD}]}],
+            "Notification":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]
+        }});
+        fs::write(dir.settings(), partial.to_string()).unwrap();
+        let before = fs::read_to_string(dir.settings()).unwrap();
+        assert_eq!(
+            hook_state_at(&dir.settings()),
+            Some(HookState {
+                complete: false,
+                any: true
+            })
+        );
+        assert_eq!(fs::read_to_string(dir.settings()).unwrap(), before);
+        // Odd shapes are read without panicking and hold no island hook.
+        for odd in [
+            serde_json::json!({"hooks":{"Stop":"x"}}),
+            serde_json::json!({"hooks":[1]}),
+            serde_json::json!({"hooks":{"Stop":[{"hooks":7}]}}),
+            serde_json::json!([]),
+        ] {
+            assert_eq!(HookState::of(&odd), HookState::NONE, "{odd}");
+        }
+        assert_eq!(uninstall_at(&dir.settings()), Ok(true));
+        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
     }
 
     #[test]
@@ -677,7 +754,7 @@ mod tests {
             uninstall_outcome_at(&dir.settings()),
             UninstallOutcome::Removed
         );
-        assert_eq!(hooks_present_at(&dir.settings()), Some(false));
+        assert_eq!(hook_state_at(&dir.settings()), NO_HOOKS);
         fs::write(dir.settings(), "{not json").unwrap();
         assert!(matches!(
             uninstall_outcome_at(&dir.settings()),

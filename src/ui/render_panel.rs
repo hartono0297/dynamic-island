@@ -25,14 +25,14 @@ use super::{
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
-use crate::model::{CalView, Hit, MediaInfo, Notice, Page, PomoField};
+use crate::model::{CalView, Hit, MediaInfo, Notice, Page};
 use crate::notes::Note;
-use crate::pomodoro::{Phase, PomoSettings, PomoStatus, Pomodoro};
+use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
     CalendarLayout, NotesLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, calendar_layout,
     media_panel_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions,
-    stepper_value, waiting_strip,
+    waiting_strip,
 };
 
 /// Pomodoro phases keep their red and green whatever the accent.
@@ -399,12 +399,6 @@ impl Renderer {
             l.header,
             1.0,
         );
-        let session = i18n::session_of(
-            lang,
-            pomo.session().min(settings.sessions),
-            settings.sessions,
-        );
-        self.text(&session, &self.fonts.body_right, l.header, 0.6);
 
         let (cx, cy) = l.ring_center;
         self.ring(
@@ -420,46 +414,20 @@ impl Renderer {
             &self.fonts.big_time,
             Rect {
                 x: cx - r,
-                y: cy - 28.0,
+                y: cy - 21.0,
                 w: 2.0 * r,
                 h: 42.0,
             },
             1.0,
         );
-        self.text(
-            &ring_caption(lang, pomo),
-            &self.fonts.small_center,
-            Rect {
-                x: cx - r + 12.0,
-                y: cy + 14.0,
-                w: 2.0 * r - 24.0,
-                h: 16.0,
-            },
-            0.6,
-        );
 
-        // Settings change only between phases; dim them otherwise.
-        let editable = matches!(status, PomoStatus::Idle | PomoStatus::Ready);
-        let alpha = if editable { 1.0 } else { 0.4 };
-        for (field, minus, plus, label) in l.steppers {
-            self.text(
-                field_label(lang, field),
-                &self.fonts.secondary,
-                label,
-                alpha,
-            );
-            for (button, glyph) in [(minus, "\u{2212}"), (plus, "+")] {
-                self.set_color(self.palette.track, alpha);
-                self.fill_round(button, 6.0);
-                self.text(glyph, &self.fonts.body_center, button, alpha);
-            }
-            self.text(
-                &stepper_text(lang, field, settings),
-                &self.fonts.body_center,
-                stepper_value(minus, plus),
-                alpha,
-            );
-        }
+        self.text(&phase_label(lang, pomo), &self.fonts.phase, l.phase, 1.0);
+        let session = i18n::session_of(
+            lang,
+            pomo.session().min(settings.sessions),
+            settings.sessions,
+        );
+        self.text(&session, &self.fonts.body_center, l.session, 0.6);
         self.set_color(accent, 1.0);
         self.fill_round(l.start_pause, 7.0);
         self.text_colored(
@@ -878,8 +846,8 @@ fn compact_label(lang: Lang, pomo: &Pomodoro) -> String {
     }
 }
 
-/// Under the big ring's time: the phase, marked when paused or waiting.
-fn ring_caption(lang: Lang, pomo: &Pomodoro) -> String {
+/// Beside the big ring: the phase, marked when paused or waiting.
+fn phase_label(lang: Lang, pomo: &Pomodoro) -> String {
     let name = phase_name(lang, pomo.phase());
     match pomo.status() {
         PomoStatus::Paused { .. } => format!("{name} · {}", text(lang, Key::Paused)),
@@ -899,31 +867,10 @@ fn start_label(lang: Lang, status: PomoStatus) -> &'static str {
     )
 }
 
-fn field_label(lang: Lang, field: PomoField) -> &'static str {
-    text(
-        lang,
-        match field {
-            PomoField::Focus => Key::Focus,
-            PomoField::ShortBreak => Key::Break,
-            PomoField::LongBreak => Key::LongBreak,
-            PomoField::Sessions => Key::Sessions,
-        },
-    )
-}
-
-fn stepper_text(lang: Lang, field: PomoField, s: PomoSettings) -> String {
-    let minutes = |m| format!("{m} {}", text(lang, Key::MinutesShort));
-    match field {
-        PomoField::Focus => minutes(s.focus_min),
-        PomoField::ShortBreak => minutes(s.short_break_min),
-        PomoField::LongBreak => minutes(s.long_break_min),
-        PomoField::Sessions => s.sessions.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pomodoro::PomoSettings;
     use chrono::{NaiveTime, TimeZone};
     use std::time::Instant;
 
@@ -1052,19 +999,16 @@ mod tests {
         p.start_pause(t0);
         assert_eq!(compact_label(l, &p), "Fokus 1/4");
         assert_eq!(start_label(l, p.status()), "Jeda");
-        assert_eq!(ring_caption(l, &p), "Fokus");
+        assert_eq!(phase_label(l, &p), "Fokus");
         p.start_pause(t0);
         assert_eq!(start_label(l, p.status()), "Lanjut");
-        assert_eq!(ring_caption(l, &p), "Fokus · dijeda");
+        assert_eq!(phase_label(l, &p), "Fokus · dijeda");
         p.skip(t0);
         assert_eq!(compact_label(l, &p), "Siap · klik");
-        assert_eq!(ring_caption(l, &p), "Istirahat siap");
+        assert_eq!(phase_label(l, &p), "Istirahat siap");
         assert_eq!(phase_color(p.phase()), BREAK);
         p.start_pause(t0);
         assert_eq!(compact_label(l, &p), "Istirahat");
-        assert_eq!(stepper_text(l, PomoField::Focus, p.settings()), "25 mnt");
-        assert_eq!(stepper_text(l, PomoField::Sessions, p.settings()), "4");
-        assert_eq!(field_label(l, PomoField::Sessions), "Jumlah sesi");
     }
 
     #[test]
@@ -1078,11 +1022,9 @@ mod tests {
         assert_eq!(start_label(l, p.status()), "Pause");
         p.start_pause(t0);
         assert_eq!(start_label(l, p.status()), "Resume");
-        assert_eq!(ring_caption(l, &p), "Focus · paused");
+        assert_eq!(phase_label(l, &p), "Focus · paused");
         p.skip(t0);
         assert_eq!(compact_label(l, &p), "Ready · click");
-        assert_eq!(ring_caption(l, &p), "Break ready");
-        assert_eq!(stepper_text(l, PomoField::Focus, p.settings()), "25 min");
-        assert_eq!(field_label(l, PomoField::LongBreak), "Long break");
+        assert_eq!(phase_label(l, &p), "Break ready");
     }
 }

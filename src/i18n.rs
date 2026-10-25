@@ -263,6 +263,8 @@ keys! {
     ModeSystem => "Ikuti Windows", "Follow Windows";
     ModeDark => "Gelap", "Dark";
     ModeLight => "Terang", "Light";
+    IdleClock => "Jam saat kosong", "Clock when idle";
+    IdleClockDesc => "Tampilkan jam saat island kosong", "Show the time when the island is idle";
     Language => "Bahasa", "Language";
     LanguageDesc => "Island dan semua jendela", "The island and every window";
     LangIndonesian => "Indonesia", "Indonesia";

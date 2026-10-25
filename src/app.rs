@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
 };
@@ -75,6 +75,8 @@ const TIMER_EQ: usize = 5;
 const TIMER_POMO: usize = 6;
 /// Date rollover check.
 const TIMER_DAY: usize = 7;
+/// Idle clock redraws at each minute boundary, only while it shows.
+const TIMER_CLOCK: usize = 8;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
@@ -147,6 +149,7 @@ pub fn run() {
             hover: HoverTracking::default(),
             eq_timer: false,
             pomo_timer: false,
+            clock_timer: false,
             config_warned: false,
         });
     });
@@ -241,6 +244,8 @@ struct App {
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
     pomo_timer: bool,
+    /// `TIMER_CLOCK` is set.
+    clock_timer: bool,
     /// The invalid-config notice was shown this run.
     config_warned: bool,
 }
@@ -533,6 +538,17 @@ impl App {
                 }
             }
         }
+        let clock = clock_timer_wanted(&view, self.config.idle_clock);
+        if clock != self.clock_timer {
+            self.clock_timer = clock;
+            if clock {
+                self.arm_clock();
+            } else {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_CLOCK);
+                }
+            }
+        }
         let shows_countdown = matches!(view, View::PomodoroCompact | View::Panel(Page::Pomodoro));
         let running = matches!(self.state.pomodoro().status(), PomoStatus::Running { .. });
         let pomo = shows_countdown && running;
@@ -553,6 +569,14 @@ impl App {
         let wait = ms_to_next_second(self.state.pomodoro().remaining(now));
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_POMO, wait, None);
+        }
+    }
+
+    /// One-shot to just past the next minute boundary, re-armed after each redraw.
+    fn arm_clock(&self) {
+        let wait = ms_to_next_minute(Local::now().time());
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_CLOCK, wait, None);
         }
     }
 
@@ -597,6 +621,14 @@ impl App {
                 }
             }
             TIMER_DAY => self.check_date(),
+            TIMER_CLOCK => {
+                if !self.animating() {
+                    self.draw(Instant::now());
+                }
+                if self.clock_timer {
+                    self.arm_clock();
+                }
+            }
             _ => {}
         }
     }
@@ -822,12 +854,18 @@ impl App {
                 self.draw(now);
             }
             SettingsAction::Autostart(on) => self.set_autostart(on),
+            SettingsAction::IdleClock(on) => {
+                self.config.idle_clock = on;
+                self.save_config();
+                // Redraws the idle island and starts or stops its timer.
+                self.refresh(now);
+            }
             SettingsAction::BatteryThreshold(threshold) => {
                 self.save_config_with(|c| c.battery_threshold = threshold);
                 self.battery.set_threshold(self.config.battery_threshold);
             }
             SettingsAction::Pomo(field, dir) => {
-                // The same path as the panel's steppers: state, then config.
+                // Through the reducer like a click: state, then config.
                 self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
             }
             SettingsAction::SaveGoogle { id, secret } => {
@@ -886,6 +924,8 @@ impl App {
             day_page: state.day_page(),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
             palette: theme::island_palette(&self.config),
+            clock: (self.config.idle_clock && self.drawn == View::Idle)
+                .then(|| Local::now().format("%H:%M").to_string()),
         };
         if let Err(error) = self
             .renderer
@@ -1018,6 +1058,20 @@ fn ms_to_next_second(remaining: Duration) -> u32 {
         0 => 1001,
         ms => ms + 1,
     }
+}
+
+/// The idle clock's minute timer runs only while the idle island shows it.
+fn clock_timer_wanted(view: &View, idle_clock: bool) -> bool {
+    idle_clock && *view == View::Idle
+}
+
+/// Milliseconds from `now` until the shown minute changes, plus 1 ms so the
+/// redraw lands after the change. A timer that fires early just redraws the
+/// same minute and re-arms for the few milliseconds left.
+fn ms_to_next_minute(now: NaiveTime) -> u32 {
+    // A leap second reports 1_000_000_000 ns and more; it counts as the 59th.
+    let ms = now.second() * 1000 + (now.nanosecond() / 1_000_000).min(999);
+    60_000 - ms + 1
 }
 
 /// False when saving would change nothing: an existing note with the same
@@ -1694,6 +1748,32 @@ mod tests {
         assert_eq!(ms_to_next_second(ms(1_500_000)), 1001);
         assert_eq!(ms_to_next_second(ms(1)), 2);
         assert_eq!(ms_to_next_second(ms(999)), 1000);
+    }
+
+    #[test]
+    fn clock_redraws_just_after_the_minute_changes() {
+        let at = |h, m, s, ms| NaiveTime::from_hms_milli_opt(h, m, s, ms).unwrap();
+        assert_eq!(ms_to_next_minute(at(9, 41, 0, 0)), 60_001);
+        assert_eq!(ms_to_next_minute(at(9, 41, 30, 250)), 29_751);
+        assert_eq!(ms_to_next_minute(at(23, 59, 59, 999)), 2);
+        // A leap second (1_000+ ms) waits like the last millisecond, never 0.
+        assert_eq!(ms_to_next_minute(at(23, 59, 59, 1_500)), 2);
+    }
+
+    #[test]
+    fn clock_timer_runs_only_while_the_idle_clock_shows() {
+        assert!(clock_timer_wanted(&View::Idle, true));
+        assert!(!clock_timer_wanted(&View::Idle, false), "setting off");
+        let others = [
+            View::Hidden,
+            View::MediaCompact,
+            View::PomodoroCompact,
+            View::Panel(Page::Calendar),
+            View::Notice(island_notice("t", "title", "body")),
+        ];
+        for view in others {
+            assert!(!clock_timer_wanted(&view, true), "{view:?}");
+        }
     }
 
     #[test]

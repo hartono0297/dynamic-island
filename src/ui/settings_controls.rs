@@ -69,8 +69,8 @@ pub struct Scene<'a> {
     pub content_dy: f32,
     /// Segmented selections in segment indexes, while they slide.
     pub segments: Vec<(Group, f32)>,
-    /// The autostart toggle, 0 (off) to 1 (on).
-    pub toggle: f32,
+    /// Toggle knobs while they slide, 0 (off) to 1 (on), by the toggle's hit.
+    pub toggles: Vec<(Hit, f32)>,
     pub focused: Option<Field>,
 }
 
@@ -581,8 +581,13 @@ impl Painter<'_> {
                         .map_or(*selected as f32, |(_, v)| *v);
                     self.segmented(*track, items, pos, s);
                 }
-                Control::Toggle { hit, rect, .. } => {
-                    self.toggle(*rect, s.toggle, s.hover == Some(*hit))
+                Control::Toggle { hit, rect, on } => {
+                    let v = s
+                        .toggles
+                        .iter()
+                        .find(|(h, _)| h == hit)
+                        .map_or(f32::from(u8::from(*on)), |(_, v)| *v);
+                    self.toggle(*rect, v, s.hover == Some(*hit))
                 }
                 Control::Stepper {
                     minus,

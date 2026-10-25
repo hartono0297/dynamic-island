@@ -63,8 +63,8 @@ use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 use super::frame_clock::{FrameClock, WM_APP_FRAME};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
-    CLIENT_H, CLIENT_W, Control, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL,
-    REPO_URL, Section, State, Tone, battery_step, layout,
+    CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
+    Section, State, Tone, battery_step, layout,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -91,6 +91,7 @@ pub enum Action {
     WindowMode(WindowTheme),
     Lang(Lang),
     Autostart(bool),
+    IdleClock(bool),
     BatteryThreshold(u8),
     DndHelp,
     Pomo(PomoField, i32),
@@ -122,6 +123,7 @@ pub struct Model {
     pub window: WindowTheme,
     pub lang: Lang,
     pub autostart: bool,
+    pub idle_clock: bool,
     pub battery_threshold: u8,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
@@ -140,6 +142,7 @@ impl Model {
             window: cfg.window_theme,
             lang: cfg.language,
             autostart: cfg.start_with_windows,
+            idle_clock: cfg.idle_clock,
             battery_threshold: cfg.battery_threshold,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
@@ -196,7 +199,8 @@ impl Tween {
 #[derive(Default)]
 struct Anims {
     segments: Vec<(Group, Tween)>,
-    toggle: Option<Tween>,
+    /// Toggle knobs sliding, by the toggle's hit.
+    toggles: Vec<(Hit, Tween)>,
     nav: Option<Tween>,
     content: Option<Tween>,
 }
@@ -204,10 +208,10 @@ struct Anims {
 impl Anims {
     fn running(&self, now: Instant) -> bool {
         let live = |t: &Option<Tween>| t.is_some_and(|t| t.running(now));
-        live(&self.toggle)
-            || live(&self.nav)
+        live(&self.nav)
             || live(&self.content)
             || self.segments.iter().any(|(_, t)| t.running(now))
+            || self.toggles.iter().any(|(_, t)| t.running(now))
     }
 
     fn segment(&self, group: Group) -> Option<Tween> {
@@ -222,10 +226,28 @@ impl Anims {
         self.segments.push((group, t));
     }
 
+    /// Slides the knob of the toggle `hit` from `from` toward `on`.
+    fn slide_toggle(&mut self, hit: Hit, from: bool, on: bool, now: Instant) {
+        let running = self
+            .toggles
+            .iter()
+            .find(|(h, _)| *h == hit)
+            .map(|(_, t)| *t);
+        let t = Tween::toward(
+            running,
+            f32::from(u8::from(from)),
+            f32::from(u8::from(on)),
+            now,
+        );
+        self.toggles.retain(|(h, _)| *h != hit);
+        self.toggles.push((hit, t));
+    }
+
     /// Drops finished tweens.
     fn prune(&mut self, now: Instant) {
         self.segments.retain(|(_, t)| t.running(now));
-        for t in [&mut self.toggle, &mut self.nav, &mut self.content] {
+        self.toggles.retain(|(_, t)| t.running(now));
+        for t in [&mut self.nav, &mut self.content] {
             if t.is_some_and(|t| !t.running(now)) {
                 *t = None;
             }
@@ -278,7 +300,7 @@ struct Settings {
     field_text: [String; 2],
     focused: Option<Field>,
     has_battery: bool,
-    hooks: Option<bool>,
+    hooks: Option<install::HookState>,
     google_note: Option<(String, Tone)>,
     hook_note: Option<(String, Tone)>,
     /// "Putuskan" waits for its second click.
@@ -564,7 +586,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         field_text,
         focused: None,
         has_battery: read_battery().is_some(),
-        hooks: install::hooks_present(),
+        hooks: install::hook_state(),
         google_note: None,
         hook_note: None,
         confirm: false,
@@ -822,6 +844,7 @@ impl Settings {
             surface: m.surface,
             window: m.window,
             autostart: m.autostart,
+            idle_clock: m.idle_clock,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             pomodoro: m.pomodoro,
@@ -910,11 +933,12 @@ impl Settings {
             }
         }
         if old.autostart != new.autostart {
-            let (from, to) = (
-                f32::from(u8::from(old.autostart)),
-                f32::from(u8::from(new.autostart)),
-            );
-            self.anims.toggle = Some(Tween::toward(self.anims.toggle, from, to, now));
+            self.anims
+                .slide_toggle(Hit::Autostart, old.autostart, new.autostart, now);
+        }
+        if old.idle_clock != new.idle_clock {
+            self.anims
+                .slide_toggle(Hit::IdleClock, old.idle_clock, new.idle_clock, now);
         }
         let mut changes = ModelChanges {
             title: None,
@@ -966,15 +990,6 @@ impl Settings {
             (rc.bottom - rc.top).max(1) as u32,
         );
         let content = self.anims.content.map_or(1.0, |t| t.value(now));
-        let selected = self
-            .layout
-            .controls
-            .iter()
-            .find_map(|c| match c {
-                Control::Toggle { on, .. } => Some(f32::from(u8::from(*on))),
-                _ => None,
-            })
-            .unwrap_or(0.0);
         let p = theme::current_window();
         let scene = Scene {
             layout: &self.layout,
@@ -997,7 +1012,12 @@ impl Settings {
                 .iter()
                 .map(|(g, t)| (*g, t.value(now)))
                 .collect(),
-            toggle: self.anims.toggle.map_or(selected, |t| t.value(now)),
+            toggles: self
+                .anims
+                .toggles
+                .iter()
+                .map(|(h, t)| (*h, t.value(now)))
+                .collect(),
             focused: self.focused,
         };
         let dpi = self.dpi as f32;
@@ -1057,6 +1077,7 @@ impl Settings {
             Hit::WindowMode(v) if v != m.window => post(Action::WindowMode(v)),
             Hit::Lang(v) if v != m.lang => post(Action::Lang(v)),
             Hit::Autostart => post(Action::Autostart(!m.autostart)),
+            Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1108,7 +1129,7 @@ impl Settings {
                         (format!("{}: {e}", text(lang, Key::Failed)), Tone::Bad)
                     }
                 };
-                self.hooks = install::hooks_present();
+                self.hooks = install::hook_state();
                 self.set_note(false, Some(note));
                 Vec::new()
             }
@@ -1124,7 +1145,7 @@ impl Settings {
                         (format!("{}: {e}", text(lang, Key::Failed)), Tone::Bad)
                     }
                 };
-                self.hooks = install::hooks_present();
+                self.hooks = install::hook_state();
                 self.set_note(false, Some(note));
                 Vec::new()
             }
@@ -1642,6 +1663,7 @@ pub fn run_demo(args: &[String]) {
                 i18n::set_lang(v);
             }
             Action::Autostart(v) => m.autostart = v,
+            Action::IdleClock(v) => m.idle_clock = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
@@ -1821,6 +1843,7 @@ mod tests {
             accent: Accent::Pink,
             battery_threshold: 35,
             google_client_id: "id".into(),
+            idle_clock: false,
             ..Config::default()
         };
         let m = Model::from_config(&cfg);
@@ -1829,9 +1852,10 @@ mod tests {
                 m.style,
                 m.accent,
                 m.battery_threshold,
-                m.google_client_id.as_str()
+                m.google_client_id.as_str(),
+                m.idle_clock
             ),
-            (Style::Notch, Accent::Pink, 35, "id")
+            (Style::Notch, Accent::Pink, 35, "id", false)
         );
     }
 

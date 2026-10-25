@@ -8,6 +8,7 @@
 //! space left over, so the tests check that the labels fit with the estimate.
 
 use crate::calendar::CalStatus;
+use crate::claude::install::HookState;
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
@@ -199,6 +200,7 @@ pub enum Hit {
     WindowMode(WindowTheme),
     Lang(Lang),
     Autostart,
+    IdleClock,
     Battery(i32),
     DndHelp,
     Pomo(PomoField, i32),
@@ -426,6 +428,8 @@ pub struct State<'a> {
     pub accent: Accent,
     pub surface: Surface,
     pub window: WindowTheme,
+    /// The idle island shows the clock.
+    pub idle_clock: bool,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -436,7 +440,7 @@ pub struct State<'a> {
     /// A short message beside the Google buttons.
     pub google_note: Option<(&'a str, Tone)>,
     /// `None` when Claude Code's settings could not be read.
-    pub hooks: Option<bool>,
+    pub hooks: Option<HookState>,
     /// The outcome of the last hook button, shown instead of the status.
     pub hook_note: Option<(&'a str, Tone)>,
     pub version: &'a str,
@@ -863,8 +867,8 @@ fn index_of<T: PartialEq>(all: &[T], v: &T) -> usize {
 fn appearance(b: &mut Builder, s: &State) {
     let preview = b.card(PREVIEW_H);
     b.l.preview = Some(preview);
-    let card = b.card(4.0 * ROW_H);
-    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(5.0 * ROW_H);
+    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let styles = [
@@ -948,6 +952,11 @@ fn appearance(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::WindowModeDesc), Tone::Secondary));
     b.row_text(card, rows[3], b.t(Key::WindowMode), desc, false, x);
     b.divider(card, rows[3]);
+
+    let x = b.toggle(Hit::IdleClock, RIGHT, cy(rows[4]), s.idle_clock);
+    let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
+    b.row_text(card, rows[4], b.t(Key::IdleClock), desc, false, x);
+    b.divider(card, rows[4]);
 }
 
 fn general(b: &mut Builder, s: &State) {
@@ -1094,7 +1103,11 @@ fn integrations(b: &mut Builder, s: &State) {
     // Buttons, with a short message on their left.
     let (save, connect) = (b.t(Key::Save), b.t(Key::Connect));
     let (disconnect, sure) = (b.t(Key::Disconnect), b.t(Key::ConfirmShort));
-    let connected = matches!(g.status, CalStatus::Ok | CalStatus::Offline);
+    // A login to forget: connected, offline, or one Google stopped accepting.
+    let can_disconnect = matches!(
+        g.status,
+        CalStatus::Ok | CalStatus::Offline | CalStatus::Reconnect
+    );
     let needs_login = matches!(g.status, CalStatus::NeedsLogin | CalStatus::Reconnect);
     let kind = |primary: bool| {
         if primary {
@@ -1103,7 +1116,9 @@ fn integrations(b: &mut Builder, s: &State) {
             ButtonKind::Secondary
         }
     };
-    let can_connect = g.has_id && (g.status != CalStatus::NotConfigured || g.dirty);
+    // Connected already: nothing to connect.
+    let can_connect =
+        g.has_id && (g.status != CalStatus::NotConfigured || g.dirty) && g.status != CalStatus::Ok;
     let items = vec![
         (
             Hit::GoogleSave,
@@ -1131,7 +1146,7 @@ fn integrations(b: &mut Builder, s: &State) {
             } else {
                 ButtonKind::Secondary
             },
-            connected,
+            can_disconnect,
             b.button_w(&[&disconnect, &sure], ButtonKind::Secondary),
         ),
     ];
@@ -1150,29 +1165,31 @@ fn integrations(b: &mut Builder, s: &State) {
     // Claude Code hooks.
     let card = b.card(ROW_H);
     let (install, remove) = (b.t(Key::InstallHooks), b.t(Key::RemoveHooks));
-    let installed = s.hooks == Some(true);
+    // Unreadable settings (`None`): both stay on, so a click reports why.
+    let complete = s.hooks.is_some_and(|h| h.complete);
+    let any = s.hooks.is_none_or(|h| h.any);
     let items = vec![
+        (
+            Hit::HooksInstall,
+            install.clone(),
+            kind(!complete),
+            !complete,
+            b.button_w(&[&install], ButtonKind::Secondary),
+        ),
         (
             Hit::HooksRemove,
             remove.clone(),
             ButtonKind::Secondary,
-            s.hooks != Some(false),
+            any,
             b.button_w(&[&remove], ButtonKind::Secondary),
-        ),
-        (
-            Hit::HooksInstall,
-            install.clone(),
-            kind(!installed),
-            true,
-            b.button_w(&[&install], ButtonKind::Secondary),
         ),
     ];
     let x = b.buttons(RIGHT, card.y + ROW_H / 2.0, items);
     let desc = match s.hook_note {
         Some((note, tone)) => (note.to_owned(), tone),
         None => match s.hooks {
-            Some(true) => (b.t(Key::HooksOn), Tone::Good),
-            Some(false) => (b.t(Key::HooksOff), Tone::Secondary),
+            Some(h) if h.complete => (b.t(Key::HooksOn), Tone::Good),
+            Some(_) => (b.t(Key::HooksOff), Tone::Secondary),
             None => (b.t(Key::HooksUnknown), Tone::Warn),
         },
     };
@@ -1272,16 +1289,19 @@ mod tests {
                 (CalStatus::Offline, false, true, false),
             ] {
                 for (hooks, locked, battery) in [
-                    (Some(true), false, true),
-                    (Some(false), true, false),
+                    (Some((true, true)), false, true),
+                    (Some((false, true)), false, true),
+                    (Some((false, false)), true, false),
                     (None, true, true),
                 ] {
+                    let hooks = hooks.map(|(complete, any)| HookState { complete, any });
                     out.push(State {
                         lang,
                         style: Style::Notch,
                         accent: Accent::Orange,
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
+                        idle_clock: locked,
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -1564,10 +1584,83 @@ mod tests {
             enabled(g(CalStatus::NeedsLogin, false, true)),
             [Hit::GoogleConnect]
         );
+        // Connected: nothing to connect, only to forget.
         assert_eq!(
             enabled(g(CalStatus::Ok, false, true)),
+            [Hit::GoogleDisconnect]
+        );
+        // A refused login can be redone or forgotten.
+        assert_eq!(
+            enabled(g(CalStatus::Reconnect, false, true)),
             [Hit::GoogleConnect, Hit::GoogleDisconnect]
         );
+        assert_eq!(
+            enabled(g(CalStatus::Offline, false, true)),
+            [Hit::GoogleConnect, Hit::GoogleDisconnect]
+        );
+    }
+
+    #[test]
+    fn hook_buttons_follow_what_is_installed() {
+        let base = states()[0].clone();
+        // Buttons in drawing order (left to right) with whether they take clicks.
+        let buttons = |hooks: Option<HookState>| -> Vec<(Hit, bool)> {
+            let s = State {
+                hooks,
+                ..base.clone()
+            };
+            let l = layout(Section::Integrations, &s, &Estimate);
+            let mut out: Vec<(f32, Hit, bool)> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Button(b) if matches!(b.hit, Hit::HooksInstall | Hit::HooksRemove) => {
+                        Some((b.rect.x, b.hit, b.enabled))
+                    }
+                    _ => None,
+                })
+                .collect();
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
+            out.into_iter().map(|(_, h, e)| (h, e)).collect()
+        };
+        let state = |complete, any| Some(HookState { complete, any });
+        assert_eq!(
+            buttons(state(true, true)),
+            [(Hit::HooksInstall, false), (Hit::HooksRemove, true)]
+        );
+        assert_eq!(
+            buttons(state(false, true)),
+            [(Hit::HooksInstall, true), (Hit::HooksRemove, true)],
+            "a partial install can be completed or removed"
+        );
+        assert_eq!(
+            buttons(state(false, false)),
+            [(Hit::HooksInstall, true), (Hit::HooksRemove, false)]
+        );
+        // Unreadable settings: both stay clickable, so a click says why.
+        assert_eq!(
+            buttons(None),
+            [(Hit::HooksInstall, true), (Hit::HooksRemove, true)]
+        );
+    }
+
+    #[test]
+    fn idle_clock_toggle_shows_the_setting() {
+        for on in [true, false] {
+            let s = State {
+                idle_clock: on,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let toggle = l.controls.iter().find_map(|c| match c {
+                Control::Toggle { hit, rect, on } if *hit == Hit::IdleClock => Some((*rect, *on)),
+                _ => None,
+            });
+            let (rect, shown) = toggle.expect("idle clock toggle in Appearance");
+            assert_eq!(shown, on);
+            let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+            assert_eq!(l.hit(cx, cy), Some(Hit::IdleClock));
+        }
     }
 
     #[test]

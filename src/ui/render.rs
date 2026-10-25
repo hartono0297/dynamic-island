@@ -96,6 +96,8 @@ pub struct Frame<'a> {
     pub page_slide: f32,
     /// Island colours (surface and accent).
     pub palette: Palette,
+    /// "HH:MM" drawn while the view is `Idle`; `None` when the clock is off.
+    pub clock: Option<String>,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
@@ -124,6 +126,8 @@ struct Fonts {
     secondary: IDWriteTextFormat,
     icon: IDWriteTextFormat,
     badge: IDWriteTextFormat,
+    /// The idle clock.
+    clock: IDWriteTextFormat,
     /// Page titles ("Oktober 2026", "Pomodoro", "Notes").
     heading: IDWriteTextFormat,
     small: IDWriteTextFormat,
@@ -134,6 +138,8 @@ struct Fonts {
     body_center: IDWriteTextFormat,
     body_right: IDWriteTextFormat,
     big_time: IDWriteTextFormat,
+    /// The pomodoro page's phase beside the ring.
+    phase: IDWriteTextFormat,
     media_title: IDWriteTextFormat,
     media_artist: IDWriteTextFormat,
     icon_small: IDWriteTextFormat,
@@ -438,8 +444,15 @@ impl Renderer {
                 .map_or(Ok(()), |m| self.paint_compact(shape, m, frame.now)),
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             View::Notice(notice) => self.paint_notice(shape, notice),
-            // Idle is the empty shape; the panel returned above.
-            View::Idle | View::Panel(_) | View::Hidden => Ok(()),
+            View::Idle => {
+                // Without the clock, idle is the empty shape.
+                if let Some(time) = &frame.clock {
+                    self.text(time, &self.fonts.clock, shape_rect(shape), 1.0);
+                }
+                Ok(())
+            }
+            // The panel returned above.
+            View::Panel(_) | View::Hidden => Ok(()),
         };
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
@@ -723,6 +736,7 @@ impl Fonts {
             secondary: line(normal, 12.0)?,
             icon: centered(icon_family, normal, 16.0)?,
             badge: centered(text_family, DWRITE_FONT_WEIGHT_BOLD, 17.0)?,
+            clock: centered(text_family, semi, 13.0)?,
             heading: line(semi, 15.0)?,
             small: line(normal, 11.0)?,
             small_center: centered(text_family, normal, 11.0)?,
@@ -732,6 +746,7 @@ impl Fonts {
             body_center: centered(text_family, normal, 12.0)?,
             body_right: aligned(text_family, normal, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
             big_time: centered(text_family, semi, 32.0)?,
+            phase: centered(text_family, semi, 15.0)?,
             media_title: line(semi, 17.0)?,
             media_artist: line(normal, 13.0)?,
             icon_small: centered(icon_family, normal, 12.0)?,
