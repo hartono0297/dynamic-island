@@ -22,6 +22,8 @@ pub struct ShapeRect {
 pub enum ShapeKind {
     Idle,
     MediaCompact,
+    /// The compact media view showing a lyric line: wider, same height.
+    MediaLyric,
     PomodoroCompact,
     Notice,
     Panel,
@@ -34,6 +36,7 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     let (w, h) = match kind {
         ShapeKind::Idle | ShapeKind::MediaCompact => (190.0, 34.0),
         ShapeKind::PomodoroCompact => (210.0, 34.0),
+        ShapeKind::MediaLyric => (300.0, 34.0),
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::Panel => (560.0, 290.0),
     };
@@ -160,6 +163,8 @@ pub struct ExpandedLayout {
     pub artist: Rect,
     /// Prev, play/pause, next.
     pub buttons: [Rect; 3],
+    /// "Lirik": lyrics in the notch on or off (top right).
+    pub lyrics: Rect,
 }
 
 /// Notice: round badge, title over body.
@@ -226,6 +231,13 @@ pub fn compact_layout(s: ShapeRect) -> CompactLayout {
     };
     let text = text_box(art.right() + GAP, bars.x - GAP, s.y, s.h);
     CompactLayout { art, text, bars }
+}
+
+/// The lyric line's box: the shape less its side padding (wider than the
+/// corner radius, so trimmed text never runs into the rounded ends).
+pub fn lyric_layout(s: ShapeRect) -> Rect {
+    const PAD_X: f32 = 20.0;
+    text_box(s.x + PAD_X, s.x + s.w - PAD_X, s.y, s.h)
 }
 
 pub fn notice_layout(s: ShapeRect) -> NoticeLayout {
@@ -381,6 +393,12 @@ mod tests {
             assert_eq!(l.art.w, 22.0);
             assert!(l.text.x >= l.art.right() && l.text.right() <= l.bars.x);
 
+            let m = shape_for(style, ShapeKind::MediaLyric);
+            let text = lyric_layout(m);
+            assert!(inside(m, text), "{style:?} lyric {text:?}");
+            assert_eq!((text.w, text.h), (260.0, 34.0));
+            assert!(text.x - m.x >= corner_radius(style, m));
+
             let n = shape_for(style, ShapeKind::Notice);
             let l = notice_layout(n);
             for r in [l.badge, l.title, l.body] {
@@ -497,6 +515,7 @@ mod tests {
             assert_eq!(size(ShapeKind::Idle), (190.0, 34.0));
             assert_eq!(size(ShapeKind::MediaCompact), (190.0, 34.0));
             assert_eq!(size(ShapeKind::PomodoroCompact), (210.0, 34.0));
+            assert_eq!(size(ShapeKind::MediaLyric), (300.0, 34.0));
             assert_eq!(size(ShapeKind::Notice), (360.0, 76.0));
             assert_eq!(size(ShapeKind::Panel), (560.0, 290.0));
         }
@@ -510,6 +529,8 @@ mod tests {
         assert_eq!(radius(Style::Pill, ShapeKind::PomodoroCompact), 17.0);
         assert_eq!(radius(Style::Notch, ShapeKind::MediaCompact), 16.0);
         assert_eq!(radius(Style::Notch, ShapeKind::PomodoroCompact), 16.0);
+        assert_eq!(radius(Style::Pill, ShapeKind::MediaLyric), 17.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::MediaLyric), 16.0);
         assert_eq!(radius(Style::Notch, ShapeKind::Notice), 22.0);
         assert_eq!(radius(Style::Notch, ShapeKind::Panel), 26.0);
     }

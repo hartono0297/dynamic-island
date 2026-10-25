@@ -1,4 +1,5 @@
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::{
@@ -10,7 +11,8 @@ use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::Result;
 
-use crate::model::{Event, MediaCommand, MediaInfo};
+use crate::lyrics::timeline_moved;
+use crate::model::{Event, MediaCommand, MediaInfo, Timeline};
 
 /// Thumbnails larger than this are dropped rather than held in memory.
 const MAX_ART_BYTES: u64 = 2 * 1024 * 1024;
@@ -25,6 +27,8 @@ enum Signal {
     Properties,
     /// The current session's play/pause state changed.
     Playback,
+    /// The current session's position, length or seek state changed.
+    Timeline,
 }
 
 /// The work implied by a burst of signals, coalesced so that a flurry of
@@ -35,6 +39,8 @@ struct Refresh {
     session: bool,
     /// Re-read title, artist and thumbnail.
     properties: bool,
+    /// Re-read the timeline (cheap: no art).
+    timeline: bool,
 }
 
 impl Refresh {
@@ -43,9 +49,15 @@ impl Refresh {
             Signal::Session => {
                 self.session = true;
                 self.properties = true;
+                self.timeline = true;
             }
-            Signal::Properties => self.properties = true,
-            Signal::Playback => {}
+            // A new track starts a new timeline, whichever event comes first.
+            Signal::Properties => {
+                self.properties = true;
+                self.timeline = true;
+            }
+            // Play/pause may come with or without a timeline update.
+            Signal::Playback | Signal::Timeline => self.timeline = true,
         }
     }
 }
@@ -79,6 +91,7 @@ struct SessionSubscription {
     session: Session,
     properties_token: Option<i64>,
     playback_token: Option<i64>,
+    timeline_token: Option<i64>,
 }
 
 impl SessionSubscription {
@@ -97,10 +110,18 @@ impl SessionSubscription {
                 Ok(())
             }))
             .ok();
+        let s = signals.clone();
+        let timeline_token = session
+            .TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
+                let _ = s.send(Signal::Timeline);
+                Ok(())
+            }))
+            .ok();
         Self {
             session,
             properties_token,
             playback_token,
+            timeline_token,
         }
     }
 }
@@ -112,6 +133,9 @@ impl Drop for SessionSubscription {
         }
         if let Some(token) = self.playback_token {
             let _ = self.session.RemovePlaybackInfoChanged(token);
+        }
+        if let Some(token) = self.timeline_token {
+            let _ = self.session.RemoveTimelinePropertiesChanged(token);
         }
     }
 }
@@ -186,6 +210,13 @@ impl Watcher {
             art: properties.art.clone(),
         })
     }
+
+    /// The current session's timeline; `None` without a session or when it
+    /// reports none.
+    fn timeline(&self) -> Option<Timeline> {
+        let session = &self.subscription.as_ref()?.session;
+        read_timeline(session).ok().flatten()
+    }
 }
 
 impl Drop for Watcher {
@@ -212,7 +243,10 @@ fn shown_playing(status: Result<PlaybackStatus>) -> Option<bool> {
 
 /// Watches the system media session on a background thread and sends
 /// `Event::Media` whenever what is playing changes: once at start, then on
-/// session, track and play/pause changes. The thread blocks between events.
+/// session, track and play/pause changes. A changed timeline (a seek, a new
+/// track, play/pause) follows as `Event::MediaTimeline`, without re-reading
+/// the art; steady playback reported again is not sent (`timeline_moved`).
+/// The thread blocks between events.
 pub fn spawn_watcher(tx: Sender<Event>, wake: impl Fn() + Send + Sync + 'static) {
     std::thread::spawn(move || {
         unsafe {
@@ -224,14 +258,31 @@ pub fn spawn_watcher(tx: Sender<Event>, wake: impl Fn() + Send + Sync + 'static)
         let (signals, signal_rx) = mpsc::channel();
         let mut watcher = Watcher::new(manager, signals);
         let mut last = LastSent::default();
+        let mut last_timeline: Option<Timeline> = None;
         let mut refresh = Refresh::default();
         refresh.add(Signal::Session);
         loop {
             let info = watcher.refresh(refresh);
+            let (present, playing) = (info.is_some(), info.as_ref().is_some_and(|m| m.playing));
+            let mut sent = false;
             if last.changed(&info) {
                 if tx.send(Event::Media(info)).is_err() {
                     return;
                 }
+                sent = true;
+            }
+            if refresh.timeline || sent {
+                let timeline = if present { watcher.timeline() } else { None };
+                let now = Instant::now();
+                if timeline_moved(last_timeline.as_ref(), timeline.as_ref(), playing, now) {
+                    if tx.send(Event::MediaTimeline(timeline)).is_err() {
+                        return;
+                    }
+                    last_timeline = timeline;
+                    sent = true;
+                }
+            }
+            if sent {
                 wake();
             }
             refresh = next_refresh(&signal_rx);
@@ -286,6 +337,47 @@ fn read_properties(session: &Session) -> Result<Properties> {
     })
 }
 
+/// 100 ns ticks between 1601-01-01 (WinRT `DateTime`) and 1970-01-01.
+const TICKS_TO_UNIX: i64 = 116_444_736_000_000_000;
+
+/// The session's timeline, positions relative to its start. `None` when it
+/// reports no length and no position (players without timeline support).
+fn read_timeline(session: &Session) -> Result<Option<Timeline>> {
+    let t = session.GetTimelineProperties()?;
+    let start = t.StartTime()?.Duration;
+    let ms = |ticks: i64| u64::try_from(ticks.saturating_sub(start) / 10_000).unwrap_or(0);
+    let position_ms = ms(t.Position()?.Duration);
+    let end_ms = ms(t.EndTime()?.Duration);
+    if position_ms == 0 && end_ms == 0 {
+        return Ok(None);
+    }
+    let updated_ticks = t.LastUpdatedTime()?.UniversalTime;
+    let age = Duration::from_millis(age_ms(now_ticks(), updated_ticks));
+    Ok(Some(Timeline {
+        position_ms,
+        end_ms,
+        updated: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
+    }))
+}
+
+/// The wall clock as WinRT `DateTime` ticks.
+fn now_ticks() -> i64 {
+    let since = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    TICKS_TO_UNIX.saturating_add(i64::try_from(since.as_nanos() / 100).unwrap_or(i64::MAX))
+}
+
+/// How long ago `updated` was, in ms: 0 when unset or in the future, at most
+/// a day (a stale stamp must not throw the position hours ahead).
+fn age_ms(now_ticks: i64, updated_ticks: i64) -> u64 {
+    if updated_ticks <= 0 {
+        return 0;
+    }
+    let ms = now_ticks.saturating_sub(updated_ticks) / 10_000;
+    u64::try_from(ms).unwrap_or(0).min(86_400_000)
+}
+
 /// The thumbnail's encoded image bytes; `None` when empty or over the size cap.
 fn read_thumbnail(thumbnail: &IRandomAccessStreamReference) -> Result<Option<Vec<u8>>> {
     let stream = thumbnail.OpenReadAsync()?.join()?;
@@ -311,16 +403,23 @@ pub fn probe() {
     spawn_watcher(tx, || {});
     println!("Watching media sessions; press Ctrl+C to stop.");
     for event in rx {
-        let Event::Media(info) = event else { continue };
-        match info {
-            None => println!("None"),
-            Some(m) => println!(
+        match event {
+            Event::Media(None) => println!("None"),
+            Event::Media(Some(m)) => println!(
                 "{} | {} | playing={} | art={} bytes",
                 m.title,
                 m.artist,
                 m.playing,
                 m.art.as_ref().map_or(0, Vec::len)
             ),
+            Event::MediaTimeline(Some(t)) => println!(
+                "  timeline {} / {} ms, updated {} ms ago",
+                t.position_ms,
+                t.end_ms,
+                t.updated.elapsed().as_millis()
+            ),
+            Event::MediaTimeline(None) => println!("  no timeline"),
+            _ => {}
         }
     }
 }
@@ -363,10 +462,37 @@ mod tests {
     }
 
     #[test]
-    fn playback_signal_alone_does_not_reread_properties() {
+    fn playback_and_timeline_signals_reread_only_the_timeline() {
+        for signal in [Signal::Playback, Signal::Timeline] {
+            let mut r = Refresh::default();
+            r.add(signal);
+            assert_eq!(
+                r,
+                Refresh {
+                    timeline: true,
+                    ..Refresh::default()
+                },
+                "{signal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_properties_reread_the_timeline_too() {
         let mut r = Refresh::default();
-        r.add(Signal::Playback);
-        assert_eq!(r, Refresh::default());
+        r.add(Signal::Properties);
+        assert!(r.properties && r.timeline && !r.session);
+    }
+
+    #[test]
+    fn timeline_age_is_clamped() {
+        let now = TICKS_TO_UNIX + 1_000_000_000;
+        assert_eq!(age_ms(now, now - 25_000_000), 2_500);
+        assert_eq!(age_ms(now, 0), 0, "unset");
+        assert_eq!(age_ms(now, now + 10_000_000), 0, "in the future");
+        assert_eq!(age_ms(now, 1), 86_400_000, "at most a day");
+        // The wall clock is past 2023 in WinRT ticks.
+        assert!(now_ticks() > TICKS_TO_UNIX + 1_700_000_000 * 10_000_000);
     }
 
     #[test]
@@ -378,7 +504,8 @@ mod tests {
             r,
             Refresh {
                 session: true,
-                properties: true
+                properties: true,
+                timeline: true
             }
         );
     }
@@ -394,7 +521,8 @@ mod tests {
             r,
             Refresh {
                 session: false,
-                properties: true
+                properties: true,
+                timeline: true
             }
         );
         assert!(rx.try_recv().is_err());

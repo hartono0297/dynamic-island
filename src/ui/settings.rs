@@ -92,6 +92,7 @@ pub enum Action {
     Lang(Lang),
     Autostart(bool),
     IdleClock(bool),
+    Lyrics(bool),
     BatteryThreshold(u8),
     DndHelp,
     Pomo(PomoField, i32),
@@ -124,6 +125,7 @@ pub struct Model {
     pub lang: Lang,
     pub autostart: bool,
     pub idle_clock: bool,
+    pub lyrics: bool,
     pub battery_threshold: u8,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
@@ -143,6 +145,7 @@ impl Model {
             lang: cfg.language,
             autostart: cfg.start_with_windows,
             idle_clock: cfg.idle_clock,
+            lyrics: cfg.lyrics,
             battery_threshold: cfg.battery_threshold,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
@@ -845,6 +848,7 @@ impl Settings {
             window: m.window,
             autostart: m.autostart,
             idle_clock: m.idle_clock,
+            lyrics: m.lyrics,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             pomodoro: m.pomodoro,
@@ -939,6 +943,10 @@ impl Settings {
         if old.idle_clock != new.idle_clock {
             self.anims
                 .slide_toggle(Hit::IdleClock, old.idle_clock, new.idle_clock, now);
+        }
+        if old.lyrics != new.lyrics {
+            self.anims
+                .slide_toggle(Hit::Lyrics, old.lyrics, new.lyrics, now);
         }
         let mut changes = ModelChanges {
             title: None,
@@ -1078,6 +1086,7 @@ impl Settings {
             Hit::Lang(v) if v != m.lang => post(Action::Lang(v)),
             Hit::Autostart => post(Action::Autostart(!m.autostart)),
             Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
+            Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1664,6 +1673,7 @@ pub fn run_demo(args: &[String]) {
             }
             Action::Autostart(v) => m.autostart = v,
             Action::IdleClock(v) => m.idle_clock = v,
+            Action::Lyrics(v) => m.lyrics = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
@@ -1752,6 +1762,7 @@ pub fn run_demo(args: &[String]) {
         window,
         lang,
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
+        lyrics: env("DI_LYRICS") == "1",
         calendar,
         google_client_id: if configured {
             "123456789012-demo.apps.googleusercontent.com".into()
@@ -1844,6 +1855,7 @@ mod tests {
             battery_threshold: 35,
             google_client_id: "id".into(),
             idle_clock: false,
+            lyrics: true,
             ..Config::default()
         };
         let m = Model::from_config(&cfg);
@@ -1853,9 +1865,10 @@ mod tests {
                 m.accent,
                 m.battery_threshold,
                 m.google_client_id.as_str(),
-                m.idle_clock
+                m.idle_clock,
+                m.lyrics
             ),
-            (Style::Notch, Accent::Pink, 35, "id", false)
+            (Style::Notch, Accent::Pink, 35, "id", false, true)
         );
     }
 

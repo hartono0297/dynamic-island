@@ -158,6 +158,7 @@ const MEDIA_ART: f32 = 128.0;
 const MEDIA_BUTTON_W: f32 = 56.0;
 const MEDIA_BUTTON_H: f32 = 44.0;
 const MEDIA_BUTTON_STEP: f32 = 72.0;
+const LYRICS_W: f32 = 64.0;
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect {
@@ -547,6 +548,7 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
         title: rect(text_x, art.y + 14.0, text_w, 26.0),
         artist: rect(text_x, art.y + 42.0, text_w, 22.0),
         buttons: [button(0.0), button(1.0), button(2.0)],
+        lyrics: rect(right(s) - LYRICS_W, top, LYRICS_W, HEADER_H),
     }
 }
 
@@ -627,6 +629,7 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(prev, Hit::Prev);
             add(play, Hit::PlayPause);
             add(next, Hit::Next);
+            add(l.lyrics, Hit::LyricsToggle);
         }
     }
     out
@@ -1039,6 +1042,7 @@ mod tests {
 
             let (a, b) = (media_panel_layout(s, false), media_panel_layout(s, true));
             assert!(b.art.y > a.art.y && b.art.y >= strip.bottom());
+            assert_eq!(b.lyrics.y - a.lyrics.y, 24.0);
         }
     }
 
@@ -1151,7 +1155,7 @@ mod tests {
         assert!(!r.iter().any(|r| matches!(r.hit, Hit::NoteOpen(_))));
 
         let r = regions(s, &PageLayout::Media(media_panel_layout(s, false)), false);
-        for hit in [Hit::Prev, Hit::PlayPause, Hit::Next] {
+        for hit in [Hit::Prev, Hit::PlayPause, Hit::Next, Hit::LyricsToggle] {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
     }
@@ -1287,6 +1291,27 @@ mod tests {
             assert!(text.x >= cx + r);
             assert!(text.right() <= s.x + s.w);
             assert!(rect_inside(style, s, text), "{style:?} {text:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+    use crate::config::Style;
+    use crate::ui::geometry::{ShapeKind, shape_for};
+
+    #[test]
+    fn lyric_button_sits_top_right_clear_of_the_rest() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::Panel);
+            for strip in [false, true] {
+                let l = media_panel_layout(s, strip);
+                assert_eq!(l.lyrics.right(), right(s));
+                assert_eq!(l.lyrics.y, content_top(s, strip));
+                // Above the title and the art, so nothing overlaps it.
+                assert!(l.lyrics.bottom() <= l.title.y && l.lyrics.bottom() <= l.art.y);
+            }
         }
     }
 }

@@ -201,6 +201,7 @@ pub enum Hit {
     Lang(Lang),
     Autostart,
     IdleClock,
+    Lyrics,
     Battery(i32),
     DndHelp,
     Pomo(PomoField, i32),
@@ -430,6 +431,8 @@ pub struct State<'a> {
     pub window: WindowTheme,
     /// The idle island shows the clock.
     pub idle_clock: bool,
+    /// Synced lyrics in the notch.
+    pub lyrics: bool,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -960,8 +963,8 @@ fn appearance(b: &mut Builder, s: &State) {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(4.0 * ROW_H);
-    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(5.0 * ROW_H);
+    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1004,6 +1007,12 @@ fn general(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::PopupsHelpDesc), Tone::Secondary));
     b.row_text(card, rows[3], b.t(Key::PopupsHelp), desc, false, x);
     b.divider(card, rows[3]);
+
+    // The description doubles as the privacy note.
+    let x = b.toggle(Hit::Lyrics, RIGHT, cy(rows[4]), s.lyrics);
+    let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
+    b.row_text(card, rows[4], b.t(Key::LyricsInNotch), desc, false, x);
+    b.divider(card, rows[4]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1302,6 +1311,7 @@ mod tests {
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
                         idle_clock: locked,
+                        lyrics: !locked,
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -1661,6 +1671,37 @@ mod tests {
             let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
             assert_eq!(l.hit(cx, cy), Some(Hit::IdleClock));
         }
+    }
+
+    #[test]
+    fn lyrics_toggle_in_general_with_privacy_note() {
+        for lang in [Lang::Id, Lang::En] {
+            for on in [true, false] {
+                let s = State {
+                    lang,
+                    lyrics: on,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::General, &s, &Estimate);
+                let toggle = l.controls.iter().find_map(|c| match c {
+                    Control::Toggle { hit, rect, on } if *hit == Hit::Lyrics => Some((*rect, *on)),
+                    _ => None,
+                });
+                let (rect, shown) = toggle.expect("lyrics toggle in General");
+                assert_eq!(shown, on);
+                let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                assert_eq!(l.hit(cx, cy), Some(Hit::Lyrics));
+                for key in [Key::LyricsInNotch, Key::LyricsInNotchDesc] {
+                    assert!(
+                        l.texts.iter().any(|t| t.text == text(lang, key)),
+                        "{lang:?} {key:?}"
+                    );
+                }
+            }
+        }
+        // Not in Appearance, which is full.
+        let l = layout(Section::Appearance, &states()[0], &Estimate);
+        assert!(!l.hits().iter().any(|(h, _)| *h == Hit::Lyrics));
     }
 
     #[test]

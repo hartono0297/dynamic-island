@@ -1,6 +1,9 @@
+use std::time::Instant;
+
 use chrono::NaiveDate;
 
 use crate::calendar::CalendarSnapshot;
+use crate::lyrics::LyricsFound;
 use crate::pomodoro::PomoSettings;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,10 +46,34 @@ pub struct MediaInfo {
     pub art: Option<Vec<u8>>,
 }
 
+/// Where the current track's playback was at a known moment, from the media
+/// session's timeline. While it plays, the position at `now` is `position_ms
+/// + (now − updated)` (`lyrics::position_at`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timeline {
+    pub position_ms: u64,
+    /// The track's length; 0 when the player does not report one.
+    pub end_ms: u64,
+    /// When `position_ms` was true.
+    pub updated: Instant,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// `None` means no media session is active.
     Media(Option<MediaInfo>),
+    /// The session's timeline (seek, track change, play/pause); `None` when
+    /// it reports none. Sent apart from `Media` so a seek never resends art.
+    MediaTimeline(Option<Timeline>),
+    /// Synced lyrics for the current track exist (`App` decides); the
+    /// compact media view may show them.
+    LyricsReady(bool),
+    /// The "Lirik di notch" setting, at startup and when the settings window
+    /// changes it.
+    LyricsSetting(bool),
+    /// A lookup by the lyrics worker finished; `App` keeps it, the reducer
+    /// ignores it.
+    Lyrics(LyricsFound),
     Notice(Notice),
     ClaudeActivity {
         session_id: String,
@@ -97,6 +124,8 @@ pub enum Hit {
     /// Reminder id.
     ReminderOpen(String),
     RemindersMore,
+    /// The Musik page's "Lirik" button: lyrics in the notch on or off.
+    LyricsToggle,
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
@@ -132,6 +161,8 @@ pub enum Effect {
     OpenReminderEditor(Option<String>),
     /// A due reminder's notice was clicked: done, or on to its next time.
     ReminderDone(String),
+    /// The Musik page's lyric button changed the setting; save it.
+    SaveLyrics(bool),
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
@@ -177,6 +208,8 @@ pub enum View {
     /// The empty black shape.
     Idle,
     MediaCompact,
+    /// The compact media view showing the current synced lyric line.
+    MediaLyric,
     PomodoroCompact,
     Panel(Page),
     Notice(Notice),

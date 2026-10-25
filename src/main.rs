@@ -6,6 +6,7 @@ mod claude;
 mod config;
 mod google;
 mod i18n;
+mod lyrics;
 mod model;
 mod notes;
 mod pomodoro;

@@ -33,6 +33,17 @@ impl Http {
         self.send(&request)
     }
 
+    /// GET with extra request headers (e.g. `User-Agent`), added without
+    /// WinRT's header-value validation, which rejects some valid agents.
+    pub fn get_with_headers(&self, url: &str, extra: &[(&str, &str)]) -> Result<(u16, String)> {
+        let request = self.request(&HttpMethod::Get()?, url, None)?;
+        let headers = request.Headers()?;
+        for (name, value) in extra {
+            headers.TryAppendWithoutValidation(&HSTRING::from(*name), &HSTRING::from(*value))?;
+        }
+        self.send(&request)
+    }
+
     /// `method` is "POST" or "PATCH"; `body` is sent as UTF-8 JSON.
     pub fn send_json(
         &self,

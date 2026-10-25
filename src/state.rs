@@ -5,8 +5,9 @@ use chrono::{Days, Months, NaiveDate};
 
 use crate::calendar::range_for;
 use crate::i18n::{self, Key, text};
+use crate::lyrics;
 use crate::model::{
-    CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, View,
+    CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Timeline, View,
 };
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 
@@ -23,6 +24,13 @@ const POMODORO_KEY: &str = "pomodoro";
 /// renderer draws its `View`; the caller performs the returned `Effect`s.
 pub struct IslandState {
     media: Option<MediaInfo>,
+    /// The media session's last reported timeline, as the watcher sent it
+    /// (re-based here when play/pause flips).
+    timeline: Option<Timeline>,
+    /// "Lirik di notch" is on.
+    lyrics_on: bool,
+    /// `App` has synced lyrics for the current track.
+    lyrics_ready: bool,
     queue: VecDeque<Notice>,
     current: Option<(Notice, Instant)>,
     /// Sticky notices, oldest first; the newest is shown. At most one
@@ -51,6 +59,9 @@ impl IslandState {
     pub fn new(today: NaiveDate, pomo: PomoSettings) -> Self {
         Self {
             media: None,
+            timeline: None,
+            lyrics_on: false,
+            lyrics_ready: false,
             queue: VecDeque::new(),
             current: None,
             sticky: Vec::new(),
@@ -83,7 +94,10 @@ impl IslandState {
         }
         self.advance(now);
         match event {
-            Event::Media(media) => self.media = media,
+            Event::Media(media) => self.set_media(media, now),
+            Event::MediaTimeline(timeline) => self.timeline = timeline,
+            Event::LyricsReady(ready) => self.lyrics_ready = ready,
+            Event::LyricsSetting(on) => self.lyrics_on = on,
             Event::Notice(notice) => match &notice.kind {
                 NoticeKind::ClaudeWaiting { .. } | NoticeKind::Reminder { .. } => {
                     if let Some(key) = sticky_key(&notice) {
@@ -112,7 +126,7 @@ impl IslandState {
             Event::Today(date) => self.set_today(date),
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
             Event::Click(hit) => self.click(hit, now, &mut effects),
-            Event::Calendar(_) | Event::Tick => {}
+            Event::Calendar(_) | Event::Lyrics(_) | Event::Tick => {}
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
@@ -156,7 +170,10 @@ impl IslandState {
         if self.pomodoro.is_active() {
             return View::PomodoroCompact;
         }
-        if self.media.is_some() {
+        if let Some(media) = &self.media {
+            if self.lyrics_on && self.lyrics_ready && media.playing {
+                return View::MediaLyric;
+            }
             return View::MediaCompact;
         }
         View::Idle
@@ -164,6 +181,36 @@ impl IslandState {
 
     pub fn media(&self) -> Option<&MediaInfo> {
         self.media.as_ref()
+    }
+
+    pub fn timeline(&self) -> Option<&Timeline> {
+        self.timeline.as_ref()
+    }
+
+    pub fn lyrics_on(&self) -> bool {
+        self.lyrics_on
+    }
+
+    pub fn lyrics_ready(&self) -> bool {
+        self.lyrics_ready
+    }
+
+    /// A new track's lyrics are not known yet. When the same track pauses or
+    /// resumes, the timeline is re-based at that moment, so a player that
+    /// does not report a fresh one neither runs on while paused nor jumps
+    /// ahead when it resumes (a fresh one from the watcher replaces it).
+    fn set_media(&mut self, media: Option<MediaInfo>, now: Instant) {
+        match (&self.media, &media) {
+            (Some(old), Some(new)) if old.title == new.title && old.artist == new.artist => {
+                if old.playing != new.playing
+                    && let Some(t) = &self.timeline
+                {
+                    self.timeline = Some(lyrics::rebase(t, old.playing, now));
+                }
+            }
+            _ => self.lyrics_ready = false,
+        }
+        self.media = media;
     }
 
     /// The earliest of the current notice's expiry and the pomodoro phase end;
@@ -244,6 +291,10 @@ impl IslandState {
             Hit::ReminderNew => effects.push(Effect::OpenReminderEditor(None)),
             Hit::ReminderOpen(id) => effects.push(Effect::OpenReminderEditor(Some(id))),
             Hit::RemindersMore => self.reminders_page += 1,
+            Hit::LyricsToggle => {
+                self.lyrics_on = !self.lyrics_on;
+                effects.push(Effect::SaveLyrics(self.lyrics_on));
+            }
             // The strip shows the newest sticky notice; clicking it dismisses that one.
             Hit::Strip => {
                 if matches!(self.view(), View::Panel(_)) {
@@ -1706,5 +1757,125 @@ mod tests {
         assert_eq!(s.notes_page(), 2);
         s.apply(Event::Hover(false), t0);
         assert_eq!(s.notes_page(), 0);
+    }
+
+    // ---- v2.2: lyrics ----
+
+    fn lyric_ready(s: &mut IslandState, t0: Instant) {
+        s.apply(Event::Media(Some(media(true))), t0);
+        s.apply(Event::LyricsSetting(true), t0);
+        s.apply(Event::LyricsReady(true), t0);
+    }
+
+    #[test]
+    fn lyric_view_needs_setting_lyrics_and_playback() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        s.apply(Event::LyricsReady(true), t0);
+        assert_eq!(s.view(), View::MediaCompact, "setting off");
+        s.apply(Event::LyricsSetting(true), t0);
+        assert_eq!(s.view(), View::MediaLyric);
+        s.apply(Event::LyricsReady(false), t0);
+        assert_eq!(s.view(), View::MediaCompact, "no synced lyrics");
+        s.apply(Event::LyricsReady(true), t0);
+        s.apply(Event::Media(Some(media(false))), t0);
+        assert_eq!(s.view(), View::MediaCompact, "paused shows the title");
+        s.apply(Event::Media(Some(media(true))), t0);
+        assert_eq!(s.view(), View::MediaLyric, "same track resumes its lyrics");
+        s.apply(Event::Media(None), t0);
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn lyric_view_ranks_like_the_compact_media() {
+        let t0 = Instant::now();
+        let mut s = st();
+        lyric_ready(&mut s, t0);
+        s.apply(Event::Notice(app_notice("k1")), t0);
+        assert_eq!(s.view(), View::Notice(app_notice("k1")));
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::MediaLyric);
+        s.apply(Event::Click(Hit::PomoStartPause), t0 + secs(5));
+        assert_eq!(s.view(), View::PomodoroCompact);
+        s.apply(Event::Click(Hit::PomoReset), t0 + secs(6));
+        s.apply(Event::Hover(true), t0 + secs(6));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Hover(false), t0 + secs(6));
+        s.apply(Event::Fullscreen(true), t0 + secs(6));
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0 + secs(6));
+        assert_eq!(s.view(), View::MediaLyric);
+        assert_eq!(s.apply(Event::Click(Hit::Body), t0 + secs(7)), vec![]);
+    }
+
+    #[test]
+    fn a_new_track_waits_for_its_own_lyrics() {
+        let t0 = Instant::now();
+        let mut s = st();
+        lyric_ready(&mut s, t0);
+        let next = MediaInfo {
+            title: "Another One".into(),
+            ..media(true)
+        };
+        s.apply(Event::Media(Some(next)), t0);
+        assert!(!s.lyrics_ready());
+        assert_eq!(s.view(), View::MediaCompact);
+    }
+
+    #[test]
+    fn lyric_button_flips_the_setting_and_saves() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Media, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricsToggle), t0),
+            vec![Effect::SaveLyrics(true)]
+        );
+        assert!(s.lyrics_on());
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricsToggle), t0),
+            vec![Effect::SaveLyrics(false)]
+        );
+        assert!(!s.lyrics_on());
+        assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn timeline_is_kept_and_rebased_on_play_pause() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        let t = Timeline {
+            position_ms: 10_000,
+            end_ms: 200_000,
+            updated: t0,
+        };
+        s.apply(Event::MediaTimeline(Some(t)), t0);
+        assert_eq!(s.timeline(), Some(&t));
+        // Paused 3 s later: the position freezes there.
+        let paused = t0 + secs(3);
+        s.apply(Event::Media(Some(media(false))), paused);
+        let frozen = Timeline {
+            position_ms: 13_000,
+            end_ms: 200_000,
+            updated: paused,
+        };
+        assert_eq!(s.timeline(), Some(&frozen));
+        // A minute later it resumes from there.
+        let resumed = paused + secs(60);
+        s.apply(Event::Media(Some(media(true))), resumed);
+        assert_eq!(
+            s.timeline(),
+            Some(&Timeline {
+                updated: resumed,
+                ..frozen
+            })
+        );
+        // A fresh timeline from the watcher wins.
+        s.apply(Event::MediaTimeline(Some(t)), resumed);
+        assert_eq!(s.timeline(), Some(&t));
+        s.apply(Event::MediaTimeline(None), resumed);
+        assert_eq!(s.timeline(), None);
     }
 }

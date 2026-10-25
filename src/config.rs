@@ -33,6 +33,9 @@ pub struct Config {
     pub window_theme: WindowTheme,
     /// The idle island shows the local time instead of an empty shape.
     pub idle_clock: bool,
+    /// While music plays, the compact island shows the current synced lyric
+    /// line (looked up at lrclib.net) instead of the artist.
+    pub lyrics: bool,
 }
 
 impl Default for Config {
@@ -51,6 +54,7 @@ impl Default for Config {
             surface: Surface::Black,
             window_theme: WindowTheme::System,
             idle_clock: true,
+            lyrics: false,
         }
     }
 }
@@ -98,7 +102,7 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language, theme, idle clock) over everything else as it is on disk (Google client, muted
+/// language, theme, idle clock, lyrics) over everything else as it is on disk (Google client, muted
 /// apps, battery threshold), which the owner may have edited by hand while the
 /// island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
@@ -112,6 +116,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         surface: mem.surface,
         window_theme: mem.window_theme,
         idle_clock: mem.idle_clock,
+        lyrics: mem.lyrics,
         ..disk
     }
 }
@@ -280,6 +285,7 @@ mod tests {
         assert_eq!(c.surface, Surface::Black);
         assert_eq!(c.window_theme, WindowTheme::System);
         assert!(c.idle_clock);
+        assert!(!c.lyrics);
     }
 
     #[test]
@@ -303,6 +309,7 @@ mod tests {
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
             idle_clock: false,
+            lyrics: true,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -388,6 +395,7 @@ mod tests {
         Surface,
         WindowTheme,
         bool,
+        bool,
     );
 
     fn owned(c: &Config) -> Owned {
@@ -401,6 +409,7 @@ mod tests {
             c.surface,
             c.window_theme,
             c.idle_clock,
+            c.lyrics,
         )
     }
 
@@ -420,6 +429,7 @@ mod tests {
             surface: Surface::Black,
             window_theme: WindowTheme::System,
             idle_clock: true,
+            lyrics: false,
             ..Config::default()
         };
         let mem = Config {
@@ -435,6 +445,7 @@ mod tests {
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
             idle_clock: false,
+            lyrics: true,
             ..Config::default()
         };
         (disk, mem)

@@ -38,6 +38,7 @@ use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_dra
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
+use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
@@ -86,6 +87,8 @@ const TIMER_DAY: usize = 7;
 const TIMER_REMINDER: usize = 9;
 /// Idle clock redraws at each minute boundary, only while it shows.
 const TIMER_CLOCK: usize = 8;
+/// One-shot to the next lyric line, only while the lyric view shows.
+const TIMER_LYRIC: usize = 10;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
@@ -167,11 +170,17 @@ pub fn run() {
             eq_timer: false,
             pomo_timer: false,
             clock_timer: false,
+            lyrics: LyricsState::default(),
+            lyrics_worker: None,
+            lyric_timer: false,
+            lyric_fading: false,
             config_warned: false,
         });
     });
     with_app(|app| {
         let now = Instant::now();
+        let lyrics_on = app.config.lyrics;
+        app.apply(Event::LyricsSetting(lyrics_on), now);
         app.check_fullscreen();
         app.check_battery();
         app.draw(now);
@@ -272,6 +281,14 @@ struct App {
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
+    /// Lyrics looked up, the current track's lines and the line on screen.
+    lyrics: LyricsState,
+    /// The lyrics thread, started on the first lookup.
+    lyrics_worker: Option<LyricsWorker>,
+    /// `TIMER_LYRIC` is set.
+    lyric_timer: bool,
+    /// Two lyric lines are crossfading; the frame clock runs until it ends.
+    lyric_fading: bool,
     /// The invalid-config notice was shown this run.
     config_warned: bool,
 }
@@ -296,6 +313,11 @@ impl App {
                 // Only `App` keeps the calendar; the reducer has no use for it.
                 Event::Calendar(snapshot) => {
                     self.calendar = snapshot;
+                    continue;
+                }
+                // Lyrics are `App`'s too; `refresh` tells the reducer they exist.
+                Event::Lyrics(found) => {
+                    self.lyrics.found(found);
                     continue;
                 }
                 other => other,
@@ -329,6 +351,10 @@ impl App {
             Effect::OpenReminderEditor(id) => {
                 let now = Local::now().naive_local();
                 return self.open_editor(reminder_editor_kind(&self.reminders, id.as_deref(), now));
+            }
+            Effect::SaveLyrics(on) => {
+                self.config.lyrics = on;
+                self.save_config();
             }
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
@@ -613,11 +639,14 @@ impl App {
 
     /// Retargets the animation at the state's view and re-arms the notice deadline.
     fn refresh(&mut self, now: Instant) {
+        self.sync_lyrics(now);
+        self.sync_lyric_line(now);
         let view = self.state.view();
         let kind = match &view {
             View::Hidden => None,
             View::Idle => Some(ShapeKind::Idle),
             View::MediaCompact => Some(ShapeKind::MediaCompact),
+            View::MediaLyric => Some(ShapeKind::MediaLyric),
             View::PomodoroCompact => Some(ShapeKind::PomodoroCompact),
             View::Panel(_) => Some(ShapeKind::Panel),
             View::Notice(_) => Some(ShapeKind::Notice),
@@ -654,7 +683,84 @@ impl App {
     }
 
     fn animating(&self) -> bool {
-        self.anim.running || self.slide.is_some()
+        self.anim.running || self.slide.is_some() || self.lyric_fading
+    }
+
+    /// Looks up lyrics for the playing track (memory first, else the worker;
+    /// only with the setting on and while it plays) and tells the reducer
+    /// whether the current track has them.
+    fn sync_lyrics(&mut self, now: Instant) {
+        let on = self.state.lyrics_on();
+        let query = lyrics::track_query(self.state.media(), self.state.timeline());
+        if on {
+            let playing = self.state.media().is_some_and(|m| m.playing);
+            if let Some(q) = self.lyrics.want(query.as_ref(), playing) {
+                self.ask_lyrics(q);
+            }
+        }
+        let ready = on && self.lyrics.ready(query.as_ref());
+        if ready != self.state.lyrics_ready() {
+            self.apply(Event::LyricsReady(ready), now);
+        }
+    }
+
+    fn ask_lyrics(&mut self, q: Query) {
+        let worker = self.lyrics_worker.get_or_insert_with(|| {
+            lyrics::spawn_worker(
+                self.tx.clone(),
+                poster(self.hwnd, WM_APP_EVENT),
+                DiskCache::new(DiskCache::default_dir()),
+            )
+        });
+        if !worker.ask(q) {
+            // The thread is gone; the next track starts another.
+            self.lyrics_worker = None;
+        }
+    }
+
+    /// Puts the line for the current position on screen (crossfading from
+    /// the last one) and arms `TIMER_LYRIC` for the next change. Outside
+    /// the lyric view the timer stops. True when the line changed.
+    fn sync_lyric_line(&mut self, now: Instant) -> bool {
+        let view = self.state.view();
+        let position = match (self.state.timeline(), self.state.media()) {
+            (Some(t), Some(m)) if view == View::MediaLyric => {
+                Some(lyrics::position_at(t, m.playing, now))
+            }
+            _ => None,
+        };
+        let Some(pos) = position else {
+            // Fading out (fullscreen) keeps its last line.
+            if view != View::Hidden {
+                self.lyrics.hide();
+            }
+            self.set_lyric_timer(None);
+            return false;
+        };
+        let changed = self.lyrics.advance(pos, now);
+        if self.lyrics.fading(now) {
+            self.lyric_fading = true;
+            self.ensure_clock();
+        }
+        self.set_lyric_timer(self.lyrics.wait_ms(pos));
+        changed
+    }
+
+    /// One-shot: `SetTimer` on the same id replaces the pending one.
+    fn set_lyric_timer(&mut self, wait_ms: Option<u64>) {
+        unsafe {
+            match wait_ms {
+                Some(ms) => {
+                    let ms = u32::try_from(ms).unwrap_or(u32::MAX);
+                    SetTimer(Some(self.hwnd), TIMER_LYRIC, ms, None);
+                }
+                None if self.lyric_timer => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_LYRIC);
+                }
+                None => {}
+            }
+        }
+        self.lyric_timer = wait_ms.is_some();
     }
 
     fn ensure_clock(&mut self) {
@@ -782,6 +888,13 @@ impl App {
                 // Also re-arms: the next one, or another hour's wait.
                 self.fire_reminders(false);
             }
+            TIMER_LYRIC => {
+                let now = Instant::now();
+                // A crossfade starts the frame clock, which draws it.
+                if self.sync_lyric_line(now) && !self.animating() {
+                    self.draw(now);
+                }
+            }
             TIMER_CLOCK => {
                 if !self.animating() {
                     self.draw(Instant::now());
@@ -812,6 +925,10 @@ impl App {
         if shape_done && self.anim.running {
             self.anim.running = false;
             self.frame_log.finish();
+        }
+        // Checked at the drawn frame's time, so its last frame was the settled one.
+        if self.lyric_fading && !self.lyrics.fading(now) {
+            self.lyric_fading = false;
         }
         if slide_done {
             self.slide = None;
@@ -1021,6 +1138,12 @@ impl App {
                 // Redraws the idle island and starts or stops its timer.
                 self.refresh(now);
             }
+            SettingsAction::Lyrics(on) => {
+                self.config.lyrics = on;
+                self.save_config();
+                // Looks the track up and switches the view now.
+                self.apply_now(Event::LyricsSetting(on));
+            }
             SettingsAction::BatteryThreshold(threshold) => {
                 self.save_config_with(|c| c.battery_threshold = threshold);
                 self.battery.set_threshold(self.config.battery_threshold);
@@ -1089,6 +1212,8 @@ impl App {
             palette: theme::island_palette(&self.config),
             clock: (self.config.idle_clock && self.drawn == View::Idle)
                 .then(|| Local::now().format("%H:%M").to_string()),
+            lyric: self.lyrics.shown(now),
+            lyrics_on: state.lyrics_on(),
         };
         if let Err(error) = self
             .renderer

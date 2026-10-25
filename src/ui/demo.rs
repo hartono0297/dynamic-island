@@ -10,6 +10,9 @@
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
 //! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
 //! - `DI_CLOCK=0` draws the idle island without its clock.
+//! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
+//!   LRC (`DEMO_LRC`); `DI_DEMO_FADE=0.5` freezes the crossfade from the
+//!   previous line at that progress.
 
 use std::time::{Duration, Instant};
 
@@ -27,6 +30,7 @@ use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
+use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
@@ -56,6 +60,10 @@ struct Scene {
     /// Sample reminders on the reminder page: 3 or 12.
     reminders: usize,
     strip: bool,
+    /// Position in `DEMO_LRC` for the lyric view.
+    lyric_at: u64,
+    /// "Lirik di notch" is on (the Musik page's button).
+    lyrics_on: bool,
 }
 
 /// `View` without its payloads, so scenes can be `const`.
@@ -67,6 +75,7 @@ enum View0 {
     Panel(Page),
     /// A due reminder's notice.
     ReminderNotice,
+    MediaLyric,
 }
 
 const BASE: Scene = Scene {
@@ -80,7 +89,28 @@ const BASE: Scene = Scene {
     notes: 5,
     reminders: 3,
     strip: false,
+    lyric_at: 2_000,
+    lyrics_on: false,
 };
+
+/// Made-up lyrics: a metadata tag, an offset, a line timed twice, an
+/// instrumental gap and a line too long for the notch.
+const DEMO_LRC: &str = "[ar:Demo]\n[ti:Jalan Pulang]\n[offset:+0]\n\
+[00:01.00][00:24.00] Lampu kota menyala satu per satu\n\
+[00:05.20] Kita pulang lewat jalan yang biasa\n\
+[00:10.00]\n\
+[00:16.00] Langit sore memeluk atap-atap rumah di sepanjang jalan menuju pantai yang jauh di sana\n";
+
+const fn lyric(name: &'static str, lyric_at: u64) -> Scene {
+    Scene {
+        name,
+        kind: ShapeKind::MediaLyric,
+        view: View0::MediaLyric,
+        lyric_at,
+        lyrics_on: true,
+        ..BASE
+    }
+}
 
 const fn panel(name: &'static str, page: Page) -> Scene {
     Scene {
@@ -90,7 +120,7 @@ const fn panel(name: &'static str, page: Page) -> Scene {
     }
 }
 
-const SCENES: [Scene; 18] = [
+const SCENES: [Scene; 22] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -167,6 +197,13 @@ const SCENES: [Scene; 18] = [
         strip: true,
         ..panel("strip", Page::Calendar)
     },
+    lyric("lyric", 6_000),
+    lyric("lyric-long", 17_000),
+    lyric("lyric-instrumental", 11_000),
+    Scene {
+        lyrics_on: true,
+        ..panel("media-lyrics-on", Page::Media)
+    },
 ];
 
 fn env<T: std::str::FromStr>(name: &str) -> Option<T> {
@@ -216,6 +253,8 @@ pub fn run() {
         Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
     );
     let clock_on = std::env::var("DI_CLOCK").map_or(true, |v| v != "0");
+    let lyric_at: Option<u64> = env("DI_LYRIC_AT");
+    let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
     let steps = 2 * SCENES.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -254,7 +293,9 @@ pub fn run() {
                 View0::PomodoroCompact => View::PomodoroCompact,
                 View0::Panel(page) => View::Panel(page),
                 View0::ReminderNotice => View::Notice(reminder_notice.clone()),
+                View0::MediaLyric => View::MediaLyric,
             };
+            let lyric_state = demo_lyrics(lyric_at.unwrap_or(scene.lyric_at), lyric_fade, now);
             let page = match scene.view {
                 View0::Panel(page) => page,
                 _ => Page::Calendar,
@@ -288,6 +329,8 @@ pub fn run() {
                 page_slide: slide,
                 palette,
                 clock: clock_on.then(|| Local::now().format("%H:%M").to_string()),
+                lyric: lyric_state.shown(now),
+                lyrics_on: scene.lyrics_on,
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -295,6 +338,37 @@ pub fn run() {
         }
         std::thread::sleep(Duration::from_millis(if animated { 33 } else { 16 }));
     }
+}
+
+/// `DEMO_LRC` through the island's own lyric state, on the line at `at` ms;
+/// with `fade`, crossfading into it from the line before at that progress.
+fn demo_lyrics(at: u64, fade: Option<f32>, now: Instant) -> LyricsState {
+    let lines = lyrics::parse_lrc(DEMO_LRC);
+    let query = Query {
+        key: "demo".into(),
+        artist: "Demo".into(),
+        title: "Jalan Pulang".into(),
+        duration_ms: 30_000,
+    };
+    let mut state = LyricsState::default();
+    state.want(Some(&query), true);
+    state.found(LyricsFound {
+        key: "demo".into(),
+        lines: Some(std::sync::Arc::new(lines.clone())),
+        transient: false,
+    });
+    if let Some(f) = fade {
+        let line = lyrics::current_line(&lines, at).map_or(0, |(i, _)| i);
+        let before = line.checked_sub(1).map_or(0, |i| lines[i].at_ms);
+        state.advance(before, now);
+        let since = now
+            .checked_sub(FADE.mul_f32(f.clamp(0.0, 1.0)))
+            .unwrap_or(now);
+        state.advance(at, since);
+    } else {
+        state.advance(at, now);
+    }
+    state
 }
 
 fn scene(step: usize) -> (Style, Scene) {

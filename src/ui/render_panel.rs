@@ -139,7 +139,7 @@ impl Renderer {
                 self.paint_notes(l, frame.notes, frame.today);
                 Ok(())
             }
-            PageLayout::Media(l) => self.paint_media(l, frame.media),
+            PageLayout::Media(l) => self.paint_media(l, frame.media, frame.lyrics_on),
         }
     }
 
@@ -594,7 +594,13 @@ impl Renderer {
         }
     }
 
-    fn paint_media(&mut self, l: &ExpandedLayout, media: Option<&MediaInfo>) -> Result<()> {
+    fn paint_media(
+        &mut self,
+        l: &ExpandedLayout,
+        media: Option<&MediaInfo>,
+        lyrics_on: bool,
+    ) -> Result<()> {
+        self.paint_lyrics_button(l.lyrics, lyrics_on);
         self.paint_art(l.art, 12.0, media.and_then(|m| m.art.as_deref()))?;
         let Some(media) = media else {
             self.text(
@@ -628,6 +634,21 @@ impl Renderer {
         self.text(play, &self.fonts.icon_panel_large, middle, 1.0);
         self.text(GLYPH_NEXT, &self.fonts.icon_panel, next, 1.0);
         Ok(())
+    }
+
+    /// "Lirik": lit in the accent while lyrics show in the notch.
+    fn paint_lyrics_button(&self, r: Rect, on: bool) {
+        let label = i18n::tr(Key::LyricsButton);
+        let font = &self.fonts.small_center_bold;
+        if on {
+            self.set_color(self.palette.accent, 1.0);
+            self.fill_round(r, r.h / 2.0);
+            self.text_colored(label, font, r, self.palette.on_accent, 1.0);
+        } else {
+            self.set_color(self.palette.raised, 1.0);
+            self.fill_round(r, r.h / 2.0);
+            self.text(label, font, r, SECONDARY_ALPHA);
+        }
     }
 
     /// Orange dot and "Claude butuh respon · {project}", or an accent dot and

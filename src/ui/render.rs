@@ -43,11 +43,12 @@ use chrono::NaiveDate;
 
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
-    compact_layout, corner_radius, equalizer_heights, notice_layout,
+    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_layout,
 };
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::config::Style;
+use crate::lyrics::ShownLine;
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
@@ -70,6 +71,10 @@ const GLYPH_NEXT: &str = "\u{E893}";
 const GLYPH_MUSIC: &str = "\u{E8D6}";
 /// "Ringer" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const GLYPH_BELL: &str = "\u{EA8F}";
+/// Shown for an instrumental gap and before the first lyric line.
+const LYRIC_REST: &str = "\u{266A}";
+/// How far a lyric line rises while it crossfades into the next.
+const LYRIC_RISE: f32 = 5.0;
 
 /// Everything a frame draws besides the shape: the view and the data behind it.
 pub struct Frame<'a> {
@@ -104,6 +109,10 @@ pub struct Frame<'a> {
     pub palette: Palette,
     /// "HH:MM" drawn while the view is `Idle`; `None` when the clock is off.
     pub clock: Option<String>,
+    /// The line drawn while the view is `MediaLyric`.
+    pub lyric: Option<ShownLine<'a>>,
+    /// "Lirik di notch" is on: the Musik page's button is lit.
+    pub lyrics_on: bool,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
@@ -138,6 +147,10 @@ struct Fonts {
     has_icons: bool,
     /// The idle clock.
     clock: IDWriteTextFormat,
+    /// The lyric line in the notch.
+    lyric: IDWriteTextFormat,
+    /// The rest sign of an instrumental gap, larger than the words.
+    lyric_rest: IDWriteTextFormat,
     /// Page titles ("Oktober 2026", "Pomodoro", "Notes").
     heading: IDWriteTextFormat,
     small: IDWriteTextFormat,
@@ -452,6 +465,10 @@ impl Renderer {
             View::MediaCompact => frame
                 .media
                 .map_or(Ok(()), |m| self.paint_compact(shape, m, frame.now)),
+            View::MediaLyric => {
+                self.paint_lyric(shape, frame.lyric.as_ref());
+                Ok(())
+            }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             View::Notice(notice) => self.paint_notice(shape, notice),
             View::Idle => {
@@ -494,6 +511,35 @@ impl Renderer {
             self.fill_round(bar, 1.0);
         }
         Ok(())
+    }
+
+    /// The current lyric line, centred and trimmed; while lines change, the
+    /// old one fades out rising and the new one fades in from below.
+    fn paint_lyric(&self, shape: ShapeRect, lyric: Option<&ShownLine>) {
+        let Some(lyric) = lyric else { return };
+        let area = lyric_layout(shape);
+        let t = lyric.fade.clamp(0.0, 1.0);
+        // Smoothstep: the lines settle gently instead of stopping dead.
+        let eased = t * t * (3.0 - 2.0 * t);
+        let line = |text: &str, area: Rect, alpha: f32| {
+            if text.trim().is_empty() {
+                self.text(LYRIC_REST, &self.fonts.lyric_rest, area, alpha * 0.85);
+            } else {
+                self.text(text, &self.fonts.lyric, area, alpha);
+            }
+        };
+        if let Some(prev) = lyric.prev.filter(|_| t < 1.0) {
+            let up = Rect {
+                y: area.y - LYRIC_RISE * eased,
+                ..area
+            };
+            line(prev, up, 1.0 - t);
+        }
+        let rising = Rect {
+            y: area.y + LYRIC_RISE * (1.0 - eased),
+            ..area
+        };
+        line(lyric.text, rising, t);
     }
 
     fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice) -> Result<()> {
@@ -762,6 +808,8 @@ impl Fonts {
             badge_icon: centered(icon_family, normal, 18.0)?,
             has_icons,
             clock: centered(text_family, semi, 13.0)?,
+            lyric: centered(text_family, semi, 13.0)?,
+            lyric_rest: centered(text_family, normal, 19.0)?,
             heading: line(semi, 15.0)?,
             small: line(normal, 11.0)?,
             small_center: centered(text_family, normal, 11.0)?,

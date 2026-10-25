@@ -226,6 +226,7 @@ keys! {
     // Media page.
     NothingPlaying => "Tidak ada musik yang diputar", "Nothing playing";
     NothingPlayingHint => "Putar lagu di aplikasi mana pun", "Play music in any app";
+    LyricsButton => "Lirik", "Lyrics";
 
     // Editors.
     EditorNote => "Note", "Note";
@@ -300,6 +301,8 @@ keys! {
     PopupsHelp => "Cara matikan popup Windows", "Turn off Windows pop-ups";
     PopupsHelpDesc => "Supaya notifikasi tidak muncul dua kali", "So notifications don't show twice";
     ShowHow => "Buka petunjuk", "Show me how";
+    LyricsInNotch => "Lirik di notch", "Lyrics in notch";
+    LyricsInNotchDesc => "Artis & judul dikirim ke lrclib.net", "Artist & title are sent to lrclib.net";
     FocusDesc => "Lama satu sesi fokus", "Length of one focus session";
     BreakDesc => "Jeda di antara sesi", "Pause between sessions";
     LongBreakDesc => "Setelah sesi terakhir", "After the last session";
