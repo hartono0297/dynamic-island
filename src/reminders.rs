@@ -156,6 +156,7 @@ impl RemindersStore {
     /// when it falls in a skipped DST hour). Text that is empty after trimming
     /// creates or changes nothing and returns `None`. An unknown `id` is
     /// treated as a new reminder.
+    #[cfg_attr(not(test), allow(dead_code))] // The island saves through `upsert_local`.
     pub fn upsert(
         &mut self,
         id: Option<&str>,
@@ -169,10 +170,9 @@ impl RemindersStore {
     }
 
     /// `upsert` for a reminder set to local `date` and `time`: a repeating one
-    /// set in the past starts at its next occurrence (`first_due`), and the
+    /// set in the past starts at its next occurrence (`first_due_at`), and the
     /// intended `time` is kept even when that day skips it. `None` also when
     /// the local time cannot be worked out.
-    #[allow(dead_code)] // The island still saves through `upsert`.
     pub fn upsert_local(
         &mut self,
         id: Option<&str>,
@@ -236,9 +236,9 @@ impl RemindersStore {
         self.items.len() != before
     }
 
-    /// The local wall-clock time `id` rings at.
-    #[cfg(test)]
-    fn wall_time(&self, id: &str) -> Option<NaiveTime> {
+    /// The local wall-clock time `id` rings at (`None` for one saved without
+    /// it, by an older version).
+    pub fn wall_time(&self, id: &str) -> Option<NaiveTime> {
         self.wall.get(id).copied()
     }
 
@@ -383,13 +383,9 @@ pub fn local_time(unix: i64) -> Option<NaiveDateTime> {
     DateTime::from_timestamp(unix, 0).map(|t| t.with_timezone(&chrono::Local).naive_local())
 }
 
-/// The due time to store for a reminder set to `due`: a repeating one set in
-/// the past starts at its next occurrence instead of firing at once.
-pub fn first_due(due: i64, repeat: Repeat, now: i64) -> i64 {
-    first_due_at(&chrono::Local, due, None, repeat, now)
-}
-
-/// `first_due` in `tz`, repeating at wall-clock time `wall` (see `advance_in`).
+/// The due time to store for a reminder set to `due` in `tz`: a repeating one
+/// set in the past starts at its next occurrence instead of firing at once,
+/// repeating at wall-clock time `wall` (see `advance_in`).
 fn first_due_at<Tz: TimeZone>(
     tz: &Tz,
     due: i64,

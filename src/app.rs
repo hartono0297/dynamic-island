@@ -535,10 +535,12 @@ impl App {
                 repeat,
             } => {
                 let unix = Local::now().timestamp();
-                if let Some(due) = reminders::local_unix(date, time) {
-                    let due = reminders::first_due(due, repeat, unix);
-                    self.reminders
-                        .upsert(id.as_deref(), &text, due, repeat, unix);
+                // Keeps the time as set, even on a day a DST change skips it.
+                if self
+                    .reminders
+                    .upsert_local(id.as_deref(), &text, date, time, repeat, unix)
+                    .is_some()
+                {
                     self.persist_reminders(now);
                     self.settle_reminders(now);
                 }
@@ -1438,7 +1440,8 @@ fn reminder_editor_kind(
             id: Some(r.id.clone()),
             text: r.text.clone(),
             date: due.date(),
-            time: due.time(),
+            // The time as set: on a day DST skips it, `due_unix` shows another.
+            time: reminders.wall_time(&r.id).unwrap_or(due.time()),
             repeat: r.repeat,
         };
     }
