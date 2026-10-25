@@ -32,7 +32,6 @@ use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, Style};
 use crate::model::{Effect, Event, Notice, NoticeKind, View};
-use crate::pomodoro::PomoSettings;
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
@@ -87,14 +86,14 @@ pub fn run() {
     let _ = tray::set_autostart(config.start_with_windows);
 
     let rest = shape_for(config.style, ShapeKind::Compact);
+    let pomodoro = config.pomodoro;
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
             hwnd,
             win: Some(win),
             renderer,
             config,
-            // Task 4 adds the saved pomodoro settings to Config.
-            state: IslandState::new(chrono::Local::now().date_naive(), PomoSettings::default()),
+            state: IslandState::new(chrono::Local::now().date_naive(), pomodoro),
             rx,
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),

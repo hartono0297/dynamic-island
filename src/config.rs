@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::pomodoro::PomoSettings;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
     Pill,
@@ -15,6 +17,10 @@ pub struct Config {
     pub start_with_windows: bool,
     pub muted_apps: Vec<String>,
     pub onboarding_done: bool,
+    pub pomodoro: PomoSettings,
+    /// OAuth desktop-client credentials for Google Calendar; empty until the user sets them.
+    pub google_client_id: String,
+    pub google_client_secret: String,
 }
 
 impl Default for Config {
@@ -25,6 +31,9 @@ impl Default for Config {
             start_with_windows: true,
             muted_apps: vec!["Claude".into(), "Orca".into()],
             onboarding_done: false,
+            pomodoro: PomoSettings::default(),
+            google_client_id: String::new(),
+            google_client_secret: String::new(),
         }
     }
 }
@@ -112,7 +121,60 @@ mod tests {
             start_with_windows: false,
             muted_apps: vec!["Slack".into()],
             onboarding_done: true,
+            pomodoro: PomoSettings {
+                focus_min: 50,
+                short_break_min: 10,
+                long_break_min: 30,
+                sessions: 3,
+            },
+            google_client_id: "id.apps.googleusercontent.com".into(),
+            google_client_secret: "secret".into(),
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn old_file_without_new_fields_loads_defaults() {
+        let old = r#"{
+            "style": "Notch",
+            "battery_threshold": 15,
+            "start_with_windows": false,
+            "muted_apps": ["Slack"],
+            "onboarding_done": true
+        }"#;
+        let c = parse(old);
+        assert_eq!(c.style, Style::Notch);
+        assert_eq!(c.battery_threshold, 15);
+        assert!(!c.start_with_windows);
+        assert_eq!(c.muted_apps, vec!["Slack".to_string()]);
+        assert!(c.onboarding_done);
+        assert_eq!(c.pomodoro, PomoSettings::default());
+        assert_eq!(c.google_client_id, "");
+        assert_eq!(c.google_client_secret, "");
+    }
+
+    #[test]
+    fn pomodoro_round_trip() {
+        let c = Config {
+            pomodoro: PomoSettings {
+                focus_min: 45,
+                short_break_min: 7,
+                long_break_min: 20,
+                sessions: 6,
+            },
+            ..Config::default()
+        };
+        let back = parse(&serde_json::to_string_pretty(&c).unwrap());
+        assert_eq!(back.pomodoro, c.pomodoro);
+        assert_eq!(back, c);
+        // A partial pomodoro object keeps the missing fields at their defaults.
+        let partial = parse(r#"{"pomodoro":{"focus_min":40}}"#);
+        assert_eq!(
+            partial.pomodoro,
+            PomoSettings {
+                focus_min: 40,
+                ..PomoSettings::default()
+            }
+        );
     }
 }
