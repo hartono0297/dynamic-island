@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, SecondsFormat, TimeDelta};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::{CalEvent, EventDraft, EventTime, fits_draft};
@@ -40,6 +41,7 @@ struct ListEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiEvent {
     id: String,
     #[serde(default)]
@@ -50,6 +52,8 @@ struct ApiEvent {
     description: String,
     start: Option<ApiTime>,
     end: Option<ApiTime>,
+    /// Set on each instance that `singleEvents=true` expands from a series.
+    recurring_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,16 +82,42 @@ fn parse_color(s: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
-fn parse_page<T: for<'de> Deserialize<'de>>(json: &str) -> Option<Page<T>> {
-    serde_json::from_str(json).ok()
+impl<T> Page<T> {
+    /// `None` on the last page (Google may send an empty token there).
+    fn next_token(&self) -> Option<String> {
+        self.next_page_token.clone().filter(|t| !t.is_empty())
+    }
+}
+
+/// Network path: a non-2xx status maps through `http_error`, and a 2xx body
+/// that is not a page of `T` (a captive portal's HTML, say) is an error, never
+/// an empty page that would replace the cached events.
+fn read_page<T: DeserializeOwned>(status: u16, body: &str) -> Result<Page<T>, AuthError> {
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, body));
+    }
+    serde_json::from_str(body).map_err(|_| unreadable(status))
+}
+
+fn unreadable(status: u16) -> AuthError {
+    AuthError::Network(format!("HTTP {status}: jawaban tidak terbaca"))
+}
+
+/// Lenient parse for the pure helpers: anything unreadable is an empty page.
+fn items<T: DeserializeOwned>(json: &str) -> Vec<T> {
+    serde_json::from_str::<Page<T>>(json)
+        .map(|page| page.items)
+        .unwrap_or_default()
 }
 
 /// Calendars marked `selected` (shown in Google Calendar): id, color, and
 /// whether the user may write to it (`accessRole` owner or writer).
 pub fn parse_calendar_list(json: &str) -> Vec<CalendarEntry> {
-    parse_page::<ListEntry>(json)
-        .map(|page| page.items)
-        .unwrap_or_default()
+    calendars_from(items(json))
+}
+
+fn calendars_from(entries: Vec<ListEntry>) -> Vec<CalendarEntry> {
+    entries
         .into_iter()
         .filter(|c| c.selected)
         .map(|c| {
@@ -105,15 +135,23 @@ pub fn parse_events(
     color: Option<u32>,
     writable: bool,
 ) -> Vec<CalEvent> {
-    parse_page::<ApiEvent>(json)
-        .map(|page| page.items)
-        .unwrap_or_default()
+    events_from(items(json), calendar_id, color, writable)
+}
+
+fn events_from(
+    events: Vec<ApiEvent>,
+    calendar_id: &str,
+    color: Option<u32>,
+    writable: bool,
+) -> Vec<CalEvent> {
+    events
         .into_iter()
         .filter(|e| e.status != "cancelled")
         .filter_map(|e| {
             let start = e.start.as_ref()?.to_event_time()?;
             let end = e.end.as_ref()?.to_event_time()?;
-            let editable = writable && fits_draft(&start, &end);
+            // Editing an expanded instance of a recurring event is out of scope.
+            let editable = writable && e.recurring_event_id.is_none() && fits_draft(&start, &end);
             let title = if e.summary.trim().is_empty() {
                 NO_TITLE.to_string()
             } else {
@@ -131,12 +169,6 @@ pub fn parse_events(
             })
         })
         .collect()
-}
-
-fn next_page_token(json: &str) -> Option<String> {
-    parse_page::<Value>(json)?
-        .next_page_token
-        .filter(|t| !t.is_empty())
 }
 
 /// Local wall-clock time with its UTC offset. A time skipped by a DST jump
@@ -224,16 +256,29 @@ fn http_error(status: u16, body: &str) -> AuthError {
     }
 }
 
-fn check((status, body): (u16, String)) -> Result<String, AuthError> {
-    if (200..300).contains(&status) {
-        Ok(body)
-    } else {
-        Err(http_error(status, &body))
+/// An insert/patch answer must be the saved event; a 2xx page that is not
+/// (a captive portal again) means the save never reached Google.
+fn check_saved((status, body): (u16, String)) -> Result<(), AuthError> {
+    #[derive(Deserialize)]
+    struct Saved {
+        #[allow(dead_code)] // Only its presence is checked.
+        id: String,
     }
+    if !(200..300).contains(&status) {
+        return Err(http_error(status, &body));
+    }
+    serde_json::from_str::<Saved>(&body)
+        .map(drop)
+        .map_err(|_| unreadable(status))
 }
 
-fn get(http: &Http, token: &str, url: &str) -> Result<String, AuthError> {
-    check(http.get_json(url, Some(token)).map_err(network)?)
+fn get_page<T: DeserializeOwned>(
+    http: &Http,
+    token: &str,
+    url: &str,
+) -> Result<Page<T>, AuthError> {
+    let (status, body) = http.get_json(url, Some(token)).map_err(network)?;
+    read_page(status, &body)
 }
 
 pub fn list_calendars(http: &Http, token: &str) -> Result<Vec<CalendarEntry>, AuthError> {
@@ -245,9 +290,9 @@ pub fn list_calendars(http: &Http, token: &str) -> Result<Vec<CalendarEntry>, Au
             query.push(("pageToken", t));
         }
         let url = format!("{BASE}/users/me/calendarList?{}", form_encode(&query));
-        let body = get(http, token, &url)?;
-        out.extend(parse_calendar_list(&body));
-        page_token = next_page_token(&body);
+        let page = get_page::<ListEntry>(http, token, &url)?;
+        page_token = page.next_token();
+        out.extend(calendars_from(page.items));
         if page_token.is_none() {
             return Ok(out);
         }
@@ -282,9 +327,9 @@ pub fn list_events(
             url_encode(cal_id),
             form_encode(&query)
         );
-        let body = get(http, token, &url)?;
-        out.extend(parse_events(&body, cal_id, *color, *writable));
-        page_token = next_page_token(&body);
+        let page = get_page::<ApiEvent>(http, token, &url)?;
+        page_token = page.next_token();
+        out.extend(events_from(page.items, cal_id, *color, *writable));
         if page_token.is_none() {
             return Ok(out);
         }
@@ -310,11 +355,10 @@ pub fn fetch_range(
 pub fn insert_event(http: &Http, token: &str, draft: &EventDraft) -> Result<(), AuthError> {
     let url = format!("{BASE}/calendars/primary/events");
     let body = draft_body(draft).to_string();
-    check(
+    check_saved(
         http.send_json("POST", &url, Some(token), &body)
             .map_err(network)?,
-    )?;
-    Ok(())
+    )
 }
 
 pub fn patch_event(
@@ -330,16 +374,17 @@ pub fn patch_event(
         url_encode(event_id)
     );
     let body = patch_body(draft).to_string();
-    check(
+    check_saved(
         http.send_json("PATCH", &url, Some(token), &body)
             .map_err(network)?,
-    )?;
-    Ok(())
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar::sync::merge_fetch;
+    use crate::calendar::{CalStatus, CalendarSnapshot};
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -436,6 +481,71 @@ mod tests {
     }
 
     #[test]
+    fn recurring_instances_are_read_only() {
+        let json = r##"{
+          "kind": "calendar#events",
+          "items": [
+            {"id": "weekly_20261026T020000Z", "recurringEventId": "weekly",
+             "summary": "Standup",
+             "start": {"dateTime": "2026-10-26T09:00:00+07:00"},
+             "end": {"dateTime": "2026-10-26T09:15:00+07:00"}},
+            {"id": "once", "summary": "Sekali",
+             "start": {"dateTime": "2026-10-26T09:00:00+07:00"},
+             "end": {"dateTime": "2026-10-26T09:15:00+07:00"}}
+          ]
+        }"##;
+        let evs = parse_events(json, "cal1", None, true);
+        assert_eq!(evs.len(), 2);
+        assert!(!evs[0].editable, "expanded recurring instance");
+        assert!(evs[1].editable);
+    }
+
+    #[test]
+    fn unreadable_2xx_body_is_an_error_and_keeps_the_cache() {
+        let html = "<html><body>Masuk ke Wi-Fi hotel</body></html>";
+        let err = read_page::<ApiEvent>(200, html).err().unwrap();
+        assert_eq!(
+            err,
+            AuthError::Network("HTTP 200: jawaban tidak terbaca".into())
+        );
+        assert!(read_page::<ListEntry>(200, "").is_err());
+        assert!(read_page::<ListEntry>(204, "<html>").is_err());
+        assert_eq!(
+            read_page::<ApiEvent>(401, "").err(),
+            Some(AuthError::Reconnect)
+        );
+        assert_eq!(
+            read_page::<ApiEvent>(200, EVENTS).ok().unwrap().items.len(),
+            5
+        );
+
+        let prev = CalendarSnapshot {
+            status: CalStatus::Ok,
+            events: parse_events(EVENTS, "cal1", None, true),
+            from: date(2026, 10, 19),
+            to: date(2026, 10, 26),
+            fetched_at: Some(Local::now()),
+        };
+        let merged = merge_fetch(&prev, Err(err), prev.from, prev.to, Local::now());
+        assert_eq!(merged.status, CalStatus::Offline);
+        assert_eq!(merged.events, prev.events);
+        assert_eq!(merged.fetched_at, prev.fetched_at);
+    }
+
+    #[test]
+    fn save_needs_the_saved_event_back() {
+        assert_eq!(
+            check_saved((200, r#"{"id":"abc","kind":"calendar#event"}"#.into())),
+            Ok(())
+        );
+        assert_eq!(
+            check_saved((200, "<html>".into())),
+            Err(AuthError::Network("HTTP 200: jawaban tidak terbaca".into()))
+        );
+        assert_eq!(check_saved((401, String::new())), Err(AuthError::Reconnect));
+    }
+
+    #[test]
     fn calendar_list_keeps_selected_only() {
         let json = r##"{
           "items": [
@@ -457,8 +567,10 @@ mod tests {
                 ("team".to_string(), None, true),
             ]
         );
-        assert_eq!(next_page_token(json).as_deref(), Some("p2"));
-        assert_eq!(next_page_token(EVENTS), None, "empty token ends paging");
+        let page = read_page::<ListEntry>(200, json).ok().unwrap();
+        assert_eq!(page.next_token().as_deref(), Some("p2"));
+        let page = read_page::<ApiEvent>(200, EVENTS).ok().unwrap();
+        assert_eq!(page.next_token(), None, "empty token ends paging");
     }
 
     #[test]
