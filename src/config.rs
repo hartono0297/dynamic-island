@@ -41,8 +41,45 @@ impl Default for Config {
 /// Missing or malformed config falls back to defaults rather than failing startup.
 /// A leading UTF-8 BOM (Notepad and PowerShell 5.1 may write one) is skipped.
 pub fn parse(text: &str) -> Config {
+    try_parse(text).unwrap_or_default()
+}
+
+/// `None` when `text` is not a config.
+pub fn try_parse(text: &str) -> Option<Config> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    serde_json::from_str(text).unwrap_or_default()
+    serde_json::from_str(text).ok()
+}
+
+/// The island's own settings (`mem`: style, autostart, onboarding, pomodoro)
+/// over everything else as it is on disk (Google client, muted apps, battery
+/// threshold), which the owner may have edited by hand while the island ran.
+pub fn merge_owned(disk: Config, mem: &Config) -> Config {
+    Config {
+        style: mem.style,
+        start_with_windows: mem.start_with_windows,
+        onboarding_done: mem.onboarding_done,
+        pomodoro: mem.pomodoro,
+        ..disk
+    }
+}
+
+/// What to write when the island saves `mem`, given the file as read now:
+/// a missing file gets `mem`; a valid one keeps its other fields
+/// (`merge_owned`); an unreadable or half-edited one is left alone (`None`)
+/// rather than overwritten.
+pub fn merge_for_save(read: std::io::Result<String>, mem: &Config) -> Option<Config> {
+    match read {
+        Ok(text) => try_parse(&text).map(|disk| merge_owned(disk, mem)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(mem.clone()),
+        Err(_) => None,
+    }
+}
+
+/// The current file merged under the island's own settings; `None` when it
+/// is missing or not a config, so the caller keeps what it has.
+pub fn reload(mem: &Config) -> Option<Config> {
+    let disk = try_parse(&std::fs::read_to_string(path()).ok()?)?;
+    Some(merge_owned(disk, mem))
 }
 
 /// `%APPDATA%\DynamicIsland\config.json`, or the current directory when APPDATA is unset.
@@ -151,6 +188,65 @@ mod tests {
         assert_eq!(c.pomodoro, PomoSettings::default());
         assert_eq!(c.google_client_id, "");
         assert_eq!(c.google_client_secret, "");
+    }
+
+    fn owned(c: &Config) -> (Style, bool, bool, PomoSettings) {
+        (c.style, c.start_with_windows, c.onboarding_done, c.pomodoro)
+    }
+
+    /// The island started with an empty client ID; the owner then added one
+    /// (and changed other fields) by hand while the island changed its own.
+    fn disk_and_mem() -> (Config, Config) {
+        let disk = Config {
+            google_client_id: "id.apps.googleusercontent.com".into(),
+            google_client_secret: "secret".into(),
+            muted_apps: vec!["Slack".into()],
+            battery_threshold: 35,
+            // Stale copies of the island's own settings.
+            style: Style::Pill,
+            pomodoro: PomoSettings::default(),
+            ..Config::default()
+        };
+        let mem = Config {
+            style: Style::Notch,
+            start_with_windows: false,
+            onboarding_done: true,
+            pomodoro: PomoSettings {
+                focus_min: 20,
+                ..PomoSettings::default()
+            },
+            ..Config::default()
+        };
+        (disk, mem)
+    }
+
+    #[test]
+    fn merge_keeps_hand_edits_and_island_settings() {
+        let (disk, mem) = disk_and_mem();
+        let merged = merge_owned(disk.clone(), &mem);
+        assert_eq!(merged.google_client_id, disk.google_client_id);
+        assert_eq!(merged.google_client_secret, disk.google_client_secret);
+        assert_eq!(merged.muted_apps, disk.muted_apps);
+        assert_eq!(merged.battery_threshold, 35);
+        assert_eq!(owned(&merged), owned(&mem));
+    }
+
+    #[test]
+    fn save_never_clobbers_the_file() {
+        let (disk, mem) = disk_and_mem();
+        let text = serde_json::to_string_pretty(&disk).unwrap();
+        let merged = merge_for_save(Ok(format!("\u{feff}{text}")), &mem).unwrap();
+        assert_eq!(merged, merge_owned(disk, &mem));
+        // No file yet: the island's config as it is.
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(merge_for_save(Err(missing), &mem), Some(mem.clone()));
+        // Half-edited JSON or an unreadable file: leave it alone.
+        assert_eq!(
+            merge_for_save(Ok("{\"google_client_id\": ".into()), &mem),
+            None
+        );
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(merge_for_save(Err(denied), &mem), None);
     }
 
     #[test]

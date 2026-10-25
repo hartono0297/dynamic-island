@@ -302,8 +302,11 @@ impl App {
     }
 
     /// Without a client ID there is nothing to log in to; the notice says
-    /// where to set it. A second click while the browser login waits is ignored.
-    fn connect_google(&self) -> Option<Event> {
+    /// where to set it. config.json is read again first, so an ID added while
+    /// the island runs is used without a restart. A second click while the
+    /// browser login waits is ignored.
+    fn connect_google(&mut self) -> Option<Event> {
+        self.reload_config();
         if self.config.google_client_id.trim().is_empty() {
             return Some(Event::Notice(client_id_notice()));
         }
@@ -666,10 +669,37 @@ impl App {
         );
     }
 
-    /// Saving can only fail on a broken profile; the setting still holds for
-    /// this run and there is nowhere better to report it.
-    fn save_config(&self) {
+    /// Writes the island's own settings over config.json as it is now, so
+    /// fields edited by hand meanwhile survive (and are picked up). A file
+    /// that does not parse (half-edited) is left alone. Either way the setting
+    /// holds for this run; a failed write only happens on a broken profile and
+    /// there is nowhere better to report it.
+    fn save_config(&mut self) {
+        let read = std::fs::read_to_string(config::path());
+        let Some(merged) = config::merge_for_save(read, &self.config) else {
+            return;
+        };
+        self.adopt_config(merged);
         let _ = self.config.save();
+    }
+
+    /// Picks up hand edits to config.json; a missing or broken file changes nothing.
+    fn reload_config(&mut self) {
+        if let Some(merged) = config::reload(&self.config) {
+            self.adopt_config(merged);
+        }
+    }
+
+    /// The sync thread gets a changed Google client before any later request.
+    fn adopt_config(&mut self, cfg: Config) {
+        let google = |c: &Config| (c.google_client_id.clone(), c.google_client_secret.clone());
+        let changed = google(&cfg) != google(&self.config);
+        self.config = cfg;
+        if changed && let Some(sync) = &self.sync {
+            sync.send(SyncRequest::Config(self.config.clone()));
+            // The next calendar view asks again, now with the new client.
+            self.calendar_asked = None;
+        }
     }
 
     fn set_style(&mut self, style: Style) {

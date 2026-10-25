@@ -49,6 +49,9 @@ pub enum SyncRequest {
     /// Interactive Google login (opens the browser), then a fetch. Sent by
     /// `SyncHandle::connect`, which keeps a second one from queueing.
     Connect,
+    /// config.json changed on disk (Google client ID or secret): use it from
+    /// the next request on, without a restart.
+    Config(Config),
     Shutdown,
 }
 
@@ -281,6 +284,7 @@ impl Worker {
                         fetch = Some(true);
                     }
                 }
+                SyncRequest::Config(cfg) => self.set_config(cfg),
                 SyncRequest::Shutdown => return false,
             }
         }
@@ -359,6 +363,19 @@ impl Worker {
                 self.set_status(status_for(&e));
                 false
             }
+        }
+    }
+
+    /// A client ID added (or removed) by hand takes effect at once: the
+    /// calendar stops (or starts) showing "not configured", without calling Google.
+    fn set_config(&mut self, cfg: Config) {
+        self.cfg = cfg;
+        match (configured(&self.cfg), self.snapshot.status) {
+            (true, CalStatus::NotConfigured) => self.set_status(CalStatus::Offline),
+            (false, status) if status != CalStatus::NotConfigured => {
+                self.set_status(CalStatus::NotConfigured)
+            }
+            _ => {}
         }
     }
 
@@ -680,6 +697,32 @@ mod tests {
         let n = save_failed_notice("Gagal simpan: tidak ada koneksi".into());
         assert_eq!(n.source, "Kalender");
         assert_eq!(n.kind, NoticeKind::App { app_id: None });
+    }
+
+    #[test]
+    fn a_new_client_id_ends_not_configured_without_a_restart() {
+        let dir = temp_dir();
+        let (mut w, rx, _) = worker(dir.join("calendar-cache.json"));
+        let with_id = Config {
+            google_client_id: "id.apps.googleusercontent.com".into(),
+            google_client_secret: "secret".into(),
+            ..Config::default()
+        };
+        // Same batch order as the island sends it: the config, then the login.
+        assert!(w.handle(vec![SyncRequest::Config(with_id.clone())]));
+        assert_eq!(w.cfg, with_id);
+        assert_eq!(
+            statuses(&rx),
+            [CalStatus::Offline],
+            "no longer NotConfigured"
+        );
+        // A repeat changes nothing and says nothing.
+        assert!(w.handle(vec![SyncRequest::Config(with_id)]));
+        assert!(statuses(&rx).is_empty());
+        // The ID removed again: back to NotConfigured.
+        assert!(w.handle(vec![SyncRequest::Config(Config::default())]));
+        assert_eq!(statuses(&rx), [CalStatus::NotConfigured]);
+        assert!(!dir.exists(), "nothing written");
     }
 
     #[test]
