@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use chrono::{Datelike, Days, Months, NaiveDate};
+use chrono::{Days, Months, NaiveDate};
 
+use crate::calendar::range_for;
 use crate::model::{
     CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, View,
 };
@@ -100,7 +101,7 @@ impl IslandState {
             Event::Wheel(delta) => self.wheel(delta),
             Event::Today(date) => self.set_today(date),
             Event::Click(hit) => self.click(hit, now, &mut effects),
-            Event::Tick => {}
+            Event::Calendar(_) | Event::Tick => {}
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
@@ -388,21 +389,6 @@ impl IslandState {
     pub fn notes_page(&self) -> usize {
         self.notes_page
     }
-}
-
-/// Dates `[from, to)` a calendar view shows around `anchor`: the day itself,
-/// its Monday-to-Monday week, or the 6-week Monday-first month grid.
-pub fn range_for(view: CalView, anchor: NaiveDate) -> (NaiveDate, NaiveDate) {
-    let monday_of = |d: NaiveDate| {
-        d.checked_sub_days(Days::new(u64::from(d.weekday().num_days_from_monday())))
-            .unwrap_or(d)
-    };
-    let (from, days) = match view {
-        CalView::Day => (anchor, 1),
-        CalView::Week => (monday_of(anchor), 7),
-        CalView::Month => (monday_of(anchor.with_day(1).unwrap_or(anchor)), 42),
-    };
-    (from, from.checked_add_days(Days::new(days)).unwrap_or(from))
 }
 
 fn waiting_session(notice: &Notice) -> Option<&str> {
