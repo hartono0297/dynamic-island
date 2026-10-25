@@ -115,7 +115,7 @@ pub enum EditorResult {
     NoteDeleted {
         id: String,
     },
-    /// The editor stays open, showing "Menyimpanâ€¦", until `WM_APP_EDITOR_STATUS`.
+    /// The editor stays open, showing "Menyimpan…", until `WM_APP_EDITOR_STATUS`.
     EventSave {
         event_id: Option<String>,
         calendar_id: Option<String>,
@@ -191,10 +191,11 @@ pub fn validate_event(d: &EventDraft) -> std::result::Result<(), Key> {
     Ok(())
 }
 
-/// The checks behind the reminder's "Simpan": some text, and a one-off
-/// reminder must be due after `now` (`due` is `None` when the local time
-/// cannot be worked out, which counts as passed). A repeating one set in the
-/// past simply starts at its next occurrence.
+/// The checks behind the reminder's "Simpan": some text, a date and time
+/// that exist as a local time (`due` is `None` when they cannot be worked
+/// out; refused for every repeat, so a save is never dropped after the
+/// editor has closed), and a one-off reminder due after `now`. A repeating
+/// one set in the past simply starts at its next occurrence.
 pub fn validate_reminder(
     text: &str,
     due: Option<i64>,
@@ -204,7 +205,10 @@ pub fn validate_reminder(
     if text.trim().is_empty() {
         return Err(Key::TextRequired);
     }
-    if repeat == Repeat::Once && due.is_none_or(|due| due <= now) {
+    let Some(due) = due else {
+        return Err(Key::SaveFailed);
+    };
+    if repeat == Repeat::Once && due <= now {
         return Err(Key::TimePassed);
     }
     Ok(())
@@ -563,7 +567,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
     }
 }
 
-/// Logical `[x, y, w, h]` of each control for a client area of `cw` Ã— `ch`
+/// Logical `[x, y, w, h]` of each control for a client area of `cw` × `ch`
 /// logical px.
 fn layout(form: Form, ids: &[i32], cw: f32, ch: f32) -> Vec<(i32, [f32; 4])> {
     let has = |id| ids.contains(&id);
@@ -2657,7 +2661,7 @@ mod tests {
             validate_reminder("Minum obat", Some(2_000), Repeat::Once, now),
             Ok(())
         );
-        for past in [Some(1_000), Some(10), None] {
+        for past in [Some(1_000), Some(10)] {
             assert_eq!(
                 validate_reminder("Minum obat", past, Repeat::Once, now),
                 Err(Key::TimePassed),
@@ -2674,6 +2678,23 @@ mod tests {
             Ok(())
         );
         assert_eq!(tr(Key::TimePassed), "Waktunya sudah lewat");
+    }
+
+    #[test]
+    fn unresolvable_local_time_is_refused_for_every_repeat() {
+        // The island would drop such a save after the editor closed.
+        for repeat in [Repeat::Once, Repeat::Daily, Repeat::Weekly] {
+            assert_eq!(
+                validate_reminder("Minum obat", None, repeat, 1_000),
+                Err(Key::SaveFailed),
+                "{repeat:?}"
+            );
+        }
+        // Empty text is still the first thing said.
+        assert_eq!(
+            validate_reminder(" ", None, Repeat::Daily, 1_000),
+            Err(Key::TextRequired)
+        );
     }
 
     #[test]

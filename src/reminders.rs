@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Days, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 
@@ -48,21 +49,43 @@ pub struct Reminder {
 /// Done reminders are dropped once they are this old (seconds past due).
 const KEEP_DONE_SECS: i64 = 30 * 24 * 3600;
 
+/// A reminder as the file stores it: the reminder plus the local wall-clock
+/// time it rings at, which `due_unix` alone cannot tell when an occurrence
+/// fell in a skipped DST hour (a daily 02:30 rings at 03:30 that day, and at
+/// 02:30 again the next). Files written before the field existed fall back to
+/// the wall time of `due_unix`.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Stored {
+    #[serde(flatten)]
+    reminder: Reminder,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    time: Option<NaiveTime>,
+}
+
 /// Reminders in a local JSON file. Changes stay in memory until `save`.
 pub struct RemindersStore {
     path: PathBuf,
     /// Not done first, by due time (then id); done ones after, the same way.
     items: Vec<Reminder>,
+    /// Each reminder's local wall-clock time, by id (see `Stored`).
+    wall: HashMap<String, NaiveTime>,
     counter: u64,
     /// The file existed but could not be read or parsed. It is moved aside
     /// (`reminders.json.bak`) before the first save instead of being overwritten.
     keep_old: bool,
 }
 
+/// The local wall-clock time of `unix` in `tz`.
+fn wall_of<Tz: TimeZone>(tz: &Tz, unix: i64) -> Option<NaiveTime> {
+    tz.timestamp_opt(unix, 0)
+        .single()
+        .map(|t| t.naive_local().time())
+}
+
 /// The reminders in a file read as `read`, and whether the file must be kept
 /// aside: it exists but is unreadable or not a reminders list. A missing file
 /// is simply empty.
-fn load(read: io::Result<String>) -> (Vec<Reminder>, bool) {
+fn load(read: io::Result<String>) -> (Vec<Stored>, bool) {
     match read {
         Ok(text) => {
             let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
@@ -81,10 +104,20 @@ impl RemindersStore {
     /// itself is left untouched until the next `save`, which first renames an
     /// unreadable or malformed one to `reminders.json.bak`.
     pub fn open(path: PathBuf) -> Self {
-        let (items, keep_old) = load(std::fs::read_to_string(&path));
+        let (stored, keep_old) = load(std::fs::read_to_string(&path));
+        let mut wall = HashMap::new();
+        let mut items = Vec::with_capacity(stored.len());
+        for Stored { reminder, time } in stored {
+            let time = time.or_else(|| wall_of(&chrono::Local, reminder.due_unix));
+            if let Some(time) = time {
+                wall.insert(reminder.id.clone(), time);
+            }
+            items.push(reminder);
+        }
         let mut store = RemindersStore {
             path,
             items,
+            wall,
             counter: 0,
             keep_old,
         };
@@ -117,14 +150,50 @@ impl RemindersStore {
         self.items.iter().find(|r| r.id == id)
     }
 
-    /// Creates or edits a reminder and returns its id; an edit is not done any
-    /// more. Text that is empty after trimming creates or changes nothing and
-    /// returns `None`. An unknown `id` is treated as a new reminder.
+    /// Creates or edits a reminder due at `due_unix` and returns its id; an
+    /// edit is not done any more. It rings at the wall-clock time of
+    /// `due_unix` (prefer `upsert_local`, which also knows the intended time
+    /// when it falls in a skipped DST hour). Text that is empty after trimming
+    /// creates or changes nothing and returns `None`. An unknown `id` is
+    /// treated as a new reminder.
     pub fn upsert(
         &mut self,
         id: Option<&str>,
         text: &str,
         due_unix: i64,
+        repeat: Repeat,
+        now: i64,
+    ) -> Option<String> {
+        let wall = wall_of(&chrono::Local, due_unix);
+        self.put(id, text, due_unix, wall, repeat, now)
+    }
+
+    /// `upsert` for a reminder set to local `date` and `time`: a repeating one
+    /// set in the past starts at its next occurrence (`first_due`), and the
+    /// intended `time` is kept even when that day skips it. `None` also when
+    /// the local time cannot be worked out.
+    #[allow(dead_code)] // The island still saves through `upsert`.
+    pub fn upsert_local(
+        &mut self,
+        id: Option<&str>,
+        text: &str,
+        date: NaiveDate,
+        time: NaiveTime,
+        repeat: Repeat,
+        now: i64,
+    ) -> Option<String> {
+        let tz = chrono::Local;
+        let due = at_local(&tz, date.and_time(time))?;
+        let due = first_due_at(&tz, due, Some(time), repeat, now);
+        self.put(id, text, due, Some(time), repeat, now)
+    }
+
+    fn put(
+        &mut self,
+        id: Option<&str>,
+        text: &str,
+        due_unix: i64,
+        wall: Option<NaiveTime>,
         repeat: Repeat,
         now: i64,
     ) -> Option<String> {
@@ -152,6 +221,10 @@ impl RemindersStore {
                 id
             }
         };
+        match wall {
+            Some(time) => self.wall.insert(id.clone(), time),
+            None => self.wall.remove(&id),
+        };
         self.sort();
         Some(id)
     }
@@ -159,7 +232,14 @@ impl RemindersStore {
     pub fn delete(&mut self, id: &str) -> bool {
         let before = self.items.len();
         self.items.retain(|r| r.id != id);
+        self.wall.remove(id);
         self.items.len() != before
+    }
+
+    /// The local wall-clock time `id` rings at.
+    #[cfg(test)]
+    fn wall_time(&self, id: &str) -> Option<NaiveTime> {
+        self.wall.get(id).copied()
     }
 
     /// The reminder was dismissed at `now`: a one-off is done, a repeating one
@@ -169,12 +249,17 @@ impl RemindersStore {
         let Some(r) = self.items.iter_mut().find(|r| r.id == id && !r.done) else {
             return false;
         };
-        match advance(r, now) {
+        // From the intended wall time, not the one `due_unix` shows: an
+        // occurrence moved by a skipped hour must not move the next ones.
+        let wall = self.wall.get(id).copied();
+        match advance_in(&chrono::Local, r.due_unix, wall, r.repeat, now) {
             Some(next) => r.due_unix = next,
             None => r.done = true,
         }
         self.items
             .retain(|r| !r.done || r.due_unix > now - KEEP_DONE_SECS);
+        let items = &self.items;
+        self.wall.retain(|id, _| items.iter().any(|r| &r.id == id));
         self.sort();
         true
     }
@@ -196,7 +281,15 @@ impl RemindersStore {
             }
             self.keep_old = false;
         }
-        let json = serde_json::to_string_pretty(&self.items).map_err(io::Error::other)?;
+        let stored: Vec<Stored> = self
+            .items
+            .iter()
+            .map(|r| Stored {
+                reminder: r.clone(),
+                time: self.wall.get(&r.id).copied(),
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&stored).map_err(io::Error::other)?;
         let mut tmp = self.path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
@@ -241,23 +334,28 @@ pub fn due_now(reminders: &[Reminder], now: i64) -> Vec<String> {
     due.into_iter().map(|r| r.id.clone()).collect()
 }
 
-/// The next occurrence of a repeating reminder after both its due time and
-/// `now`, at the same local wall-clock time; `None` for a one-off.
-pub fn advance(r: &Reminder, now: i64) -> Option<i64> {
-    advance_in(&chrono::Local, r.due_unix, r.repeat, now)
-}
-
-/// `advance` in time zone `tz`.
-pub fn advance_in<Tz: TimeZone>(tz: &Tz, due: i64, repeat: Repeat, now: i64) -> Option<i64> {
+/// The next occurrence of a repeating reminder (`None` for a one-off) after
+/// both `due` and `now` in time zone `tz`, on the days after `due`'s local
+/// date at the wall-clock time `wall` (`None`: the wall time of `due`). Pass
+/// the intended time: when `due` fell in a skipped DST hour, its own wall
+/// time is an hour late.
+pub fn advance_in<Tz: TimeZone>(
+    tz: &Tz,
+    due: i64,
+    wall: Option<NaiveTime>,
+    repeat: Repeat,
+    now: i64,
+) -> Option<i64> {
     let step = repeat.step_days()?;
-    let wall = tz.timestamp_opt(due, 0).single()?.naive_local();
+    let shown = tz.timestamp_opt(due, 0).single()?.naive_local();
+    let (base, time) = (shown.date(), wall.unwrap_or(shown.time()));
     let today = tz.timestamp_opt(now, 0).single()?.naive_local().date();
     // Skip the whole steps that are surely past; the loop finds the exact one.
-    let behind = (today - wall.date()).num_days().max(0) as u64;
+    let behind = (today - base).num_days().max(0) as u64;
     let mut k = (behind / step).saturating_sub(1).max(1);
     loop {
-        let date = wall.date().checked_add_days(Days::new(k * step))?;
-        let at = at_local(tz, date.and_time(wall.time()))?;
+        let date = base.checked_add_days(Days::new(k * step))?;
+        let at = at_local(tz, date.and_time(time))?;
         if at > now {
             return Some(at);
         }
@@ -288,14 +386,21 @@ pub fn local_time(unix: i64) -> Option<NaiveDateTime> {
 /// The due time to store for a reminder set to `due`: a repeating one set in
 /// the past starts at its next occurrence instead of firing at once.
 pub fn first_due(due: i64, repeat: Repeat, now: i64) -> i64 {
-    first_due_in(&chrono::Local, due, repeat, now)
+    first_due_at(&chrono::Local, due, None, repeat, now)
 }
 
-fn first_due_in<Tz: TimeZone>(tz: &Tz, due: i64, repeat: Repeat, now: i64) -> i64 {
+/// `first_due` in `tz`, repeating at wall-clock time `wall` (see `advance_in`).
+fn first_due_at<Tz: TimeZone>(
+    tz: &Tz,
+    due: i64,
+    wall: Option<NaiveTime>,
+    repeat: Repeat,
+    now: i64,
+) -> i64 {
     if repeat == Repeat::Once || due > now {
         due
     } else {
-        advance_in(tz, due, repeat, now).unwrap_or(due)
+        advance_in(tz, due, wall, repeat, now).unwrap_or(due)
     }
 }
 
@@ -412,7 +517,7 @@ mod tests {
 
     #[test]
     fn once_never_advances() {
-        assert_eq!(advance_in(&Utc, 1000, Repeat::Once, 5000), None);
+        assert_eq!(advance_in(&Utc, 1000, None, Repeat::Once, 5000), None);
     }
 
     #[test]
@@ -421,40 +526,40 @@ mod tests {
         let due = at(1, 8);
         // Dismissed a minute after it fired: tomorrow at the same time.
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Daily, due + 60),
+            advance_in(&Utc, due, None, Repeat::Daily, due + 60),
             Some(at(2, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Weekly, due + 60),
+            advance_in(&Utc, due, None, Repeat::Weekly, due + 60),
             Some(at(8, 8))
         );
         // Off for days: the first occurrence still to come, not one per day missed.
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Daily, at(10, 9)),
+            advance_in(&Utc, due, None, Repeat::Daily, at(10, 9)),
             Some(at(11, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Daily, at(10, 7)),
+            advance_in(&Utc, due, None, Repeat::Daily, at(10, 7)),
             Some(at(10, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Weekly, at(20, 12)),
+            advance_in(&Utc, due, None, Repeat::Weekly, at(20, 12)),
             Some(at(22, 8))
         );
         // Exactly at an occurrence: the next one (strictly after now).
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Weekly, at(8, 8)),
+            advance_in(&Utc, due, None, Repeat::Weekly, at(8, 8)),
             Some(at(15, 8))
         );
         // Not due yet (dismissed early): still the occurrence after this one.
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Daily, due - 3600),
+            advance_in(&Utc, due, None, Repeat::Daily, due - 3600),
             Some(at(2, 8))
         );
         // A year away still lands on the right day.
         let later = utc(2027, 6, 1, 9, 0).and_utc().timestamp();
         assert_eq!(
-            advance_in(&Utc, due, Repeat::Daily, later),
+            advance_in(&Utc, due, None, Repeat::Daily, later),
             Some(utc(2027, 6, 2, 8, 0).and_utc().timestamp())
         );
     }
@@ -463,17 +568,17 @@ mod tests {
     fn repeats_keep_the_local_time_across_dst() {
         // 08:00 the day before clocks go forward: the next day is 23 h later.
         let due = cet(2026, 3, 28, 8, 0);
-        let next = advance_in(&Cet, due, Repeat::Daily, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 3, 29, 8, 0));
         assert_eq!(next - due, 23 * 3600);
         // ...and back in autumn: 25 h.
         let due = cet(2026, 10, 24, 8, 0);
-        let next = advance_in(&Cet, due, Repeat::Daily, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 10, 25, 8, 0));
         assert_eq!(next - due, 25 * 3600);
         // Weekly across the change.
         let due = cet(2026, 3, 25, 19, 30);
-        let next = advance_in(&Cet, due, Repeat::Weekly, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Weekly, due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 4, 1, 19, 30));
     }
 
@@ -481,14 +586,24 @@ mod tests {
     fn repeats_through_the_skipped_and_doubled_hour() {
         // 02:30 does not exist on 29 Mar: that day it rings at 03:30, and
         // the day after at 02:30 again.
+        let half_two = NaiveTime::from_hms_opt(2, 30, 0);
         let due = cet(2026, 3, 28, 2, 30);
-        let gap = advance_in(&Cet, due, Repeat::Daily, due + 60).unwrap();
+        let gap = advance_in(&Cet, due, half_two, Repeat::Daily, due + 60).unwrap();
         assert_eq!(wall(gap), utc(2026, 3, 29, 3, 30));
-        let after = advance_in(&Cet, due, Repeat::Daily, gap).unwrap();
+        // Advancing from the stored (moved) instant goes back to 02:30...
+        let after = advance_in(&Cet, gap, half_two, Repeat::Daily, gap + 60).unwrap();
         assert_eq!(wall(after), utc(2026, 3, 30, 2, 30));
+        let weekly = advance_in(&Cet, gap, half_two, Repeat::Weekly, gap + 60).unwrap();
+        assert_eq!(wall(weekly), utc(2026, 4, 5, 2, 30));
+        // ...which the instant alone cannot tell: it reads 03:30.
+        let drifted = advance_in(&Cet, gap, None, Repeat::Daily, gap + 60).unwrap();
+        assert_eq!(wall(drifted), utc(2026, 3, 30, 3, 30));
+        // Set at 02:30 on that very day and already past: next day 02:30.
+        let first = first_due_at(&Cet, gap, half_two, Repeat::Daily, gap + 60);
+        assert_eq!(wall(first), utc(2026, 3, 30, 2, 30));
         // 02:30 happens twice on 25 Oct: the first one.
         let due = cet(2026, 10, 24, 2, 30);
-        let fold = advance_in(&Cet, due, Repeat::Daily, due + 60).unwrap();
+        let fold = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
         assert_eq!(wall(fold), utc(2026, 10, 25, 2, 30));
         assert_eq!(fold, utc(2026, 10, 25, 0, 30).and_utc().timestamp());
     }
@@ -497,11 +612,23 @@ mod tests {
     fn repeating_reminder_set_in_the_past_starts_at_its_next_time() {
         let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
         let now = at(5, 10);
-        assert_eq!(first_due_in(&Utc, at(5, 8), Repeat::Daily, now), at(6, 8));
-        assert_eq!(first_due_in(&Utc, at(5, 8), Repeat::Weekly, now), at(12, 8));
-        assert_eq!(first_due_in(&Utc, at(5, 12), Repeat::Daily, now), at(5, 12));
+        assert_eq!(
+            first_due_at(&Utc, at(5, 8), None, Repeat::Daily, now),
+            at(6, 8)
+        );
+        assert_eq!(
+            first_due_at(&Utc, at(5, 8), None, Repeat::Weekly, now),
+            at(12, 8)
+        );
+        assert_eq!(
+            first_due_at(&Utc, at(5, 12), None, Repeat::Daily, now),
+            at(5, 12)
+        );
         // A past one-off stays as it is (the editor refuses it).
-        assert_eq!(first_due_in(&Utc, at(5, 8), Repeat::Once, now), at(5, 8));
+        assert_eq!(
+            first_due_at(&Utc, at(5, 8), None, Repeat::Once, now),
+            at(5, 8)
+        );
     }
 
     #[test]
@@ -621,13 +748,51 @@ mod tests {
     }
 
     #[test]
+    fn wall_time_is_kept_saved_and_derived_for_old_files() {
+        let tmp = TempDir::new("wall");
+        let mut store = RemindersStore::open(tmp.file());
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let eight = NaiveTime::from_hms_opt(8, 0, 0).unwrap();
+        // Set in the past: a repeating one starts at its next time.
+        let now = local_unix(date, eight).unwrap() + 3600;
+        let id = store
+            .upsert_local(None, "obat", date, eight, Repeat::Daily, now)
+            .unwrap();
+        let r = store.get(&id).unwrap().clone();
+        assert!(r.due_unix > now);
+        assert_eq!(local_time(r.due_unix).unwrap().time(), eight);
+        assert_eq!(store.wall_time(&id), Some(eight));
+        // Dismissing keeps the wall time; it is written and read back.
+        assert!(store.mark_done_or_advance(&id, r.due_unix + 60));
+        assert_eq!(store.wall_time(&id), Some(eight));
+        store.save().unwrap();
+        let text = std::fs::read_to_string(tmp.file()).unwrap();
+        assert!(text.contains(r#""time": "08:00:00""#), "{text}");
+        let reopened = RemindersStore::open(tmp.file());
+        assert_eq!(reopened.wall_time(&id), Some(eight));
+        assert_eq!(reopened.list(), store.list());
+        // `upsert` takes the wall time of the instant; delete forgets it.
+        let mut store = reopened;
+        let nine = local_unix(date, NaiveTime::from_hms_opt(9, 15, 0).unwrap()).unwrap();
+        let other = store.upsert(None, "lain", nine, Repeat::Weekly, 1).unwrap();
+        assert_eq!(store.wall_time(&other), NaiveTime::from_hms_opt(9, 15, 0));
+        assert!(store.delete(&other));
+        assert_eq!(store.wall_time(&other), None);
+        // A file from before the field: the wall time of `due_unix`.
+        let old = format!(r#"[{{"id":"r1-0","text":"x","due_unix":{nine},"repeat":"daily"}}]"#);
+        std::fs::write(tmp.file(), old).unwrap();
+        let store = RemindersStore::open(tmp.file());
+        assert_eq!(store.wall_time("r1-0"), NaiveTime::from_hms_opt(9, 15, 0));
+    }
+
+    #[test]
     fn file_format_is_plain_json() {
         let json = r#"[{"id":"r1-0","text":"x","due_unix":10,"repeat":"daily","done":false},
                        {"id":"r1-1","text":"y","due_unix":5,"repeat":"none"},
                        {"id":"r1-2","text":"z","due_unix":7}]"#;
         let (items, keep) = load(Ok(json.into()));
         assert!(!keep);
-        let repeats: Vec<Repeat> = items.iter().map(|r| r.repeat).collect();
+        let repeats: Vec<Repeat> = items.iter().map(|r| r.reminder.repeat).collect();
         assert_eq!(repeats, [Repeat::Daily, Repeat::Once, Repeat::Once]);
         let out = serde_json::to_string(&items[0]).unwrap();
         assert_eq!(
