@@ -1,7 +1,8 @@
 //! Google Calendar API v3: JSON parsing (pure) and the blocking calls the
-//! sync thread makes. Errors reuse `AuthError`: 401 means the token is no
-//! longer accepted (`Reconnect`), other failures are `Network`, with messages
-//! starting "HTTP " when Google answered.
+//! sync thread makes. Errors reuse `AuthError`: 401 is `Unauthorized` (the
+//! sync thread refreshes and retries), a token missing a scope is `Reconnect`,
+//! other refusals are `Google`, and 5xx, rate limits and transport failures
+//! are `Network`.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, SecondsFormat, TimeDelta};
 use serde::Deserialize;
@@ -10,16 +11,28 @@ use serde_json::{Value, json};
 
 use super::{CalEvent, EventDraft, EventTime, fits_draft};
 use crate::google::http::{Http, form_encode, url_encode};
-use crate::google::oauth::AuthError;
+use crate::google::oauth::{AuthError, short};
 
 const BASE: &str = "https://www.googleapis.com/calendar/v3";
 /// Google's maximum page size for events.list.
 const PAGE_SIZE: &str = "2500";
 /// Shown for an event with no summary (Google's own UI says "(No title)").
 const NO_TITLE: &str = "(Tanpa judul)";
+/// The island's text for a 403 that means the Calendar API is off in the
+/// owner's Google Cloud project.
+pub const API_DISABLED: &str = "Google Calendar API belum diaktifkan — lihat README";
 
 /// A calendar the user shows in Google Calendar.
-pub type CalendarEntry = (String, Option<u32>, bool);
+#[derive(Clone, Debug, PartialEq)]
+pub struct CalendarEntry {
+    pub id: String,
+    /// `0xRRGGBB`.
+    pub color: Option<u32>,
+    /// The user may write to it (`accessRole` owner or writer).
+    pub writable: bool,
+    /// The user's own calendar.
+    pub primary: bool,
+}
 
 #[derive(Deserialize)]
 struct Page<T> {
@@ -38,6 +51,8 @@ struct ListEntry {
     #[serde(default)]
     access_role: String,
     background_color: Option<String>,
+    #[serde(default)]
+    primary: bool,
 }
 
 #[derive(Deserialize)]
@@ -123,10 +138,11 @@ fn calendars_from(entries: Vec<ListEntry>) -> Vec<CalendarEntry> {
     entries
         .into_iter()
         .filter(|c| c.selected)
-        .map(|c| {
-            let writable = matches!(c.access_role.as_str(), "owner" | "writer");
-            let color = c.background_color.as_deref().and_then(parse_color);
-            (c.id, color, writable)
+        .map(|c| CalendarEntry {
+            writable: matches!(c.access_role.as_str(), "owner" | "writer"),
+            color: c.background_color.as_deref().and_then(parse_color),
+            primary: c.primary,
+            id: c.id,
         })
         .collect()
 }
@@ -241,22 +257,50 @@ fn network(e: windows::core::Error) -> AuthError {
     AuthError::Network(e.message())
 }
 
-/// Maps a non-2xx answer using only Google's `error.message`, never the
+/// Maps a non-2xx answer using only Google's `error.message` and the error
+/// reasons (`error.errors[].reason`, `error.details[].reason`), never the
 /// rest of the body.
 fn http_error(status: u16, body: &str) -> AuthError {
     if status == 401 {
+        return AuthError::Unauthorized;
+    }
+    let parsed = serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
+    let error = &parsed["error"];
+    let message = error["message"].as_str().unwrap_or("").trim();
+    let reasons: Vec<&str> = ["errors", "details"]
+        .iter()
+        .filter_map(|list| error[*list].as_array())
+        .flatten()
+        .filter_map(|item| item["reason"].as_str())
+        .collect();
+    let has = |reason: &str| reasons.contains(&reason);
+    if status == 403
+        && (has("insufficientPermissions")
+            || has("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+            || message
+                .to_ascii_lowercase()
+                .contains("insufficient authentication scopes"))
+    {
+        // The token lacks a scope: only a new login with both ticked helps.
         return AuthError::Reconnect;
     }
-    let message = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-        .filter(|m| !m.is_empty());
-    match message {
-        Some(m) => AuthError::Network(format!(
-            "HTTP {status}: {}",
-            m.chars().take(120).collect::<String>()
-        )),
-        None => AuthError::Network(format!("HTTP {status}")),
+    if status == 403 && (has("accessNotConfigured") || has("SERVICE_DISABLED")) {
+        return AuthError::Google(API_DISABLED.into());
+    }
+    // Rate limits pass; they read as offline until the next fetch.
+    let rate_limited = status == 429
+        || (status == 403 && (has("rateLimitExceeded") || has("userRateLimitExceeded")));
+    let text = if message.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        short(message)
+    };
+    if (400..500).contains(&status) && !rate_limited {
+        AuthError::Google(text)
+    } else if message.is_empty() {
+        AuthError::Network(text)
+    } else {
+        AuthError::Network(format!("HTTP {status}: {text}"))
     }
 }
 
@@ -311,7 +355,7 @@ pub fn list_events(
     from: NaiveDate,
     to: NaiveDate,
 ) -> Result<Vec<CalEvent>, AuthError> {
-    let (cal_id, color, writable) = cal;
+    let cal_id = &cal.id;
     let (time_min, time_max) = (day_start(from), day_start(to));
     let mut out = Vec::new();
     let mut page_token: Option<String> = None;
@@ -333,24 +377,72 @@ pub fn list_events(
         );
         let page = get_page::<ApiEvent>(http, token, &url)?;
         page_token = page.next_token();
-        out.extend(events_from(page.items, cal_id, *color, *writable));
+        out.extend(events_from(page.items, cal_id, cal.color, cal.writable));
         if page_token.is_none() {
             return Ok(out);
         }
     }
 }
 
-/// Events from every selected calendar, sorted by start.
+/// An error that says the login itself is no good: every other call would
+/// fail the same way.
+fn is_auth(e: &AuthError) -> bool {
+    matches!(
+        e,
+        AuthError::NotConfigured
+            | AuthError::NeedsLogin
+            | AuthError::Reconnect
+            | AuthError::MissingScopes
+            | AuthError::Unauthorized
+    )
+}
+
+/// Events from every selected calendar, sorted by start. A secondary
+/// calendar that fails (deleted meanwhile, not shared any more) is left out
+/// while another calendar loads; an auth error stops the whole fetch.
 pub fn fetch_range(
     http: &Http,
     token: &str,
     from: NaiveDate,
     to: NaiveDate,
 ) -> Result<Vec<CalEvent>, AuthError> {
-    let mut events = Vec::new();
+    let mut results = Vec::new();
     for cal in list_calendars(http, token)? {
-        events.extend(list_events(http, token, &cal, from, to)?);
+        let result = list_events(http, token, &cal, from, to);
+        if let Err(e) = &result
+            && is_auth(e)
+        {
+            return Err(result.unwrap_err());
+        }
+        results.push((cal.primary, result));
     }
+    combine_calendars(results)
+}
+
+/// The events of every calendar's result (`primary`, events or error),
+/// sorted by start. Fails with the first auth error, a failed primary
+/// calendar's error, or the first error when no calendar loaded at all;
+/// a failed secondary calendar is otherwise skipped.
+fn combine_calendars(
+    results: Vec<(bool, Result<Vec<CalEvent>, AuthError>)>,
+) -> Result<Vec<CalEvent>, AuthError> {
+    let any_ok = results.iter().any(|(_, r)| r.is_ok());
+    let errors = || {
+        results
+            .iter()
+            .filter_map(|(primary, r)| Some((*primary, r.as_ref().err()?)))
+    };
+    let fatal = errors()
+        .find(|(_, e)| is_auth(e))
+        .or_else(|| errors().find(|(primary, _)| *primary || !any_ok));
+    if let Some((_, e)) = fatal {
+        return Err(e.clone());
+    }
+    let mut events: Vec<CalEvent> = results
+        .into_iter()
+        .filter_map(|(_, r)| r.ok())
+        .flatten()
+        .collect();
     events.sort_by_key(|e| e.start.naive_local());
     Ok(events)
 }
@@ -516,7 +608,7 @@ mod tests {
         assert!(read_page::<ListEntry>(204, "<html>").is_err());
         assert_eq!(
             read_page::<ApiEvent>(401, "").err(),
-            Some(AuthError::Reconnect)
+            Some(AuthError::Unauthorized)
         );
         assert_eq!(
             read_page::<ApiEvent>(200, EVENTS).ok().unwrap().items.len(),
@@ -546,7 +638,10 @@ mod tests {
             check_saved((200, "<html>".into())),
             Err(AuthError::Network("HTTP 200: jawaban tidak terbaca".into()))
         );
-        assert_eq!(check_saved((401, String::new())), Err(AuthError::Reconnect));
+        assert_eq!(
+            check_saved((401, String::new())),
+            Err(AuthError::Unauthorized)
+        );
     }
 
     #[test]
@@ -563,12 +658,18 @@ mod tests {
           ],
           "nextPageToken": "p2"
         }"##;
+        let cal = |id: &str, color, writable, primary| CalendarEntry {
+            id: id.into(),
+            color,
+            writable,
+            primary,
+        };
         assert_eq!(
             parse_calendar_list(json),
             vec![
-                ("me@example.com".to_string(), Some(0x9FE1E7), true),
-                ("holidays".to_string(), Some(0x16A765), false),
-                ("team".to_string(), None, true),
+                cal("me@example.com", Some(0x9FE1E7), true, true),
+                cal("holidays", Some(0x16A765), false, false),
+                cal("team", None, true, false),
             ]
         );
         let page = read_page::<ListEntry>(200, json).ok().unwrap();
@@ -619,17 +720,160 @@ mod tests {
 
     #[test]
     fn http_errors_map_to_auth_errors() {
-        assert_eq!(http_error(401, ""), AuthError::Reconnect);
+        assert_eq!(http_error(401, ""), AuthError::Unauthorized);
         assert_eq!(
             http_error(
                 403,
                 r#"{"error":{"code":403,"message":"Forbidden","errors":[]}}"#
             ),
-            AuthError::Network("HTTP 403: Forbidden".into())
+            AuthError::Google("Forbidden".into())
+        );
+        assert_eq!(
+            http_error(404, r#"{"error":{"code":404,"message":"Not Found"}}"#),
+            AuthError::Google("Not Found".into())
+        );
+        assert_eq!(
+            http_error(400, "<html>"),
+            AuthError::Google("HTTP 400".into())
         );
         assert_eq!(
             http_error(500, "<html>"),
             AuthError::Network("HTTP 500".into())
         );
+        assert_eq!(
+            http_error(503, r#"{"error":{"message":"Backend Error"}}"#),
+            AuthError::Network("HTTP 503: Backend Error".into())
+        );
+        let long = format!(r#"{{"error":{{"message":"{}"}}}}"#, "x".repeat(300));
+        let AuthError::Google(m) = http_error(400, &long) else {
+            panic!("not a Google error")
+        };
+        assert_eq!(m.chars().count(), 120);
+    }
+
+    #[test]
+    fn missing_scope_403_means_reconnect() {
+        // Google's answer to a token without the calendar.events scope.
+        let scope = r#"{"error":{"code":403,
+          "message":"Request had insufficient authentication scopes.",
+          "errors":[{"message":"Insufficient Permission","domain":"global","reason":"insufficientPermissions"}],
+          "status":"PERMISSION_DENIED",
+          "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo",
+            "reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT","domain":"googleapis.com"}]}}"#;
+        assert_eq!(http_error(403, scope), AuthError::Reconnect);
+        let details_only = r#"{"error":{"code":403,"message":"x",
+          "details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
+        assert_eq!(http_error(403, details_only), AuthError::Reconnect);
+        let message_only =
+            r#"{"error":{"code":403,"message":"Request had insufficient authentication scopes."}}"#;
+        assert_eq!(http_error(403, message_only), AuthError::Reconnect);
+        let errors_only = r#"{"error":{"errors":[{"reason":"insufficientPermissions"}]}}"#;
+        assert_eq!(http_error(403, errors_only), AuthError::Reconnect);
+    }
+
+    #[test]
+    fn disabled_calendar_api_is_a_google_refusal() {
+        let disabled = r#"{"error":{"code":403,
+          "message":"Google Calendar API has not been used in project 123 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview?project=123 then retry.",
+          "errors":[{"message":"...","domain":"usageLimits","reason":"accessNotConfigured","extendedHelp":"https://console.developers.google.com"}],
+          "status":"PERMISSION_DENIED",
+          "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED"}]}}"#;
+        assert_eq!(
+            http_error(403, disabled),
+            AuthError::Google(API_DISABLED.into())
+        );
+        let details_only = r#"{"error":{"message":"x","details":[{"reason":"SERVICE_DISABLED"}]}}"#;
+        assert_eq!(
+            http_error(403, details_only),
+            AuthError::Google(API_DISABLED.into())
+        );
+    }
+
+    #[test]
+    fn rate_limits_stay_offline() {
+        let limited = r#"{"error":{"code":403,"message":"Rate Limit Exceeded",
+          "errors":[{"reason":"rateLimitExceeded"}]}}"#;
+        assert_eq!(
+            http_error(403, limited),
+            AuthError::Network("HTTP 403: Rate Limit Exceeded".into())
+        );
+        assert_eq!(http_error(429, ""), AuthError::Network("HTTP 429".into()));
+    }
+
+    fn one_event(id: &str, day: u32) -> CalEvent {
+        CalEvent {
+            id: id.into(),
+            calendar_id: id.into(),
+            title: id.into(),
+            start: EventTime::AllDay(date(2026, 10, day)),
+            end: EventTime::AllDay(date(2026, 10, day + 1)),
+            description: String::new(),
+            color: None,
+            editable: false,
+        }
+    }
+
+    fn ids(result: &Result<Vec<CalEvent>, AuthError>) -> Vec<String> {
+        result
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|e| e.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_failing_secondary_calendar_is_skipped() {
+        let gone = || Err(AuthError::Google("Not Found".into()));
+        let offline = || Err(AuthError::Network("HTTP 500".into()));
+        let result = combine_calendars(vec![
+            (true, Ok(vec![one_event("mine", 27)])),
+            (false, gone()),
+            (false, Ok(vec![one_event("team", 26)])),
+            (false, offline()),
+        ]);
+        assert_eq!(ids(&result), ["team", "mine"], "sorted by start");
+
+        // Only a secondary calendar, and it works.
+        let result = combine_calendars(vec![(false, Ok(vec![])), (false, gone())]);
+        assert_eq!(ids(&result), Vec::<String>::new());
+        assert_eq!(combine_calendars(vec![]), Ok(vec![]));
+    }
+
+    #[test]
+    fn primary_auth_or_total_failures_fail_the_fetch() {
+        let ok = || Ok(vec![one_event("x", 26)]);
+        // The primary calendar failed.
+        assert_eq!(
+            combine_calendars(vec![
+                (true, Err(AuthError::Network("HTTP 500".into()))),
+                (false, ok()),
+            ]),
+            Err(AuthError::Network("HTTP 500".into()))
+        );
+        // Nothing loaded.
+        assert_eq!(
+            combine_calendars(vec![
+                (false, Err(AuthError::Google("Not Found".into()))),
+                (false, Err(AuthError::Network("HTTP 500".into()))),
+            ]),
+            Err(AuthError::Google("Not Found".into()))
+        );
+        // Auth errors win over everything, even on a secondary calendar.
+        for auth in [
+            AuthError::Reconnect,
+            AuthError::Unauthorized,
+            AuthError::NeedsLogin,
+            AuthError::MissingScopes,
+        ] {
+            assert_eq!(
+                combine_calendars(vec![
+                    (true, Err(AuthError::Network("HTTP 500".into()))),
+                    (false, ok()),
+                    (false, Err(auth.clone())),
+                ]),
+                Err(auth)
+            );
+        }
     }
 }

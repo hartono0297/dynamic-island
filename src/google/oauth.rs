@@ -40,7 +40,13 @@ const NO_CODE: &str = "no_code";
 const PAGE_OK: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
     <p style=\"font:16px sans-serif\">Berhasil terhubung. Kembali ke island ya.</p>";
 const PAGE_FAILED: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
-    <p style=\"font:16px sans-serif\">Gagal terhubung. Coba lagi dari island ya.</p>";
+    <p style=\"font:16px sans-serif\">Gagal terhubung — coba lagi dari island.</p>";
+const PAGE_MISSING_SCOPES: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
+    <p style=\"font:16px sans-serif\">Izin Google belum lengkap — centang kedua izin, \
+    lalu coba lagi dari island.</p>";
+
+/// Google's own messages are cut to this many characters before they are shown.
+const MESSAGE_MAX: usize = 120;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
@@ -48,8 +54,20 @@ pub enum AuthError {
     NotConfigured,
     /// No stored tokens (or the user cancelled the consent screen).
     NeedsLogin,
-    /// The refresh token was revoked or expired (`invalid_grant`).
+    /// The refresh token was revoked or expired (`invalid_grant`), or the
+    /// token lacks a scope a Calendar call needs.
     Reconnect,
+    /// The consent screen came back without every scope in `SCOPES` ticked.
+    /// The token is not kept.
+    MissingScopes,
+    /// A Calendar API call answered 401. The sync thread refreshes the token
+    /// and retries once; a second 401 counts as `Reconnect`.
+    Unauthorized,
+    /// Google answered and refused for a reason a retry will not fix (the
+    /// Calendar API not enabled, a bad request): its short message, in a form
+    /// fit for the island.
+    Google(String),
+    /// The request never got an answer from Google (or a 5xx / rate limit).
     Network(String),
 }
 
@@ -58,6 +76,35 @@ pub struct TokenResponse {
     pub access_token: String,
     pub expires_in: u64,
     pub refresh_token: Option<String>,
+    /// Space-separated scopes this token carries.
+    pub scope: Option<String>,
+}
+
+/// At most `MESSAGE_MAX` characters of `message`.
+pub fn short(message: &str) -> String {
+    message.chars().take(MESSAGE_MAX).collect()
+}
+
+/// `MissingScopes` when `granted` (the token response's `scope`) lacks one of
+/// `SCOPES`. Google lets the user untick each scope on the consent screen.
+/// An absent field cannot be judged and passes; a Calendar call would then
+/// answer 403 and read as `Reconnect`.
+pub fn check_scopes(granted: Option<&str>) -> Result<(), AuthError> {
+    /// Covers both requested scopes.
+    const FULL_CALENDAR: &str = "https://www.googleapis.com/auth/calendar";
+    let Some(granted) = granted else {
+        return Ok(());
+    };
+    let granted: Vec<&str> = granted.split_whitespace().collect();
+    let all = granted.contains(&FULL_CALENDAR)
+        || SCOPES
+            .split_whitespace()
+            .all(|needed| granted.contains(&needed));
+    if all {
+        Ok(())
+    } else {
+        Err(AuthError::MissingScopes)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -182,17 +229,18 @@ pub fn classify_token_error(status: u16, body: &str) -> AuthError {
         error_description: String,
     }
     let parsed: ErrorBody = serde_json::from_str(body).unwrap_or_default();
+    let message = if parsed.error_description.is_empty() {
+        parsed.error.clone()
+    } else {
+        format!("{} ({})", parsed.error, parsed.error_description)
+    };
     match parsed.error.as_str() {
         "invalid_grant" => AuthError::Reconnect,
         "invalid_client" | "unauthorized_client" => AuthError::NotConfigured,
         "" => AuthError::Network(format!("HTTP {status}")),
-        error if parsed.error_description.is_empty() => {
-            AuthError::Network(format!("HTTP {status}: {error}"))
-        }
-        error => AuthError::Network(format!(
-            "HTTP {status}: {error} ({})",
-            parsed.error_description
-        )),
+        // A refusal (bad request, wrong redirect): retrying will not help.
+        _ if (400..500).contains(&status) && status != 429 => AuthError::Google(short(&message)),
+        _ => AuthError::Network(format!("HTTP {status}: {}", short(&message))),
     }
 }
 
@@ -223,7 +271,8 @@ fn io_error(e: io::Error) -> AuthError {
 }
 
 /// Interactive login: opens the consent page in the browser, waits up to five
-/// minutes for the loopback redirect, exchanges the code and saves the tokens.
+/// minutes for the loopback redirect, exchanges the code, checks the granted
+/// scopes and saves the tokens, and only then tells the browser how it went.
 /// Blocks; run it on a worker thread.
 pub fn login(http: &Http, client_id: &str, client_secret: &str) -> Result<Tokens, AuthError> {
     if client_id.trim().is_empty() {
@@ -243,26 +292,25 @@ pub fn login(http: &Http, client_id: &str, client_secret: &str) -> Result<Tokens
         &pkce_challenge(&verifier),
         &state,
     ))?;
-    let code = wait_for_code(&listener, &state)?;
-    drop(listener);
-
-    let (status, body) = http
-        .post_form(
-            TOKEN_ENDPOINT,
-            &[
-                ("code", &code),
-                ("client_id", client_id),
-                ("client_secret", client_secret),
-                ("redirect_uri", &redirect),
-                ("grant_type", "authorization_code"),
-                ("code_verifier", &verifier),
-            ],
-        )
-        .map_err(network)?;
-    let tokens = token_result(status, &body, None)?;
-    save_tokens(&tokens)
-        .map_err(|e| AuthError::Network(format!("could not save the token: {}", e.kind())))?;
-    Ok(tokens)
+    wait_for_code(&listener, &state, |code| {
+        let (status, body) = http
+            .post_form(
+                TOKEN_ENDPOINT,
+                &[
+                    ("code", &code),
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
+                    ("redirect_uri", &redirect),
+                    ("grant_type", "authorization_code"),
+                    ("code_verifier", &verifier),
+                ],
+            )
+            .map_err(network)?;
+        let tokens = token_result(status, &body, None)?;
+        save_tokens(&tokens)
+            .map_err(|e| AuthError::Network(format!("could not save the token: {}", e.kind())))?;
+        Ok(tokens)
+    })
 }
 
 pub fn refresh(
@@ -285,18 +333,21 @@ pub fn refresh(
     token_result(status, &body, Some(tokens))
 }
 
+/// The tokens in a token-endpoint answer. A token without every scope in
+/// `SCOPES` is refused (`MissingScopes`).
 fn token_result(status: u16, body: &str, old: Option<&Tokens>) -> Result<Tokens, AuthError> {
     if !(200..300).contains(&status) {
         return Err(classify_token_error(status, body));
     }
     let resp: TokenResponse = serde_json::from_str(body)
         .map_err(|_| AuthError::Network("unreadable token response".into()))?;
+    check_scopes(resp.scope.as_deref())?;
     merge_tokens(old, resp, now_unix())
         .ok_or_else(|| AuthError::Network("Google sent no refresh token".into()))
 }
 
 /// A valid access token, refreshed (and saved) when it expires within a minute.
-/// `Reconnect` also deletes the stored tokens.
+/// `Reconnect` and `MissingScopes` also delete the stored tokens.
 pub fn access_token(http: &Http, cfg: &Config) -> Result<String, AuthError> {
     if cfg.google_client_id.trim().is_empty() {
         return Err(AuthError::NotConfigured);
@@ -305,20 +356,34 @@ pub fn access_token(http: &Http, cfg: &Config) -> Result<String, AuthError> {
     if !needs_refresh(&tokens, now_unix()) {
         return Ok(tokens.access);
     }
+    refresh_and_store(http, cfg, &tokens)
+}
+
+/// A new access token even though the stored one has not expired: Google
+/// answered 401 to it (revoked, or the clock is off).
+pub fn force_refresh(http: &Http, cfg: &Config) -> Result<String, AuthError> {
+    if cfg.google_client_id.trim().is_empty() {
+        return Err(AuthError::NotConfigured);
+    }
+    let tokens = load_tokens().ok_or(AuthError::NeedsLogin)?;
+    refresh_and_store(http, cfg, &tokens)
+}
+
+fn refresh_and_store(http: &Http, cfg: &Config, tokens: &Tokens) -> Result<String, AuthError> {
     match refresh(
         http,
         &cfg.google_client_id,
         &cfg.google_client_secret,
-        &tokens,
+        tokens,
     ) {
         Ok(fresh) => {
             // A failed save only costs another refresh next time.
             let _ = save_tokens(&fresh);
             Ok(fresh.access)
         }
-        Err(AuthError::Reconnect) => {
+        Err(e @ (AuthError::Reconnect | AuthError::MissingScopes)) => {
             clear_tokens();
-            Err(AuthError::Reconnect)
+            Err(e)
         }
         Err(e) => Err(e),
     }
@@ -348,13 +413,26 @@ fn open_browser(url: &str) -> Result<(), AuthError> {
 
 /// Accepts loopback connections until the OAuth redirect arrives or the
 /// login times out. Other requests (favicon, empty preconnects) are skipped.
-fn wait_for_code(listener: &TcpListener, expected_state: &str) -> Result<String, AuthError> {
+/// The redirect's code goes through `exchange` before the browser gets its
+/// answer, so the page says "connected" only when the login really worked.
+fn wait_for_code<T>(
+    listener: &TcpListener,
+    expected_state: &str,
+    mut exchange: impl FnMut(String) -> Result<T, AuthError>,
+) -> Result<T, AuthError> {
     listener.set_nonblocking(true).map_err(io_error)?;
     let deadline = Instant::now() + LOGIN_TIMEOUT;
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(outcome) = answer_redirect(&stream, expected_state) {
+                if let Some(code) = read_redirect(&stream, expected_state) {
+                    let outcome = code.and_then(&mut exchange);
+                    let page = match &outcome {
+                        Ok(_) => PAGE_OK,
+                        Err(AuthError::MissingScopes) => PAGE_MISSING_SCOPES,
+                        Err(_) => PAGE_FAILED,
+                    };
+                    respond(&stream, "200 OK", page);
                     return outcome;
                 }
             }
@@ -369,8 +447,10 @@ fn wait_for_code(listener: &TcpListener, expected_state: &str) -> Result<String,
     }
 }
 
-/// `None` when the request was not the redirect and waiting should go on.
-fn answer_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<String, AuthError>> {
+/// The redirect's code, or why the login failed; the caller answers the
+/// browser. `None` (already answered 404) when the request was not the
+/// redirect and waiting should go on.
+fn read_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<String, AuthError>> {
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).ok()?;
     let mut reader = BufReader::new(stream.take(16 * 1024));
@@ -383,7 +463,7 @@ fn answer_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<St
         header.clear();
     }
 
-    let outcome = match parse_redirect(request_line.trim_end()) {
+    Some(match parse_redirect(request_line.trim_end()) {
         Err(e) if e == NO_CODE => {
             respond(stream, "404 Not Found", "");
             return None;
@@ -397,17 +477,7 @@ fn answer_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<St
             Err(AuthError::Network("login state mismatch".into()))
         }
         Ok((code, _)) => Ok(code),
-    };
-    respond(
-        stream,
-        "200 OK",
-        if outcome.is_ok() {
-            PAGE_OK
-        } else {
-            PAGE_FAILED
-        },
-    );
-    Some(outcome)
+    })
 }
 
 fn respond(mut stream: &TcpStream, status: &str, body: &str) {
@@ -644,39 +714,169 @@ mod tests {
         response
     }
 
-    fn loopback_run(requests: &'static [&'static str]) -> (Result<String, AuthError>, Vec<String>) {
+    /// Runs the loopback wait against `requests`; `exchange` stands in for the
+    /// token exchange. The client records whether the exchange had finished
+    /// when each response arrived.
+    fn loopback_run(
+        requests: &'static [&'static str],
+        exchange: fn(String) -> Result<String, AuthError>,
+    ) -> (Result<String, AuthError>, Vec<(String, bool)>) {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        let exchanged = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&exchanged);
         let client = std::thread::spawn(move || {
             requests
                 .iter()
-                .map(|r| send_raw(port, r))
+                .map(|r| {
+                    let response = send_raw(port, r);
+                    (response, seen.load(Ordering::SeqCst))
+                })
                 .collect::<Vec<_>>()
         });
-        let outcome = wait_for_code(&listener, "s1");
+        let outcome = wait_for_code(&listener, "s1", |code| {
+            // Slow enough that an early answer would beat it.
+            std::thread::sleep(Duration::from_millis(200));
+            let result = exchange(code);
+            exchanged.store(true, Ordering::SeqCst);
+            result
+        });
         (outcome, client.join().unwrap())
     }
 
     #[test]
     fn loopback_skips_other_requests_and_answers_the_redirect() {
-        let (outcome, responses) = loopback_run(&[
-            "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
-            "GET /?state=s1&code=4%2F0Ab&scope=x HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: */*\r\n\r\n",
-        ]);
-        assert_eq!(outcome, Ok("4/0Ab".to_string()));
-        assert!(responses[0].starts_with("HTTP/1.1 404"));
-        assert!(responses[1].starts_with("HTTP/1.1 200 OK"));
-        assert!(responses[1].contains("Berhasil terhubung. Kembali ke island ya."));
+        let (outcome, responses) = loopback_run(
+            &[
+                "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                "GET /?state=s1&code=4%2F0Ab&scope=x HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: */*\r\n\r\n",
+            ],
+            |code| Ok(format!("tokens for {code}")),
+        );
+        assert_eq!(outcome, Ok("tokens for 4/0Ab".to_string()));
+        assert!(responses[0].0.starts_with("HTTP/1.1 404"));
+        assert!(responses[1].0.starts_with("HTTP/1.1 200 OK"));
+        assert!(
+            responses[1]
+                .0
+                .contains("Berhasil terhubung. Kembali ke island ya.")
+        );
+        assert!(responses[1].1, "answered only after the exchange");
+    }
+
+    #[test]
+    fn loopback_shows_failure_when_the_exchange_fails() {
+        let (outcome, responses) =
+            loopback_run(&["GET /?state=s1&code=c HTTP/1.1\r\n\r\n"], |_| {
+                Err(AuthError::Google("invalid_request".into()))
+            });
+        assert_eq!(outcome, Err(AuthError::Google("invalid_request".into())));
+        assert!(responses[0].1, "answered only after the exchange");
+        assert!(
+            responses[0]
+                .0
+                .contains("Gagal terhubung — coba lagi dari island")
+        );
+        assert!(!responses[0].0.contains("Berhasil"));
+
+        let (outcome, responses) =
+            loopback_run(&["GET /?state=s1&code=c HTTP/1.1\r\n\r\n"], |_| {
+                Err(AuthError::MissingScopes)
+            });
+        assert_eq!(outcome, Err(AuthError::MissingScopes));
+        assert!(responses[0].0.contains("Izin Google belum lengkap"));
     }
 
     #[test]
     fn loopback_rejects_a_mismatched_state() {
-        let (outcome, responses) = loopback_run(&["GET /?state=evil&code=c HTTP/1.1\r\n\r\n"]);
+        let (outcome, responses) =
+            loopback_run(&["GET /?state=evil&code=c HTTP/1.1\r\n\r\n"], |_| {
+                panic!("no exchange for a forged redirect")
+            });
         assert_eq!(
             outcome,
             Err(AuthError::Network("login state mismatch".into()))
         );
-        assert!(responses[0].contains("Gagal terhubung"));
+        assert!(responses[0].0.contains("Gagal terhubung"));
+    }
+
+    const BOTH: &str = "https://www.googleapis.com/auth/calendar.events \
+        https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+
+    #[test]
+    fn both_scopes_are_required() {
+        assert_eq!(check_scopes(Some(BOTH)), Ok(()));
+        assert_eq!(check_scopes(Some(SCOPES)), Ok(()));
+        assert_eq!(
+            check_scopes(Some("https://www.googleapis.com/auth/calendar")),
+            Ok(()),
+            "the full calendar scope covers both"
+        );
+        assert_eq!(check_scopes(None), Ok(()), "absent field: cannot judge");
+        for granted in [
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+            "",
+            "openid email",
+        ] {
+            assert_eq!(
+                check_scopes(Some(granted)),
+                Err(AuthError::MissingScopes),
+                "{granted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_token_without_both_scopes_is_not_kept() {
+        let one = r#"{"access_token":"a","expires_in":3599,"refresh_token":"r",
+            "scope":"https://www.googleapis.com/auth/calendar.events"}"#;
+        assert_eq!(token_result(200, one, None), Err(AuthError::MissingScopes));
+        let both = format!(
+            r#"{{"access_token":"a","expires_in":3599,"refresh_token":"r","scope":"{BOTH}"}}"#
+        );
+        assert_eq!(token_result(200, &both, None).unwrap().access, "a");
+        // A refresh answer without `scope` keeps working.
+        let old = Tokens {
+            access: "old".into(),
+            refresh: "r".into(),
+            expires_at_unix: 0,
+        };
+        let plain = r#"{"access_token":"b","expires_in":3599}"#;
+        assert_eq!(token_result(200, plain, Some(&old)).unwrap().access, "b");
+    }
+
+    #[test]
+    fn token_endpoint_refusals_are_google_errors() {
+        assert_eq!(
+            classify_token_error(
+                400,
+                r#"{"error":"invalid_request","error_description":"Missing code verifier."}"#
+            ),
+            AuthError::Google("invalid_request (Missing code verifier.)".into())
+        );
+        assert_eq!(
+            classify_token_error(401, r#"{"error":"invalid_client"}"#),
+            AuthError::NotConfigured
+        );
+        assert_eq!(
+            classify_token_error(503, r#"{"error":"backend_error"}"#),
+            AuthError::Network("HTTP 503: backend_error".into())
+        );
+        assert_eq!(
+            classify_token_error(502, "<html>"),
+            AuthError::Network("HTTP 502".into())
+        );
+        let long = format!(
+            r#"{{"error":"x","error_description":"{}"}}"#,
+            "y".repeat(300)
+        );
+        let AuthError::Google(m) = classify_token_error(400, &long) else {
+            panic!("not a Google error")
+        };
+        assert_eq!(m.chars().count(), MESSAGE_MAX);
     }
 
     /// Live request with bogus credentials: checks the WinRT client, form

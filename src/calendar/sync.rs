@@ -3,6 +3,7 @@
 //! for saves, `WM_APP_EDITOR_STATUS` to the editor window), keeps the local
 //! cache, and re-fetches the last requested range every ten minutes.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -153,22 +154,79 @@ fn login_failure_status(configured: bool) -> CalStatus {
     }
 }
 
+/// Only transport failures (and 5xx / rate limits) read as `Offline`; a
+/// refusal from Google keeps the connect button on screen, with a notice
+/// saying why (`google_notice`).
 fn status_for(e: &AuthError) -> CalStatus {
     match e {
         AuthError::NotConfigured => CalStatus::NotConfigured,
-        AuthError::NeedsLogin => CalStatus::NeedsLogin,
-        AuthError::Reconnect => CalStatus::Reconnect,
+        AuthError::NeedsLogin | AuthError::MissingScopes | AuthError::Google(_) => {
+            CalStatus::NeedsLogin
+        }
+        AuthError::Reconnect | AuthError::Unauthorized => CalStatus::Reconnect,
         AuthError::Network(_) => CalStatus::Offline,
     }
 }
 
-/// The editor's error line. Messages that start with "HTTP " came from Google;
-/// any other network error means the request never got through.
+/// The island notice for an error the calendar status alone cannot explain:
+/// unticked scopes, or a refusal from Google.
+fn google_notice(e: &AuthError) -> Option<Notice> {
+    let (title, body) = match e {
+        AuthError::MissingScopes => (
+            "Izin Google belum lengkap",
+            "Centang kedua izin saat login".to_string(),
+        ),
+        AuthError::Google(message) => ("Google menolak", message.clone()),
+        _ => return None,
+    };
+    Some(Notice {
+        key: "calendar-google".into(),
+        source: "Kalender".into(),
+        title: title.into(),
+        body,
+        kind: NoticeKind::App { app_id: None },
+    })
+}
+
+/// The notice after a browser login that failed. With a client ID set,
+/// `NotConfigured` means Google rejected the client ID or secret.
+fn login_notice(e: &AuthError, configured: bool) -> Option<Notice> {
+    match e {
+        AuthError::NotConfigured if configured => google_notice(&AuthError::Google(
+            "Client ID atau secret ditolak — cek config.json".into(),
+        )),
+        other => google_notice(other),
+    }
+}
+
+/// Runs `call` with `token`; on a 401 gets a fresh token from `refresh` and
+/// tries once more. A second 401 means the login is no good (`Reconnect`).
+fn retry_unauthorized<T>(
+    token: String,
+    call: impl Fn(&str) -> Result<T, AuthError>,
+    refresh: impl FnOnce() -> Result<String, AuthError>,
+) -> Result<T, AuthError> {
+    match call(&token) {
+        Err(AuthError::Unauthorized) => call(&refresh()?).map_err(|e| match e {
+            AuthError::Unauthorized => AuthError::Reconnect,
+            other => other,
+        }),
+        other => other,
+    }
+}
+
+/// The editor's error line. Network messages that start with "HTTP " came
+/// from Google (a 5xx); any other network error means the request never got
+/// through.
 pub fn save_error_message(e: &AuthError) -> String {
     match e {
         AuthError::NotConfigured => "Gagal simpan: Google belum diatur".into(),
         AuthError::NeedsLogin => "Gagal simpan: hubungkan Google dulu".into(),
-        AuthError::Reconnect => "Gagal simpan: hubungkan ulang Google".into(),
+        AuthError::Reconnect | AuthError::Unauthorized => {
+            "Gagal simpan: hubungkan ulang Google".into()
+        }
+        AuthError::MissingScopes => "Gagal simpan: izin Google belum lengkap".into(),
+        AuthError::Google(m) => format!("Gagal simpan: Google menolak ({m})"),
         AuthError::Network(m) if m.starts_with("HTTP ") => {
             format!("Gagal simpan: Google menolak ({m})")
         }
@@ -214,6 +272,9 @@ struct Worker {
     range: Option<(NaiveDate, NaiveDate)>,
     last_ok: Option<((NaiveDate, NaiveDate), Instant)>,
     next_refresh: Option<Instant>,
+    /// Title and body of every fetch-error notice shown this run, so the
+    /// ten-minute refresh does not repeat one.
+    noticed: HashSet<(String, String)>,
 }
 
 impl Worker {
@@ -238,6 +299,7 @@ impl Worker {
             range: None,
             last_ok: None,
             next_refresh: None,
+            noticed: HashSet::new(),
         }
     }
 
@@ -321,11 +383,11 @@ impl Worker {
         if recent && !force {
             return;
         }
-        let result = ensure_http(&mut self.http).and_then(|http| {
-            let token = oauth::access_token(http, &self.cfg)?;
-            api::fetch_range(http, &token, range.0, range.1)
-        });
+        let result = self.with_token(|http, token| api::fetch_range(http, token, range.0, range.1));
         let ok = result.is_ok();
+        if let Some(notice) = result.as_ref().err().and_then(google_notice) {
+            self.notify_once(notice);
+        }
         self.snapshot = merge_fetch(&self.snapshot, result, range.0, range.1, Local::now());
         if ok {
             // A failed write only costs the offline view after a restart.
@@ -345,16 +407,41 @@ impl Worker {
         if !configured(&self.cfg) {
             return Err(AuthError::NotConfigured);
         }
+        self.with_token(|http, token| match event_id {
+            Some(id) => api::patch_event(http, token, calendar_id.unwrap_or("primary"), id, draft),
+            None => api::insert_event(http, token, draft),
+        })
+    }
+
+    /// Runs `call` with a valid access token; a 401 gets one forced refresh
+    /// and retry.
+    fn with_token<T>(
+        &mut self,
+        call: impl Fn(&Http, &str) -> Result<T, AuthError>,
+    ) -> Result<T, AuthError> {
         let http = ensure_http(&mut self.http)?;
-        let token = oauth::access_token(http, &self.cfg)?;
-        match event_id {
-            Some(id) => api::patch_event(http, &token, calendar_id.unwrap_or("primary"), id, draft),
-            None => api::insert_event(http, &token, draft),
+        let cfg = &self.cfg;
+        let token = oauth::access_token(http, cfg)?;
+        retry_unauthorized(
+            token,
+            |token| call(http, token),
+            || oauth::force_refresh(http, cfg),
+        )
+    }
+
+    /// Posts `notice` unless one with the same title and body was posted this run.
+    fn notify_once(&mut self, notice: Notice) {
+        if self
+            .noticed
+            .insert((notice.title.clone(), notice.body.clone()))
+        {
+            self.send(Event::Notice(notice));
         }
     }
 
     /// Runs the browser login. True when it succeeded and a fetch should follow;
-    /// on failure the snapshot shows why.
+    /// on failure the snapshot shows why, and a notice too when Google refused
+    /// or a permission was left unticked.
     fn connect(&mut self) -> bool {
         let result = if configured(&self.cfg) {
             ensure_http(&mut self.http).and_then(|http| {
@@ -370,11 +457,21 @@ impl Worker {
         // The attempt is over, before the island hears of it: a new one may start.
         self.login.store(false, Ordering::Release);
         match result {
-            Ok(_) => true,
-            // The error itself is not shown: whatever went wrong, the next
-            // step is another click on the connect button.
-            Err(_) => {
-                self.set_status(login_failure_status(configured(&self.cfg)));
+            Ok(_) => {
+                // A fresh login: a refusal that is still there after it is news.
+                self.noticed.clear();
+                true
+            }
+            // Whatever went wrong, the next step is another click on the
+            // connect button; a notice says what to do differently when
+            // there is something (a cancel or timeout needs no words).
+            Err(e) => {
+                let configured = configured(&self.cfg);
+                if let Some(notice) = login_notice(&e, configured) {
+                    // Shown on every failed attempt: each one was a click.
+                    self.send(Event::Notice(notice));
+                }
+                self.set_status(login_failure_status(configured));
                 false
             }
         }
@@ -547,7 +644,10 @@ mod tests {
 
         for (err, status) in [
             (AuthError::Reconnect, CalStatus::Reconnect),
+            (AuthError::Unauthorized, CalStatus::Reconnect),
             (AuthError::NeedsLogin, CalStatus::NeedsLogin),
+            (AuthError::MissingScopes, CalStatus::NeedsLogin),
+            (AuthError::Google("Forbidden".into()), CalStatus::NeedsLogin),
             (AuthError::NotConfigured, CalStatus::NotConfigured),
         ] {
             let merged = merge_fetch(&prev, Err(err), prev.from, prev.to, now);
@@ -615,6 +715,134 @@ mod tests {
             save_error_message(&AuthError::Reconnect),
             "Gagal simpan: hubungkan ulang Google"
         );
+        assert_eq!(
+            save_error_message(&AuthError::Google("Not Found".into())),
+            "Gagal simpan: Google menolak (Not Found)"
+        );
+        assert_eq!(
+            save_error_message(&AuthError::MissingScopes),
+            "Gagal simpan: izin Google belum lengkap"
+        );
+    }
+
+    #[test]
+    fn google_refusals_get_a_notice() {
+        let n = google_notice(&AuthError::MissingScopes).unwrap();
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("Izin Google belum lengkap", "Centang kedua izin saat login")
+        );
+        let n = google_notice(&AuthError::Google(api::API_DISABLED.into())).unwrap();
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            (
+                "Google menolak",
+                "Google Calendar API belum diaktifkan — lihat README"
+            )
+        );
+        for quiet in [
+            AuthError::Network("timeout".into()),
+            AuthError::NeedsLogin,
+            AuthError::Reconnect,
+            AuthError::NotConfigured,
+        ] {
+            assert!(google_notice(&quiet).is_none(), "{quiet:?}");
+        }
+        // At login, NotConfigured with an ID set means Google rejected the client.
+        let n = login_notice(&AuthError::NotConfigured, true).unwrap();
+        assert_eq!(n.title, "Google menolak");
+        assert!(login_notice(&AuthError::NotConfigured, false).is_none());
+        assert!(
+            login_notice(&AuthError::NeedsLogin, true).is_none(),
+            "cancelled"
+        );
+        assert_eq!(
+            login_notice(&AuthError::MissingScopes, true).unwrap().title,
+            "Izin Google belum lengkap"
+        );
+    }
+
+    #[test]
+    fn a_401_refreshes_once_and_retries() {
+        use std::cell::RefCell;
+        // Accepted after the refresh.
+        let calls = RefCell::new(Vec::new());
+        let call = |t: &str| {
+            calls.borrow_mut().push(t.to_string());
+            if t == "fresh" {
+                Ok(7)
+            } else {
+                Err(AuthError::Unauthorized)
+            }
+        };
+        assert_eq!(
+            retry_unauthorized("old".into(), call, || Ok("fresh".into())),
+            Ok(7)
+        );
+        assert_eq!(*calls.borrow(), ["old", "fresh"]);
+
+        // Refused again: the login is no good.
+        let calls = RefCell::new(0);
+        let refused = |_: &str| -> Result<(), AuthError> {
+            *calls.borrow_mut() += 1;
+            Err(AuthError::Unauthorized)
+        };
+        assert_eq!(
+            retry_unauthorized("old".into(), refused, || Ok("fresh".into())),
+            Err(AuthError::Reconnect)
+        );
+        assert_eq!(*calls.borrow(), 2, "one retry only");
+
+        // The refresh itself failed: its error, no second call.
+        let calls = RefCell::new(0);
+        let refused = |_: &str| -> Result<(), AuthError> {
+            *calls.borrow_mut() += 1;
+            Err(AuthError::Unauthorized)
+        };
+        assert_eq!(
+            retry_unauthorized("old".into(), refused, || Err(AuthError::Network(
+                "x".into()
+            ))),
+            Err(AuthError::Network("x".into()))
+        );
+        assert_eq!(*calls.borrow(), 1);
+
+        // Anything but a 401 is not retried.
+        let refreshed = RefCell::new(false);
+        assert_eq!(
+            retry_unauthorized(
+                "t".into(),
+                |_| -> Result<(), AuthError> { Err(AuthError::Google("Forbidden".into())) },
+                || {
+                    *refreshed.borrow_mut() = true;
+                    Ok("fresh".into())
+                }
+            ),
+            Err(AuthError::Google("Forbidden".into()))
+        );
+        assert!(!*refreshed.borrow());
+    }
+
+    #[test]
+    fn each_distinct_refusal_is_told_once_per_run() {
+        let dir = temp_dir();
+        let (mut w, rx, _) = worker(dir.join("calendar-cache.json"));
+        let bodies = |rx: &Receiver<Event>| -> Vec<String> {
+            rx.try_iter()
+                .map(|e| match e {
+                    Event::Notice(n) => n.body,
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect()
+        };
+        let disabled = google_notice(&AuthError::Google(api::API_DISABLED.into())).unwrap();
+        let other = google_notice(&AuthError::Google("Forbidden".into())).unwrap();
+        w.notify_once(disabled.clone());
+        w.notify_once(disabled.clone());
+        w.notify_once(other);
+        w.notify_once(disabled);
+        assert_eq!(bodies(&rx), [api::API_DISABLED, "Forbidden"]);
+        assert!(!dir.exists(), "nothing written");
     }
 
     fn worker(cache: PathBuf) -> (Worker, Receiver<Event>, Arc<AtomicUsize>) {
