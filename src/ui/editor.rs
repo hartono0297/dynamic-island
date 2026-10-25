@@ -25,16 +25,16 @@ use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
     CreateSolidBrush, DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
-    FONT_QUALITY, FW_NORMAL, FillRect, GdiFlush, GetMonitorInfoW, HBRUSH, HDC, HFONT, HGDIOBJ,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SRCCOPY, SelectObject,
-    SetBkColor, SetTextColor,
+    FONT_QUALITY, FW_NORMAL, FillRect, FrameRect, GdiFlush, GetMonitorInfoW, HBRUSH, HDC, HFONT,
+    HGDIOBJ, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints, MonitorFromPoint,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
+    RedrawWindow, SRCCOPY, SelectObject, SetBkColor, SetTextColor,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, DATETIMEPICK_CLASSW, DTM_GETMONTHCAL, DTM_GETSYSTEMTIME, DTM_SETFORMATW,
-    DTM_SETMCFONT, DTM_SETSYSTEMTIME, DTN_DROPDOWN, DTS_SHORTDATEFORMAT, DTS_TIMEFORMAT,
-    EM_SETMARGINS, EM_SETSEL, GDT_VALID, ICC_DATE_CLASSES, ICC_STANDARD_CLASSES,
+    DTM_SETMCFONT, DTM_SETSYSTEMTIME, DTN_DATETIMECHANGE, DTN_DROPDOWN, DTS_SHORTDATEFORMAT,
+    DTS_TIMEFORMAT, EM_SETMARGINS, EM_SETSEL, GDT_VALID, ICC_DATE_CLASSES, ICC_STANDARD_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SetWindowTheme,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -47,9 +47,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN, EC_RIGHTMARGIN,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, GW_CHILD,
     GetClientRect, GetDlgCtrlID, GetForegroundWindow, GetNextDlgTabItem, GetParent, GetWindow,
-    GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL, IDOK, IsChild, IsWindow,
-    LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW, RegisterClassExW, SW_SHOW,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL, IDOK, IsChild,
+    IsWindow, LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW, RegisterClassExW,
+    SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
     SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, SwitchToThisWindow, WA_INACTIVE,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
     WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
@@ -60,7 +60,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use crate::calendar::EventDraft;
-use crate::i18n::{Key, tr};
+use crate::i18n::{self, Key, Lang, tr};
 use crate::theme::{self, WindowPalette};
 use crate::ui::app_icon;
 
@@ -195,6 +195,48 @@ fn date_of(st: &SYSTEMTIME) -> Option<NaiveDate> {
 /// Minutes only: the pickers show `HH:mm`.
 fn time_of(st: &SYSTEMTIME) -> Option<NaiveTime> {
     NaiveTime::from_hms_opt(st.wHour.into(), st.wMinute.into(), 0)
+}
+
+/// The date picker's format for `date`: day and month names as quoted
+/// literals in the app's language ("'Min' d 'Okt' yyyy"), since the picker's
+/// own `ddd`/`MMM` follow the Windows locale. Set again whenever the date
+/// changes. The month is then picked from the drop-down calendar rather
+/// than typed.
+fn date_format(lang: Lang, date: NaiveDate) -> String {
+    format!(
+        "'{}' d '{}' yyyy",
+        i18n::day_short(lang, date),
+        i18n::month_short(lang, date)
+    )
+}
+
+/// The window title for an editor of this kind.
+fn title_key(mode: &Mode) -> Key {
+    match mode {
+        Mode::Note { .. } => Key::EditorNote,
+        Mode::Event {
+            read_only: true, ..
+        } => Key::EditorEvent,
+        Mode::Event { event_id: None, .. } => Key::EditorAddEvent,
+        Mode::Event { .. } => Key::EditorEditEvent,
+    }
+}
+
+/// The text a control shows, for relabelling after a language switch.
+fn label_key(id: i32, read_only: bool) -> Option<Key> {
+    Some(match id {
+        ID_DELETE => Key::Delete,
+        ID_LBL_TITLE => Key::FieldTitle,
+        ID_LBL_DATE => Key::FieldDate,
+        ID_LBL_START => Key::FieldStart,
+        ID_LBL_END => Key::FieldEnd,
+        ID_LBL_NOTES => Key::FieldNotes,
+        ID_ALLDAY_LABEL => Key::AllDay,
+        ID_OK => Key::Save,
+        ID_CANCEL if read_only => Key::Close,
+        ID_CANCEL => Key::Cancel,
+        _ => return None,
+    })
 }
 
 // Control ids. IDOK / IDCANCEL double as the keyboard commands (Ctrl+Enter, Esc).
@@ -465,6 +507,8 @@ struct Editor {
     /// Controls drawn with a visual style (buttons, checkbox, fields' scroll
     /// bars): switched between the dark and light style.
     themed: Vec<HWND>,
+    /// The date picker's current format; the picker may keep the pointer.
+    date_format: HSTRING,
     /// Set once the window was active: only then does deactivation close a note.
     was_active: bool,
     /// The final result was posted.
@@ -599,6 +643,38 @@ pub fn restyle_open_editor() {
             RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
         );
     }
+}
+
+/// Relabels the open editor (if any) in the language now in effect: title,
+/// labels, buttons and the date picker's day and month names. A status
+/// message already shown keeps its language until the next one.
+pub fn relabel_open_editor() {
+    let open = EDITOR.with(|cell| {
+        cell.try_borrow().ok().and_then(|slot| {
+            slot.as_ref().map(|ed| {
+                let read_only = matches!(
+                    ed.mode,
+                    Mode::Event {
+                        read_only: true,
+                        ..
+                    }
+                );
+                (ed.hwnd, title_key(&ed.mode), ed.controls.clone(), read_only)
+            })
+        })
+    });
+    let Some((hwnd, title, controls, read_only)) = open else {
+        return;
+    };
+    unsafe {
+        let _ = SetWindowTextW(hwnd, &HSTRING::from(tr(title)));
+        for (id, control) in controls {
+            if let Some(key) = label_key(id, read_only) {
+                let _ = SetWindowTextW(control, &HSTRING::from(tr(key)));
+            }
+        }
+    }
+    with_editor(hwnd, Editor::set_date_format);
 }
 
 /// Runs `f` on the editor for `hwnd`, or returns `None` when there is none or
@@ -816,7 +892,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
             saving: false,
         },
     };
-    let editor = Editor {
+    let mut editor = Editor {
         hwnd,
         owner,
         previous,
@@ -825,6 +901,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         fonts,
         controls,
         themed,
+        date_format: HSTRING::new(),
         was_active: false,
         finished: false,
     };
@@ -979,6 +1056,10 @@ impl Editor {
                 }
             }
         }
+        unsafe {
+            // The hairlines around the fields follow them.
+            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
+        }
         let margin = (6.0 * s).round() as usize;
         for id in [ID_TEXT, ID_TITLE, ID_NOTES] {
             if let Some(edit) = self.control(id) {
@@ -993,7 +1074,7 @@ impl Editor {
     }
 
     /// Formats the pickers and loads the draft's date and times.
-    fn fill_pickers(&self) {
+    fn fill_pickers(&mut self) {
         let Mode::Event { base, .. } = &self.mode else {
             return;
         };
@@ -1009,13 +1090,33 @@ impl Editor {
                 );
             }
         };
-        set(ID_DATE, w!("ddd d MMM yyyy"), NaiveTime::MIN);
+        set(ID_DATE, w!("d MMM yyyy"), NaiveTime::MIN);
         set(ID_START, w!("HH':'mm"), base.start);
         set(ID_END, w!("HH':'mm"), base.end);
         if let Some(check) = self.control(ID_ALLDAY) {
             let state = if base.all_day { BST_CHECKED.0 } else { 0 };
             send(check, BM_SETCHECK, state as usize, 0);
         }
+        self.set_date_format();
+    }
+
+    /// Names the picker's date in the app's language (see `date_format`).
+    fn set_date_format(&mut self) {
+        let Some(picker) = self.control(ID_DATE) else {
+            return;
+        };
+        let Mode::Event { base, .. } = &self.mode else {
+            return;
+        };
+        let date = self
+            .picker_time(ID_DATE)
+            .as_ref()
+            .and_then(date_of)
+            .unwrap_or(base.date);
+        let format = HSTRING::from(date_format(i18n::lang(), date));
+        send(picker, DTM_SETFORMATW, 0, format.as_ptr() as isize);
+        // Freed only after the picker holds the new one.
+        self.date_format = format;
     }
 
     fn all_day_checked(&self) -> bool {
@@ -1350,6 +1451,67 @@ fn erase_background(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     LRESULT(1)
 }
 
+/// Text fields of an editor, framed with a hairline in light mode, where a
+/// white field on the light window would have no edge.
+const FRAMED: [i32; 3] = [ID_TEXT, ID_TITLE, ID_NOTES];
+
+/// The window's own paint: a 1 px `border` hairline just outside each text
+/// field in light mode (the background comes from `WM_ERASEBKGND`).
+fn paint_field_borders(hwnd: HWND) {
+    let p = theme::current_window();
+    let fields: Vec<HWND> = with_editor(hwnd, |ed| {
+        FRAMED.iter().filter_map(|id| ed.control(*id)).collect()
+    })
+    .unwrap_or_default();
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        let hdc = BeginPaint(hwnd, &mut ps);
+        if p.light && !hdc.is_invalid() {
+            // The border colour (`0xRRGGBBAA`) over the window background.
+            let alpha = (p.border & 0xFF) as f32 / 255.0;
+            let rgb = blend(p.bg, p.border >> 8, alpha);
+            let brush = CreateSolidBrush(colorref(rgb));
+            for field in fields {
+                let mut rc = RECT::default();
+                if GetWindowRect(field, &mut rc).is_ok() {
+                    let mut pts = [
+                        POINT {
+                            x: rc.left,
+                            y: rc.top,
+                        },
+                        POINT {
+                            x: rc.right,
+                            y: rc.bottom,
+                        },
+                    ];
+                    MapWindowPoints(None, Some(hwnd), &mut pts);
+                    let frame = RECT {
+                        left: pts[0].x - 1,
+                        top: pts[0].y - 1,
+                        right: pts[1].x + 1,
+                        bottom: pts[1].y + 1,
+                    };
+                    FrameRect(hdc, &frame, brush);
+                }
+            }
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+        }
+        let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// `over` at `alpha` on `base` (`0xRRGGBB`).
+fn blend(base: u32, over: u32, alpha: f32) -> u32 {
+    let ch = |shift: u32| {
+        let (b, o) = (
+            ((base >> shift) & 0xFF) as f32,
+            ((over >> shift) & 0xFF) as f32,
+        );
+        ((b + (o - b) * alpha).round() as u32) << shift
+    };
+    ch(16) | ch(8) | ch(0)
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -1359,6 +1521,10 @@ unsafe extern "system" fn wnd_proc(
     match msg {
         WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => color_control(wparam, lparam, msg),
         WM_ERASEBKGND => erase_background(hwnd, wparam),
+        WM_PAINT => {
+            paint_field_borders(hwnd);
+            LRESULT(0)
+        }
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -1380,6 +1546,12 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_NOTIFY => {
             let header = lparam.0 as *const NMHDR;
+            if let Some(header) = unsafe { header.as_ref() }
+                && header.code == DTN_DATETIMECHANGE
+                && header.idFrom == ID_DATE as usize
+            {
+                with_editor(hwnd, Editor::set_date_format);
+            }
             if let Some(header) = unsafe { header.as_ref() }
                 && header.code == DTN_DROPDOWN
             {
@@ -1999,6 +2171,32 @@ mod tests {
         assert_eq!(lighten(0xFFFFFF), 0xFFFFFF);
         assert_eq!(lighten(0x000000), light.text);
         assert_eq!(lighten(0x0078D7), 0x0078D7);
+    }
+
+    #[test]
+    fn date_format_names_the_date_in_the_app_language() {
+        let sunday = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        assert_eq!(date_format(Lang::Id, sunday), "'Min' d 'Okt' yyyy");
+        assert_eq!(date_format(Lang::En, sunday), "'Sun' d 'Oct' yyyy");
+    }
+
+    #[test]
+    fn every_label_has_a_key_for_relabelling() {
+        let kind = EditorKind::Event {
+            event_id: None,
+            calendar_id: None,
+            draft: draft("", false, (9, 0), (10, 0)),
+            read_only: false,
+        };
+        for spec in specs(&kind) {
+            if !spec.text.is_empty() {
+                assert!(label_key(spec.id, false).is_some(), "{}", spec.id);
+                assert_eq!(tr(label_key(spec.id, false).unwrap()), spec.text);
+            }
+        }
+        assert_eq!(label_key(ID_CANCEL, true), Some(Key::Close));
+        assert_eq!(blend(0xF3F3F5, 0x000000, 0.0), 0xF3F3F5);
+        assert_eq!(blend(0xFFFFFF, 0x000000, 1.0), 0x000000);
     }
 
     #[test]

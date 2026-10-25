@@ -168,9 +168,10 @@ fn events_from(
             let end = e.end.as_ref()?.to_event_time()?;
             // Editing an expanded instance of a recurring event is out of scope.
             let editable = writable && e.recurring_event_id.is_none() && fits_draft(&start, &end);
-            // Shown for an event with no summary, as Google's own UI does.
+            // Kept empty when Google has no summary: the panel draws
+            // "(Tanpa judul)" in the current language (`CalEvent::shown_title`).
             let title = if e.summary.trim().is_empty() {
-                tr(Key::NoTitle).to_string()
+                String::new()
             } else {
                 e.summary
             };
@@ -535,7 +536,8 @@ mod tests {
         assert_eq!(a.end, EventTime::AllDay(date(2026, 10, 29)));
         assert!(!a.editable, "a three-day event does not fit a draft");
         assert_eq!(evs[1].description, "bawa laptop");
-        assert_eq!(evs[2].title, "(Tanpa judul)");
+        assert_eq!(evs[2].title, "");
+        assert_eq!(evs[2].shown_title(), "(Tanpa judul)");
         assert!(evs[2].editable);
         assert!(
             parse_events(EVENTS, "cal1", None, false)

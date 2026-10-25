@@ -155,6 +155,67 @@ fn all_events_have_command(settings: &Value, command: &str) -> bool {
     })
 }
 
+/// True when every island event has a hook from some copy of the island.
+fn has_island_hooks(settings: &Value) -> bool {
+    EVENTS.iter().all(|event| {
+        settings["hooks"][*event].as_array().is_some_and(|groups| {
+            groups.iter().any(|group| {
+                group["hooks"]
+                    .as_array()
+                    .is_some_and(|hooks| hooks.iter().any(is_island_hook))
+            })
+        })
+    })
+}
+
+/// `%USERPROFILE%\.claude\settings.json`.
+fn user_settings_path() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .map(|home| PathBuf::from(home).join(".claude").join("settings.json"))
+}
+
+/// Whether the island's hooks are in the settings file at `path`; read only.
+/// `None` when the file exists but cannot be read or is not JSON.
+pub fn hooks_present_at(path: &Path) -> Option<bool> {
+    match fs::read_to_string(path) {
+        Ok(text) if text.trim().is_empty() => Some(false),
+        Ok(text) => serde_json::from_str::<Value>(&text)
+            .ok()
+            .map(|v| has_island_hooks(&v)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// `hooks_present_at` for the current user's Claude Code settings.
+pub fn hooks_present() -> Option<bool> {
+    hooks_present_at(&user_settings_path()?)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UninstallOutcome {
+    Removed,
+    NothingToRemove,
+    Error(String),
+}
+
+/// `uninstall_at` as an outcome for the settings window.
+pub fn uninstall_outcome_at(path: &Path) -> UninstallOutcome {
+    match uninstall_at(path) {
+        Ok(true) => UninstallOutcome::Removed,
+        Ok(false) => UninstallOutcome::NothingToRemove,
+        Err(e) => UninstallOutcome::Error(e),
+    }
+}
+
+/// Removes the island's hooks from the current user's Claude Code settings.
+pub fn uninstall_for_current_user() -> UninstallOutcome {
+    match user_settings_path() {
+        Some(path) => uninstall_outcome_at(&path),
+        None => UninstallOutcome::Error(tr(Key::UserProfileUnset).into()),
+    }
+}
+
 /// `--install-hooks` mode: prints the outcome of `install_for_current_exe`.
 pub fn install_hooks() {
     match install_for_current_exe() {
@@ -171,10 +232,9 @@ pub fn install_for_current_exe() -> InstallOutcome {
         Ok(exe) => exe,
         Err(e) => return InstallOutcome::Error(e.to_string()),
     };
-    let Some(home) = std::env::var_os("USERPROFILE") else {
+    let Some(path) = user_settings_path() else {
         return InstallOutcome::Error(tr(Key::UserProfileUnset).into());
     };
-    let path = PathBuf::from(home).join(".claude").join("settings.json");
     install_at(&path, &format!("\"{}\" --hook", exe.display()))
 }
 
@@ -231,15 +291,14 @@ fn try_install_at(path: &Path, command: &str) -> Result<bool, String> {
 /// `--uninstall-hooks` mode: removes the island's hooks from
 /// `%USERPROFILE%\.claude\settings.json`, used by the uninstall script.
 pub fn uninstall_hooks() {
-    let Some(home) = std::env::var_os("USERPROFILE") else {
+    let Some(path) = user_settings_path() else {
         eprintln!("USERPROFILE tidak diset");
         return;
     };
-    let path = PathBuf::from(home).join(".claude").join("settings.json");
-    match uninstall_at(&path) {
-        Ok(true) => println!("Hook Dynamic Island dihapus."),
-        Ok(false) => println!("Tidak ada hook Dynamic Island."),
-        Err(e) => eprintln!("Gagal menghapus hook: {e}"),
+    match uninstall_outcome_at(&path) {
+        UninstallOutcome::Removed => println!("Hook Dynamic Island dihapus."),
+        UninstallOutcome::NothingToRemove => println!("Tidak ada hook Dynamic Island."),
+        UninstallOutcome::Error(e) => eprintln!("Gagal menghapus hook: {e}"),
     }
 }
 
@@ -585,5 +644,44 @@ mod tests {
         fs::write(dir.settings(), "{not json").unwrap();
         assert!(uninstall_at(&dir.settings()).is_err());
         assert_eq!(fs::read_to_string(dir.settings()).unwrap(), "{not json");
+    }
+
+    #[test]
+    fn status_check_reads_without_writing() {
+        let dir = TempDir::new("status");
+        assert_eq!(hooks_present_at(&dir.settings()), Some(false), "no file");
+        fs::write(dir.settings(), "  ").unwrap();
+        assert_eq!(hooks_present_at(&dir.settings()), Some(false), "empty");
+        let foreign = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}}"#;
+        fs::write(dir.settings(), foreign).unwrap();
+        assert_eq!(hooks_present_at(&dir.settings()), Some(false));
+        assert_eq!(install_at(&dir.settings(), OLD), InstallOutcome::Installed);
+        // Any copy of the island counts, wherever its exe is.
+        assert_eq!(hooks_present_at(&dir.settings()), Some(true));
+        let before = fs::read_to_string(dir.settings()).unwrap();
+        hooks_present_at(&dir.settings());
+        assert_eq!(fs::read_to_string(dir.settings()).unwrap(), before);
+        fs::write(dir.settings(), "{not json").unwrap();
+        assert_eq!(hooks_present_at(&dir.settings()), None);
+    }
+
+    #[test]
+    fn uninstall_outcomes() {
+        let dir = TempDir::new("uninstall-outcome");
+        assert_eq!(
+            uninstall_outcome_at(&dir.settings()),
+            UninstallOutcome::NothingToRemove
+        );
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(
+            uninstall_outcome_at(&dir.settings()),
+            UninstallOutcome::Removed
+        );
+        assert_eq!(hooks_present_at(&dir.settings()), Some(false));
+        fs::write(dir.settings(), "{not json").unwrap();
+        assert!(matches!(
+            uninstall_outcome_at(&dir.settings()),
+            UninstallOutcome::Error(_)
+        ));
     }
 }

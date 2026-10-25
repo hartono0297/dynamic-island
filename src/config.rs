@@ -137,7 +137,19 @@ pub struct SaveOutcome {
 /// Write errors only happen on a broken profile; the setting still holds for
 /// this run, so they are not reported.
 pub fn save_merged_at(path: &Path, mem: &Config) -> SaveOutcome {
-    let (config, repair) = match read_at(path) {
+    save_merged_with_at(path, mem, |_| {})
+}
+
+/// `save_merged_at`, plus `edit` applied on top of the merge: for a field that
+/// is normally the owner's to edit by hand (the Google client, the battery
+/// threshold) but was just set from the settings window. Only what `edit`
+/// touches is replaced; every other hand edit in the file stays.
+pub fn save_merged_with_at(
+    path: &Path,
+    mem: &Config,
+    edit: impl FnOnce(&mut Config),
+) -> SaveOutcome {
+    let (mut config, repair) = match read_at(path) {
         OnDisk::Valid(disk) => (merge_owned(disk, mem), Repair::None),
         OnDisk::Missing => (mem.clone(), Repair::None),
         OnDisk::Invalid => {
@@ -147,20 +159,27 @@ pub fn save_merged_at(path: &Path, mem: &Config) -> SaveOutcome {
                 // Gone meanwhile: nothing left to keep.
                 Err(e) if e.kind() == io::ErrorKind::NotFound => (mem.clone(), Repair::None),
                 Err(_) => {
+                    let mut config = mem.clone();
+                    edit(&mut config);
                     return SaveOutcome {
-                        config: mem.clone(),
+                        config,
                         repair: Repair::Blocked,
                     };
                 }
             }
         }
     };
+    edit(&mut config);
     let _ = config.save_to(path);
     SaveOutcome { config, repair }
 }
 
 pub fn save_merged(mem: &Config) -> SaveOutcome {
     save_merged_at(&path(), mem)
+}
+
+pub fn save_merged_with(mem: &Config, edit: impl FnOnce(&mut Config)) -> SaveOutcome {
+    save_merged_with_at(&path(), mem, edit)
 }
 
 /// `<file>.bak`, or `.bak2`, `.bak3`… when earlier backups exist, so a
@@ -561,6 +580,43 @@ mod tests {
         let out = save_merged_at(&path, &mem);
         assert!(matches!(out.repair, Repair::BackedUp(_)));
         assert_eq!(on_disk(&path), mem);
+    }
+
+    #[test]
+    fn credential_save_keeps_other_hand_edits() {
+        let tmp = TempDir::new("credentials");
+        let path = tmp.file("config.json");
+        let (disk, mem) = disk_and_mem();
+        disk.save_to(&path).unwrap();
+        let out = save_merged_with_at(&path, &mem, |c| {
+            c.google_client_id = "new.apps.googleusercontent.com".into();
+            c.google_client_secret = "new-secret".into();
+        });
+        assert_eq!(out.repair, Repair::None);
+        let saved = on_disk(&path);
+        assert_eq!(saved, out.config);
+        assert_eq!(
+            (
+                saved.google_client_id.as_str(),
+                saved.google_client_secret.as_str()
+            ),
+            ("new.apps.googleusercontent.com", "new-secret")
+        );
+        // Hand edits the island does not own stay as they were on disk...
+        assert_eq!(saved.muted_apps, disk.muted_apps);
+        assert_eq!(saved.battery_threshold, 35);
+        // ...and the island's own settings come from memory, as in any save.
+        assert_eq!(owned(&saved), owned(&mem));
+    }
+
+    #[test]
+    fn edit_applies_to_a_missing_file() {
+        let tmp = TempDir::new("edit-missing");
+        let path = tmp.file("config.json");
+        let (_, mem) = disk_and_mem();
+        let out = save_merged_with_at(&path, &mem, |c| c.battery_threshold = 45);
+        assert_eq!(out.config.battery_threshold, 45);
+        assert_eq!(on_disk(&path).battery_threshold, 45);
     }
 
     #[test]

@@ -39,20 +39,16 @@ static TRAY_ICON: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_m
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCmd {
+    Settings,
     StylePill,
     StyleNotch,
-    ToggleAutostart,
-    ShowDndHelp,
-    InstallClaudeHooks,
     Exit,
 }
 
-const COMMANDS: [MenuCmd; 6] = [
+const COMMANDS: [MenuCmd; 4] = [
+    MenuCmd::Settings,
     MenuCmd::StylePill,
     MenuCmd::StyleNotch,
-    MenuCmd::ToggleAutostart,
-    MenuCmd::ShowDndHelp,
-    MenuCmd::InstallClaudeHooks,
     MenuCmd::Exit,
 ];
 
@@ -77,7 +73,8 @@ enum MenuItem {
     Separator,
 }
 
-/// The menu in `cfg.language`.
+/// The menu in `cfg.language`, built each time it opens, so it always
+/// shows the current language. Everything else lives in the settings window.
 fn menu_items(cfg: &Config) -> Vec<MenuItem> {
     let entry = |cmd, key, checked| MenuItem::Entry {
         cmd,
@@ -85,6 +82,8 @@ fn menu_items(cfg: &Config) -> Vec<MenuItem> {
         checked,
     };
     vec![
+        entry(MenuCmd::Settings, Key::MenuSettings, false),
+        MenuItem::Separator,
         entry(
             MenuCmd::StylePill,
             Key::MenuStylePill,
@@ -95,14 +94,6 @@ fn menu_items(cfg: &Config) -> Vec<MenuItem> {
             Key::MenuStyleNotch,
             cfg.style == Style::Notch,
         ),
-        MenuItem::Separator,
-        entry(
-            MenuCmd::ToggleAutostart,
-            Key::MenuAutostart,
-            cfg.start_with_windows,
-        ),
-        entry(MenuCmd::ShowDndHelp, Key::MenuDndHelp, false),
-        entry(MenuCmd::InstallClaudeHooks, Key::MenuInstallHooks, false),
         MenuItem::Separator,
         entry(MenuCmd::Exit, Key::MenuExit, false),
     ]
@@ -291,14 +282,12 @@ mod tests {
         assert_eq!(
             labels(&menu_items(&Config::default())),
             vec![
+                "Pengaturan…",
+                "-",
                 "Gaya: Pill",
                 "Gaya: Notch",
                 "-",
-                "Jalan saat Windows start",
-                "Cara matiin popup Windows",
-                "Pasang hook Claude Code",
-                "-",
-                "Keluar",
+                "Keluar"
             ]
         );
     }
@@ -311,26 +300,27 @@ mod tests {
         };
         assert_eq!(
             labels(&menu_items(&en)),
-            vec![
-                "Style: Pill",
-                "Style: Notch",
-                "-",
-                "Start with Windows",
-                "How to turn off Windows pop-ups",
-                "Install Claude Code hooks",
-                "-",
-                "Quit",
-            ]
+            vec!["Settings…", "-", "Style: Pill", "Style: Notch", "-", "Quit"]
         );
+    }
+
+    #[test]
+    fn settings_comes_first() {
+        let items = menu_items(&Config::default());
+        assert!(matches!(
+            items.first(),
+            Some(MenuItem::Entry {
+                cmd: MenuCmd::Settings,
+                checked: false,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn checks_follow_config() {
         let pill = Config::default();
-        assert_eq!(
-            checked(&menu_items(&pill)),
-            vec![MenuCmd::StylePill, MenuCmd::ToggleAutostart]
-        );
+        assert_eq!(checked(&menu_items(&pill)), vec![MenuCmd::StylePill]);
         let notch = Config {
             style: Style::Notch,
             start_with_windows: false,

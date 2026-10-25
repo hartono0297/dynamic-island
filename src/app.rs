@@ -35,11 +35,10 @@ use windows::core::{PCWSTR, w};
 
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
-use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
-use crate::model::{Effect, Event, Notice, NoticeKind, Page, View};
+use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
@@ -51,6 +50,7 @@ use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
 use crate::ui::render::{Frame, Renderer};
+use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
 
@@ -93,6 +93,7 @@ thread_local! {
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_SETTINGS: RefCell<Vec<SettingsAction>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -504,6 +505,7 @@ impl App {
         }
         self.arm_deadline(now);
         self.sync_timers(now);
+        self.sync_settings();
     }
 
     fn animating(&self) -> bool {
@@ -703,6 +705,18 @@ impl App {
         }
     }
 
+    /// `save_config`, also writing the fields `edit` sets: ones the owner may
+    /// edit by hand (Google client, battery threshold) but just set in the
+    /// settings window. Other hand edits in the file stay.
+    fn save_config_with(&mut self, edit: impl FnOnce(&mut Config)) {
+        let out = config::save_merged_with(&self.config, edit);
+        self.adopt_config(out.config);
+        if out.repair != Repair::None && !self.config_warned {
+            self.config_warned = true;
+            self.apply_now(Event::Notice(invalid_config_notice(Some(&out.repair))));
+        }
+    }
+
     /// Picks up hand edits to config.json. False when the file exists but is
     /// not a valid config; it then changes nothing (only saves back it up).
     fn reload_config(&mut self) -> bool {
@@ -737,6 +751,7 @@ impl App {
     fn apply_theme(&mut self) {
         if theme::set_current(Theme::of(&self.config)) {
             editor::restyle_open_editor();
+            settings::restyle();
             self.draw(Instant::now());
         }
     }
@@ -757,12 +772,92 @@ impl App {
         self.refresh(now);
     }
 
-    fn toggle_autostart(&mut self) {
-        let enabled = !self.config.start_with_windows;
+    fn set_autostart(&mut self, enabled: bool) {
         if tray::set_autostart(enabled).is_ok() {
             self.config.start_with_windows = enabled;
             self.save_config();
         }
+    }
+
+    /// What the settings window shows.
+    fn settings_model(&self) -> settings::Model {
+        let status = self.state.pomodoro().status();
+        settings::Model {
+            pomodoro: self.state.pomodoro().settings(),
+            pomodoro_locked: !matches!(status, PomoStatus::Idle | PomoStatus::Ready),
+            calendar: self.calendar.status,
+            ..settings::Model::from_config(&self.config)
+        }
+    }
+
+    /// Brings an open settings window up to date; it redraws only on a change.
+    fn sync_settings(&self) {
+        if settings::is_open() {
+            settings::update(self.settings_model());
+        }
+    }
+
+    /// A change made in the settings window: applied now and saved.
+    fn on_settings_action(&mut self, action: SettingsAction) {
+        let now = Instant::now();
+        match action {
+            SettingsAction::Style(style) => self.set_style(style),
+            SettingsAction::Accent(accent) => {
+                self.config.accent = accent;
+                self.save_config();
+            }
+            SettingsAction::Surface(surface) => {
+                self.config.surface = surface;
+                self.save_config();
+            }
+            SettingsAction::WindowMode(mode) => {
+                self.config.window_theme = mode;
+                self.save_config();
+            }
+            SettingsAction::Lang(lang) => {
+                self.config.language = lang;
+                // `adopt_config` switches the strings; everything showing text relabels.
+                self.save_config();
+                editor::relabel_open_editor();
+                self.draw(now);
+            }
+            SettingsAction::Autostart(on) => self.set_autostart(on),
+            SettingsAction::BatteryThreshold(threshold) => {
+                self.save_config_with(|c| c.battery_threshold = threshold);
+                self.battery.set_threshold(self.config.battery_threshold);
+            }
+            SettingsAction::Pomo(field, dir) => {
+                // The same path as the panel's steppers: state, then config.
+                self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
+            }
+            SettingsAction::SaveGoogle { id, secret } => {
+                self.save_config_with(|c| {
+                    c.google_client_id = id;
+                    c.google_client_secret = secret;
+                });
+            }
+            SettingsAction::ConnectGoogle => {
+                if let Some(event) = self.connect_google() {
+                    self.apply_now(event);
+                }
+            }
+            SettingsAction::DisconnectGoogle => self.disconnect_google(),
+            // Handled outside the app borrow (`deliver_settings_action`).
+            SettingsAction::DndHelp | SettingsAction::Closed => {}
+        }
+        self.sync_settings();
+    }
+
+    /// Forgets the Google login; the calendar asks to connect again.
+    fn disconnect_google(&mut self) {
+        if let Some(sync) = &self.sync {
+            sync.send(SyncRequest::Disconnect);
+        }
+        if self.calendar.status != CalStatus::NotConfigured {
+            self.calendar.status = CalStatus::NeedsLogin;
+        }
+        self.calendar_asked = None;
+        self.refresh(Instant::now());
     }
 
     fn finish_onboarding(&mut self) {
@@ -1100,17 +1195,6 @@ fn dnd_notice() -> Notice {
     island_notice("dnd", tr(Key::DndTitle), tr(Key::DndBody))
 }
 
-fn hook_notice(outcome: InstallOutcome) -> Notice {
-    const SETTINGS: &str = r"~\.claude\settings.json";
-    match outcome {
-        InstallOutcome::Installed => island_notice("hooks", tr(Key::HooksInstalled), SETTINGS),
-        InstallOutcome::AlreadyInstalled => {
-            island_notice("hooks", tr(Key::HooksAlreadyInstalled), SETTINGS)
-        }
-        InstallOutcome::Error(e) => island_notice("hooks", tr(Key::HooksFailed), &e),
-    }
-}
-
 /// Every start: asks for notification access when it is missing (a new
 /// package identity starts without it, even after onboarding). On first run
 /// the Do Not Disturb hint follows once the user has answered.
@@ -1168,28 +1252,52 @@ fn open_menu(hwnd: HWND) {
     let cmd = tray::show_menu(hwnd, &config);
     MENU_OPEN.set(false);
     match cmd {
+        Some(MenuCmd::Settings) => open_settings(hwnd),
         Some(MenuCmd::StylePill) => {
             with_app(|app| app.set_style(Style::Pill));
         }
         Some(MenuCmd::StyleNotch) => {
             with_app(|app| app.set_style(Style::Notch));
         }
-        Some(MenuCmd::ToggleAutostart) => {
-            with_app(App::toggle_autostart);
-        }
-        Some(MenuCmd::ShowDndHelp) => show_dnd_help(),
-        Some(MenuCmd::InstallClaudeHooks) => {
-            let notice = hook_notice(install::install_for_current_exe());
-            with_app(|app| app.apply_now(Event::Notice(notice)));
-        }
         Some(MenuCmd::Exit) => shutdown(hwnd),
         None => {}
+    }
+}
+
+/// Opens the settings window, or brings the open one forward. Outside
+/// `with_app`: creating and focusing a window sends messages.
+fn open_settings(hwnd: HWND) {
+    let Some(model) = with_app(|app| app.settings_model()) else {
+        return;
+    };
+    if let Err(error) = settings::open(hwnd, model, None) {
+        eprintln!("dynamic-island: cannot open settings: {error}");
+    }
+}
+
+/// Runs a settings action now, or once the handler holding the app returns.
+/// The Do Not Disturb help opens the Settings app, which may pump messages,
+/// so it never runs inside `with_app`.
+fn deliver_settings_action(action: SettingsAction) {
+    if action == SettingsAction::DndHelp {
+        show_dnd_help();
+        return;
+    }
+    let mut pending = Some(action);
+    with_app(|app| {
+        if let Some(action) = pending.take() {
+            app.on_settings_action(action);
+        }
+    });
+    if let Some(action) = pending {
+        DEFERRED_SETTINGS.with_borrow_mut(|queue| queue.push(action));
     }
 }
 
 /// Closes the island. An open editor is closed first and its last result
 /// (an edited note) handled here: once the island is gone, nobody reads it.
 fn shutdown(hwnd: HWND) {
+    settings::close();
     flush_editor();
     unsafe {
         let _ = DestroyWindow(hwnd);
@@ -1285,6 +1393,9 @@ fn run_deferred() {
     for result in DEFERRED_RESULTS.take() {
         deliver_result(result);
     }
+    for action in DEFERRED_SETTINGS.take() {
+        deliver_settings_action(action);
+    }
 }
 
 /// `WM_SETTINGCHANGE` for "ImmersiveColorSet": the Windows app mode (light or
@@ -1300,6 +1411,7 @@ fn on_system_theme_changed() {
     let changed = theme::set_system_light(theme::read_system_light());
     if changed && theme::current().window == theme::WindowTheme::System {
         editor::restyle_open_editor();
+        settings::restyle();
     }
 }
 
@@ -1361,6 +1473,13 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_APP_ACCESS => {
             on_access_answered();
+            LRESULT(0)
+        }
+        WM_APP_SETTINGS_ACTION => {
+            // Each action is taken exactly once, here.
+            if let Some(action) = unsafe { settings::take_action(lparam) } {
+                deliver_settings_action(action);
+            }
             LRESULT(0)
         }
         WM_APP_EDITOR_RESULT => {
@@ -1467,30 +1586,10 @@ mod tests {
 
     #[test]
     fn island_notices_are_temporary_and_open_nothing() {
-        for notice in [
-            dnd_notice(),
-            hook_notice(InstallOutcome::Installed),
-            hook_notice(InstallOutcome::AlreadyInstalled),
-            hook_notice(InstallOutcome::Error("x".into())),
-        ] {
+        for notice in [dnd_notice(), invalid_config_notice(None)] {
             assert_eq!(notice.source, "Dynamic Island");
             assert_eq!(notice.kind, NoticeKind::App { app_id: None });
         }
-    }
-
-    #[test]
-    fn hook_notice_titles() {
-        assert_eq!(
-            hook_notice(InstallOutcome::Installed).title,
-            "Hook Claude Code terpasang"
-        );
-        assert_eq!(
-            hook_notice(InstallOutcome::AlreadyInstalled).title,
-            "Hook sudah terpasang"
-        );
-        let failed = hook_notice(InstallOutcome::Error("rusak".into()));
-        assert_eq!(failed.title, "Gagal pasang hook");
-        assert_eq!(failed.body, "rusak");
     }
 
     #[test]
@@ -1753,10 +1852,6 @@ mod tests {
             ("Calendar", "Add a Google client ID first")
         );
         assert_eq!(dnd_notice().title, "Turn off Windows pop-ups");
-        assert_eq!(
-            hook_notice(InstallOutcome::Installed).title,
-            "Claude Code hooks installed"
-        );
     }
 
     #[test]
@@ -1764,7 +1859,7 @@ mod tests {
         let n = client_id_notice();
         assert_eq!(n.source, "Kalender");
         assert_eq!(n.title, "Isi Google client ID dulu");
-        assert_eq!(n.body, "lihat README");
+        assert_eq!(n.body, "Lihat README");
         assert_eq!(n.kind, NoticeKind::App { app_id: None });
     }
 

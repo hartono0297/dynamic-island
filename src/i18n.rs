@@ -132,29 +132,26 @@ keys! {
     ClaudeWaiting => "Claude butuh respon", "Claude needs you";
     BatteryLow => "Baterai lemah", "Low battery";
     FocusDone => "Fokus selesai", "Focus done";
-    BreakDone => "Istirahat selesai", "Break over";
+    BreakDone => "Istirahat selesai", "Break done";
     NotesSaveFailed => "Gagal simpan catatan", "Couldn't save notes";
     NotesUnreadable => "notes.json tidak terbaca", "Can't read notes.json";
     NotesUnreadableBody => "Disimpan sebagai notes.json.bak saat menyimpan berikutnya",
-        "Kept as notes.json.bak on the next save";
+        "Will be saved as notes.json.bak on the next save";
     ConfigInvalid => "config.json tidak valid", "config.json is invalid";
     ConfigNotCopied => "Tidak bisa disalin — cek lagi isinya",
         "Couldn't copy it — check its contents";
     ConfigCheck => "Cek lagi isinya — lihat README", "Check its contents — see the README";
     ClientIdMissing => "Isi Google client ID dulu", "Add a Google client ID first";
-    SeeReadme => "lihat README", "see the README";
+    SeeReadme => "Lihat README", "See the README";
     DndTitle => "Matiin popup Windows", "Turn off Windows pop-ups";
     DndBody => "Nyalain Do Not Disturb: Settings → System → Notifications",
         "Turn on Do Not Disturb: Settings → System → Notifications";
-    HooksInstalled => "Hook Claude Code terpasang", "Claude Code hooks installed";
-    HooksAlreadyInstalled => "Hook sudah terpasang", "Hooks already installed";
-    HooksFailed => "Gagal pasang hook", "Couldn't install hooks";
     UserProfileUnset => "USERPROFILE tidak diset", "USERPROFILE is not set";
 
     // Calendar and Google.
     SaveEventFailed => "Gagal simpan acara", "Couldn't save event";
     GoogleScopes => "Izin Google belum lengkap", "Google permissions incomplete";
-    GoogleScopesBody => "Centang kedua izin saat login", "Tick both permissions when you sign in";
+    GoogleScopesBody => "Centang kedua izin saat login", "Check both permissions when you sign in";
     GoogleRefused => "Google menolak", "Google refused";
     ClientRejected => "Client ID atau secret ditolak — cek config.json",
         "Client ID or secret rejected — check config.json";
@@ -173,7 +170,7 @@ keys! {
     OauthFailed => "Gagal terhubung — coba lagi dari island.",
         "Couldn't connect — try again from the island.";
     OauthScopes => "Izin Google belum lengkap — centang kedua izin, lalu coba lagi dari island.",
-        "Google permissions incomplete — tick both permissions, then try again from the island.";
+        "Google permissions incomplete — check both permissions, then try again from the island.";
 
     // Calendar page.
     Offline => "offline", "offline";
@@ -235,10 +232,88 @@ keys! {
     // Tray menu.
     MenuStylePill => "Gaya: Pill", "Style: Pill";
     MenuStyleNotch => "Gaya: Notch", "Style: Notch";
-    MenuAutostart => "Jalan saat Windows start", "Start with Windows";
-    MenuDndHelp => "Cara matiin popup Windows", "How to turn off Windows pop-ups";
-    MenuInstallHooks => "Pasang hook Claude Code", "Install Claude Code hooks";
     MenuExit => "Keluar", "Quit";
+    MenuSettings => "Pengaturan…", "Settings…";
+
+    // Settings window.
+    SettingsTitle => "Pengaturan Dynamic Island", "Dynamic Island Settings";
+    SecAppearance => "Tampilan", "Appearance";
+    SecGeneral => "Umum", "General";
+    SecPomodoro => "Pomodoro", "Pomodoro";
+    SecIntegrations => "Integrasi", "Integrations";
+    SecAbout => "Tentang", "About";
+    PreviewTrack => "Sedang diputar", "Now playing";
+    IslandStyle => "Gaya island", "Island style";
+    IslandStyleDesc => "Bentuk island di atas layar", "Its shape at the top of the screen";
+    StylePill => "Pill", "Pill";
+    StyleNotch => "Notch", "Notch";
+    AccentColor => "Warna aksen", "Accent color";
+    AccentBlue => "Biru", "Blue";
+    AccentPurple => "Ungu", "Purple";
+    AccentGreen => "Hijau", "Green";
+    AccentOrange => "Oranye", "Orange";
+    AccentPink => "Pink", "Pink";
+    AccentRed => "Merah", "Red";
+    IslandSurface => "Latar island", "Island fill";
+    IslandSurfaceDesc => "Warna dasar island", "The island's base color";
+    SurfaceBlack => "Hitam", "Black";
+    SurfaceGraphite => "Grafit", "Graphite";
+    WindowMode => "Mode jendela", "Window mode";
+    WindowModeDesc => "Pengaturan dan editor", "Settings and editors";
+    ModeSystem => "Ikuti Windows", "Follow Windows";
+    ModeDark => "Gelap", "Dark";
+    ModeLight => "Terang", "Light";
+    Language => "Bahasa", "Language";
+    LanguageDesc => "Island dan semua jendela", "The island and every window";
+    LangIndonesian => "Indonesia", "Indonesia";
+    LangEnglish => "English", "English";
+    Autostart => "Jalan saat Windows start", "Start with Windows";
+    AutostartDesc => "Buka island otomatis saat masuk", "Open the island when you sign in";
+    BatteryAlert => "Peringatan baterai", "Battery alert";
+    BatteryAlertDesc => "Kasih tahu saat baterai di bawah ini", "Warn when the charge drops below";
+    NoBattery => "Tidak ada baterai", "No battery found";
+    PopupsHelp => "Cara matikan popup Windows", "Turn off Windows pop-ups";
+    PopupsHelpDesc => "Supaya notifikasi tidak muncul dua kali", "So notifications don't show twice";
+    ShowHow => "Buka petunjuk", "Show me how";
+    FocusDesc => "Lama satu sesi fokus", "Length of one focus session";
+    BreakDesc => "Jeda di antara sesi", "Pause between sessions";
+    LongBreakDesc => "Setelah sesi terakhir", "After the last session";
+    SessionsDesc => "Sesi fokus sebelum istirahat panjang", "Focus sessions before a long break";
+    PomodoroLocked => "Pomodoro sedang berjalan — reset dulu untuk mengubah ini.",
+        "A pomodoro is running — reset it to change these.";
+    GoogleCalendar => "Google Calendar", "Google Calendar";
+    StatusNotConfigured => "Belum diatur", "Not set up";
+    StatusNeedsLogin => "Belum terhubung", "Not connected";
+    StatusConnected => "Terhubung", "Connected";
+    StatusReconnect => "Perlu login ulang", "Sign in again";
+    StatusOffline => "Offline", "Offline";
+    ClientId => "Client ID", "Client ID";
+    ClientSecret => "Client secret", "Client secret";
+    SetupGuide => "Panduan setup", "Setup guide";
+    Connect => "Hubungkan", "Connect";
+    Disconnect => "Putuskan", "Disconnect";
+    ConfirmShort => "Yakin?", "Sure?";
+    Saved => "Tersimpan", "Saved";
+    CheckBrowser => "Cek browser…", "Check your browser…";
+    Disconnected => "Terputus", "Disconnected";
+    ClaudeCode => "Claude Code", "Claude Code";
+    HooksOn => "Hook terpasang", "Hooks installed";
+    HooksOff => "Hook belum terpasang", "Hooks not installed";
+    HooksUnknown => "Status tidak diketahui", "Status unknown";
+    InstallHooks => "Pasang hook", "Install hooks";
+    RemoveHooks => "Hapus hook", "Remove hooks";
+    HooksAlready => "Sudah terpasang", "Already installed";
+    HooksRemoved => "Hook dihapus", "Hooks removed";
+    HooksNone => "Tidak ada hook", "No hooks found";
+    Failed => "Gagal", "Failed";
+    AboutTagline => "Island ala macOS untuk Windows 11", "A macOS-style island for Windows 11";
+    SourceCode => "Kode sumber", "Source code";
+    OpenGithub => "Buka GitHub", "Open GitHub";
+    Updates => "Pembaruan", "Updates";
+    UpdatesDesc => "Cek rilis terbaru di GitHub", "Check for the latest release";
+    SeeReleases => "Lihat rilis", "See releases";
+    DataFolder => "Folder data", "Data folder";
+    OpenDataFolder => "Buka folder data", "Open data folder";
 }
 
 /// `key` in `lang`.
@@ -299,6 +374,14 @@ pub fn config_copied_to(lang: Lang, name: &str) -> String {
     match lang {
         Lang::Id => format!("Disalin ke {name} — cek lagi isinya"),
         Lang::En => format!("Copied to {name} — check its contents"),
+    }
+}
+
+/// "Versi 2.1.0" on the settings window's About page.
+pub fn version_label(lang: Lang, version: &str) -> String {
+    match lang {
+        Lang::Id => format!("Versi {version}"),
+        Lang::En => format!("Version {version}"),
     }
 }
 
@@ -418,6 +501,11 @@ fn weekday(d: NaiveDate) -> usize {
 /// "Sen", "Mon".
 pub fn day_short(lang: Lang, d: NaiveDate) -> &'static str {
     pick(lang, DAYS_SHORT_ID, DAYS_SHORT_EN)[weekday(d)]
+}
+
+/// "Okt", "Oct".
+pub fn month_short(lang: Lang, d: NaiveDate) -> &'static str {
+    pick(lang, MONTHS_SHORT_ID, MONTHS_SHORT_EN)[d.month0() as usize]
 }
 
 /// "25 Okt", "25 Oct".

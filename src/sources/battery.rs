@@ -25,6 +25,12 @@ impl BatteryMonitor {
         }
     }
 
+    /// A new threshold from the settings window; an alert already raised
+    /// this discharge stays raised.
+    pub fn set_threshold(&mut self, threshold: u8) {
+        self.threshold = threshold;
+    }
+
     /// True when the alert should be raised now.
     pub fn update(&mut self, percent: u8, charging: bool) -> bool {
         if charging || percent > self.threshold {

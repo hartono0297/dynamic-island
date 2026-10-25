@@ -52,6 +52,17 @@ impl CalEvent {
     pub fn all_day(&self) -> bool {
         matches!(self.start, EventTime::AllDay(_))
     }
+
+    /// The title as drawn: "(Tanpa judul)" in the current language when the
+    /// event has none, as Google's own UI does. Decided at draw time, so a
+    /// language switch relabels cached events too.
+    pub fn shown_title(&self) -> &str {
+        if self.title.trim().is_empty() {
+            crate::i18n::tr(crate::i18n::Key::NoTitle)
+        } else {
+            &self.title
+        }
+    }
 }
 
 /// What the event editor edits: one title, one date, and either all-day or a

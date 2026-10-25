@@ -54,7 +54,7 @@ pub struct Pomodoro {
 }
 
 /// `(min, max, step)` for each stepper, in minutes (sessions: count).
-fn range(field: PomoField) -> (u32, u32, u32) {
+pub fn range(field: PomoField) -> (u32, u32, u32) {
     match field {
         PomoField::Focus => (5, 120, 5),
         PomoField::ShortBreak => (1, 30, 1),

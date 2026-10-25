@@ -6,5 +6,8 @@ pub mod frame_clock;
 pub mod geometry;
 pub mod panel_layout;
 pub mod render;
+pub mod settings;
+pub mod settings_controls;
+pub mod settings_layout;
 pub mod tray;
 pub mod window;

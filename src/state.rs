@@ -1096,7 +1096,7 @@ mod tests {
         s.apply(Event::Click(Hit::PomoSkip), t0 + secs(1));
         assert_eq!(
             notice_title(&s.view()).map(|t| (t.1, t.2)),
-            Some(("Break over", "Focus session 2 of 4 · click to start"))
+            Some(("Break done", "Focus session 2 of 4 · click to start"))
         );
     }
 

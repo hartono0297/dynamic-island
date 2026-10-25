@@ -354,7 +354,7 @@ impl Renderer {
                 w,
                 h: 14.0,
             };
-            self.text(&ev.title, title_font, title, 1.0);
+            self.text(ev.shown_title(), title_font, title, 1.0);
             self.text(&event_time_label(lang, ev), time_font, time, 0.6);
         }
         if let Some((n, r)) = l.more {

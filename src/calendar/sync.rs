@@ -54,6 +54,9 @@ pub enum SyncRequest {
     /// config.json changed on disk (Google client ID or secret): use it from
     /// the next request on, without a restart.
     Config(Config),
+    /// "Putuskan" in the settings window: forget the stored tokens. The
+    /// calendar then asks to be connected again; the cached events stay.
+    Disconnect,
     Shutdown,
 }
 
@@ -271,6 +274,9 @@ struct Worker {
     /// Title and body of every fetch-error notice shown this run, so the
     /// ten-minute refresh does not repeat one.
     noticed: HashSet<(String, String)>,
+    /// Whether Google tokens are stored (replaced in tests, which must not
+    /// read the real token file).
+    has_tokens: fn() -> bool,
 }
 
 impl Worker {
@@ -296,6 +302,7 @@ impl Worker {
             last_ok: None,
             next_refresh: None,
             noticed: HashSet::new(),
+            has_tokens: || oauth::load_tokens().is_some(),
         }
     }
 
@@ -355,6 +362,7 @@ impl Worker {
                     }
                 }
                 SyncRequest::Config(cfg) => self.set_config(cfg),
+                SyncRequest::Disconnect => self.disconnect(),
                 SyncRequest::Shutdown => return false,
             }
         }
@@ -478,11 +486,30 @@ impl Worker {
     fn set_config(&mut self, cfg: Config) {
         self.cfg = cfg;
         match (configured(&self.cfg), self.snapshot.status) {
-            (true, CalStatus::NotConfigured) => self.set_status(CalStatus::Offline),
+            // Set up from the settings window or by hand: say at once whether
+            // a login is still needed, rather than "offline" until a fetch.
+            (true, CalStatus::NotConfigured) => {
+                let status = if (self.has_tokens)() {
+                    CalStatus::Offline
+                } else {
+                    CalStatus::NeedsLogin
+                };
+                self.set_status(status);
+            }
             (false, status) if status != CalStatus::NotConfigured => {
                 self.set_status(CalStatus::NotConfigured)
             }
             _ => {}
+        }
+    }
+
+    fn disconnect(&mut self) {
+        oauth::clear_tokens();
+        // Nothing to refresh until the next login.
+        self.next_refresh = None;
+        self.last_ok = None;
+        if configured(&self.cfg) {
+            self.set_status(CalStatus::NeedsLogin);
         }
     }
 
@@ -862,7 +889,10 @@ mod tests {
             w.fetch_add(1, Ordering::Relaxed);
         });
         // Empty client id: the worker must answer without calling Google.
-        (Worker::new(tx, wake, Config::default(), cache), rx, wakes)
+        let mut worker = Worker::new(tx, wake, Config::default(), cache);
+        // Never the real token file.
+        worker.has_tokens = || false;
+        (worker, rx, wakes)
     }
 
     fn statuses(rx: &Receiver<Event>) -> Vec<CalStatus> {
@@ -980,6 +1010,7 @@ mod tests {
             ..Config::default()
         };
         // Same batch order as the island sends it: the config, then the login.
+        w.has_tokens = || true;
         assert!(w.handle(vec![SyncRequest::Config(with_id.clone())]));
         assert_eq!(w.cfg, with_id);
         assert_eq!(
@@ -988,11 +1019,15 @@ mod tests {
             "no longer NotConfigured"
         );
         // A repeat changes nothing and says nothing.
-        assert!(w.handle(vec![SyncRequest::Config(with_id)]));
+        assert!(w.handle(vec![SyncRequest::Config(with_id.clone())]));
         assert!(statuses(&rx).is_empty());
         // The ID removed again: back to NotConfigured.
         assert!(w.handle(vec![SyncRequest::Config(Config::default())]));
         assert_eq!(statuses(&rx), [CalStatus::NotConfigured]);
+        // Set up with no login stored yet: it asks to connect.
+        w.has_tokens = || false;
+        assert!(w.handle(vec![SyncRequest::Config(with_id)]));
+        assert_eq!(statuses(&rx), [CalStatus::NeedsLogin]);
         assert!(!dir.exists(), "nothing written");
     }
 

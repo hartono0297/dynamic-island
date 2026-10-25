@@ -185,10 +185,6 @@ pub fn island_palette(cfg: &Config) -> Palette {
 
 /// Colours of ordinary windows (editors, settings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "card, border, secondary, accent and the button fills are for the settings window"
-)]
 pub struct WindowPalette {
     pub light: bool,
     pub bg: u32,
@@ -226,8 +222,8 @@ pub fn window(accent: Accent, mode: WindowTheme, system_light: bool) -> WindowPa
             accent,
             on_accent,
             field: 0xFFFFFF,
-            button: 0xE6E6EA,
-            button_hover: 0xDCDCE0,
+            button: 0xF6F6F8,
+            button_hover: 0xEBEBEE,
             error: 0xC42B1C,
         }
     } else {

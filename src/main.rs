@@ -64,6 +64,13 @@ fn main() {
             demo_lang_from_env();
             ui::editor::run_demo(std::env::args().nth(2).as_deref());
         }
+        #[cfg(debug_assertions)]
+        Some("--settings") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            ui::settings::run_demo(&args);
+        }
         Some("--install-hooks") => {
             attach_parent_console();
             claude::install::install_hooks();
