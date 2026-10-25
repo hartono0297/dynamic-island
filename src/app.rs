@@ -59,8 +59,10 @@ const WM_APP_ACCESS: u32 = WM_APP + 3;
 /// These live in the Controls feature of `windows`; the values are fixed by Win32.
 const WM_MOUSEHOVER: u32 = 0x02A1;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-/// How long the pointer must rest on the island before it expands.
-const HOVER_DWELL_MS: u32 = 350;
+/// How long the pointer must rest on the island before it expands. Long
+/// enough that a pointer crossing the notch on its way elsewhere doesn't
+/// open it, short enough that a deliberate hover feels immediate.
+const HOVER_DWELL_MS: u32 = 120;
 
 const TIMER_SYSTEM: usize = 1;
 const TIMER_BATTERY: usize = 2;

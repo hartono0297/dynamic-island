@@ -84,12 +84,12 @@ impl Renderer {
     ) -> Result<()> {
         let rest = shape_for(style, ShapeKind::Panel);
         let settled = shape == rest;
+        // Content is fully visible by ~70 % of the growth, so the panel reads
+        // as open while the shape is still easing into place.
         let fade = if settled {
             1.0
         } else {
-            ((shape.h - COMPACT_H) / (rest.h - COMPACT_H))
-                .clamp(0.0, 1.0)
-                .powi(2)
+            ((shape.h - COMPACT_H) / (rest.h - COMPACT_H) / 0.7).clamp(0.0, 1.0)
         };
         if fade <= 0.0 {
             return Ok(());

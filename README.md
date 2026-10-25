@@ -95,7 +95,7 @@ Rilis baru: push tag `vX.Y.Z`; GitHub Actions (`.github/workflows/release.yml`) 
 
 ### Panel
 
-- **Buka:** diamkan kursor sebentar (~0,35 detik) di atas island. Kursor yang sekadar lewat tidak membukanya. Kursor keluar → panel mengecil lagi.
+- **Buka:** diamkan kursor sebentar (~0,12 detik) di atas island. Kursor yang sekadar lewat tidak membukanya. Kursor keluar → panel mengecil lagi.
 - **Pindah halaman:** putar roda mouse di atas panel. Scroll ke bawah = halaman berikutnya (Kalender → Pomodoro → Notes → Musik), scroll ke atas = sebelumnya; tidak berputar dari Musik balik ke Kalender. Titik di bawah panel menunjukkan halaman yang aktif. Island seharusnya tidak perlu diklik dulu supaya roda mouse sampai (belum dicek di semua mouse/touchpad; kalau roda tidak berefek, klik panel sekali).
 - Panel dibuka lagi di halaman terakhir yang dilihat.
 - **Notifikasi masuk saat panel terbuka:** panel mengecil jadi notifikasi itu (~5 detik, bisa diklik), lalu terbuka lagi kalau kursor masih di atasnya. Selama notifikasi sementara tampil, hover tidak membuka panel.

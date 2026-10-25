@@ -7,7 +7,7 @@ use crate::model::{Hit, Notice, NoticeKind};
 
 pub const WINDOW_W: f32 = 620.0;
 pub const WINDOW_H: f32 = 330.0;
-pub const ANIM_MS: u64 = 380;
+pub const ANIM_MS: u64 = 240;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeRect {
@@ -71,10 +71,14 @@ pub fn lerp_shape(a: ShapeRect, b: ShapeRect, t: f32) -> ShapeRect {
     }
 }
 
-/// Ease-out with a slight overshoot (peaks about 5 % past the target).
+/// Ease-out with a slight overshoot (peaks about 2 % past the target).
 pub fn ease_out_back(t: f32) -> f32 {
-    const C1: f32 = 1.2;
+    const C1: f32 = 0.7;
     const C3: f32 = C1 + 1.0;
+    // Exact at the start: f32 rounding would otherwise leave t = 0 a hair off 0.
+    if t <= 0.0 {
+        return 0.0;
+    }
     let u = t - 1.0;
     1.0 + C3 * u * u * u + C1 * u * u
 }
