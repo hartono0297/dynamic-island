@@ -270,12 +270,13 @@ impl HitRegions {
 }
 
 /// Badge fill as 0xRRGGBB: WhatsApp green, Claude orange, battery amber,
-/// pomodoro red, else grey.
-pub fn badge_color(notice: &Notice) -> u32 {
+/// pomodoro red, reminders in the island's `accent`, else grey.
+pub fn badge_color(notice: &Notice, accent: u32) -> u32 {
     match notice.kind {
         NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => 0xD97757,
         NoticeKind::BatteryLow => 0xF5A524,
         NoticeKind::Pomodoro => 0xEF5350,
+        NoticeKind::Reminder { .. } => accent,
         NoticeKind::App { .. } if notice.source.to_lowercase().contains("whatsapp") => 0x25D366,
         NoticeKind::App { .. } => 0x5A5A5E,
     }
@@ -437,22 +438,27 @@ mod tests {
     #[test]
     fn badge_colors_by_source_and_kind() {
         let app = |s: &str| notice(s, NoticeKind::App { app_id: None });
-        assert_eq!(badge_color(&app("WhatsApp")), 0x25D366);
-        assert_eq!(badge_color(&app("whatsapp beta")), 0x25D366);
-        assert_eq!(badge_color(&app("Discord")), 0x5A5A5E);
+        assert_eq!(badge_color(&app("WhatsApp"), ACCENT), 0x25D366);
+        assert_eq!(badge_color(&app("whatsapp beta"), ACCENT), 0x25D366);
+        assert_eq!(badge_color(&app("Discord"), ACCENT), 0x5A5A5E);
         let done = NoticeKind::ClaudeDone {
             session_id: "s".into(),
         };
-        assert_eq!(badge_color(&notice("Claude", done)), 0xD97757);
+        assert_eq!(badge_color(&notice("Claude", done), ACCENT), 0xD97757);
         let waiting = NoticeKind::ClaudeWaiting {
             session_id: "s".into(),
         };
-        assert_eq!(badge_color(&notice("Claude", waiting)), 0xD97757);
+        assert_eq!(badge_color(&notice("Claude", waiting), ACCENT), 0xD97757);
         assert_eq!(
-            badge_color(&notice("Baterai", NoticeKind::BatteryLow)),
+            badge_color(&notice("Baterai", NoticeKind::BatteryLow), ACCENT),
             0xF5A524
         );
+        // Reminders follow the accent.
+        let reminder = NoticeKind::Reminder { id: "r".into() };
+        assert_eq!(badge_color(&notice("Pengingat", reminder), ACCENT), ACCENT);
     }
+
+    const ACCENT: u32 = 0x123456;
 
     #[test]
     fn badge_letter_is_first_char_uppercased() {

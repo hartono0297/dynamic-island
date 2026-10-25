@@ -48,9 +48,10 @@ use super::geometry::{
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::config::Style;
-use crate::model::{CalView, Hit, MediaInfo, Notice, Page, View};
+use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
+use crate::reminders::Reminder;
 use crate::theme::{self, Accent, Palette};
 
 // Page drawing lives in its own file; as a child module it shares the
@@ -67,6 +68,8 @@ const GLYPH_PLAY: &str = "\u{E768}";
 const GLYPH_PAUSE: &str = "\u{E769}";
 const GLYPH_NEXT: &str = "\u{E893}";
 const GLYPH_MUSIC: &str = "\u{E8D6}";
+/// "Ringer" in Segoe Fluent Icons and Segoe MDL2 Assets.
+const GLYPH_BELL: &str = "\u{EA8F}";
 
 /// Everything a frame draws besides the shape: the view and the data behind it.
 pub struct Frame<'a> {
@@ -87,6 +90,9 @@ pub struct Frame<'a> {
     pub calendar: &'a CalendarSnapshot,
     pub notes: &'a [Note],
     pub notes_page: usize,
+    /// Upcoming (not done) reminders, earliest first.
+    pub reminders: &'a [Reminder],
+    pub reminders_page: usize,
     /// Day view: chunk of the day's events ("+N lagi" clicks).
     pub day_page: usize,
     /// -1..1 during a page transition, 0 at rest: the page is drawn shifted
@@ -126,6 +132,10 @@ struct Fonts {
     secondary: IDWriteTextFormat,
     icon: IDWriteTextFormat,
     badge: IDWriteTextFormat,
+    /// The reminder notice's bell.
+    badge_icon: IDWriteTextFormat,
+    /// Segoe Fluent Icons or Segoe MDL2 Assets is installed.
+    has_icons: bool,
     /// The idle clock.
     clock: IDWriteTextFormat,
     /// Page titles ("Oktober 2026", "Pomodoro", "Notes").
@@ -488,7 +498,7 @@ impl Renderer {
 
     fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice) -> Result<()> {
         let layout = notice_layout(shape);
-        let fill = badge_color(notice);
+        let fill = badge_color(notice, self.palette.accent);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
             target.brush.SetColor(&color(fill, 1.0));
@@ -502,14 +512,26 @@ impl Renderer {
                 &target.brush,
             );
         }
-        // Dark letter on the light fills (WhatsApp green, amber), white otherwise.
-        let ink = match fill {
-            0x25D366 => 0x0B3D1F,
-            0xF5A524 => 0x3D2A00,
-            _ => 0xFFFFFF,
-        };
-        let letter = badge_letter(&notice.source);
-        self.text_colored(&letter, &self.fonts.badge, layout.badge, ink, 1.0);
+        if matches!(notice.kind, NoticeKind::Reminder { .. }) {
+            // A bell in the accent's ink; the letter if no icon font is installed.
+            let ink = self.palette.on_accent;
+            if self.fonts.has_icons {
+                let bell = &self.fonts.badge_icon;
+                self.text_colored(GLYPH_BELL, bell, layout.badge, ink, 1.0);
+            } else {
+                let letter = badge_letter(&notice.source);
+                self.text_colored(&letter, &self.fonts.badge, layout.badge, ink, 1.0);
+            }
+        } else {
+            // Dark letter on the light fills (WhatsApp green, amber), white otherwise.
+            let ink = match fill {
+                0x25D366 => 0x0B3D1F,
+                0xF5A524 => 0x3D2A00,
+                _ => 0xFFFFFF,
+            };
+            let letter = badge_letter(&notice.source);
+            self.text_colored(&letter, &self.fonts.badge, layout.badge, ink, 1.0);
+        }
         self.text(&notice.title, &self.fonts.title, layout.title, 1.0);
         self.text(
             &notice.body,
@@ -720,8 +742,9 @@ impl Fonts {
                 w!("Segoe UI"),
             ],
         )?;
-        let icon_family =
-            first_installed(dwrite, &[w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")])?;
+        let icon_names = [w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")];
+        let has_icons = find_installed(dwrite, &icon_names)?.is_some();
+        let icon_family = first_installed(dwrite, &icon_names)?;
         let line = |weight, size| line_format(dwrite, text_family, weight, size);
         let aligned = |family, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
             let format = line_format(dwrite, family, weight, size)?;
@@ -736,6 +759,8 @@ impl Fonts {
             secondary: line(normal, 12.0)?,
             icon: centered(icon_family, normal, 16.0)?,
             badge: centered(text_family, DWRITE_FONT_WEIGHT_BOLD, 17.0)?,
+            badge_icon: centered(icon_family, normal, 18.0)?,
+            has_icons,
             clock: centered(text_family, semi, 13.0)?,
             heading: line(semi, 15.0)?,
             small: line(normal, 11.0)?,
@@ -759,6 +784,11 @@ impl Fonts {
 /// The first family in `names` present in the system collection (else the last name,
 /// letting DirectWrite's own fallback pick).
 fn first_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<PCWSTR> {
+    Ok(find_installed(dwrite, names)?.unwrap_or(*names.last().expect("at least one family name")))
+}
+
+/// The first family in `names` present in the system collection, if any.
+fn find_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<Option<PCWSTR>> {
     unsafe {
         let mut collection = None;
         dwrite.GetSystemFontCollection(&mut collection, false)?;
@@ -767,12 +797,12 @@ fn first_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<PCWSTR> 
                 let (mut index, mut exists) = (0u32, BOOL(0));
                 collection.FindFamilyName(name, &mut index, &mut exists)?;
                 if exists.as_bool() {
-                    return Ok(name);
+                    return Ok(Some(name));
                 }
             }
         }
     }
-    Ok(*names.last().expect("at least one family name"))
+    Ok(None)
 }
 
 /// Single line, vertically centered, never wrapping, trimmed per character with "…".

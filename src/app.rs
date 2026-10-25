@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate, NaiveTime, Timelike};
+use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
 };
@@ -41,6 +41,7 @@ use crate::i18n::{self, Key, tr};
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
+use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
@@ -81,6 +82,8 @@ const TIMER_EQ: usize = 5;
 const TIMER_POMO: usize = 6;
 /// Date rollover check.
 const TIMER_DAY: usize = 7;
+/// Reminders: one-shot at the earliest due time (at most `REMINDER_MAX_MS` away).
+const TIMER_REMINDER: usize = 9;
 /// Idle clock redraws at each minute boundary, only while it shows.
 const TIMER_CLOCK: usize = 8;
 const SYSTEM_MS: u32 = 1000;
@@ -88,6 +91,11 @@ const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
 const EQ_MS: u32 = 33;
 const DAY_MS: u32 = 60_000;
+/// The reminder timer re-arms at least this often, so a changed clock or a
+/// sleep is noticed without polling.
+const REMINDER_MAX_MS: i64 = 3_600_000;
+/// A reminder fired this much after its time (sleep, clock change) says "Terlewat".
+const REMINDER_LATE_SECS: i64 = 60;
 /// Values table: page slide duration (ease-out).
 const SLIDE_MS: f32 = 220.0;
 /// Values table: the open calendar re-asks for its range once data is this old.
@@ -129,6 +137,7 @@ pub fn run() {
     let pomodoro = config.pomodoro;
     let today = Local::now().date_naive();
     let notes = NotesStore::open(NotesStore::default_path());
+    let reminders = RemindersStore::open(RemindersStore::default_path());
     // Sends the cached calendar at once; the first range is asked for below.
     let sync = spawn_sync(tx.clone(), poster(hwnd, WM_APP_EVENT), config.clone());
     APP.with(|cell| {
@@ -140,6 +149,8 @@ pub fn run() {
             state: IslandState::new(today, pomodoro),
             calendar: CalendarSnapshot::empty(CalStatus::NotConfigured, today),
             notes,
+            reminders,
+            reminder_fired: Vec::new(),
             sync: Some(sync),
             calendar_asked: None,
             editor: None,
@@ -169,6 +180,11 @@ pub fn run() {
         if let Some(notice) = notes_unreadable_notice(&app.notes) {
             app.apply_now(Event::Notice(notice));
         }
+        if let Some(notice) = reminders_unreadable_notice(&app.reminders) {
+            app.apply_now(Event::Notice(notice));
+        }
+        // Reminders that came due while the island was off ring now.
+        app.fire_reminders(true);
         unsafe {
             SetTimer(Some(hwnd), TIMER_SYSTEM, SYSTEM_MS, None);
             SetTimer(Some(hwnd), TIMER_BATTERY, BATTERY_MS, None);
@@ -226,11 +242,15 @@ struct App {
     /// The latest calendar data from the sync thread.
     calendar: CalendarSnapshot,
     notes: NotesStore,
+    reminders: RemindersStore,
+    /// Due reminders whose notice was raised and not yet dismissed; the timer
+    /// skips them.
+    reminder_fired: Vec<String>,
     /// `None` once shut down.
     sync: Option<SyncHandle>,
     /// The range last asked of the sync thread, and when.
     calendar_asked: Option<((NaiveDate, NaiveDate), Instant)>,
-    /// The open note or event editor (at most one).
+    /// The open note, event or reminder editor (at most one).
     editor: Option<HWND>,
     rx: Receiver<Event>,
     /// Kept to restart the notification poller once access is granted.
@@ -306,8 +326,96 @@ impl App {
                 let kind = event_editor_kind(&self.calendar.events, event_id.as_deref(), date)?;
                 return self.open_editor(kind);
             }
+            Effect::OpenReminderEditor(id) => {
+                let now = Local::now().naive_local();
+                return self.open_editor(reminder_editor_kind(&self.reminders, id.as_deref(), now));
+            }
+            Effect::ReminderDone(id) => {
+                // The reducer already took its notice down.
+                self.reminder_fired.retain(|f| *f != id);
+                if self
+                    .reminders
+                    .mark_done_or_advance(&id, Local::now().timestamp())
+                {
+                    self.persist_reminders(now);
+                }
+                self.arm_reminders();
+            }
         }
         None
+    }
+
+    /// Raises a notice (and one sound) for every reminder whose time has come
+    /// and that is not showing yet, then re-arms the timer. At startup they all
+    /// say "Terlewat"; later only those fired well after their time (sleep).
+    fn fire_reminders(&mut self, startup: bool) {
+        let now = Instant::now();
+        let unix = Local::now().timestamp();
+        let mut rang = false;
+        for id in due_now(self.reminders.list(), unix) {
+            if self.reminder_fired.contains(&id) {
+                continue;
+            }
+            let Some(notice) = self
+                .reminders
+                .get(&id)
+                .map(|r| reminder_notice(r, unix, startup))
+            else {
+                continue;
+            };
+            self.reminder_fired.push(id);
+            self.apply(Event::Notice(notice), now);
+            rang = true;
+        }
+        if rang {
+            play_phase_sound();
+            self.refresh(now);
+        }
+        self.arm_reminders();
+    }
+
+    /// One-shot to the earliest reminder not showing yet, capped at
+    /// `REMINDER_MAX_MS` so a clock change or sleep is caught within the hour.
+    fn arm_reminders(&self) {
+        let pending: Vec<Reminder> = self
+            .reminders
+            .upcoming()
+            .iter()
+            .filter(|r| !self.reminder_fired.contains(&r.id))
+            .cloned()
+            .collect();
+        let wait = reminder_wait_ms(next_due(&pending), Local::now().timestamp_millis());
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_REMINDER);
+            if let Some(ms) = wait {
+                SetTimer(Some(self.hwnd), TIMER_REMINDER, ms, None);
+            }
+        }
+    }
+
+    /// After an edit or delete: notices of reminders that are no longer due
+    /// come down, and the timer follows the new times.
+    fn settle_reminders(&mut self, now: Instant) {
+        let due = due_now(self.reminders.list(), Local::now().timestamp());
+        let (keep, gone): (Vec<String>, Vec<String>) = std::mem::take(&mut self.reminder_fired)
+            .into_iter()
+            .partition(|id| due.contains(id));
+        self.reminder_fired = keep;
+        for id in gone {
+            self.apply(Event::ReminderCleared(id), now);
+        }
+        self.arm_reminders();
+    }
+
+    fn persist_reminders(&mut self, now: Instant) {
+        if let Err(error) = self.reminders.save() {
+            let notice = island_notice(
+                "reminders",
+                tr(Key::RemindersSaveFailed),
+                &error.to_string(),
+            );
+            self.apply(Event::Notice(notice), now);
+        }
     }
 
     /// Slides in the page the wheel just switched to.
@@ -419,6 +527,28 @@ impl App {
                     }
                 }
             }
+            EditorResult::ReminderSaved {
+                id,
+                text,
+                date,
+                time,
+                repeat,
+            } => {
+                let unix = Local::now().timestamp();
+                if let Some(due) = reminders::local_unix(date, time) {
+                    let due = reminders::first_due(due, repeat, unix);
+                    self.reminders
+                        .upsert(id.as_deref(), &text, due, repeat, unix);
+                    self.persist_reminders(now);
+                    self.settle_reminders(now);
+                }
+            }
+            EditorResult::ReminderDeleted { id } => {
+                if self.reminders.delete(&id) {
+                    self.persist_reminders(now);
+                    self.settle_reminders(now);
+                }
+            }
             EditorResult::Closed => {}
         }
         if closes {
@@ -462,6 +592,8 @@ impl App {
         let today = Local::now().date_naive();
         if today != self.state.today() {
             self.apply_now(Event::Today(today));
+            // A new day may follow a clock or time-zone change.
+            self.fire_reminders(false);
         }
     }
 
@@ -578,9 +710,11 @@ impl App {
         }
     }
 
-    /// The wall clock jumped (time or zone changed, or the PC woke up): a
+    /// The wall clock jumped (time or zone changed, or the PC woke up): due
+    /// reminders ring and the reminder timer re-arms for the new time; a
     /// showing clock redraws now and re-aligns to the new minute boundary.
     fn on_clock_jump(&mut self) {
+        self.fire_reminders(false);
         if !self.clock_timer {
             return;
         }
@@ -639,6 +773,13 @@ impl App {
                 }
             }
             TIMER_DAY => self.check_date(),
+            TIMER_REMINDER => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_REMINDER);
+                }
+                // Also re-arms: the next one, or another hour's wait.
+                self.fire_reminders(false);
+            }
             TIMER_CLOCK => {
                 if !self.animating() {
                     self.draw(Instant::now());
@@ -938,6 +1079,8 @@ impl App {
             cal_selected: state.cal_selected(),
             calendar: &self.calendar,
             notes: self.notes.list(),
+            reminders: self.reminders.upcoming(),
+            reminders_page: state.reminders_page(),
             notes_page: state.notes_page(),
             day_page: state.day_page(),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
@@ -1226,6 +1369,88 @@ fn notes_unreadable_notice(notes: &NotesStore) -> Option<Notice> {
             tr(Key::NotesUnreadableBody),
         )
     })
+}
+
+/// At startup: reminders.json exists but could not be read or parsed.
+fn reminders_unreadable_notice(reminders: &RemindersStore) -> Option<Notice> {
+    reminders.load_failed().then(|| {
+        island_notice(
+            "reminders-unreadable",
+            tr(Key::RemindersUnreadable),
+            tr(Key::RemindersUnreadableBody),
+        )
+    })
+}
+
+/// The sticky notice for a reminder whose time came: its text over the time
+/// ("09.30", or "26 Okt 09.30" on another day), marked "Terlewat · " when it
+/// is announced late: at startup, or over a minute after its time.
+fn reminder_notice(r: &Reminder, now: i64, startup: bool) -> Notice {
+    let lang = i18n::lang();
+    let when = match (
+        reminders::local_time(r.due_unix),
+        reminders::local_time(now),
+    ) {
+        (Some(due), Some(today)) if due.date() == today.date() => i18n::time_hm(lang, due),
+        (Some(due), _) => format!(
+            "{} {}",
+            i18n::short_date(lang, due.date()),
+            i18n::time_hm(lang, due)
+        ),
+        (None, _) => String::new(),
+    };
+    let late = startup || now - r.due_unix > REMINDER_LATE_SECS;
+    let body = if late {
+        format!("{} · {when}", i18n::text(lang, Key::Missed))
+    } else {
+        when
+    };
+    Notice {
+        key: format!("reminder-{}", r.id),
+        source: tr(Key::SourceReminder).into(),
+        title: r.text.clone(),
+        body,
+        kind: NoticeKind::Reminder { id: r.id.clone() },
+    }
+}
+
+/// Milliseconds until the reminder due at `next` (Unix seconds), plus 1 ms
+/// so it is due when the timer fires; never more than `REMINDER_MAX_MS`.
+/// `None` when nothing is pending.
+fn reminder_wait_ms(next: Option<i64>, now_ms: i64) -> Option<u32> {
+    let due_ms = next?.saturating_mul(1000);
+    let wait = due_ms.saturating_sub(now_ms).max(0).saturating_add(1);
+    Some(wait.min(REMINDER_MAX_MS) as u32)
+}
+
+/// The reminder editor for `id`; an unknown id (deleted meanwhile) or `None`
+/// opens a new one-off reminder at the next whole hour after `now`.
+fn reminder_editor_kind(
+    reminders: &RemindersStore,
+    id: Option<&str>,
+    now: NaiveDateTime,
+) -> EditorKind {
+    let existing = id.and_then(|id| reminders.get(id));
+    if let Some(r) = existing
+        && let Some(due) = reminders::local_time(r.due_unix)
+    {
+        return EditorKind::Reminder {
+            id: Some(r.id.clone()),
+            text: r.text.clone(),
+            date: due.date(),
+            time: due.time(),
+            repeat: r.repeat,
+        };
+    }
+    let next_hour =
+        now.date().and_hms_opt(now.hour(), 0, 0).unwrap_or(now) + chrono::Duration::hours(1);
+    EditorKind::Reminder {
+        id: None,
+        text: String::new(),
+        date: next_hour.date(),
+        time: next_hour.time(),
+        repeat: reminders::Repeat::Once,
+    }
 }
 
 /// What "Hubungkan Google" does, given whether config.json is valid (or
@@ -1943,6 +2168,122 @@ mod tests {
         // New: on the selected date, writable, into the primary calendar.
         assert_eq!(open(None), (None, None, date(27), false));
         assert_eq!(event_editor_kind(&events, Some("gone"), date(27)), None);
+    }
+
+    fn local_unix(d: NaiveDate, h: u32, m: u32) -> i64 {
+        reminders::local_unix(d, NaiveTime::from_hms_opt(h, m, 0).unwrap()).unwrap()
+    }
+
+    fn due_reminder(due: i64) -> Reminder {
+        Reminder {
+            id: "r1-0".into(),
+            text: "Minum obat".into(),
+            due_unix: due,
+            repeat: reminders::Repeat::Daily,
+            done: false,
+        }
+    }
+
+    #[test]
+    fn reminder_notice_on_time_late_and_missed() {
+        let due = local_unix(date(26), 8, 30);
+        let on_time = reminder_notice(&due_reminder(due), due + 1, false);
+        assert_eq!(on_time.title, "Minum obat");
+        assert_eq!(on_time.body, "08.30");
+        assert_eq!(on_time.source, "Pengingat");
+        assert_eq!(on_time.key, "reminder-r1-0");
+        assert_eq!(on_time.kind, NoticeKind::Reminder { id: "r1-0".into() });
+        // Woken from sleep ten minutes late.
+        let late = reminder_notice(&due_reminder(due), due + 600, false);
+        assert_eq!(late.body, "Terlewat · 08.30");
+        // At startup, even a just-passed one was missed while off.
+        let missed = reminder_notice(&due_reminder(due), due + 5, true);
+        assert_eq!(missed.body, "Terlewat · 08.30");
+        // From another day: with its date.
+        let next_day = local_unix(date(27), 9, 0);
+        let old = reminder_notice(&due_reminder(due), next_day, true);
+        assert_eq!(old.body, "Terlewat · 26 Okt 08.30");
+    }
+
+    #[test]
+    fn reminder_notice_in_english() {
+        i18n::set_lang(i18n::Lang::En);
+        let due = local_unix(date(26), 8, 30);
+        let missed = reminder_notice(&due_reminder(due), due + 5, true);
+        assert_eq!(
+            (missed.source.as_str(), missed.body.as_str()),
+            ("Reminder", "Missed · 08:30")
+        );
+    }
+
+    #[test]
+    fn reminder_timer_waits_for_the_next_but_at_most_an_hour() {
+        assert_eq!(reminder_wait_ms(None, 5_000), None);
+        // Due in 90 s.
+        assert_eq!(reminder_wait_ms(Some(100), 10_000), Some(90_001));
+        // Already due (a moment ago): at once.
+        assert_eq!(reminder_wait_ms(Some(100), 100_500), Some(1));
+        // Tomorrow: an hour, then it looks again.
+        assert_eq!(reminder_wait_ms(Some(86_400), 0), Some(3_600_000));
+    }
+
+    #[test]
+    fn reminder_editor_opens_the_reminder_or_a_new_one_next_hour() {
+        let dir = std::env::temp_dir().join(format!(
+            "dynamic-island-app-reminder-kind-{}",
+            std::process::id()
+        ));
+        let mut store = RemindersStore::open(dir.join("reminders.json"));
+        let due = local_unix(date(27), 7, 15);
+        let id = store
+            .upsert(None, "Telepon ibu", due, reminders::Repeat::Weekly, 1)
+            .unwrap();
+        let now = date(26).and_hms_opt(22, 40, 0).unwrap();
+        assert_eq!(
+            reminder_editor_kind(&store, Some(&id), now),
+            EditorKind::Reminder {
+                id: Some(id),
+                text: "Telepon ibu".into(),
+                date: date(27),
+                time: NaiveTime::from_hms_opt(7, 15, 0).unwrap(),
+                repeat: reminders::Repeat::Weekly,
+            }
+        );
+        let new = |now| match reminder_editor_kind(&store, Some("r0-gone"), now) {
+            EditorKind::Reminder {
+                id: None,
+                text,
+                date,
+                time,
+                repeat: reminders::Repeat::Once,
+            } if text.is_empty() => (date, time),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            new(now),
+            (date(26), NaiveTime::from_hms_opt(23, 0, 0).unwrap())
+        );
+        let late = date(26).and_hms_opt(23, 5, 0).unwrap();
+        assert_eq!(new(late), (date(27), NaiveTime::MIN), "past midnight");
+        assert!(!dir.exists(), "nothing written");
+    }
+
+    #[test]
+    fn unreadable_reminders_file_is_announced() {
+        let dir = std::env::temp_dir().join(format!(
+            "dynamic-island-app-reminders-bad-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("reminders.json"), "[{").unwrap();
+        let store = RemindersStore::open(dir.join("reminders.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let notice = reminders_unreadable_notice(&store).expect("a notice");
+        assert_eq!(notice.title, "reminders.json tidak terbaca");
+        assert_eq!(
+            reminders_unreadable_notice(&RemindersStore::open(dir.join("none.json"))),
+            None
+        );
     }
 
     #[test]

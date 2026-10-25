@@ -1,12 +1,13 @@
-//! The note and event editors: small Win32 windows under the panel, dark or
-//! light per the window mode (`theme::current_window`),
+//! The note, event and reminder editors: small Win32 windows under the panel,
+//! dark or light per the window mode (`theme::current_window`),
 //! because the layered island cannot host native text controls. At most one
 //! editor exists at a time; it lives on the island's UI thread and reports to
 //! the island with `WM_APP_EDITOR_RESULT`.
 //!
-//! Every editor's last result is `NoteSaved`, `NoteDeleted` or `Closed`
-//! (`EditorResult::closes_editor`), posted as the window goes away.
-//! `EventSave` is not last: the event editor waits for `WM_APP_EDITOR_STATUS`.
+//! Every editor's last result is `NoteSaved`, `NoteDeleted`, `ReminderSaved`,
+//! `ReminderDeleted` or `Closed` (`EditorResult::closes_editor`), posted as
+//! the window goes away. `EventSave` is not last: the event editor waits for
+//! `WM_APP_EDITOR_STATUS`.
 //!
 //! Keyboard handling lives in a subclass on each control (Esc, Ctrl+Enter,
 //! Tab), so the editors need no `IsDialogMessage` in the island's loop.
@@ -24,18 +25,21 @@ use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowA
 use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    CreateSolidBrush, DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
-    FONT_QUALITY, FW_NORMAL, FillRect, FrameRect, GdiFlush, GetMonitorInfoW, HBRUSH, HDC, HFONT,
-    HGDIOBJ, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints, MonitorFromPoint,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
-    RedrawWindow, SRCCOPY, SelectObject, SetBkColor, SetTextColor,
+    CreatePen, CreateSolidBrush, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE,
+    DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FONT_QUALITY, FW_NORMAL, FillRect,
+    FrameRect, GdiFlush, GetMonitorInfoW, GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints, MonitorFromPoint, NULL_BRUSH,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
+    RDW_INVALIDATE, RedrawWindow, RoundRect, SRCCOPY, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    BST_CHECKED, DATETIMEPICK_CLASSW, DTM_GETMONTHCAL, DTM_GETSYSTEMTIME, DTM_SETFORMATW,
-    DTM_SETMCFONT, DTM_SETSYSTEMTIME, DTN_DATETIMECHANGE, DTN_DROPDOWN, DTS_SHORTDATEFORMAT,
-    DTS_TIMEFORMAT, EM_SETMARGINS, EM_SETSEL, GDT_VALID, ICC_DATE_CLASSES, ICC_STANDARD_CLASSES,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SetWindowTheme,
+    BST_CHECKED, DATETIMEPICK_CLASSW, DRAWITEMSTRUCT, DTM_GETMONTHCAL, DTM_GETSYSTEMTIME,
+    DTM_SETFORMATW, DTM_SETMCFONT, DTM_SETSYSTEMTIME, DTN_DATETIMECHANGE, DTN_DROPDOWN,
+    DTS_SHORTDATEFORMAT, DTS_TIMEFORMAT, EM_SETMARGINS, EM_SETSEL, GDT_VALID, ICC_DATE_CLASSES,
+    ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, ODS_FOCUS,
+    ODS_NOFOCUSRECT, ODS_SELECTED, ODT_BUTTON, SetWindowTheme,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -44,23 +48,25 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
-    BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN, EC_RIGHTMARGIN,
-    ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, GW_CHILD,
-    GetClientRect, GetDlgCtrlID, GetForegroundWindow, GetNextDlgTabItem, GetParent, GetWindow,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL, IDOK, IsChild,
-    IsWindow, LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW, RegisterClassExW,
-    SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, SwitchToThisWindow, WA_INACTIVE,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT,
-    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BS_OWNERDRAW, BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN,
+    EC_RIGHTMARGIN, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN,
+    GW_CHILD, GetClientRect, GetDlgCtrlID, GetForegroundWindow, GetNextDlgTabItem, GetParent,
+    GetWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL,
+    IDOK, IsChild, IsWindow, LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW,
+    RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
+    SwitchToThisWindow, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY,
+    WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use crate::calendar::EventDraft;
 use crate::i18n::{self, Key, Lang, tr};
+use crate::reminders::{Repeat, local_unix};
 use crate::theme::{self, WindowPalette};
 use crate::ui::app_icon;
 
@@ -89,6 +95,14 @@ pub enum EditorKind {
         draft: EventDraft,
         read_only: bool,
     },
+    /// `id` is `None` for a new reminder.
+    Reminder {
+        id: Option<String>,
+        text: String,
+        date: NaiveDate,
+        time: NaiveTime,
+        repeat: Repeat,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,11 +115,22 @@ pub enum EditorResult {
     NoteDeleted {
         id: String,
     },
-    /// The editor stays open, showing "Menyimpan…", until `WM_APP_EDITOR_STATUS`.
+    /// The editor stays open, showing "Menyimpanâ€¦", until `WM_APP_EDITOR_STATUS`.
     EventSave {
         event_id: Option<String>,
         calendar_id: Option<String>,
         draft: EventDraft,
+    },
+    /// Validated: text not empty, and a one-off not in the past.
+    ReminderSaved {
+        id: Option<String>,
+        text: String,
+        date: NaiveDate,
+        time: NaiveTime,
+        repeat: Repeat,
+    },
+    ReminderDeleted {
+        id: String,
     },
     Closed,
 }
@@ -131,6 +156,7 @@ pub unsafe fn take_result(lparam: LPARAM) -> Option<EditorResult> {
 /// Logical sizes (the window's outer size, scaled by the monitor's DPI).
 const NOTE_SIZE: (f32, f32) = (400.0, 220.0);
 const EVENT_SIZE: (f32, f32) = (420.0, 260.0);
+const REMINDER_SIZE: (f32, f32) = (420.0, 236.0);
 /// Gap between the anchor (the panel's bottom edge) and the editor, in px.
 const GAP: i32 = 8;
 
@@ -161,6 +187,25 @@ pub fn validate_event(d: &EventDraft) -> std::result::Result<(), Key> {
     }
     if !d.all_day && d.end <= d.start {
         return Err(Key::EndBeforeStart);
+    }
+    Ok(())
+}
+
+/// The checks behind the reminder's "Simpan": some text, and a one-off
+/// reminder must be due after `now` (`due` is `None` when the local time
+/// cannot be worked out, which counts as passed). A repeating one set in the
+/// past simply starts at its next occurrence.
+pub fn validate_reminder(
+    text: &str,
+    due: Option<i64>,
+    repeat: Repeat,
+    now: i64,
+) -> std::result::Result<(), Key> {
+    if text.trim().is_empty() {
+        return Err(Key::TextRequired);
+    }
+    if repeat == Repeat::Once && due.is_none_or(|due| due <= now) {
+        return Err(Key::TimePassed);
     }
     Ok(())
 }
@@ -219,6 +264,8 @@ fn title_key(mode: &Mode) -> Key {
         } => Key::EditorEvent,
         Mode::Event { event_id: None, .. } => Key::EditorAddEvent,
         Mode::Event { .. } => Key::EditorEditEvent,
+        Mode::Reminder { id: None, .. } => Key::EditorNewReminder,
+        Mode::Reminder { .. } => Key::EditorEditReminder,
     }
 }
 
@@ -232,6 +279,12 @@ fn label_key(id: i32, read_only: bool) -> Option<Key> {
         ID_LBL_END => Key::FieldEnd,
         ID_LBL_NOTES => Key::FieldNotes,
         ID_ALLDAY_LABEL => Key::AllDay,
+        ID_LBL_TEXT => Key::FieldText,
+        ID_LBL_TIME => Key::FieldTime,
+        ID_LBL_REPEAT => Key::FieldRepeat,
+        ID_REPEAT_ONCE => Key::RepeatOnce,
+        ID_REPEAT_DAILY => Key::RepeatDaily,
+        ID_REPEAT_WEEKLY => Key::RepeatWeekly,
         ID_OK => Key::Save,
         ID_CANCEL if read_only => Key::Close,
         ID_CANCEL => Key::Cancel,
@@ -252,11 +305,40 @@ const ID_START: i32 = 205;
 const ID_END: i32 = 206;
 const ID_NOTES: i32 = 207;
 const ID_STATUS: i32 = 208;
+const ID_TIME: i32 = 209;
+const ID_REPEAT_ONCE: i32 = 210;
+const ID_REPEAT_DAILY: i32 = 211;
+const ID_REPEAT_WEEKLY: i32 = 212;
 const ID_LBL_TITLE: i32 = 301;
 const ID_LBL_DATE: i32 = 302;
 const ID_LBL_START: i32 = 303;
 const ID_LBL_END: i32 = 304;
 const ID_LBL_NOTES: i32 = 305;
+const ID_LBL_TEXT: i32 = 306;
+const ID_LBL_TIME: i32 = 307;
+const ID_LBL_REPEAT: i32 = 308;
+
+/// The repeat segments, in order, with what each one picks.
+const REPEAT_SEGMENTS: [(i32, Repeat); 3] = [
+    (ID_REPEAT_ONCE, Repeat::Once),
+    (ID_REPEAT_DAILY, Repeat::Daily),
+    (ID_REPEAT_WEEKLY, Repeat::Weekly),
+];
+
+fn segment_for(repeat: Repeat) -> i32 {
+    REPEAT_SEGMENTS
+        .iter()
+        .find(|(_, r)| *r == repeat)
+        .map_or(ID_REPEAT_ONCE, |(id, _)| *id)
+}
+
+/// Which kind of editor a layout is for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Form {
+    Note,
+    Event,
+    Reminder,
+}
 
 // Static styles (System_SystemServices in `windows`; values fixed by Win32).
 const SS_NOTIFY: u32 = 0x0100;
@@ -430,15 +512,63 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
             }
             v
         }
+        EditorKind::Reminder { id, text, .. } => {
+            let button = |id, key, style: i32| {
+                spec(id, w!("BUTTON"), tr(key), style as u32, Some(Role::Button))
+            };
+            let mut v = vec![
+                label(ID_LBL_TEXT, tr(Key::FieldText)),
+                spec(
+                    ID_TITLE,
+                    w!("EDIT"),
+                    text,
+                    ES_AUTOHSCROLL as u32,
+                    Some(Role::Line),
+                ),
+                label(ID_LBL_DATE, tr(Key::FieldDate)),
+                spec(
+                    ID_DATE,
+                    DATETIMEPICK_CLASSW,
+                    "",
+                    DTS_SHORTDATEFORMAT,
+                    Some(Role::Picker),
+                ),
+                label(ID_LBL_TIME, tr(Key::FieldTime)),
+                spec(
+                    ID_TIME,
+                    DATETIMEPICK_CLASSW,
+                    "",
+                    DTS_TIMEFORMAT,
+                    Some(Role::Picker),
+                ),
+                label(ID_LBL_REPEAT, tr(Key::FieldRepeat)),
+                button(ID_REPEAT_ONCE, Key::RepeatOnce, BS_OWNERDRAW),
+                button(ID_REPEAT_DAILY, Key::RepeatDaily, BS_OWNERDRAW),
+                button(ID_REPEAT_WEEKLY, Key::RepeatWeekly, BS_OWNERDRAW),
+                spec(
+                    ID_STATUS,
+                    w!("STATIC"),
+                    "",
+                    SS_CENTERIMAGE | SS_ENDELLIPSIS,
+                    None,
+                ),
+            ];
+            if id.is_some() {
+                v.push(button(ID_DELETE, Key::Delete, BS_PUSHBUTTON));
+            }
+            v.push(button(ID_OK, Key::Save, BS_DEFPUSHBUTTON));
+            v.push(button(ID_CANCEL, Key::Cancel, BS_PUSHBUTTON));
+            v
+        }
     }
 }
 
-/// Logical `[x, y, w, h]` of each control for a client area of `cw` × `ch`
+/// Logical `[x, y, w, h]` of each control for a client area of `cw` Ã— `ch`
 /// logical px.
-fn layout(note: bool, ids: &[i32], cw: f32, ch: f32) -> Vec<(i32, [f32; 4])> {
+fn layout(form: Form, ids: &[i32], cw: f32, ch: f32) -> Vec<(i32, [f32; 4])> {
     let has = |id| ids.contains(&id);
     let mut out = Vec::new();
-    if note {
+    if form == Form::Note {
         let m = 10.0;
         let row = if has(ID_DELETE) { 28.0 + 8.0 } else { 0.0 };
         out.push((ID_TEXT, [m, m, cw - 2.0 * m, ch - 2.0 * m - row]));
@@ -449,6 +579,36 @@ fn layout(note: bool, ids: &[i32], cw: f32, ch: f32) -> Vec<(i32, [f32; 4])> {
     let fx = m + label_w + 8.0;
     let field_w = cw - fx - m;
     let rows = [12.0, 44.0, 76.0, 108.0];
+    if form == Form::Reminder {
+        for (id, y) in [ID_LBL_TEXT, ID_LBL_DATE, ID_LBL_TIME, ID_LBL_REPEAT]
+            .into_iter()
+            .zip(rows)
+        {
+            out.push((id, [m, y, label_w, row_h]));
+        }
+        out.push((ID_TITLE, [fx, rows[0], field_w, row_h]));
+        out.push((ID_DATE, [fx, rows[1], 150.0, row_h]));
+        out.push((ID_TIME, [fx, rows[2], 80.0, row_h]));
+        let (seg_w, seg_h, seg_gap) = (84.0, 26.0, 4.0);
+        for (i, (id, _)) in REPEAT_SEGMENTS.into_iter().enumerate() {
+            let x = fx + i as f32 * (seg_w + seg_gap);
+            out.push((id, [x, rows[3] - 1.0, seg_w, seg_h]));
+        }
+        let (btn_w, btn_h) = (80.0, 28.0);
+        let by = ch - m - btn_h;
+        let cancel = cw - m - btn_w;
+        let ok = cancel - 8.0 - btn_w;
+        out.push((ID_CANCEL, [cancel, by, btn_w, btn_h]));
+        out.push((ID_OK, [ok, by, btn_w, btn_h]));
+        let status_x = if has(ID_DELETE) {
+            out.push((ID_DELETE, [m, by, btn_w, btn_h]));
+            m + btn_w + 8.0
+        } else {
+            m
+        };
+        out.push((ID_STATUS, [status_x, by, ok - 8.0 - status_x, btn_h]));
+        return out;
+    }
     for (id, y) in [ID_LBL_TITLE, ID_LBL_DATE, ID_LBL_START, ID_LBL_NOTES]
         .into_iter()
         .zip(rows)
@@ -493,6 +653,33 @@ enum Mode {
         /// An `EventSave` was posted; Simpan stays off until the status arrives.
         saving: bool,
     },
+    Reminder {
+        id: Option<String>,
+        /// What the pickers started from; fallback if one cannot be read.
+        date: NaiveDate,
+        time: NaiveTime,
+        /// The selected repeat segment.
+        repeat: Repeat,
+    },
+}
+
+impl Mode {
+    fn form(&self) -> Form {
+        match self {
+            Mode::Note { .. } => Form::Note,
+            Mode::Event { .. } => Form::Event,
+            Mode::Reminder { .. } => Form::Reminder,
+        }
+    }
+
+    /// The date the date picker started from.
+    fn base_date(&self) -> Option<NaiveDate> {
+        match self {
+            Mode::Note { .. } => None,
+            Mode::Event { base, .. } => Some(base.date),
+            Mode::Reminder { date, .. } => Some(*date),
+        }
+    }
 }
 
 struct Editor {
@@ -533,7 +720,7 @@ impl Fonts {
     }
 
     fn apply(&self, control: HWND, id: i32) {
-        let font = if matches!(id, ID_DATE | ID_START | ID_END) {
+        let font = if matches!(id, ID_DATE | ID_START | ID_END | ID_TIME) {
             self.gray
         } else {
             self.text
@@ -565,6 +752,9 @@ thread_local! {
     static STATUS_LABEL: Cell<(isize, bool)> = const { Cell::new((0, false)) };
     /// The control that last had the keyboard focus, restored on reactivation.
     static LAST_FOCUS: Cell<isize> = const { Cell::new(0) };
+    /// The selected repeat segment's id, for `WM_DRAWITEM` (read without
+    /// borrowing `EDITOR`).
+    static REPEAT_SEL: Cell<i32> = const { Cell::new(ID_REPEAT_ONCE) };
     /// Per window mode (dark, light).
     static BRUSHES: Cell<[Option<(HBRUSH, HBRUSH)>; 2]> = const { Cell::new([None; 2]) };
 }
@@ -834,6 +1024,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
     let (lw, lh) = match kind {
         EditorKind::Note { .. } => NOTE_SIZE,
         EditorKind::Event { .. } => EVENT_SIZE,
+        EditorKind::Reminder { .. } => REMINDER_SIZE,
     };
     let size = SIZE {
         cx: (lw * scale).round() as i32,
@@ -847,6 +1038,8 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         } => Key::EditorEvent,
         EditorKind::Event { event_id: None, .. } => Key::EditorAddEvent,
         EditorKind::Event { .. } => Key::EditorEditEvent,
+        EditorKind::Reminder { id: None, .. } => Key::EditorNewReminder,
+        EditorKind::Reminder { .. } => Key::EditorEditReminder,
     });
 
     let previous = unsafe { GetForegroundWindow() };
@@ -891,6 +1084,21 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
             read_only,
             saving: false,
         },
+        EditorKind::Reminder {
+            id,
+            date,
+            time,
+            repeat,
+            ..
+        } => {
+            REPEAT_SEL.set(segment_for(repeat));
+            Mode::Reminder {
+                id,
+                date,
+                time,
+                repeat,
+            }
+        }
     };
     let mut editor = Editor {
         hwnd,
@@ -1048,7 +1256,7 @@ impl Editor {
             (rc.bottom - rc.top) as f32 / s,
         );
         let ids: Vec<i32> = self.controls.iter().map(|(id, _)| *id).collect();
-        for (id, [x, y, w, h]) in layout(self.is_note(), &ids, cw, ch) {
+        for (id, [x, y, w, h]) in layout(self.mode.form(), &ids, cw, ch) {
             if let Some(hwnd) = self.control(id) {
                 let px = |v: f32| (v * s).round() as i32;
                 unsafe {
@@ -1073,14 +1281,20 @@ impl Editor {
         }
     }
 
-    /// Formats the pickers and loads the draft's date and times.
+    /// Formats the pickers and loads the draft's (or reminder's) date and times.
     fn fill_pickers(&mut self) {
-        let Mode::Event { base, .. } = &self.mode else {
-            return;
+        let (date, times, all_day) = match &self.mode {
+            Mode::Note { .. } => return,
+            Mode::Event { base, .. } => (
+                base.date,
+                vec![(ID_START, base.start), (ID_END, base.end)],
+                Some(base.all_day),
+            ),
+            Mode::Reminder { date, time, .. } => (*date, vec![(ID_TIME, *time)], None),
         };
         let set = |id, format: PCWSTR, time| {
             if let Some(picker) = self.control(id) {
-                let st = system_time(base.date, time);
+                let st = system_time(date, time);
                 send(picker, DTM_SETFORMATW, 0, format.0 as isize);
                 send(
                     picker,
@@ -1091,10 +1305,11 @@ impl Editor {
             }
         };
         set(ID_DATE, w!("d MMM yyyy"), NaiveTime::MIN);
-        set(ID_START, w!("HH':'mm"), base.start);
-        set(ID_END, w!("HH':'mm"), base.end);
-        if let Some(check) = self.control(ID_ALLDAY) {
-            let state = if base.all_day { BST_CHECKED.0 } else { 0 };
+        for (id, time) in times {
+            set(id, w!("HH':'mm"), time);
+        }
+        if let (Some(check), Some(all_day)) = (self.control(ID_ALLDAY), all_day) {
+            let state = if all_day { BST_CHECKED.0 } else { 0 };
             send(check, BM_SETCHECK, state as usize, 0);
         }
         self.set_date_format();
@@ -1105,14 +1320,14 @@ impl Editor {
         let Some(picker) = self.control(ID_DATE) else {
             return;
         };
-        let Mode::Event { base, .. } = &self.mode else {
+        let Some(base) = self.mode.base_date() else {
             return;
         };
         let date = self
             .picker_time(ID_DATE)
             .as_ref()
             .and_then(date_of)
-            .unwrap_or(base.date);
+            .unwrap_or(base);
         let format = HSTRING::from(date_format(i18n::lang(), date));
         send(picker, DTM_SETFORMATW, 0, format.as_ptr() as isize);
         // Freed only after the picker holds the new one.
@@ -1199,7 +1414,63 @@ impl Editor {
                     .map(|c| from_edit_text(&window_text(c)))
                     .unwrap_or_default(),
             },
-            Mode::Event { .. } => EditorResult::Closed,
+            Mode::Event { .. } | Mode::Reminder { .. } => EditorResult::Closed,
+        }
+    }
+
+    /// Reminder "Simpan": the validated result, or `None` with the reason
+    /// shown in the status line.
+    fn save_reminder(&self) -> Option<EditorResult> {
+        let Mode::Reminder {
+            id,
+            date,
+            time,
+            repeat,
+        } = &self.mode
+        else {
+            return None;
+        };
+        let text = self.control(ID_TITLE).map(window_text).unwrap_or_default();
+        let date = self
+            .picker_time(ID_DATE)
+            .as_ref()
+            .and_then(date_of)
+            .unwrap_or(*date);
+        let time = self
+            .picker_time(ID_TIME)
+            .as_ref()
+            .and_then(time_of)
+            .unwrap_or(*time);
+        let due = local_unix(date, time);
+        let now = chrono::Local::now().timestamp();
+        if let Err(message) = validate_reminder(&text, due, *repeat, now) {
+            self.set_status(tr(message), true);
+            return None;
+        }
+        Some(EditorResult::ReminderSaved {
+            id: id.clone(),
+            text: text.trim().to_owned(),
+            date,
+            time,
+            repeat: *repeat,
+        })
+    }
+
+    /// Picks a repeat segment and repaints the three.
+    fn select_repeat(&mut self, segment: i32) {
+        let Some((_, picked)) = REPEAT_SEGMENTS.iter().find(|(id, _)| *id == segment) else {
+            return;
+        };
+        if let Mode::Reminder { repeat, .. } = &mut self.mode {
+            *repeat = *picked;
+        }
+        REPEAT_SEL.set(segment);
+        for (id, _) in REPEAT_SEGMENTS {
+            if let Some(button) = self.control(id) {
+                unsafe {
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, true);
+                }
+            }
         }
     }
 
@@ -1306,19 +1577,31 @@ fn on_command(hwnd: HWND, id: i32, code: u32) {
     enum Next {
         Nothing,
         Close,
-        Delete(String),
+        Finish(EditorResult),
     }
     let next = with_editor(hwnd, |ed| match (id, code) {
         (ID_OK, BN_CLICKED) if ed.is_note() => Next::Close,
+        (ID_OK, BN_CLICKED) if ed.mode.form() == Form::Reminder => {
+            ed.save_reminder().map_or(Next::Nothing, Next::Finish)
+        }
         (ID_OK, BN_CLICKED) => {
             ed.save_event();
             Next::Nothing
         }
         (ID_CANCEL, BN_CLICKED) => Next::Close,
         (ID_DELETE, BN_CLICKED) => match &ed.mode {
-            Mode::Note { id: Some(id) } => Next::Delete(id.clone()),
+            Mode::Note { id: Some(id) } => {
+                Next::Finish(EditorResult::NoteDeleted { id: id.clone() })
+            }
+            Mode::Reminder { id: Some(id), .. } => {
+                Next::Finish(EditorResult::ReminderDeleted { id: id.clone() })
+            }
             _ => Next::Nothing,
         },
+        (ID_REPEAT_ONCE | ID_REPEAT_DAILY | ID_REPEAT_WEEKLY, BN_CLICKED) => {
+            ed.select_repeat(id);
+            Next::Nothing
+        }
         (ID_ALLDAY, BN_CLICKED) => {
             ed.sync_enabled();
             Next::Nothing
@@ -1340,7 +1623,7 @@ fn on_command(hwnd: HWND, id: i32, code: u32) {
     });
     match next {
         Some(Next::Close) => finish(hwnd, Editor::closing_result),
-        Some(Next::Delete(id)) => finish(hwnd, move |_| EditorResult::NoteDeleted { id }),
+        Some(Next::Finish(result)) => finish(hwnd, move |_| result),
         _ => {}
     }
 }
@@ -1512,6 +1795,83 @@ fn blend(base: u32, over: u32, alpha: f32) -> u32 {
     ch(16) | ch(8) | ch(0)
 }
 
+/// Fill and ink of a repeat segment: the picked one in the accent, the others
+/// like a button (a shade darker while pressed).
+fn segment_colors(p: &WindowPalette, picked: bool, pressed: bool) -> (u32, u32) {
+    match (picked, pressed) {
+        (true, _) => (p.accent, p.on_accent),
+        (false, true) => (p.button_hover, p.text),
+        (false, false) => (p.button, p.text),
+    }
+}
+
+/// Paints one repeat segment (an owner-drawn button): a rounded fill, a
+/// hairline in light mode, the centred label, and the focus rectangle.
+fn draw_segment(item: &DRAWITEMSTRUCT) {
+    let p = theme::current_window();
+    let picked = REPEAT_SEL.get() == item.CtlID as i32;
+    let pressed = item.itemState.0 & ODS_SELECTED.0 != 0;
+    let (fill, ink) = segment_colors(&p, picked, pressed);
+    let edge = if p.light && !picked {
+        blend(p.bg, p.border >> 8, (p.border & 0xFF) as f32 / 255.0)
+    } else {
+        fill
+    };
+    let hdc = item.hDC;
+    let mut rc = item.rcItem;
+    unsafe {
+        // The window colour behind the rounded corners.
+        FillRect(hdc, &rc, brushes(&p).0);
+        let brush = CreateSolidBrush(colorref(fill));
+        let pen = CreatePen(PS_SOLID, 1, colorref(edge));
+        let old_brush = SelectObject(hdc, HGDIOBJ(brush.0));
+        let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+        let radius = ((rc.bottom - rc.top) / 4).max(2) * 2;
+        let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+
+        let font = send(item.hwndItem, WM_GETFONT, 0, 0);
+        let old_font = (font != 0).then(|| SelectObject(hdc, HGDIOBJ(font as *mut c_void)));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, colorref(ink));
+        let mut label: Vec<u16> = window_text(item.hwndItem).encode_utf16().collect();
+        DrawTextW(
+            hdc,
+            &mut label,
+            &mut rc,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        if let Some(old) = old_font {
+            SelectObject(hdc, old);
+        }
+        // Keyboard focus (hidden until the keyboard is used, like other
+        // buttons): a thin ring in the label's colour.
+        let focus = item.itemState.0 & ODS_FOCUS.0 != 0;
+        let cues_hidden = item.itemState.0 & ODS_NOFOCUSRECT.0 != 0;
+        if focus && !cues_hidden {
+            let pen = CreatePen(PS_SOLID, 1, colorref(ink));
+            let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+            let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            let inner = radius - 4;
+            let _ = RoundRect(
+                hdc,
+                rc.left + 2,
+                rc.top + 2,
+                rc.right - 2,
+                rc.bottom - 2,
+                inner,
+                inner,
+            );
+            SelectObject(hdc, old_brush);
+            SelectObject(hdc, old_pen);
+            let _ = DeleteObject(HGDIOBJ(pen.0));
+        }
+    }
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -1520,6 +1880,16 @@ unsafe extern "system" fn wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => color_control(wparam, lparam, msg),
+        WM_DRAWITEM => {
+            let item = lparam.0 as *const DRAWITEMSTRUCT;
+            match unsafe { item.as_ref() } {
+                Some(item) if item.CtlType == ODT_BUTTON => {
+                    draw_segment(item);
+                    LRESULT(1)
+                }
+                _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+            }
+        }
         WM_ERASEBKGND => erase_background(hwnd, wparam),
         WM_PAINT => {
             paint_field_borders(hwnd);
@@ -1768,7 +2138,8 @@ unsafe extern "system" fn control_proc(
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
-/// `--demo-editor note|note-new|event|event-new|event-ro` (debug builds only):
+/// `--demo-editor note|note-new|event|event-new|event-ro|reminder|reminder-new`
+/// (debug builds only):
 /// opens one editor under where the panel would be, with a hidden owner that
 /// prints each result. `EventSave` gets a failure after 1.5 s, then success on
 /// the next try. Ends when the editor closes.
@@ -1890,9 +2261,24 @@ pub fn run_demo(which: Option<&str>) {
         "event" => event(Some("demo-event"), "Rapat desain", false),
         "event-new" => event(None, "", false),
         "event-ro" => event(Some("demo-event"), "Libur nasional", true),
+        "reminder" => EditorKind::Reminder {
+            id: Some("demo-reminder".into()),
+            text: "Minum obat setelah makan".into(),
+            date: date + chrono::Days::new(1),
+            time: NaiveTime::from_hms_opt(8, 0, 0).unwrap_or(NaiveTime::MIN),
+            repeat: Repeat::Daily,
+        },
+        "reminder-new" => EditorKind::Reminder {
+            id: None,
+            text: String::new(),
+            date,
+            time: NaiveTime::from_hms_opt(17, 0, 0).unwrap_or(NaiveTime::MIN),
+            repeat: Repeat::Once,
+        },
         other => {
             eprintln!(
-                "demo-editor: unknown kind `{other}` (note|note-new|event|event-new|event-ro)"
+                "demo-editor: unknown kind `{other}` \
+                 (note|note-new|event|event-new|event-ro|reminder|reminder-new)"
             );
             return;
         }
@@ -2216,15 +2602,116 @@ mod tests {
         .iter()
         .map(|s| s.id)
         .collect();
-        // Roughly the client areas of the two windows (caption and borders off).
-        for (note, ids, cw, ch) in [
-            (true, &note_ids[..], 398.0, 190.0),
-            (false, &event_ids[..], 418.0, 230.0),
+        let reminder_ids: Vec<i32> = specs(&reminder_kind(Some("r1")))
+            .iter()
+            .map(|s| s.id)
+            .collect();
+        // Roughly the client areas of the windows (caption and borders off).
+        for (form, ids, cw, ch) in [
+            (Form::Note, &note_ids[..], 398.0, 190.0),
+            (Form::Event, &event_ids[..], 418.0, 230.0),
+            (Form::Reminder, &reminder_ids[..], 418.0, 200.0),
         ] {
-            for (id, [x, y, w, h]) in layout(note, ids, cw, ch) {
-                assert!(x >= 0.0 && y >= 0.0 && w > 0.0 && h > 0.0, "{id}");
+            let rects = layout(form, ids, cw, ch);
+            for (id, [x, y, w, h]) in &rects {
+                assert!(*x >= 0.0 && *y >= 0.0 && *w > 0.0 && *h > 0.0, "{id}");
                 assert!(x + w <= cw && y + h <= ch, "{id} outside {cw}x{ch}");
             }
+            // Every control has a place, and none overlap.
+            for id in ids {
+                assert!(
+                    rects.iter().any(|(r, _)| r == id),
+                    "{form:?}: {id} unplaced"
+                );
+            }
+            for (i, (a, ra)) in rects.iter().enumerate() {
+                for (b, rb) in &rects[i + 1..] {
+                    let apart = ra[0] + ra[2] <= rb[0]
+                        || rb[0] + rb[2] <= ra[0]
+                        || ra[1] + ra[3] <= rb[1]
+                        || rb[1] + rb[3] <= ra[1];
+                    assert!(apart, "{form:?}: {a} overlaps {b}");
+                }
+            }
+        }
+    }
+
+    fn reminder_kind(id: Option<&str>) -> EditorKind {
+        EditorKind::Reminder {
+            id: id.map(Into::into),
+            text: "Minum obat".into(),
+            date: NaiveDate::from_ymd_opt(2026, 10, 27).unwrap(),
+            time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+            repeat: Repeat::Daily,
+        }
+    }
+
+    #[test]
+    fn reminder_needs_text_and_a_future_time_unless_it_repeats() {
+        let now = 1_000;
+        assert_eq!(
+            validate_reminder("  ", Some(2_000), Repeat::Once, now),
+            Err(Key::TextRequired)
+        );
+        assert_eq!(
+            validate_reminder("Minum obat", Some(2_000), Repeat::Once, now),
+            Ok(())
+        );
+        for past in [Some(1_000), Some(10), None] {
+            assert_eq!(
+                validate_reminder("Minum obat", past, Repeat::Once, now),
+                Err(Key::TimePassed),
+                "{past:?}"
+            );
+        }
+        // A repeating one set in the past just starts at its next time.
+        assert_eq!(
+            validate_reminder("Minum obat", Some(10), Repeat::Daily, now),
+            Ok(())
+        );
+        assert_eq!(
+            validate_reminder("Minum obat", Some(10), Repeat::Weekly, now),
+            Ok(())
+        );
+        assert_eq!(tr(Key::TimePassed), "Waktunya sudah lewat");
+    }
+
+    #[test]
+    fn reminder_form_has_delete_only_when_editing() {
+        let ids = |id| {
+            specs(&reminder_kind(id))
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+        };
+        assert!(ids(Some("r1")).contains(&ID_DELETE));
+        assert!(!ids(None).contains(&ID_DELETE));
+        for id in [ID_TITLE, ID_DATE, ID_TIME, ID_OK, ID_CANCEL, ID_STATUS] {
+            assert!(ids(None).contains(&id), "{id}");
+        }
+        for (segment, _) in REPEAT_SEGMENTS {
+            assert!(ids(None).contains(&segment));
+        }
+        assert_eq!(segment_for(Repeat::Weekly), ID_REPEAT_WEEKLY);
+        assert_eq!(segment_for(Repeat::Once), ID_REPEAT_ONCE);
+        // Every label relabels after a language switch.
+        for spec in specs(&reminder_kind(Some("r1"))) {
+            if !spec.text.is_empty() && spec.id != ID_TITLE {
+                let key = label_key(spec.id, false);
+                assert_eq!(key.map(tr), Some(spec.text.as_str()), "{}", spec.id);
+            }
+        }
+    }
+
+    #[test]
+    fn picked_segment_is_in_the_accent() {
+        use crate::theme::{Accent, WindowTheme};
+        for mode in [WindowTheme::Dark, WindowTheme::Light] {
+            let p = theme::window(Accent::Green, mode, false);
+            assert_eq!(segment_colors(&p, true, false), (p.accent, p.on_accent));
+            assert_eq!(segment_colors(&p, true, true), (p.accent, p.on_accent));
+            assert_eq!(segment_colors(&p, false, false), (p.button, p.text));
+            assert_eq!(segment_colors(&p, false, true), (p.button_hover, p.text));
         }
     }
 

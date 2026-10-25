@@ -25,14 +25,15 @@ use super::{
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
-use crate::model::{CalView, Hit, MediaInfo, Notice, Page};
+use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
+use crate::reminders::{Reminder, Repeat, local_time};
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
-    CalendarLayout, NotesLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, calendar_layout,
+    CalendarLayout, ListLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, calendar_layout,
     media_panel_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions,
-    waiting_strip,
+    reminders_layout, waiting_strip,
 };
 
 /// Pomodoro phases keep their red and green whatever the accent.
@@ -130,6 +131,10 @@ impl Renderer {
                 Ok(())
             }
             PageLayout::Pomodoro(l) => self.paint_pomodoro(l, frame),
+            PageLayout::Reminders(l) => {
+                self.paint_reminders(l, frame.reminders, frame.today);
+                Ok(())
+            }
             PageLayout::Notes(l) => {
                 self.paint_notes(l, frame.notes, frame.today);
                 Ok(())
@@ -445,7 +450,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn paint_notes(&self, l: &NotesLayout, notes: &[Note], today: NaiveDate) {
+    fn paint_notes(&self, l: &ListLayout, notes: &[Note], today: NaiveDate) {
         let lang = i18n::lang();
         self.text(text(lang, Key::Notes), &self.fonts.heading, l.header, 1.0);
         self.text(
@@ -508,6 +513,87 @@ impl Renderer {
         }
     }
 
+    /// Rows "09.30 · text" over "Hari ini · Harian"; a reminder already due
+    /// (its notice waiting to be dismissed) has an accent bar.
+    fn paint_reminders(&self, l: &ListLayout, reminders: &[Reminder], today: NaiveDate) {
+        let lang = i18n::lang();
+        let now = Local::now().timestamp();
+        self.text(
+            text(lang, Key::Reminders),
+            &self.fonts.heading,
+            l.header,
+            1.0,
+        );
+        self.text(
+            text(lang, Key::NewNote),
+            &self.fonts.body_right,
+            l.new_button,
+            0.8,
+        );
+        if reminders.is_empty() {
+            let hint = Rect {
+                y: l.header.bottom() + 8.0,
+                h: 20.0,
+                ..l.header
+            };
+            self.text(
+                text(lang, Key::RemindersEmpty),
+                &self.fonts.secondary,
+                hint,
+                0.5,
+            );
+        }
+        for (id, r) in &l.rows {
+            let Some(reminder) = reminders.iter().find(|x| &x.id == id) else {
+                continue;
+            };
+            self.set_color(self.palette.raised, 1.0);
+            self.fill_round(*r, 8.0);
+            if reminder.due_unix <= now {
+                self.set_color(self.palette.accent, 1.0);
+                self.fill_round(
+                    Rect {
+                        x: r.x + 4.0,
+                        y: r.y + 8.0,
+                        w: 3.0,
+                        h: r.h - 16.0,
+                    },
+                    1.5,
+                );
+            }
+            let inner = inset(*r, 12.0, 0.0);
+            let (line, when) = reminder_labels(lang, reminder, today);
+            self.text(
+                &line,
+                &self.fonts.secondary,
+                Rect {
+                    y: r.y + 4.0,
+                    h: 18.0,
+                    ..inner
+                },
+                1.0,
+            );
+            self.text(
+                &when,
+                &self.fonts.tiny,
+                Rect {
+                    y: r.y + 22.0,
+                    h: 14.0,
+                    ..inner
+                },
+                0.55,
+            );
+        }
+        if let Some((n, r)) = l.more {
+            self.text(
+                &more_label(lang, n),
+                &self.fonts.small,
+                inset(r, 2.0, 0.0),
+                0.7,
+            );
+        }
+    }
+
     fn paint_media(&mut self, l: &ExpandedLayout, media: Option<&MediaInfo>) -> Result<()> {
         self.paint_art(l.art, 12.0, media.and_then(|m| m.art.as_deref()))?;
         let Some(media) = media else {
@@ -544,12 +630,17 @@ impl Renderer {
         Ok(())
     }
 
-    /// Orange dot and "Claude butuh respon · {project}".
+    /// Orange dot and "Claude butuh respon · {project}", or an accent dot and
+    /// "{reminder} · 09.30".
     fn paint_strip(&self, s: ShapeRect, notice: &Notice) {
         let r = waiting_strip(s);
         self.set_color(self.palette.raised, 1.0);
         self.fill_round(r, 8.0);
-        self.set_color(CLAUDE, 1.0);
+        let dot = match notice.kind {
+            NoticeKind::Reminder { .. } => self.palette.accent,
+            _ => CLAUDE,
+        };
+        self.set_color(dot, 1.0);
         self.fill_round(
             Rect {
                 x: r.x + 10.0,
@@ -726,6 +817,12 @@ fn page_layout(s: ShapeRect, frame: &Frame, page: Page, strip: bool) -> PageLayo
             strip,
         )),
         Page::Pomodoro => PageLayout::Pomodoro(pomodoro_layout(s, strip)),
+        Page::Reminders => PageLayout::Reminders(reminders_layout(
+            s,
+            frame.reminders,
+            frame.reminders_page,
+            strip,
+        )),
         Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
         Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
     }
@@ -813,6 +910,42 @@ fn note_time_label(lang: Lang, updated: NaiveDateTime, today: NaiveDate) -> Stri
         text(lang, Key::Yesterday).into()
     } else if d.year() == today.year() {
         i18n::short_date(lang, d)
+    } else {
+        format!("{} {}", i18n::short_date(lang, d), d.year())
+    }
+}
+
+/// A reminder row's two lines: "09.30 · text", and its day ("Hari ini",
+/// "Besok", "Sel, 27 Okt", "3 Jan 2027") with the repeat when it has one.
+fn reminder_labels(lang: Lang, r: &Reminder, today: NaiveDate) -> (String, String) {
+    let Some(due) = local_time(r.due_unix) else {
+        return (first_line(&r.text).to_owned(), String::new());
+    };
+    let line = format!("{} · {}", i18n::time_hm(lang, due), first_line(&r.text));
+    let mut when = day_label(lang, due.date(), today);
+    let repeat = match r.repeat {
+        Repeat::Once => None,
+        Repeat::Daily => Some(Key::RepeatDaily),
+        Repeat::Weekly => Some(Key::RepeatWeekly),
+    };
+    if let Some(key) = repeat {
+        when = format!("{when} · {}", text(lang, key));
+    }
+    (line, when)
+}
+
+/// "Hari ini", "Besok", "Sel, 27 Okt", or "3 Jan 2027" in another year.
+fn day_label(lang: Lang, d: NaiveDate, today: NaiveDate) -> String {
+    if d == today {
+        text(lang, Key::DayToday).into()
+    } else if Some(d) == today.succ_opt() {
+        text(lang, Key::DayTomorrow).into()
+    } else if d.year() == today.year() {
+        format!(
+            "{}, {}",
+            i18n::day_short(lang, d),
+            i18n::short_date(lang, d)
+        )
     } else {
         format!("{} {}", i18n::short_date(lang, d), d.year())
     }
@@ -965,6 +1098,65 @@ mod tests {
         assert_eq!(
             note_time_label(l, at(date(2025, 10, 23), 8, 0), today),
             "23 Oct 2025"
+        );
+    }
+
+    #[test]
+    fn reminder_days_relative_to_today() {
+        let today = date(2026, 10, 26);
+        assert_eq!(day_label(Lang::Id, today, today), "Hari ini");
+        assert_eq!(day_label(Lang::Id, date(2026, 10, 27), today), "Besok");
+        assert_eq!(
+            day_label(Lang::Id, date(2026, 10, 30), today),
+            "Jum, 30 Okt"
+        );
+        assert_eq!(
+            day_label(Lang::Id, date(2026, 10, 25), today),
+            "Min, 25 Okt"
+        );
+        assert_eq!(day_label(Lang::Id, date(2027, 1, 3), today), "3 Jan 2027");
+        assert_eq!(day_label(Lang::En, today, today), "Today");
+        assert_eq!(day_label(Lang::En, date(2026, 10, 27), today), "Tomorrow");
+        assert_eq!(
+            day_label(Lang::En, date(2026, 10, 30), today),
+            "Fri, 30 Oct"
+        );
+    }
+
+    #[test]
+    fn reminder_rows_show_time_text_day_and_repeat() {
+        let today = date(2026, 10, 26);
+        let due = |t| local(t);
+        let unix = |t: NaiveDateTime| match due(t) {
+            EventTime::At(t) => t.timestamp(),
+            EventTime::AllDay(_) => unreachable!(),
+        };
+        let r = |at, repeat| Reminder {
+            id: "r".into(),
+            text: "Minum obat".into(),
+            due_unix: unix(at),
+            repeat,
+            done: false,
+        };
+        assert_eq!(
+            reminder_labels(Lang::Id, &r(at(today, 8, 5), Repeat::Once), today),
+            ("08.05 · Minum obat".into(), "Hari ini".into())
+        );
+        assert_eq!(
+            reminder_labels(
+                Lang::Id,
+                &r(at(date(2026, 10, 27), 20, 0), Repeat::Daily),
+                today
+            ),
+            ("20.00 · Minum obat".into(), "Besok · Harian".into())
+        );
+        assert_eq!(
+            reminder_labels(
+                Lang::En,
+                &r(at(date(2026, 11, 2), 9, 30), Repeat::Weekly),
+                today
+            ),
+            ("09:30 · Minum obat".into(), "Mon, 2 Nov · Weekly".into())
         );
     }
 

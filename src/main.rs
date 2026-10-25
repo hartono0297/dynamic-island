@@ -9,6 +9,7 @@ mod i18n;
 mod model;
 mod notes;
 mod pomodoro;
+mod reminders;
 mod sources;
 mod state;
 mod theme;

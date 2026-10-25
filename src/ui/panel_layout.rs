@@ -8,6 +8,7 @@ use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, events_on, range_for};
 use crate::model::{CalView, Hit, Page};
 use crate::notes::Note;
+use crate::reminders::Reminder;
 
 /// A clickable rect and what clicking it means.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,15 +70,16 @@ pub struct PomodoroLayout {
     pub skip: Rect,
 }
 
+/// The notes and reminders pages: a title, "+ Baru" and a list of rows.
 #[derive(Clone, Debug, PartialEq)]
-pub struct NotesLayout {
-    /// "Notes" title.
+pub struct ListLayout {
+    /// "Notes" / "Pengingat" title.
     pub header: Rect,
     /// "+ Baru".
     pub new_button: Rect,
-    /// Note id and row.
+    /// Note or reminder id and row.
     pub rows: Vec<(String, Rect)>,
-    /// Notes after this chunk and the clickable rect: "+N lagi", or
+    /// Items after this chunk and the clickable rect: "+N lagi", or
     /// "Kembali ke atas" when the count is 0 (last chunk).
     pub more: Option<(usize, Rect)>,
 }
@@ -90,7 +92,8 @@ pub struct NotesLayout {
 pub enum PageLayout {
     Calendar(CalendarLayout),
     Pomodoro(PomodoroLayout),
-    Notes(NotesLayout),
+    Reminders(ListLayout),
+    Notes(ListLayout),
     Media(ExpandedLayout),
 }
 
@@ -194,7 +197,7 @@ fn rows_that_fit(n: usize, avail: f32, pitch: f32, gap: f32, more_h: f32) -> usi
 }
 
 /// The page dots and the index of the highlighted one.
-pub fn page_dots(s: ShapeRect, page: Page) -> ([Rect; 4], usize) {
+pub fn page_dots(s: ShapeRect, page: Page) -> ([Rect; Page::ALL.len()], usize) {
     let active = Page::ALL.iter().position(|p| *p == page).unwrap_or(0);
     let count = Page::ALL.len() as f32;
     let total = count * DOT + (count - 1.0) * DOT_GAP;
@@ -466,7 +469,26 @@ pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
 
 /// Rows of 40 px, as many as fit. When they do not all fit, the list shows
 /// chunk `notes_page` (wrapping) and a "+N lagi" / "Kembali ke atas" line.
-pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool) -> NotesLayout {
+pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool) -> ListLayout {
+    list_layout(s, notes.iter().map(|n| n.id.as_str()), notes_page, strip)
+}
+
+/// The upcoming reminders, laid out like the notes.
+pub fn reminders_layout(
+    s: ShapeRect,
+    reminders: &[Reminder],
+    page: usize,
+    strip: bool,
+) -> ListLayout {
+    list_layout(s, reminders.iter().map(|r| r.id.as_str()), page, strip)
+}
+
+fn list_layout<'a>(
+    s: ShapeRect,
+    ids: impl ExactSizeIterator<Item = &'a str>,
+    page: usize,
+    strip: bool,
+) -> ListLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
     let (l, r) = (left(s), right(s));
@@ -474,22 +496,23 @@ pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool
     let new_button = rect(r - NEW_W, top, NEW_W, HEADER_H);
     let list_y = header.bottom() + 8.0;
     let pitch = NOTE_H + NOTE_GAP;
-    let n = notes.len();
+    let n = ids.len();
     let k = rows_that_fit(n, bottom - list_y, pitch, NOTE_GAP, MORE_H).max(1);
-    let (start, shown) = chunk(n, k, notes_page);
-    let rows = notes[start..start + shown]
-        .iter()
+    let (start, shown) = chunk(n, k, page);
+    let rows = ids
+        .skip(start)
+        .take(shown)
         .enumerate()
-        .map(|(i, note)| {
+        .map(|(i, id)| {
             let y = list_y + i as f32 * pitch;
-            (note.id.clone(), rect(l, y, r - l, NOTE_H))
+            (id.to_owned(), rect(l, y, r - l, NOTE_H))
         })
         .collect();
     let more = (n > k).then(|| {
         let y = list_y + shown as f32 * pitch;
         (n - start - shown, rect(l, y, NOTES_MORE_W, MORE_H))
     });
-    NotesLayout {
+    ListLayout {
         header,
         new_button,
         rows,
@@ -581,6 +604,15 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(l.reset, Hit::PomoReset);
             add(l.skip, Hit::PomoSkip);
         }
+        PageLayout::Reminders(l) => {
+            add(l.new_button, Hit::ReminderNew);
+            for (id, r) in &l.rows {
+                add(*r, Hit::ReminderOpen(id.clone()));
+            }
+            if let Some((_, r)) = l.more {
+                add(r, Hit::RemindersMore);
+            }
+        }
         PageLayout::Notes(l) => {
             add(l.new_button, Hit::NoteNew);
             for (id, r) in &l.rows {
@@ -638,6 +670,18 @@ mod tests {
             .collect()
     }
 
+    fn reminders(n: usize) -> Vec<Reminder> {
+        (0..n)
+            .map(|i| Reminder {
+                id: format!("r{i}"),
+                text: format!("reminder {i}"),
+                due_unix: 1000 + i as i64 * 60,
+                repeat: Default::default(),
+                done: false,
+            })
+            .collect()
+    }
+
     fn panel(style: Style) -> ShapeRect {
         shape_for(style, ShapeKind::Panel)
     }
@@ -677,6 +721,8 @@ mod tests {
         for (n, page) in [(0, 0), (3, 0), (30, 0), (30, 7)] {
             let l = notes_layout(s, &notes(n), page, strip);
             out.push((format!("notes {n} p{page}"), PageLayout::Notes(l)));
+            let l = reminders_layout(s, &reminders(n), page, strip);
+            out.push((format!("reminders {n} p{page}"), PageLayout::Reminders(l)));
         }
         out.push((
             "media".into(),
@@ -718,7 +764,7 @@ mod tests {
                     assert_eq!(pair[1].x - pair[0].right(), 6.0);
                 }
                 let left = dots[0].x - s.x;
-                let right = s.x + s.w - dots[3].right();
+                let right = s.x + s.w - dots[dots.len() - 1].right();
                 assert_eq!(left, right, "centered");
             }
         }
@@ -933,6 +979,31 @@ mod tests {
     }
 
     #[test]
+    fn reminder_list_pages_like_notes() {
+        let s = panel(Style::Notch);
+        let all = reminders(12);
+        let first = reminders_layout(s, &all, 0, false);
+        let k = first.rows.len();
+        assert!((3..12).contains(&k), "{k} rows");
+        assert_eq!(first.rows[0].0, "r0");
+        assert_eq!(first.more.as_ref().map(|m| m.0), Some(12 - k));
+        let second = reminders_layout(s, &all, 1, false);
+        assert_eq!(second.rows[0].0, format!("r{k}"));
+        assert_eq!(second.rows[0].1, first.rows[0].1, "same row slots");
+        let chunks = 12usize.div_ceil(k);
+        let last = reminders_layout(s, &all, chunks - 1, false);
+        assert_eq!(last.more.as_ref().map(|m| m.0), Some(0), "back to top");
+        assert_eq!(reminders_layout(s, &all, chunks, false).rows[0].0, "r0");
+        // Three fit without paging; the rows match the notes page's.
+        let three = reminders_layout(s, &all[..3], 0, false);
+        assert_eq!((three.rows.len(), three.more.is_none()), (3, true));
+        let notes3 = notes_layout(s, &notes(3), 0, false);
+        let rects = |l: &ListLayout| l.rows.iter().map(|(_, r)| *r).collect::<Vec<_>>();
+        assert_eq!(rects(&three), rects(&notes3));
+        assert_eq!(three.new_button, notes3.new_button);
+    }
+
+    #[test]
     fn strip_shifts_content_down_24() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
@@ -1065,6 +1136,20 @@ mod tests {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
 
+        let r = regions(
+            s,
+            &PageLayout::Reminders(reminders_layout(s, &reminders(12), 0, false)),
+            false,
+        );
+        for hit in [
+            Hit::ReminderNew,
+            Hit::ReminderOpen("r0".into()),
+            Hit::RemindersMore,
+        ] {
+            assert!(has(&r, hit.clone()), "{hit:?}");
+        }
+        assert!(!r.iter().any(|r| matches!(r.hit, Hit::NoteOpen(_))));
+
         let r = regions(s, &PageLayout::Media(media_panel_layout(s, false)), false);
         for hit in [Hit::Prev, Hit::PlayPause, Hit::Next] {
             assert!(has(&r, hit.clone()), "{hit:?}");
@@ -1143,7 +1228,7 @@ mod tests {
                             });
                             drawn.extend([l.phase, l.session]);
                         }
-                        PageLayout::Notes(l) => drawn.push(l.header),
+                        PageLayout::Notes(l) | PageLayout::Reminders(l) => drawn.push(l.header),
                         PageLayout::Media(l) => drawn.extend([l.art, l.title, l.artist]),
                     }
                 }

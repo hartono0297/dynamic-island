@@ -28,6 +28,11 @@ pub enum NoticeKind {
     BatteryLow,
     /// A pomodoro phase ended; clicking it starts the next phase.
     Pomodoro,
+    /// Sticky like `ClaudeWaiting`: a reminder whose time came. Clicking it
+    /// marks it done (or moves a repeating one to its next time).
+    Reminder {
+        id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,10 +56,13 @@ pub enum Event {
     Click(Hit),
     /// Raw `WM_MOUSEWHEEL` delta: +120 per notch away from the user.
     Wheel(i32),
-    /// A notes or event editor window opened (true) or closed (false).
+    /// A note, event or reminder editor window opened (true) or closed (false).
     EditorOpen(bool),
     /// The local date rolled over.
     Today(NaiveDate),
+    /// The reminder was edited, deleted or dismissed elsewhere: its sticky
+    /// notice goes.
+    ReminderCleared(String),
     /// A calendar sync result; `App` keeps it, the reducer ignores it.
     Calendar(CalendarSnapshot),
     Tick,
@@ -85,7 +93,12 @@ pub enum Hit {
     /// Note id.
     NoteOpen(String),
     NotesMore,
-    /// The Claude waiting strip at the top of the open panel.
+    ReminderNew,
+    /// Reminder id.
+    ReminderOpen(String),
+    RemindersMore,
+    /// The strip at the top of the open panel: the newest Claude waiting or
+    /// due reminder notice.
     Strip,
 }
 
@@ -115,6 +128,10 @@ pub enum Effect {
         event_id: Option<String>,
         date: NaiveDate,
     },
+    /// `None` opens an empty editor for a new reminder.
+    OpenReminderEditor(Option<String>),
+    /// A due reminder's notice was clicked: done, or on to its next time.
+    ReminderDone(String),
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
@@ -131,12 +148,19 @@ pub enum PomoField {
 pub enum Page {
     Calendar,
     Pomodoro,
+    Reminders,
     Notes,
     Media,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Calendar, Page::Pomodoro, Page::Notes, Page::Media];
+    pub const ALL: [Page; 5] = [
+        Page::Calendar,
+        Page::Pomodoro,
+        Page::Reminders,
+        Page::Notes,
+        Page::Media,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

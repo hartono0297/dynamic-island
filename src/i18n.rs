@@ -126,6 +126,7 @@ keys! {
     SourceCalendar => "Kalender", "Calendar";
     SourceBattery => "Baterai", "Battery";
     SourceNotification => "Notifikasi", "Notification";
+    SourceReminder => "Pengingat", "Reminder";
 
     // Island notices.
     ClaudeDone => "Claude selesai", "Claude finished";
@@ -137,6 +138,11 @@ keys! {
     NotesUnreadable => "notes.json tidak terbaca", "Can't read notes.json";
     NotesUnreadableBody => "Disimpan sebagai notes.json.bak saat menyimpan berikutnya",
         "Will be saved as notes.json.bak on the next save";
+    Missed => "Terlewat", "Missed";
+    RemindersSaveFailed => "Gagal simpan pengingat", "Couldn't save reminders";
+    RemindersUnreadable => "reminders.json tidak terbaca", "Can't read reminders.json";
+    RemindersUnreadableBody => "Disimpan sebagai reminders.json.bak saat menyimpan berikutnya",
+        "Will be saved as reminders.json.bak on the next save";
     ConfigInvalid => "config.json tidak valid", "config.json is invalid";
     ConfigNotCopied => "Tidak bisa disalin — cek lagi isinya",
         "Couldn't copy it — check its contents";
@@ -199,6 +205,16 @@ keys! {
     Ready => "siap", "ready";
     ReadyClick => "Siap · klik", "Ready · click";
 
+    // Reminders page.
+    Reminders => "Pengingat", "Reminders";
+    RemindersEmpty => "Belum ada pengingat. Klik + Baru untuk menambah.",
+        "No reminders yet. Click + New to add one.";
+    DayToday => "Hari ini", "Today";
+    DayTomorrow => "Besok", "Tomorrow";
+    RepeatOnce => "Sekali", "Once";
+    RepeatDaily => "Harian", "Daily";
+    RepeatWeekly => "Mingguan", "Weekly";
+
     // Notes page.
     Notes => "Notes", "Notes";
     NewNote => "+ Baru", "+ New";
@@ -228,6 +244,13 @@ keys! {
     Saving => "Menyimpan…", "Saving…";
     TitleRequired => "Judul wajib diisi", "Title is required";
     EndBeforeStart => "Jam selesai harus setelah jam mulai", "End time must be after start time";
+    EditorNewReminder => "Pengingat baru", "New reminder";
+    EditorEditReminder => "Edit pengingat", "Edit reminder";
+    FieldText => "Teks", "Text";
+    FieldTime => "Jam", "Time";
+    FieldRepeat => "Ulangi", "Repeat";
+    TextRequired => "Teks wajib diisi", "Text is required";
+    TimePassed => "Waktunya sudah lewat", "That time has passed";
 
     // Tray menu.
     MenuStylePill => "Gaya: Pill", "Style: Pill";

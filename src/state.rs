@@ -25,11 +25,12 @@ pub struct IslandState {
     media: Option<MediaInfo>,
     queue: VecDeque<Notice>,
     current: Option<(Notice, Instant)>,
-    /// At most one `ClaudeWaiting` per session, oldest first; the newest is shown.
-    waiting: Vec<Notice>,
+    /// Sticky notices, oldest first; the newest is shown. At most one
+    /// `ClaudeWaiting` per session and one `Reminder` per reminder.
+    sticky: Vec<Notice>,
     fullscreen: bool,
     hover: bool,
-    /// A notes or event editor window is open; it keeps the panel open like hover.
+    /// An editor window is open; it keeps the panel open like hover.
     editor_open: bool,
     pomodoro: Pomodoro,
     /// The panel page, kept across closes so the panel reopens where it was left.
@@ -37,6 +38,7 @@ pub struct IslandState {
     /// Wheel delta not yet worth a whole page; cleared when the panel closes.
     wheel: i32,
     notes_page: usize,
+    reminders_page: usize,
     /// Day view: which chunk of the day's events "+N lagi" has paged to.
     day_page: usize,
     today: NaiveDate,
@@ -51,7 +53,7 @@ impl IslandState {
             media: None,
             queue: VecDeque::new(),
             current: None,
-            waiting: Vec::new(),
+            sticky: Vec::new(),
             fullscreen: false,
             hover: false,
             editor_open: false,
@@ -59,6 +61,7 @@ impl IslandState {
             page: Page::Calendar,
             wheel: 0,
             notes_page: 0,
+            reminders_page: 0,
             day_page: 0,
             today,
             cal_view: CalView::Month,
@@ -82,29 +85,32 @@ impl IslandState {
         match event {
             Event::Media(media) => self.media = media,
             Event::Notice(notice) => match &notice.kind {
-                NoticeKind::ClaudeWaiting { session_id } => {
-                    self.clear_waiting(session_id);
+                NoticeKind::ClaudeWaiting { .. } | NoticeKind::Reminder { .. } => {
+                    if let Some(key) = sticky_key(&notice) {
+                        self.clear_sticky(key);
+                    }
                     // The sticky slot is hidden in fullscreen, so show it briefly like
-                    // any other new notice; it stays in `waiting` for afterwards.
+                    // any other new notice; it stays in `sticky` for afterwards.
                     if self.fullscreen {
                         self.queue.push_back(notice.clone());
                     }
-                    self.waiting.push(notice);
+                    self.sticky.push(notice);
                 }
                 NoticeKind::ClaudeDone { session_id } => {
-                    self.clear_waiting(session_id);
+                    self.clear_sticky(Sticky::Session(session_id));
                     self.queue.push_back(notice);
                 }
                 NoticeKind::App { .. } | NoticeKind::BatteryLow | NoticeKind::Pomodoro => {
                     self.queue.push_back(notice)
                 }
             },
-            Event::ClaudeActivity { session_id } => self.clear_waiting(&session_id),
+            Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => self.fullscreen = on,
             Event::Hover(on) => self.hover = on,
             Event::EditorOpen(on) => self.editor_open = on,
             Event::Wheel(delta) => self.wheel(delta),
             Event::Today(date) => self.set_today(date),
+            Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
             Event::Click(hit) => self.click(hit, now, &mut effects),
             Event::Calendar(_) | Event::Tick => {}
         }
@@ -113,6 +119,7 @@ impl IslandState {
         if panel_was_open && !self.panel_open() {
             self.wheel = 0;
             self.notes_page = 0;
+            self.reminders_page = 0;
         }
         let calendar_shown = self.view() == View::Panel(Page::Calendar);
         // Any navigation, a view change, or the calendar leaving the screen
@@ -139,11 +146,11 @@ impl IslandState {
         if self.fullscreen {
             return View::Hidden;
         }
-        // Claude waiting does not block the panel; it shows as a strip inside it.
+        // Sticky notices do not block the panel; they show as a strip inside it.
         if self.panel_open() {
             return View::Panel(self.page);
         }
-        if let Some(notice) = self.waiting.last() {
+        if let Some(notice) = self.sticky.last() {
             return View::Notice(notice.clone());
         }
         if self.pomodoro.is_active() {
@@ -234,13 +241,13 @@ impl IslandState {
             Hit::NoteNew => effects.push(Effect::OpenNoteEditor(None)),
             Hit::NoteOpen(id) => effects.push(Effect::OpenNoteEditor(Some(id))),
             Hit::NotesMore => self.notes_page += 1,
-            // The strip shows the newest waiting notice; clicking it dismisses that one.
+            Hit::ReminderNew => effects.push(Effect::OpenReminderEditor(None)),
+            Hit::ReminderOpen(id) => effects.push(Effect::OpenReminderEditor(Some(id))),
+            Hit::RemindersMore => self.reminders_page += 1,
+            // The strip shows the newest sticky notice; clicking it dismisses that one.
             Hit::Strip => {
-                if matches!(self.view(), View::Panel(_))
-                    && let Some(session) = self.waiting.last().and_then(waiting_session)
-                {
-                    let session = session.to_owned();
-                    self.clear_waiting(&session);
+                if matches!(self.view(), View::Panel(_)) {
+                    effects.extend(self.dismiss_newest_sticky());
                 }
             }
         }
@@ -338,29 +345,43 @@ impl IslandState {
         }
     }
 
-    /// Removes session's waiting notice, including a brief fullscreen copy that is
-    /// queued or showing, so a resolved wait is never displayed.
-    fn clear_waiting(&mut self, session: &str) {
-        let is_session = |n: &Notice| waiting_session(n) == Some(session);
-        self.waiting.retain(|n| !is_session(n));
-        self.queue.retain(|n| !is_session(n));
-        if matches!(&self.current, Some((n, _)) if is_session(n)) {
+    /// Removes the sticky notice for `key`, including a brief fullscreen copy
+    /// that is queued or showing, so a resolved wait or a dismissed reminder is
+    /// never displayed.
+    fn clear_sticky(&mut self, key: Sticky) {
+        let is_key = |n: &Notice| sticky_key(n) == Some(key);
+        self.sticky.retain(|n| !is_key(n));
+        self.queue.retain(|n| !is_key(n));
+        if matches!(&self.current, Some((n, _)) if is_key(n)) {
             self.current = None;
         }
     }
 
+    /// Dismisses the newest sticky notice: a reminder is then done.
+    fn dismiss_newest_sticky(&mut self) -> Option<Effect> {
+        let notice = self.sticky.last()?.clone();
+        self.dismiss_sticky(&notice)
+    }
+
+    /// Removes a sticky notice (and its copies); a reminder is then done.
+    fn dismiss_sticky(&mut self, notice: &Notice) -> Option<Effect> {
+        self.clear_sticky(sticky_key(notice)?);
+        match &notice.kind {
+            NoticeKind::Reminder { id } => Some(Effect::ReminderDone(id.clone())),
+            _ => None,
+        }
+    }
+
     /// Dismisses whichever notice the view is showing. Only called while the
-    /// view is a notice: the current one, else the newest waiting one.
+    /// view is a notice: the current one, else the newest sticky one.
     fn dismiss_visible_notice(&mut self, now: Instant) -> Option<Effect> {
         let Some((notice, _)) = self.current.take() else {
-            self.waiting.pop();
-            return None;
+            return self.dismiss_newest_sticky();
         };
         match notice.kind {
             NoticeKind::App { app_id: Some(id) } => Some(Effect::OpenApp(id)),
-            NoticeKind::ClaudeWaiting { session_id } => {
-                self.clear_waiting(&session_id);
-                None
+            NoticeKind::ClaudeWaiting { .. } | NoticeKind::Reminder { .. } => {
+                self.dismiss_sticky(&notice)
             }
             NoticeKind::Pomodoro => {
                 if self.pomodoro.status() == PomoStatus::Ready {
@@ -379,10 +400,11 @@ impl IslandState {
         self.page
     }
 
-    /// The Claude waiting notice to show at the top of the open panel.
+    /// The sticky notice (Claude waiting or a due reminder) to show at the top
+    /// of the open panel.
     pub fn waiting_strip(&self) -> Option<&Notice> {
         match self.view() {
-            View::Panel(_) => self.waiting.last(),
+            View::Panel(_) => self.sticky.last(),
             _ => None,
         }
     }
@@ -424,11 +446,25 @@ impl IslandState {
     pub fn day_page(&self) -> usize {
         self.day_page
     }
+
+    /// How many times the reminder list's "+N lagi" was clicked since the
+    /// panel opened; the layout wraps it around the list.
+    pub fn reminders_page(&self) -> usize {
+        self.reminders_page
+    }
 }
 
-fn waiting_session(notice: &Notice) -> Option<&str> {
+/// What a sticky notice is for: one per Claude session, one per reminder.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sticky<'a> {
+    Session(&'a str),
+    Reminder(&'a str),
+}
+
+fn sticky_key(notice: &Notice) -> Option<Sticky<'_>> {
     match &notice.kind {
-        NoticeKind::ClaudeWaiting { session_id } => Some(session_id),
+        NoticeKind::ClaudeWaiting { session_id } => Some(Sticky::Session(session_id)),
+        NoticeKind::Reminder { id } => Some(Sticky::Reminder(id)),
         _ => None,
     }
 }
@@ -528,7 +564,7 @@ mod tests {
         assert_eq!(s.view(), View::MediaCompact);
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-360), t0);
+        s.apply(Event::Wheel(-480), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
         s.apply(Event::Hover(false), t0);
         assert_eq!(s.view(), View::MediaCompact);
@@ -854,7 +890,7 @@ mod tests {
         s.apply(Event::Wheel(-119), t0);
         assert_eq!(s.view(), View::Panel(Page::Pomodoro));
         s.apply(Event::Wheel(-1), t0);
-        assert_eq!(s.view(), View::Panel(Page::Notes));
+        assert_eq!(s.view(), View::Panel(Page::Reminders));
     }
 
     #[test]
@@ -863,7 +899,7 @@ mod tests {
         let mut s = st();
         open_on(&mut s, Page::Notes, t0);
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+        assert_eq!(s.view(), View::Panel(Page::Reminders));
     }
 
     #[test]
@@ -873,7 +909,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 3), t0);
+        s.apply(Event::Wheel(-120 * 4), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
@@ -1471,6 +1507,192 @@ mod tests {
             s.apply(Event::Click(Hit::NoteOpen("n1".into())), t0),
             vec![Effect::OpenNoteEditor(Some("n1".into()))]
         );
+    }
+
+    // ---- v2.2: reminders ----
+
+    fn reminder(id: &str) -> Notice {
+        Notice {
+            key: format!("reminder-{id}"),
+            source: "Pengingat".into(),
+            title: format!("Minum obat {id}"),
+            body: "08.00".into(),
+            kind: NoticeKind::Reminder { id: id.into() },
+        }
+    }
+
+    #[test]
+    fn reminder_is_sticky_and_click_marks_it_done() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        assert_eq!(s.next_deadline(), None, "no expiry");
+        s.apply(Event::Tick, t0 + secs(600));
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        // Claude activity has nothing to do with it.
+        s.apply(
+            Event::ClaudeActivity {
+                session_id: "r1".into(),
+            },
+            t0 + secs(601),
+        );
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        assert_eq!(
+            s.apply(Event::Click(Hit::Body), t0 + secs(602)),
+            vec![Effect::ReminderDone("r1".into())]
+        );
+        assert_eq!(s.view(), View::MediaCompact);
+    }
+
+    #[test]
+    fn newest_sticky_notice_shows_first() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Notice(reminder("r2")), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r2")));
+        assert_eq!(
+            s.apply(Event::Click(Hit::Body), t0),
+            vec![Effect::ReminderDone("r2".into())]
+        );
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.view(), View::Notice(waiting("s1")));
+        // A newer waiting notice goes above an older reminder.
+        s.apply(Event::Notice(reminder("r3")), t0);
+        s.apply(Event::Notice(waiting("s2")), t0);
+        assert_eq!(s.view(), View::Notice(waiting("s2")));
+        assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![]);
+        assert_eq!(s.view(), View::Notice(reminder("r3")));
+    }
+
+    #[test]
+    fn same_reminder_again_is_not_shown_twice() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Notice(reminder("r2")), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r2")));
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn temporary_notice_preempts_reminder_then_it_returns() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Notice(app_notice("k1")), t0);
+        assert_eq!(s.view(), View::Notice(app_notice("k1")));
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+    }
+
+    #[test]
+    fn reminder_during_fullscreen_shows_briefly_and_returns_after() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        assert_eq!(s.next_deadline(), Some(t0 + NOTICE_DURATION));
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0 + secs(6));
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+    }
+
+    #[test]
+    fn clicking_the_brief_fullscreen_reminder_marks_it_done() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::Body), t0 + secs(1)),
+            vec![Effect::ReminderDone("r1".into())]
+        );
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Idle, "not sticky any more");
+    }
+
+    #[test]
+    fn cleared_reminder_disappears_everywhere() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Notice(reminder("r2")), t0);
+        s.apply(Event::ReminderCleared("r2".into()), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        s.apply(Event::ReminderCleared("gone".into()), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        // Also its brief fullscreen copy, showing or queued.
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(app_notice("k1")), t0);
+        s.apply(Event::Notice(reminder("r3")), t0);
+        s.apply(Event::ReminderCleared("r3".into()), t0);
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Hidden, "the queued copy went too");
+        s.apply(Event::ReminderCleared("r1".into()), t0 + secs(5));
+        s.apply(Event::Fullscreen(false), t0 + secs(6));
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn strip_shows_newest_sticky_and_click_marks_reminder_done() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        assert_eq!(s.waiting_strip(), Some(&reminder("r1")));
+        assert_eq!(
+            s.apply(Event::Click(Hit::Strip), t0),
+            vec![Effect::ReminderDone("r1".into())]
+        );
+        assert_eq!(s.waiting_strip(), Some(&waiting("s1")));
+        assert_eq!(s.apply(Event::Click(Hit::Strip), t0), vec![]);
+        assert_eq!(s.waiting_strip(), None);
+    }
+
+    #[test]
+    fn reminder_hits_open_editor_and_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert_eq!(
+            s.apply(Event::Click(Hit::ReminderNew), t0),
+            vec![Effect::OpenReminderEditor(None)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::ReminderOpen("r1".into())), t0),
+            vec![Effect::OpenReminderEditor(Some("r1".into()))]
+        );
+        open_on(&mut s, Page::Reminders, t0);
+        assert_eq!(s.reminders_page(), 0);
+        s.apply(Event::Click(Hit::RemindersMore), t0);
+        s.apply(Event::Click(Hit::RemindersMore), t0);
+        assert_eq!(s.reminders_page(), 2);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.reminders_page(), 0);
+    }
+
+    #[test]
+    fn reminder_page_sits_between_pomodoro_and_notes() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Pomodoro, t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Reminders));
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
     }
 
     #[test]

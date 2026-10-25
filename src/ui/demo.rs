@@ -13,7 +13,7 @@
 
 use std::time::{Duration, Instant};
 
-use chrono::{Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -30,6 +30,7 @@ use crate::i18n::{Key, tr};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
+use crate::reminders::{Reminder, Repeat};
 use crate::theme::{self, Accent, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
@@ -52,6 +53,8 @@ struct Scene {
     status: CalStatus,
     day_page: usize,
     notes: usize,
+    /// Sample reminders on the reminder page: 3 or 12.
+    reminders: usize,
     strip: bool,
 }
 
@@ -62,6 +65,8 @@ enum View0 {
     MediaCompact,
     PomodoroCompact,
     Panel(Page),
+    /// A due reminder's notice.
+    ReminderNotice,
 }
 
 const BASE: Scene = Scene {
@@ -73,6 +78,7 @@ const BASE: Scene = Scene {
     status: CalStatus::Ok,
     day_page: 0,
     notes: 5,
+    reminders: 3,
     strip: false,
 };
 
@@ -84,7 +90,7 @@ const fn panel(name: &'static str, page: Page) -> Scene {
     }
 }
 
-const SCENES: [Scene; 15] = [
+const SCENES: [Scene; 18] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -140,6 +146,17 @@ const SCENES: [Scene; 15] = [
         pomo: Pomo::Running,
         ..panel("pomodoro", Page::Pomodoro)
     },
+    panel("reminders-3", Page::Reminders),
+    Scene {
+        reminders: 12,
+        ..panel("reminders-12", Page::Reminders)
+    },
+    Scene {
+        name: "reminder-notice",
+        kind: ShapeKind::Notice,
+        view: View0::ReminderNotice,
+        ..BASE
+    },
     panel("notes-5", Page::Notes),
     Scene {
         notes: 30,
@@ -172,6 +189,15 @@ pub fn run() {
     let calendar = demo_calendar(today);
     let notes5 = demo_notes(today);
     let notes30 = many_notes(today);
+    let reminders3 = demo_reminders(today);
+    let reminders12 = many_reminders(today);
+    let reminder_notice = Notice {
+        key: "demo-reminder".into(),
+        source: tr(Key::SourceReminder).into(),
+        title: "Minum obat setelah makan siang".into(),
+        body: format!("{} · {}", tr(Key::Missed), "12.30"),
+        kind: NoticeKind::Reminder { id: "demo".into() },
+    };
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -227,6 +253,7 @@ pub fn run() {
                 View0::MediaCompact => View::MediaCompact,
                 View0::PomodoroCompact => View::PomodoroCompact,
                 View0::Panel(page) => View::Panel(page),
+                View0::ReminderNotice => View::Notice(reminder_notice.clone()),
             };
             let page = match scene.view {
                 View0::Panel(page) => page,
@@ -251,6 +278,12 @@ pub fn run() {
                 calendar: &snapshot,
                 notes,
                 notes_page: 0,
+                reminders: if scene.reminders == 12 {
+                    &reminders12
+                } else {
+                    &reminders3
+                },
+                reminders_page: 0,
                 day_page: scene.day_page,
                 page_slide: slide,
                 palette,
@@ -428,6 +461,58 @@ fn many_notes(today: NaiveDate) -> Vec<Note> {
             id: format!("m{i}"),
             text: format!("Catatan nomor {}", i + 1),
             updated: base - i64::from(i) * 7 * 3600,
+        })
+        .collect()
+}
+
+/// One already due (a daily one, 25 minutes ago), one later today with a
+/// long text, one weekly tomorrow.
+fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
+    let now = Local::now().naive_local();
+    let whole = |t: NaiveDateTime| t.with_second(0).unwrap_or(t);
+    let r = |id: &str, text: &str, at: NaiveDateTime, repeat| Reminder {
+        id: id.into(),
+        text: text.into(),
+        due_unix: stamp(at),
+        repeat,
+        done: false,
+    };
+    vec![
+        r(
+            "r1",
+            "Minum obat",
+            whole(now - chrono::Duration::minutes(25)),
+            Repeat::Daily,
+        ),
+        r(
+            "r2",
+            "Telepon klien soal revisi fasad dan jendela kamar tidur lantai dua",
+            whole(now + chrono::Duration::hours(3)),
+            Repeat::Once,
+        ),
+        r(
+            "r3",
+            "Kirim gambar kerja ke kontraktor",
+            (today + Days::new(1)).and_time(NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+            Repeat::Weekly,
+        ),
+    ]
+}
+
+/// Twelve reminders over the coming days.
+fn many_reminders(today: NaiveDate) -> Vec<Reminder> {
+    let repeats = [Repeat::Once, Repeat::Daily, Repeat::Weekly];
+    (0..12u32)
+        .map(|i| {
+            let day = today + Days::new(u64::from(i / 3));
+            let at = day.and_time(NaiveTime::from_hms_opt(8 + (i % 3) * 4, 30, 0).unwrap());
+            Reminder {
+                id: format!("m{i}"),
+                text: format!("Pengingat nomor {}", i + 1),
+                due_unix: stamp(at),
+                repeat: repeats[i as usize % 3],
+                done: false,
+            }
         })
         .collect()
 }
