@@ -2,23 +2,27 @@
 
 use std::path::Path;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
     RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
 };
+use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, IDI_APPLICATION, LoadIconW,
-    MF_CHECKED, MF_SEPARATOR, MF_STRING, PostMessageW, RegisterWindowMessageW, SetForegroundWindow,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_NULL,
+    AppendMenuW, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos, HICON, IDI_APPLICATION,
+    LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING, PostMessageW, RegisterWindowMessageW,
+    SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP,
+    WM_NULL,
 };
 use windows::core::{Error, HSTRING, Result, w};
 
 use crate::config::{Config, Style};
+use crate::ui::app_icon;
 
 /// Sent by the shell for mouse activity on the tray icon; `lparam` holds the
 /// mouse message (legacy notify-icon version).
@@ -27,6 +31,10 @@ const TRAY_ID: u32 = 1;
 const TOOLTIP: &str = "Dynamic Island";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "DynamicIsland";
+
+/// The logo icon the tray currently shows, if loaded (null otherwise). Kept
+/// alive while the icon is in the notification area and replaced on re-add.
+static TRAY_ICON: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCmd {
@@ -113,16 +121,33 @@ pub fn add_tray(hwnd: HWND) -> Result<()> {
     let mut data = icon_data(hwnd);
     data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     data.uCallbackMessage = WM_APP_TRAY;
-    data.hIcon = unsafe { LoadIconW(None, IDI_APPLICATION)? };
+    // Small-icon size for the system DPI: 16 px at 100 %, 20 at 125 %, ...
+    let logo = app_icon::small_icon_for_dpi(unsafe { GetDpiForSystem() }).ok();
+    data.hIcon = match logo {
+        Some(icon) => icon,
+        None => unsafe { LoadIconW(None, IDI_APPLICATION)? },
+    };
     for (dst, src) in data.szTip.iter_mut().zip(TOOLTIP.encode_utf16()) {
         *dst = src;
     }
-    unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.ok()
+    let added = unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.ok();
+    let new = logo.map_or(std::ptr::null_mut(), |icon| icon.0);
+    destroy_icon(TRAY_ICON.swap(new, Ordering::Relaxed));
+    added
 }
 
 pub fn remove_tray(hwnd: HWND) {
     unsafe {
         let _ = Shell_NotifyIconW(NIM_DELETE, &icon_data(hwnd));
+    }
+    destroy_icon(TRAY_ICON.swap(std::ptr::null_mut(), Ordering::Relaxed));
+}
+
+fn destroy_icon(raw: *mut core::ffi::c_void) {
+    if !raw.is_null() {
+        unsafe {
+            let _ = DestroyIcon(HICON(raw));
+        }
     }
 }
 

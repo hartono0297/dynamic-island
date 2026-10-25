@@ -58,6 +58,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use crate::calendar::EventDraft;
+use crate::ui::app_icon;
+
 /// Sent to the event editor after a save (defined by the sync thread, which
 /// posts it): `wparam` 1 = saved, the editor closes; 0 = failed, `lparam` is a
 /// `Box<String>` raw pointer (or 0) the editor frees and shows in red.
@@ -592,11 +594,14 @@ fn init_common_controls() {
 const CLASS_NAME: PCWSTR = w!("DynamicIslandEditor");
 
 fn register_class(instance: HINSTANCE) -> Result<()> {
+    let (icon, icon_small) = app_icon::class_icons(instance);
     unsafe {
         let class = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wnd_proc),
             hInstance: instance,
+            hIcon: icon,
+            hIconSm: icon_small,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: brushes().0,
             lpszClassName: CLASS_NAME,

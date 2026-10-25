@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Logo Dynamic Island"></p>
+
 # Dynamic Island untuk Windows
 
 "Dynamic island" kecil di tengah atas layar Windows 11. Notch hitamnya selalu ada; di-hover jadi panel dengan empat halaman: **Kalender** (Google Calendar, bisa tambah dan edit acara), **Pomodoro**, **Notes**, dan **Musik**. Selain itu island tetap menampilkan semua notifikasi toast Windows, notifikasi "Claude selesai/menunggu" dari Claude Code, dan peringatan baterai low. Ditulis dalam Rust (Win32 + Direct2D), tanpa browser engine dan tanpa runtime tambahan.
