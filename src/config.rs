@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::pomodoro::PomoSettings;
 
@@ -50,6 +51,36 @@ pub fn try_parse(text: &str) -> Option<Config> {
     serde_json::from_str(text).ok()
 }
 
+/// config.json as found on disk.
+#[derive(Debug, PartialEq)]
+pub enum OnDisk {
+    /// No file, or nothing in it but whitespace (or a BOM): nothing to keep.
+    Missing,
+    /// Text that is not a config (a typo while editing by hand), or a file
+    /// that cannot be read.
+    Invalid,
+    Valid(Config),
+}
+
+pub fn classify(read: io::Result<String>) -> OnDisk {
+    match read {
+        Ok(text) => {
+            let body = text.strip_prefix('\u{feff}').unwrap_or(&text);
+            if body.trim().is_empty() {
+                OnDisk::Missing
+            } else {
+                try_parse(body).map_or(OnDisk::Invalid, OnDisk::Valid)
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => OnDisk::Missing,
+        Err(_) => OnDisk::Invalid,
+    }
+}
+
+pub fn read_at(path: &Path) -> OnDisk {
+    classify(std::fs::read_to_string(path))
+}
+
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro)
 /// over everything else as it is on disk (Google client, muted apps, battery
 /// threshold), which the owner may have edited by hand while the island ran.
@@ -63,23 +94,73 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
     }
 }
 
-/// What to write when the island saves `mem`, given the file as read now:
-/// a missing file gets `mem`; a valid one keeps its other fields
-/// (`merge_owned`); an unreadable or half-edited one is left alone (`None`)
-/// rather than overwritten.
-pub fn merge_for_save(read: std::io::Result<String>, mem: &Config) -> Option<Config> {
-    match read {
-        Ok(text) => try_parse(&text).map(|disk| merge_owned(disk, mem)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(mem.clone()),
-        Err(_) => None,
-    }
+/// What a save found wrong with the file it replaced.
+#[derive(Debug, PartialEq)]
+pub enum Repair {
+    /// The file was valid or absent.
+    None,
+    /// An invalid file was moved here before the island's config was written.
+    BackedUp(PathBuf),
+    /// An invalid file could not be moved aside, so nothing was written; the
+    /// next save tries again.
+    Blocked,
 }
 
-/// The current file merged under the island's own settings; `None` when it
-/// is missing or not a config, so the caller keeps what it has.
-pub fn reload(mem: &Config) -> Option<Config> {
-    let disk = try_parse(&std::fs::read_to_string(path()).ok()?)?;
-    Some(merge_owned(disk, mem))
+pub struct SaveOutcome {
+    /// The config now in effect: the file's hand-edited fields under the
+    /// island's own settings, or the island's config when the file had none.
+    pub config: Config,
+    pub repair: Repair,
+}
+
+/// Saves the island's settings `mem` to `path` without losing anything there:
+/// a valid file keeps its other fields (`merge_owned`), a missing or empty one
+/// gets `mem`, and an invalid one is renamed to a backup (`backup_path`) first.
+/// Write errors only happen on a broken profile; the setting still holds for
+/// this run, so they are not reported.
+pub fn save_merged_at(path: &Path, mem: &Config) -> SaveOutcome {
+    let (config, repair) = match read_at(path) {
+        OnDisk::Valid(disk) => (merge_owned(disk, mem), Repair::None),
+        OnDisk::Missing => (mem.clone(), Repair::None),
+        OnDisk::Invalid => {
+            let backup = backup_path(path);
+            match std::fs::rename(path, &backup) {
+                Ok(()) => (mem.clone(), Repair::BackedUp(backup)),
+                // Gone meanwhile: nothing left to keep.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => (mem.clone(), Repair::None),
+                Err(_) => {
+                    return SaveOutcome {
+                        config: mem.clone(),
+                        repair: Repair::Blocked,
+                    };
+                }
+            }
+        }
+    };
+    let _ = config.save_to(path);
+    SaveOutcome { config, repair }
+}
+
+pub fn save_merged(mem: &Config) -> SaveOutcome {
+    save_merged_at(&path(), mem)
+}
+
+/// `<file>.bak`, or `.bak2`, `.bak3`… when earlier backups exist, so a
+/// backup is never overwritten.
+pub fn backup_path(path: &Path) -> PathBuf {
+    let with = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let first = with(".bak");
+    if !first.exists() {
+        return first;
+    }
+    (2..1000)
+        .map(|n| with(&format!(".bak{n}")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
 }
 
 /// `%APPDATA%\DynamicIsland\config.json`, or the current directory when APPDATA is unset.
@@ -96,13 +177,18 @@ pub fn load() -> Config {
 }
 
 impl Config {
-    pub fn save(&self) -> std::io::Result<()> {
-        let path = path();
+    /// Pretty JSON to a sibling `.tmp` file, then renamed over `path`, so a
+    /// crash mid-write never leaves a truncated config.
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
     }
 }
 
@@ -231,22 +317,145 @@ mod tests {
         assert_eq!(owned(&merged), owned(&mem));
     }
 
+    /// A fresh directory under the system temp dir; removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "dynamic-island-config-{name}-{}-{}",
+                std::process::id(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn on_disk(path: &Path) -> Config {
+        try_parse(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
     #[test]
-    fn save_never_clobbers_the_file() {
-        let (disk, mem) = disk_and_mem();
-        let text = serde_json::to_string_pretty(&disk).unwrap();
-        let merged = merge_for_save(Ok(format!("\u{feff}{text}")), &mem).unwrap();
-        assert_eq!(merged, merge_owned(disk, &mem));
-        // No file yet: the island's config as it is.
-        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
-        assert_eq!(merge_for_save(Err(missing), &mem), Some(mem.clone()));
-        // Half-edited JSON or an unreadable file: leave it alone.
+    fn classify_tells_missing_invalid_and_valid_apart() {
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        assert_eq!(classify(Err(missing)), OnDisk::Missing);
+        for empty in ["", "  \r\n", "\u{feff}", "\u{feff} \n"] {
+            assert_eq!(classify(Ok(empty.into())), OnDisk::Missing, "{empty:?}");
+        }
         assert_eq!(
-            merge_for_save(Ok("{\"google_client_id\": ".into()), &mem),
-            None
+            classify(Ok("{\"google_client_id\": ".into())),
+            OnDisk::Invalid
         );
-        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert_eq!(merge_for_save(Err(denied), &mem), None);
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(classify(Err(denied)), OnDisk::Invalid);
+        assert_eq!(
+            classify(Ok("\u{feff}{\"style\":\"Notch\"}".into())),
+            OnDisk::Valid(Config {
+                style: Style::Notch,
+                ..Config::default()
+            })
+        );
+    }
+
+    #[test]
+    fn save_merges_into_a_valid_file() {
+        let tmp = TempDir::new("valid");
+        let path = tmp.file("config.json");
+        let (disk, mem) = disk_and_mem();
+        disk.save_to(&path).unwrap();
+        let out = save_merged_at(&path, &mem);
+        assert_eq!(out.repair, Repair::None);
+        assert_eq!(out.config, merge_owned(disk, &mem));
+        assert_eq!(on_disk(&path), out.config);
+        assert!(
+            !tmp.file("config.json.tmp").exists(),
+            "atomic write cleaned up"
+        );
+    }
+
+    #[test]
+    fn save_writes_a_missing_or_empty_file() {
+        let tmp = TempDir::new("empty");
+        let path = tmp.file("config.json");
+        let (_, mem) = disk_and_mem();
+        let out = save_merged_at(&path, &mem);
+        assert_eq!(
+            (out.config.clone(), out.repair),
+            (mem.clone(), Repair::None)
+        );
+        assert_eq!(on_disk(&path), mem);
+        // A truncated (empty) file is not "invalid": nothing in it to keep.
+        for empty in ["", "\u{feff}\r\n"] {
+            std::fs::write(&path, empty).unwrap();
+            let out = save_merged_at(&path, &mem);
+            assert_eq!(out.repair, Repair::None);
+            assert_eq!(on_disk(&path), mem);
+        }
+        assert!(!tmp.file("config.json.bak").exists());
+    }
+
+    #[test]
+    fn save_backs_up_an_invalid_file_then_writes() {
+        let tmp = TempDir::new("invalid");
+        let path = tmp.file("config.json");
+        let (_, mem) = disk_and_mem();
+        let typo = "{\"google_client_id\": \"abc\",, }";
+        std::fs::write(&path, typo).unwrap();
+        let out = save_merged_at(&path, &mem);
+        let bak = tmp.file("config.json.bak");
+        assert_eq!(out.repair, Repair::BackedUp(bak.clone()));
+        assert_eq!(out.config, mem);
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), typo);
+        assert_eq!(on_disk(&path), mem);
+        // A second broken file never overwrites the first backup.
+        std::fs::write(&path, "garbage").unwrap();
+        let out = save_merged_at(&path, &mem);
+        let bak2 = tmp.file("config.json.bak2");
+        assert_eq!(out.repair, Repair::BackedUp(bak2.clone()));
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), typo);
+        assert_eq!(std::fs::read_to_string(&bak2).unwrap(), "garbage");
+        assert_eq!(on_disk(&path), mem);
+    }
+
+    #[test]
+    fn save_writes_nothing_when_the_backup_fails() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = TempDir::new("blocked");
+        let path = tmp.file("config.json");
+        let (_, mem) = disk_and_mem();
+        std::fs::write(&path, "{broken").unwrap();
+        // Held open without delete sharing (an editor locking it): it can be
+        // read, but not renamed.
+        const FILE_SHARE_READ: u32 = 1;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&path)
+            .unwrap();
+        let out = save_merged_at(&path, &mem);
+        assert_eq!(out.repair, Repair::Blocked);
+        assert_eq!(out.config, mem, "the setting still holds for this run");
+        drop(lock);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+        assert!(!tmp.file("config.json.bak").exists());
+        // Once the file is free, the next save repairs it.
+        let out = save_merged_at(&path, &mem);
+        assert!(matches!(out.repair, Repair::BackedUp(_)));
+        assert_eq!(on_disk(&path), mem);
     }
 
     #[test]

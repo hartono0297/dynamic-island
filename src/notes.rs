@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::config::backup_path;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Note {
@@ -36,23 +38,6 @@ fn load(read: io::Result<String>) -> (Vec<Note>, bool) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => (Vec::new(), false),
         Err(_) => (Vec::new(), true),
     }
-}
-
-/// `notes.json.bak`, or `notes.json.bak2`, `.bak3`… when earlier backups exist.
-fn backup_path(path: &Path) -> PathBuf {
-    let with = |suffix: &str| {
-        let mut name = path.as_os_str().to_owned();
-        name.push(suffix);
-        PathBuf::from(name)
-    };
-    let first = with(".bak");
-    if !first.exists() {
-        return first;
-    }
-    (2..1000)
-        .map(|n| with(&format!(".bak{n}")))
-        .find(|p| !p.exists())
-        .unwrap_or(first)
 }
 
 impl NotesStore {

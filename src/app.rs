@@ -37,7 +37,7 @@ use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_no
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
-use crate::config::{self, Config, Style};
+use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::model::{Effect, Event, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
@@ -139,6 +139,7 @@ pub fn run() {
             hover: HoverTracking::default(),
             eq_timer: false,
             pomo_timer: false,
+            config_warned: false,
         });
     });
     with_app(|app| {
@@ -228,6 +229,8 @@ struct App {
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
     pomo_timer: bool,
+    /// The invalid-config notice was shown this run.
+    config_warned: bool,
 }
 
 impl App {
@@ -306,14 +309,18 @@ impl App {
     /// the island runs is used without a restart. A second click while the
     /// browser login waits is ignored.
     fn connect_google(&mut self) -> Option<Event> {
-        self.reload_config();
-        if self.config.google_client_id.trim().is_empty() {
-            return Some(Event::Notice(client_id_notice()));
+        let file_ok = self.reload_config();
+        match connect_action(file_ok, &self.config.google_client_id) {
+            // The ID may well be in there; say so rather than "fill it in".
+            ConnectAction::InvalidConfig => Some(Event::Notice(invalid_config_notice(None))),
+            ConnectAction::NoClientId => Some(Event::Notice(client_id_notice())),
+            ConnectAction::Login => {
+                if let Some(sync) = &self.sync {
+                    sync.connect();
+                }
+                None
+            }
         }
-        if let Some(sync) = &self.sync {
-            sync.connect();
-        }
-        None
     }
 
     /// Asks the sync thread for `range` unless `needs_fetch` says the data is fresh.
@@ -669,24 +676,30 @@ impl App {
         );
     }
 
-    /// Writes the island's own settings over config.json as it is now, so
-    /// fields edited by hand meanwhile survive (and are picked up). A file
-    /// that does not parse (half-edited) is left alone. Either way the setting
-    /// holds for this run; a failed write only happens on a broken profile and
-    /// there is nowhere better to report it.
+    /// Writes the island's own settings into config.json as it is now, so
+    /// fields edited by hand meanwhile survive (and are picked up). An invalid
+    /// file is backed up first (`config::save_merged_at`); the first time this
+    /// run, a notice says so. The setting holds for this run either way.
     fn save_config(&mut self) {
-        let read = std::fs::read_to_string(config::path());
-        let Some(merged) = config::merge_for_save(read, &self.config) else {
-            return;
-        };
-        self.adopt_config(merged);
-        let _ = self.config.save();
+        let out = config::save_merged(&self.config);
+        self.adopt_config(out.config);
+        if out.repair != Repair::None && !self.config_warned {
+            self.config_warned = true;
+            self.apply_now(Event::Notice(invalid_config_notice(Some(&out.repair))));
+        }
     }
 
-    /// Picks up hand edits to config.json; a missing or broken file changes nothing.
-    fn reload_config(&mut self) {
-        if let Some(merged) = config::reload(&self.config) {
-            self.adopt_config(merged);
+    /// Picks up hand edits to config.json. False when the file exists but is
+    /// not a valid config; it then changes nothing (only saves back it up).
+    fn reload_config(&mut self) -> bool {
+        match config::read_at(&config::path()) {
+            OnDisk::Valid(disk) => {
+                let merged = config::merge_owned(disk, &self.config);
+                self.adopt_config(merged);
+                true
+            }
+            OnDisk::Missing => true,
+            OnDisk::Invalid => false,
         }
     }
 
@@ -999,6 +1012,39 @@ fn island_notice(key: &str, title: &str, body: &str) -> Notice {
         body: body.into(),
         kind: NoticeKind::App { app_id: None },
     }
+}
+
+/// What "Hubungkan Google" does, given whether config.json is valid (or
+/// absent) and the client ID in effect.
+#[derive(Debug, PartialEq)]
+enum ConnectAction {
+    InvalidConfig,
+    NoClientId,
+    Login,
+}
+
+fn connect_action(file_ok: bool, client_id: &str) -> ConnectAction {
+    if !file_ok {
+        ConnectAction::InvalidConfig
+    } else if client_id.trim().is_empty() {
+        ConnectAction::NoClientId
+    } else {
+        ConnectAction::Login
+    }
+}
+
+/// config.json does not parse: after a save (`repair`, which says where it
+/// went), or on "Hubungkan Google" (`None`, nothing moved yet).
+fn invalid_config_notice(repair: Option<&Repair>) -> Notice {
+    let body = match repair {
+        Some(Repair::BackedUp(path)) => {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            format!("Disalin ke {name} — cek lagi isinya")
+        }
+        Some(Repair::Blocked) => "Tidak bisa disalin — cek lagi isinya".into(),
+        Some(Repair::None) | None => "Cek lagi isinya — lihat README".into(),
+    };
+    island_notice("config-invalid", "config.json tidak valid", &body)
 }
 
 /// "Hubungkan Google" without a client ID in `config.json`.
@@ -1592,6 +1638,30 @@ mod tests {
         // New: on the selected date, writable, into the primary calendar.
         assert_eq!(open(None), (None, None, date(27), false));
         assert_eq!(event_editor_kind(&events, Some("gone"), date(27)), None);
+    }
+
+    #[test]
+    fn connect_on_an_invalid_config_says_so() {
+        let id = "id.apps.googleusercontent.com";
+        // The ID may be in the broken file; "fill in the ID" would mislead.
+        assert_eq!(connect_action(false, ""), ConnectAction::InvalidConfig);
+        assert_eq!(connect_action(false, id), ConnectAction::InvalidConfig);
+        assert_eq!(connect_action(true, "  "), ConnectAction::NoClientId);
+        assert_eq!(connect_action(true, id), ConnectAction::Login);
+    }
+
+    #[test]
+    fn invalid_config_notice_says_where_the_file_went() {
+        let bak = PathBuf::from(r"C:\x\DynamicIsland\config.json.bak");
+        let saved = invalid_config_notice(Some(&Repair::BackedUp(bak)));
+        assert_eq!(saved.title, "config.json tidak valid");
+        assert_eq!(saved.body, "Disalin ke config.json.bak — cek lagi isinya");
+        let blocked = invalid_config_notice(Some(&Repair::Blocked));
+        assert_eq!(blocked.title, "config.json tidak valid");
+        assert_eq!(blocked.body, "Tidak bisa disalin — cek lagi isinya");
+        let connect = invalid_config_notice(None);
+        assert_eq!(connect.title, "config.json tidak valid");
+        assert_eq!(connect.kind, NoticeKind::App { app_id: None });
     }
 
     #[test]
