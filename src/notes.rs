@@ -60,6 +60,12 @@ impl NotesStore {
         crate::config::path().with_file_name("notes.json")
     }
 
+    /// True while an existing notes file that could not be read or parsed
+    /// waits to be moved aside by the next `save`.
+    pub fn load_failed(&self) -> bool {
+        self.keep_old
+    }
+
     pub fn list(&self) -> &[Note] {
         &self.notes
     }
@@ -176,6 +182,7 @@ mod tests {
         let tmp = TempDir::new("missing");
         let store = NotesStore::open(tmp.file());
         assert!(store.list().is_empty());
+        assert!(!store.load_failed(), "a missing file is no failure");
         assert!(!tmp.file().exists());
     }
 
@@ -270,6 +277,7 @@ mod tests {
         std::fs::write(tmp.file(), "{not json at all").unwrap();
         let mut store = NotesStore::open(tmp.file());
         assert!(store.list().is_empty());
+        assert!(store.load_failed(), "reported, so the island can say so");
         // The corrupt file is left alone until an explicit save.
         store.upsert(None, "fresh", 1);
         assert_eq!(
@@ -277,6 +285,7 @@ mod tests {
             "{not json at all"
         );
         store.save().unwrap();
+        assert!(!store.load_failed(), "moved aside");
         assert_eq!(NotesStore::open(tmp.file()).list().len(), 1);
         // ...which keeps the corrupt file as a backup instead of losing it.
         let bak = tmp.0.join("notes.json.bak");

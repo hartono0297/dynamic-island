@@ -148,6 +148,10 @@ pub fn run() {
         app.check_battery();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
+        // An empty notes list would otherwise look like the notes were deleted.
+        if let Some(notice) = notes_unreadable_notice(&app.notes) {
+            app.apply_now(Event::Notice(notice));
+        }
         unsafe {
             SetTimer(Some(hwnd), TIMER_SYSTEM, SYSTEM_MS, None);
             SetTimer(Some(hwnd), TIMER_BATTERY, BATTERY_MS, None);
@@ -1014,6 +1018,17 @@ fn island_notice(key: &str, title: &str, body: &str) -> Notice {
     }
 }
 
+/// At startup: notes.json exists but could not be read or parsed.
+fn notes_unreadable_notice(notes: &NotesStore) -> Option<Notice> {
+    notes.load_failed().then(|| {
+        island_notice(
+            "notes-unreadable",
+            "notes.json tidak terbaca",
+            "Disimpan sebagai notes.json.bak saat menyimpan berikutnya",
+        )
+    })
+}
+
 /// What "Hubungkan Google" does, given whether config.json is valid (or
 /// absent) and the client ID in effect.
 #[derive(Debug, PartialEq)]
@@ -1583,6 +1598,26 @@ mod tests {
         assert!(note_changed(&notes, None, "baru"));
         assert!(note_changed(&notes, Some("n0-gone"), "masih ada"));
         assert!(!dir.exists(), "nothing written");
+    }
+
+    #[test]
+    fn unreadable_notes_file_is_announced() {
+        let (dir, notes) = temp_notes("unreadable-none");
+        assert_eq!(notes_unreadable_notice(&notes), None, "missing file");
+        assert!(!dir.exists());
+
+        let (dir, _) = temp_notes("unreadable");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.json"), "{ rusak").unwrap();
+        let notes = NotesStore::open(dir.join("notes.json"));
+        let notice = notes_unreadable_notice(&notes);
+        let _ = std::fs::remove_dir_all(&dir);
+        let notice = notice.expect("a notice");
+        assert_eq!(notice.title, "notes.json tidak terbaca");
+        assert_eq!(
+            notice.body,
+            "Disimpan sebagai notes.json.bak saat menyimpan berikutnya"
+        );
     }
 
     #[test]
