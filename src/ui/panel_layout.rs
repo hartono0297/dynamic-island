@@ -9,10 +9,6 @@ use crate::calendar::{CalEvent, CalStatus, events_on, range_for};
 use crate::model::{CalView, Hit, Page, PomoField};
 use crate::notes::Note;
 
-/// Month grid column labels, Monday first: Senin, Selasa, Rabu, Kamis, Jumat,
-/// Sabtu, Minggu.
-pub const WEEKDAY_LABELS: [&str; 7] = ["S", "S", "R", "K", "J", "S", "M"];
-
 /// A clickable rect and what clicking it means.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {
@@ -30,7 +26,8 @@ pub struct CalendarLayout {
     pub view_buttons: [(CalView, Rect); 3],
     pub prev: Rect,
     pub next: Rect,
-    /// Month view: one rect above each grid column for `WEEKDAY_LABELS`.
+    /// Month view: one rect above each grid column for its weekday
+    /// initial (`i18n::weekday_initials`).
     pub weekday_labels: Vec<Rect>,
     /// Month view: 42 days, Monday first.
     pub month_cells: Vec<(NaiveDate, Rect)>,
@@ -771,7 +768,6 @@ mod tests {
         assert_eq!(l.list.x, l.month_cells[6].1.right() + 16.0);
         assert_eq!(l.list.right(), s.x + s.w - 20.0);
         assert!(l.week_columns.is_empty());
-        assert_eq!(WEEKDAY_LABELS, ["S", "S", "R", "K", "J", "S", "M"]);
     }
 
     #[test]

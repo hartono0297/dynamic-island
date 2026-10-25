@@ -1,5 +1,6 @@
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 
+use crate::i18n::{self, Key, tr};
 use crate::model::{Notice, NoticeKind};
 
 /// `BatteryLifePercent` value meaning the charge level is unknown.
@@ -52,9 +53,9 @@ pub fn read_battery() -> Option<(u8, bool)> {
 pub fn battery_notice(percent: u8) -> Notice {
     Notice {
         key: "battery".to_string(),
-        source: "Baterai".to_string(),
-        title: "Baterai lemah".to_string(),
-        body: format!("Sisa {percent}%. Colokin charger."),
+        source: tr(Key::SourceBattery).to_string(),
+        title: tr(Key::BatteryLow).to_string(),
+        body: i18n::battery_body(i18n::lang(), percent),
         kind: NoticeKind::BatteryLow,
     }
 }

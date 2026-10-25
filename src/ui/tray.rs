@@ -22,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, Result, w};
 
 use crate::config::{Config, Style};
+use crate::i18n::{Key, text};
 use crate::ui::app_icon;
 
 /// Sent by the shell for mouse activity on the tray icon; `lparam` holds the
@@ -76,33 +77,34 @@ enum MenuItem {
     Separator,
 }
 
+/// The menu in `cfg.language`.
 fn menu_items(cfg: &Config) -> Vec<MenuItem> {
-    let entry = |cmd, label, checked| MenuItem::Entry {
+    let entry = |cmd, key, checked| MenuItem::Entry {
         cmd,
-        label,
+        label: text(cfg.language, key),
         checked,
     };
     vec![
-        entry(MenuCmd::StylePill, "Gaya: Pill", cfg.style == Style::Pill),
+        entry(
+            MenuCmd::StylePill,
+            Key::MenuStylePill,
+            cfg.style == Style::Pill,
+        ),
         entry(
             MenuCmd::StyleNotch,
-            "Gaya: Notch",
+            Key::MenuStyleNotch,
             cfg.style == Style::Notch,
         ),
         MenuItem::Separator,
         entry(
             MenuCmd::ToggleAutostart,
-            "Jalan saat Windows start",
+            Key::MenuAutostart,
             cfg.start_with_windows,
         ),
-        entry(MenuCmd::ShowDndHelp, "Cara matiin popup Windows", false),
-        entry(
-            MenuCmd::InstallClaudeHooks,
-            "Pasang hook Claude Code",
-            false,
-        ),
+        entry(MenuCmd::ShowDndHelp, Key::MenuDndHelp, false),
+        entry(MenuCmd::InstallClaudeHooks, Key::MenuInstallHooks, false),
         MenuItem::Separator,
-        entry(MenuCmd::Exit, "Keluar", false),
+        entry(MenuCmd::Exit, Key::MenuExit, false),
     ]
 }
 
@@ -260,6 +262,7 @@ unsafe fn write_run_value(key: HKEY) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Lang;
 
     fn labels(items: &[MenuItem]) -> Vec<&'static str> {
         items
@@ -296,6 +299,27 @@ mod tests {
                 "Pasang hook Claude Code",
                 "-",
                 "Keluar",
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_labels_in_english() {
+        let en = Config {
+            language: Lang::En,
+            ..Config::default()
+        };
+        assert_eq!(
+            labels(&menu_items(&en)),
+            vec![
+                "Style: Pill",
+                "Style: Notch",
+                "-",
+                "Start with Windows",
+                "How to turn off Windows pop-ups",
+                "Install Claude Code hooks",
+                "-",
+                "Quit",
             ]
         );
     }

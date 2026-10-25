@@ -11,6 +11,7 @@ use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, U
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::Result;
 
+use crate::i18n::{Key, tr};
 use crate::model::{Event, Notice, NoticeKind};
 
 const PROBE_SECONDS: u32 = 60;
@@ -315,7 +316,7 @@ fn source_name(display_name: Option<String>, app_id: Option<String>) -> String {
         .into_iter()
         .flatten()
         .find(|name| !name.is_empty())
-        .unwrap_or_else(|| "Notifikasi".to_string())
+        .unwrap_or_else(|| tr(Key::SourceNotification).to_string())
 }
 
 /// Title and body for a toast's text elements, each on a single line: the

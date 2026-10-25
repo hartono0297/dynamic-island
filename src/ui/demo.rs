@@ -7,6 +7,7 @@
 //! - `DI_DEMO_STEP=n` holds step `n` (see `SCENES`; Notch adds `SCENES.len()`).
 //! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
+//! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
 
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,7 @@ use super::render::{Frame, Renderer};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::config::Style;
+use crate::i18n::{Key, tr};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
@@ -170,7 +172,7 @@ pub fn run() {
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
-        title: "Claude butuh respon".into(),
+        title: tr(Key::ClaudeWaiting).into(),
         body: "Dynamic Island".into(),
         kind: NoticeKind::ClaudeWaiting {
             session_id: "demo".into(),

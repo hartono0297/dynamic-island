@@ -58,6 +58,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use crate::calendar::EventDraft;
+use crate::i18n::{Key, tr};
 use crate::ui::app_icon;
 
 /// Sent to the event editor after a save (defined by the sync thread, which
@@ -139,9 +140,6 @@ const FIELD: COLORREF = rgb(0x2B, 0x2B, 0x2E);
 const TEXT: COLORREF = rgb(0xEE, 0xEE, 0xEE);
 const ERROR_TEXT: COLORREF = rgb(0xFF, 0x6B, 0x6B);
 
-const STR_SAVING: &str = "Menyimpan…";
-const STR_SAVE_FAILED: &str = "Gagal simpan";
-
 /// Centered under `anchor` with a `GAP`, then moved inside `work` (or pinned
 /// to its top-left corner when it is bigger than `work`).
 pub fn editor_rect(anchor: POINT, size: SIZE, work: RECT) -> RECT {
@@ -158,12 +156,12 @@ pub fn editor_rect(anchor: POINT, size: SIZE, work: RECT) -> RECT {
 
 /// The checks behind "Simpan": a title, and for a timed event an end after
 /// its start (Google also allows zero-length events; the island does not).
-pub fn validate_event(d: &EventDraft) -> std::result::Result<(), &'static str> {
+pub fn validate_event(d: &EventDraft) -> std::result::Result<(), Key> {
     if d.title.trim().is_empty() {
-        return Err("Judul wajib diisi");
+        return Err(Key::TitleRequired);
     }
     if !d.all_day && d.end <= d.start {
-        return Err("Jam selesai harus setelah jam mulai");
+        return Err(Key::EndBeforeStart);
     }
     Ok(())
 }
@@ -287,7 +285,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                 v.push(spec(
                     ID_DELETE,
                     w!("BUTTON"),
-                    "Hapus",
+                    tr(Key::Delete),
                     style,
                     Some(Role::Button),
                 ));
@@ -299,7 +297,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
         } => {
             let ro = if *read_only { ES_READONLY as u32 } else { 0 };
             let mut v = vec![
-                label(ID_LBL_TITLE, "Judul"),
+                label(ID_LBL_TITLE, tr(Key::FieldTitle)),
                 spec(
                     ID_TITLE,
                     w!("EDIT"),
@@ -307,7 +305,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                     ES_AUTOHSCROLL as u32 | ro,
                     Some(Role::Line),
                 ),
-                label(ID_LBL_DATE, "Tanggal"),
+                label(ID_LBL_DATE, tr(Key::FieldDate)),
                 spec(
                     ID_DATE,
                     DATETIMEPICK_CLASSW,
@@ -325,11 +323,11 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                 spec(
                     ID_ALLDAY_LABEL,
                     w!("STATIC"),
-                    "Seharian",
+                    tr(Key::AllDay),
                     SS_CENTERIMAGE | SS_NOTIFY,
                     None,
                 ),
-                label(ID_LBL_START, "Mulai"),
+                label(ID_LBL_START, tr(Key::FieldStart)),
                 spec(
                     ID_START,
                     DATETIMEPICK_CLASSW,
@@ -337,7 +335,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                     DTS_TIMEFORMAT,
                     Some(Role::Picker),
                 ),
-                label(ID_LBL_END, "Selesai"),
+                label(ID_LBL_END, tr(Key::FieldEnd)),
                 spec(
                     ID_END,
                     DATETIMEPICK_CLASSW,
@@ -345,7 +343,7 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                     DTS_TIMEFORMAT,
                     Some(Role::Picker),
                 ),
-                label(ID_LBL_NOTES, "Catatan"),
+                label(ID_LBL_NOTES, tr(Key::FieldNotes)),
                 spec(
                     ID_NOTES,
                     w!("EDIT"),
@@ -366,18 +364,24 @@ fn specs(kind: &EditorKind) -> Vec<Spec> {
                 v.push(spec(
                     ID_CANCEL,
                     w!("BUTTON"),
-                    "Tutup",
+                    tr(Key::Close),
                     style,
                     Some(Role::Button),
                 ));
             } else {
                 let def = BS_DEFPUSHBUTTON as u32;
                 let push = BS_PUSHBUTTON as u32;
-                v.push(spec(ID_OK, w!("BUTTON"), "Simpan", def, Some(Role::Button)));
+                v.push(spec(
+                    ID_OK,
+                    w!("BUTTON"),
+                    tr(Key::Save),
+                    def,
+                    Some(Role::Button),
+                ));
                 v.push(spec(
                     ID_CANCEL,
                     w!("BUTTON"),
-                    "Batal",
+                    tr(Key::Cancel),
                     push,
                     Some(Role::Button),
                 ));
@@ -691,14 +695,14 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         cy: (lh * scale).round() as i32,
     };
     let rc = editor_rect(anchor_bottom_center, size, work);
-    let title = match &kind {
-        EditorKind::Note { .. } => "Note",
+    let title = tr(match &kind {
+        EditorKind::Note { .. } => Key::EditorNote,
         EditorKind::Event {
             read_only: true, ..
-        } => "Acara",
-        EditorKind::Event { event_id: None, .. } => "Tambah acara",
-        EditorKind::Event { .. } => "Edit acara",
-    };
+        } => Key::EditorEvent,
+        EditorKind::Event { event_id: None, .. } => Key::EditorAddEvent,
+        EditorKind::Event { .. } => Key::EditorEditEvent,
+    });
 
     let previous = unsafe { GetForegroundWindow() };
     let ex_style: WINDOW_EX_STYLE = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
@@ -1047,7 +1051,7 @@ impl Editor {
             return;
         };
         if let Err(message) = validate_event(&draft) {
-            self.set_status(message, true);
+            self.set_status(tr(message), true);
             return;
         }
         let result = EditorResult::EventSave {
@@ -1056,7 +1060,7 @@ impl Editor {
             draft,
         };
         if !post_result(self.owner, result) {
-            self.set_status(STR_SAVE_FAILED, true);
+            self.set_status(tr(Key::SaveFailed), true);
             return;
         }
         if let Mode::Event { saving, .. } = &mut self.mode {
@@ -1068,7 +1072,7 @@ impl Editor {
                 let _ = SetFocus(Some(title));
             }
         }
-        self.set_status(STR_SAVING, false);
+        self.set_status(tr(Key::Saving), false);
         self.sync_enabled();
     }
 
@@ -1187,7 +1191,7 @@ fn on_status(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         }
         if !saved {
             *saving = false;
-            ed.set_status(message.as_deref().unwrap_or(STR_SAVE_FAILED), true);
+            ed.set_status(message.as_deref().unwrap_or(tr(Key::SaveFailed)), true);
             ed.sync_enabled();
         }
         true
@@ -1553,7 +1557,9 @@ pub fn run_demo(which: Option<&str>) {
                 let n = SAVES.get();
                 SAVES.set(n + 1);
                 let (ok, message) = if n == 0 {
-                    let text = "Gagal simpan: tidak ada koneksi (demo)".to_string();
+                    let reason = tr(Key::ReasonOffline);
+                    let text = crate::i18n::save_failed_because(crate::i18n::lang(), reason);
+                    let text = format!("{text} (demo)");
                     (0, Box::into_raw(Box::new(text)) as isize)
                 } else {
                     (1, 0)
@@ -1787,11 +1793,11 @@ mod tests {
     fn empty_title_rejected() {
         assert_eq!(
             validate_event(&draft("", false, (9, 0), (10, 0))),
-            Err("Judul wajib diisi")
+            Err(Key::TitleRequired)
         );
         assert_eq!(
             validate_event(&draft("  \t ", true, (9, 0), (10, 0))),
-            Err("Judul wajib diisi")
+            Err(Key::TitleRequired)
         );
         assert_eq!(
             validate_event(&draft("Rapat", false, (9, 0), (10, 0))),
@@ -1801,7 +1807,7 @@ mod tests {
 
     #[test]
     fn end_before_start_rejected() {
-        let msg = Err("Jam selesai harus setelah jam mulai");
+        let msg = Err(Key::EndBeforeStart);
         assert_eq!(
             validate_event(&draft("Rapat", false, (10, 0), (9, 30))),
             msg

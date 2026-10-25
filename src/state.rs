@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use chrono::{Days, Months, NaiveDate};
 
 use crate::calendar::range_for;
+use crate::i18n::{self, Key, text};
 use crate::model::{
     CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, View,
 };
@@ -292,27 +293,22 @@ impl IslandState {
     /// earlier pomodoro notice still queued or showing.
     fn phase_done(&mut self, done: PhaseDone, effects: &mut Vec<Effect>) {
         let settings = self.pomodoro.settings();
+        let lang = i18n::lang();
         let (title, body) = match (done.finished, done.next) {
             (Phase::Focus, next) => {
                 let min = match next {
                     Phase::LongBreak => settings.long_break_min,
                     _ => settings.short_break_min,
                 };
-                (
-                    "Fokus selesai",
-                    format!("Istirahat {min} menit · klik untuk mulai"),
-                )
+                (text(lang, Key::FocusDone), i18n::focus_done_body(lang, min))
             }
             _ => {
                 // Lowering the session count while Ready can leave the
                 // session number above it; never show "5 dari 4".
                 let k = self.pomodoro.session().min(settings.sessions);
                 (
-                    "Istirahat selesai",
-                    format!(
-                        "Fokus sesi {k} dari {} · klik untuk mulai",
-                        settings.sessions
-                    ),
+                    text(lang, Key::BreakDone),
+                    i18n::break_done_body(lang, k, settings.sessions),
                 )
             }
         };
@@ -1080,6 +1076,27 @@ mod tests {
         assert_eq!(
             notice_title(&s.view()).map(|t| t.2),
             Some("Fokus sesi 1 dari 1 · klik untuk mulai")
+        );
+    }
+
+    #[test]
+    fn pomodoro_notices_follow_the_language() {
+        i18n::set_lang(i18n::Lang::En);
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Click(Hit::PomoSkip), t0);
+        assert_eq!(
+            notice_title(&s.view()),
+            Some((
+                &NoticeKind::Pomodoro,
+                "Focus done",
+                "5-minute break · click to start"
+            ))
+        );
+        s.apply(Event::Click(Hit::PomoSkip), t0 + secs(1));
+        assert_eq!(
+            notice_title(&s.view()).map(|t| (t.1, t.2)),
+            Some(("Break over", "Focus session 2 of 4 · click to start"))
         );
     }
 

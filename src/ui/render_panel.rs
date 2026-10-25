@@ -24,14 +24,15 @@ use super::{
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
+use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, Page, PomoField};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoSettings, PomoStatus, Pomodoro};
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
-    CalendarLayout, NotesLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, WEEKDAY_LABELS,
-    calendar_layout, media_panel_layout, notes_layout, page_dots, pomodoro_compact_layout,
-    pomodoro_layout, regions, stepper_value, waiting_strip,
+    CalendarLayout, NotesLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, calendar_layout,
+    media_panel_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions,
+    stepper_value, waiting_strip,
 };
 
 const ACCENT: u32 = 0x4F8CFF;
@@ -48,28 +49,6 @@ const GLYPH_LEFT: &str = "\u{E76B}";
 const GLYPH_RIGHT: &str = "\u{E76C}";
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
-
-const MONTHS: [&str; 12] = [
-    "Januari",
-    "Februari",
-    "Maret",
-    "April",
-    "Mei",
-    "Juni",
-    "Juli",
-    "Agustus",
-    "September",
-    "Oktober",
-    "November",
-    "Desember",
-];
-const MONTHS_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
-];
-const DAYS: [&str; 7] = [
-    "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu",
-];
-const DAYS_SHORT: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
 
 impl Renderer {
     /// The panel: content laid out for the resting panel shape, clipped to the
@@ -164,13 +143,14 @@ impl Renderer {
     }
 
     fn paint_calendar(&mut self, l: &CalendarLayout, frame: &Frame) {
+        let lang = i18n::lang();
         let today = frame.today;
         let snap = frame.calendar;
         let events = &snap.events;
         let title = match l.view {
-            CalView::Month => month_title(frame.cal_anchor),
-            CalView::Week => week_title(range_for(CalView::Week, frame.cal_anchor).0),
-            CalView::Day => day_title(l.selected),
+            CalView::Month => i18n::month_title(lang, frame.cal_anchor),
+            CalView::Week => i18n::week_title(lang, range_for(CalView::Week, frame.cal_anchor).0),
+            CalView::Day => i18n::day_title(lang, l.selected),
         };
         let mut header = l.header;
         if snap.status == CalStatus::Offline {
@@ -183,7 +163,12 @@ impl Renderer {
             header.w = (header.w - OFFLINE_W - 8.0).max(0.0);
             self.set_color(TRACK, 1.0);
             self.fill_round(tag, tag.h / 2.0);
-            self.text("offline", &self.fonts.tiny_center, tag, SECONDARY_ALPHA);
+            self.text(
+                text(lang, Key::Offline),
+                &self.fonts.tiny_center,
+                tag,
+                SECONDARY_ALPHA,
+            );
         }
         self.text(&title, &self.fonts.heading, header, 1.0);
         self.text(GLYPH_LEFT, &self.fonts.icon_small, l.prev, 0.8);
@@ -205,11 +190,14 @@ impl Renderer {
                 self.set_color(SEGMENT_ON, 1.0);
                 self.fill_round(inset(r, 0.0, 2.0), 5.0);
             }
-            let label = match view {
-                CalView::Day => "Hari",
-                CalView::Week => "Minggu",
-                CalView::Month => "Bulan",
-            };
+            let label = text(
+                lang,
+                match view {
+                    CalView::Day => Key::ViewDay,
+                    CalView::Week => Key::ViewWeek,
+                    CalView::Month => Key::ViewMonth,
+                },
+            );
             self.text(
                 label,
                 &self.fonts.small_center,
@@ -220,7 +208,7 @@ impl Renderer {
 
         match l.view {
             CalView::Month => {
-                for (label, r) in WEEKDAY_LABELS.iter().zip(&l.weekday_labels) {
+                for (label, r) in i18n::weekday_initials(lang).iter().zip(&l.weekday_labels) {
                     self.text(label, &self.fonts.tiny_center, *r, 0.5);
                 }
                 for (d, r) in &l.month_cells {
@@ -238,11 +226,16 @@ impl Renderer {
                     0.0,
                 );
                 if let Some(caption) = l.caption {
-                    self.text(&day_title(l.selected), &self.fonts.small, caption, 0.6);
+                    self.text(
+                        &i18n::day_title(lang, l.selected),
+                        &self.fonts.small,
+                        caption,
+                        0.6,
+                    );
                 }
-                self.paint_rows(l, events, snap.status, false);
+                self.paint_rows(lang, l, events, snap.status, false);
             }
-            CalView::Day => self.paint_rows(l, events, snap.status, false),
+            CalView::Day => self.paint_rows(lang, l, events, snap.status, false),
             CalView::Week => {
                 for (d, col) in &l.week_columns {
                     let head = Rect {
@@ -256,11 +249,7 @@ impl Renderer {
                     };
                     self.set_color(0x111113, 1.0);
                     self.fill_round(body, 6.0);
-                    let label = format!(
-                        "{} {}",
-                        DAYS_SHORT[d.weekday().num_days_from_monday() as usize],
-                        d.day()
-                    );
+                    let label = format!("{} {}", i18n::day_short(lang, *d), d.day());
                     if *d == today {
                         self.set_color(TEXT, 1.0);
                         self.fill_round(head, 6.0);
@@ -275,7 +264,7 @@ impl Renderer {
                 for (_, n, r) in &l.week_more {
                     self.text(&format!("+{n}"), &self.fonts.small_center, *r, 0.7);
                 }
-                self.paint_rows(l, events, snap.status, true);
+                self.paint_rows(lang, l, events, snap.status, true);
             }
         }
     }
@@ -324,7 +313,14 @@ impl Renderer {
     }
 
     /// Event rows, "+N lagi", "+ Tambah acara" and the connect button.
-    fn paint_rows(&self, l: &CalendarLayout, events: &[CalEvent], status: CalStatus, narrow: bool) {
+    fn paint_rows(
+        &self,
+        lang: Lang,
+        l: &CalendarLayout,
+        events: &[CalEvent],
+        status: CalStatus,
+        narrow: bool,
+    ) {
         for (id, r) in &l.rows {
             let Some(ev) = events.iter().find(|e| &e.id == id) else {
                 continue;
@@ -359,39 +355,53 @@ impl Renderer {
                 h: 14.0,
             };
             self.text(&ev.title, title_font, title, 1.0);
-            self.text(&event_time_label(ev), time_font, time, 0.6);
+            self.text(&event_time_label(lang, ev), time_font, time, 0.6);
         }
         if let Some((n, r)) = l.more {
-            let label = if n == 0 {
-                "Kembali ke atas".to_string()
-            } else {
-                format!("+{n} lagi")
-            };
-            self.text(&label, &self.fonts.small, inset(r, 2.0, 0.0), 0.7);
+            self.text(
+                &more_label(lang, n),
+                &self.fonts.small,
+                inset(r, 2.0, 0.0),
+                0.7,
+            );
         }
-        self.text("+ Tambah acara", &self.fonts.secondary, l.add, 0.8);
+        self.text(
+            text(lang, Key::AddEventRow),
+            &self.fonts.secondary,
+            l.add,
+            0.8,
+        );
         if let Some(r) = l.connect {
             self.set_color(ACCENT, 1.0);
             self.fill_round(r, 7.0);
-            let label = if status == CalStatus::Reconnect {
-                "Hubungkan ulang Google"
-            } else {
-                "Hubungkan Google"
-            };
+            let label = text(
+                lang,
+                if status == CalStatus::Reconnect {
+                    Key::ReconnectGoogle
+                } else {
+                    Key::ConnectGoogle
+                },
+            );
             self.text_colored(label, &self.fonts.body_center, r, 0xFFFFFF, 1.0);
         }
     }
 
     fn paint_pomodoro(&mut self, l: &PomodoroLayout, frame: &Frame) -> Result<()> {
+        let lang = i18n::lang();
         let pomo = frame.pomodoro;
         let settings = pomo.settings();
         let status = pomo.status();
         let accent = phase_color(pomo.phase());
-        self.text("Pomodoro", &self.fonts.heading, l.header, 1.0);
-        let session = format!(
-            "Sesi {} dari {}",
+        self.text(
+            text(lang, Key::Pomodoro),
+            &self.fonts.heading,
+            l.header,
+            1.0,
+        );
+        let session = i18n::session_of(
+            lang,
             pomo.session().min(settings.sessions),
-            settings.sessions
+            settings.sessions,
         );
         self.text(&session, &self.fonts.body_right, l.header, 0.6);
 
@@ -416,7 +426,7 @@ impl Renderer {
             1.0,
         );
         self.text(
-            &ring_caption(pomo),
+            &ring_caption(lang, pomo),
             &self.fonts.small_center,
             Rect {
                 x: cx - r + 12.0,
@@ -431,14 +441,19 @@ impl Renderer {
         let editable = matches!(status, PomoStatus::Idle | PomoStatus::Ready);
         let alpha = if editable { 1.0 } else { 0.4 };
         for (field, minus, plus, label) in l.steppers {
-            self.text(field_label(field), &self.fonts.secondary, label, alpha);
+            self.text(
+                field_label(lang, field),
+                &self.fonts.secondary,
+                label,
+                alpha,
+            );
             for (button, glyph) in [(minus, "\u{2212}"), (plus, "+")] {
                 self.set_color(TRACK, alpha);
                 self.fill_round(button, 6.0);
                 self.text(glyph, &self.fonts.body_center, button, alpha);
             }
             self.text(
-                &stepper_text(field, settings),
+                &stepper_text(lang, field, settings),
                 &self.fonts.body_center,
                 stepper_value(minus, plus),
                 alpha,
@@ -447,23 +462,29 @@ impl Renderer {
         self.set_color(accent, 1.0);
         self.fill_round(l.start_pause, 7.0);
         self.text_colored(
-            start_label(status),
+            start_label(lang, status),
             &self.fonts.body_center,
             l.start_pause,
             0xFFFFFF,
             1.0,
         );
-        for (r, label) in [(l.reset, "Reset"), (l.skip, "Lewati")] {
+        for (r, key) in [(l.reset, Key::Reset), (l.skip, Key::Skip)] {
             self.set_color(TRACK, 1.0);
             self.fill_round(r, 7.0);
-            self.text(label, &self.fonts.body_center, r, 1.0);
+            self.text(text(lang, key), &self.fonts.body_center, r, 1.0);
         }
         Ok(())
     }
 
     fn paint_notes(&self, l: &NotesLayout, notes: &[Note], today: NaiveDate) {
-        self.text("Notes", &self.fonts.heading, l.header, 1.0);
-        self.text("+ Baru", &self.fonts.body_right, l.new_button, 0.8);
+        let lang = i18n::lang();
+        self.text(text(lang, Key::Notes), &self.fonts.heading, l.header, 1.0);
+        self.text(
+            text(lang, Key::NewNote),
+            &self.fonts.body_right,
+            l.new_button,
+            0.8,
+        );
         if notes.is_empty() {
             let hint = Rect {
                 y: l.header.bottom() + 8.0,
@@ -471,7 +492,7 @@ impl Renderer {
                 ..l.header
             };
             self.text(
-                "Belum ada catatan. Klik + Baru untuk menulis.",
+                text(lang, Key::NotesEmpty),
                 &self.fonts.secondary,
                 hint,
                 0.5,
@@ -495,7 +516,7 @@ impl Renderer {
                 1.0,
             );
             let when = DateTime::from_timestamp(note.updated, 0)
-                .map(|t| note_time_label(t.with_timezone(&Local).naive_local(), today))
+                .map(|t| note_time_label(lang, t.with_timezone(&Local).naive_local(), today))
                 .unwrap_or_default();
             self.text(
                 &when,
@@ -509,12 +530,12 @@ impl Renderer {
             );
         }
         if let Some((n, r)) = l.more {
-            let label = if n == 0 {
-                "Kembali ke atas".to_string()
-            } else {
-                format!("+{n} lagi")
-            };
-            self.text(&label, &self.fonts.small, inset(r, 2.0, 0.0), 0.7);
+            self.text(
+                &more_label(lang, n),
+                &self.fonts.small,
+                inset(r, 2.0, 0.0),
+                0.7,
+            );
         }
     }
 
@@ -522,13 +543,13 @@ impl Renderer {
         self.paint_art(l.art, 12.0, media.and_then(|m| m.art.as_deref()))?;
         let Some(media) = media else {
             self.text(
-                "Tidak ada musik yang diputar",
+                i18n::tr(Key::NothingPlaying),
                 &self.fonts.media_title,
                 l.title,
                 0.8,
             );
             self.text(
-                "Putar lagu di aplikasi mana pun",
+                i18n::tr(Key::NothingPlayingHint),
                 &self.fonts.media_artist,
                 l.artist,
                 0.5,
@@ -607,7 +628,7 @@ impl Renderer {
             if paused { 0.6 } else { 1.0 },
         );
         self.text(
-            &compact_label(pomo),
+            &compact_label(i18n::lang(), pomo),
             &self.fonts.secondary,
             label,
             SECONDARY_ALPHA,
@@ -757,74 +778,39 @@ fn phase_color(phase: Phase) -> u32 {
     }
 }
 
-fn phase_name(phase: Phase) -> &'static str {
-    match phase {
-        Phase::Focus => "Fokus",
-        Phase::ShortBreak => "Istirahat",
-        Phase::LongBreak => "Istirahat panjang",
-    }
-}
-
-/// "Oktober 2026".
-fn month_title(d: NaiveDate) -> String {
-    format!("{} {}", MONTHS[d.month0() as usize], d.year())
-}
-
-fn short_date(d: NaiveDate) -> String {
-    format!("{} {}", d.day(), MONTHS_SHORT[d.month0() as usize])
-}
-
-/// "19 – 25 Okt 2026", "28 Sep – 4 Okt 2026", "29 Des 2025 – 4 Jan 2026".
-fn week_title(monday: NaiveDate) -> String {
-    let sunday = monday + chrono::Days::new(6);
-    if monday.year() != sunday.year() {
-        format!(
-            "{} {} – {} {}",
-            short_date(monday),
-            monday.year(),
-            short_date(sunday),
-            sunday.year()
-        )
-    } else if monday.month() != sunday.month() {
-        format!(
-            "{} – {} {}",
-            short_date(monday),
-            short_date(sunday),
-            sunday.year()
-        )
-    } else {
-        format!(
-            "{} – {} {}",
-            monday.day(),
-            short_date(sunday),
-            sunday.year()
-        )
-    }
-}
-
-/// "Minggu, 25 Okt".
-fn day_title(d: NaiveDate) -> String {
-    format!(
-        "{}, {}",
-        DAYS[d.weekday().num_days_from_monday() as usize],
-        short_date(d)
+fn phase_name(lang: Lang, phase: Phase) -> &'static str {
+    text(
+        lang,
+        match phase {
+            Phase::Focus => Key::Focus,
+            Phase::ShortBreak => Key::Break,
+            Phase::LongBreak => Key::LongBreak,
+        },
     )
 }
 
-fn hm(t: NaiveDateTime) -> String {
-    t.format("%H.%M").to_string()
+/// "+N lagi", or "Kembali ke atas" on the last chunk (`n` = 0).
+fn more_label(lang: Lang, n: usize) -> String {
+    if n == 0 {
+        text(lang, Key::BackToTop).into()
+    } else {
+        i18n::more_count(lang, n)
+    }
 }
 
 /// "10.00 – 11.30", "Seharian", "Seharian · 24 Okt – 26 Okt", or both dates
 /// for a timed event spanning days.
-fn event_time_label(ev: &CalEvent) -> String {
+fn event_time_label(lang: Lang, ev: &CalEvent) -> String {
+    let date = |d| i18n::short_date(lang, d);
+    let hm = |t| i18n::time_hm(lang, t);
     match (&ev.start, &ev.end) {
         (EventTime::AllDay(s), EventTime::AllDay(e)) => {
+            let all_day = text(lang, Key::AllDay);
             let last = e.pred_opt().unwrap_or(*s);
             if last <= *s {
-                "Seharian".into()
+                all_day.into()
             } else {
-                format!("Seharian · {} – {}", short_date(*s), short_date(last))
+                format!("{all_day} · {} – {}", date(*s), date(last))
             }
         }
         (EventTime::At(s), EventTime::At(e)) => {
@@ -834,9 +820,9 @@ fn event_time_label(ev: &CalEvent) -> String {
             } else {
                 format!(
                     "{} {} – {} {}",
-                    short_date(s.date()),
+                    date(s.date()),
                     hm(s),
-                    short_date(e.date()),
+                    date(e.date()),
                     hm(e)
                 )
             }
@@ -846,16 +832,20 @@ fn event_time_label(ev: &CalEvent) -> String {
 }
 
 /// "hari ini 09.12", "kemarin", "23 Okt", or "23 Okt 2025" in another year.
-fn note_time_label(updated: NaiveDateTime, today: NaiveDate) -> String {
+fn note_time_label(lang: Lang, updated: NaiveDateTime, today: NaiveDate) -> String {
     let d = updated.date();
     if d == today {
-        format!("hari ini {}", hm(updated))
+        format!(
+            "{} {}",
+            text(lang, Key::Today),
+            i18n::time_hm(lang, updated)
+        )
     } else if Some(d) == today.pred_opt() {
-        "kemarin".into()
+        text(lang, Key::Yesterday).into()
     } else if d.year() == today.year() {
-        short_date(d)
+        i18n::short_date(lang, d)
     } else {
-        format!("{} {}", short_date(d), d.year())
+        format!("{} {}", i18n::short_date(lang, d), d.year())
     }
 }
 
@@ -873,51 +863,59 @@ fn mmss(d: Duration) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-fn compact_label(pomo: &Pomodoro) -> String {
+fn compact_label(lang: Lang, pomo: &Pomodoro) -> String {
     if pomo.status() == PomoStatus::Ready {
-        return "Siap · klik".into();
+        return text(lang, Key::ReadyClick).into();
     }
     match pomo.phase() {
         Phase::Focus => {
             let n = pomo.settings().sessions;
-            format!("Fokus {}/{n}", pomo.session().min(n))
+            let focus = text(lang, Key::Focus);
+            format!("{focus} {}/{n}", pomo.session().min(n))
         }
-        Phase::ShortBreak | Phase::LongBreak => "Istirahat".into(),
+        Phase::ShortBreak | Phase::LongBreak => text(lang, Key::Break).into(),
     }
 }
 
 /// Under the big ring's time: the phase, marked when paused or waiting.
-fn ring_caption(pomo: &Pomodoro) -> String {
-    let name = phase_name(pomo.phase());
+fn ring_caption(lang: Lang, pomo: &Pomodoro) -> String {
+    let name = phase_name(lang, pomo.phase());
     match pomo.status() {
-        PomoStatus::Paused { .. } => format!("{name} · dijeda"),
-        PomoStatus::Ready => format!("{name} siap"),
+        PomoStatus::Paused { .. } => format!("{name} · {}", text(lang, Key::Paused)),
+        PomoStatus::Ready => format!("{name} {}", text(lang, Key::Ready)),
         PomoStatus::Idle | PomoStatus::Running { .. } => name.into(),
     }
 }
 
-fn start_label(status: PomoStatus) -> &'static str {
-    match status {
-        PomoStatus::Idle | PomoStatus::Ready => "Mulai",
-        PomoStatus::Running { .. } => "Jeda",
-        PomoStatus::Paused { .. } => "Lanjut",
-    }
+fn start_label(lang: Lang, status: PomoStatus) -> &'static str {
+    text(
+        lang,
+        match status {
+            PomoStatus::Idle | PomoStatus::Ready => Key::Start,
+            PomoStatus::Running { .. } => Key::Pause,
+            PomoStatus::Paused { .. } => Key::Resume,
+        },
+    )
 }
 
-fn field_label(field: PomoField) -> &'static str {
-    match field {
-        PomoField::Focus => "Fokus",
-        PomoField::ShortBreak => "Istirahat",
-        PomoField::LongBreak => "Istirahat panjang",
-        PomoField::Sessions => "Jumlah sesi",
-    }
+fn field_label(lang: Lang, field: PomoField) -> &'static str {
+    text(
+        lang,
+        match field {
+            PomoField::Focus => Key::Focus,
+            PomoField::ShortBreak => Key::Break,
+            PomoField::LongBreak => Key::LongBreak,
+            PomoField::Sessions => Key::Sessions,
+        },
+    )
 }
 
-fn stepper_text(field: PomoField, s: PomoSettings) -> String {
+fn stepper_text(lang: Lang, field: PomoField, s: PomoSettings) -> String {
+    let minutes = |m| format!("{m} {}", text(lang, Key::MinutesShort));
     match field {
-        PomoField::Focus => format!("{} mnt", s.focus_min),
-        PomoField::ShortBreak => format!("{} mnt", s.short_break_min),
-        PomoField::LongBreak => format!("{} mnt", s.long_break_min),
+        PomoField::Focus => minutes(s.focus_min),
+        PomoField::ShortBreak => minutes(s.short_break_min),
+        PomoField::LongBreak => minutes(s.long_break_min),
         PomoField::Sessions => s.sessions.to_string(),
     }
 }
@@ -954,46 +952,80 @@ mod tests {
     }
 
     #[test]
-    fn titles_in_indonesian() {
-        assert_eq!(month_title(date(2026, 10, 25)), "Oktober 2026");
-        assert_eq!(day_title(date(2026, 10, 25)), "Minggu, 25 Okt");
-        assert_eq!(week_title(date(2026, 10, 19)), "19 – 25 Okt 2026");
-        assert_eq!(week_title(date(2026, 9, 28)), "28 Sep – 4 Okt 2026");
-        assert_eq!(week_title(date(2025, 12, 29)), "29 Des 2025 – 4 Jan 2026");
-    }
-
-    #[test]
     fn event_times() {
+        let l = Lang::Id;
         let d = date(2026, 10, 25);
         let one = event(EventTime::AllDay(d), EventTime::AllDay(date(2026, 10, 26)));
-        assert_eq!(event_time_label(&one), "Seharian");
+        assert_eq!(event_time_label(l, &one), "Seharian");
         let multi = event(
             EventTime::AllDay(date(2026, 10, 24)),
             EventTime::AllDay(date(2026, 10, 27)),
         );
-        assert_eq!(event_time_label(&multi), "Seharian · 24 Okt – 26 Okt");
+        assert_eq!(event_time_label(l, &multi), "Seharian · 24 Okt – 26 Okt");
         let timed = event(local(at(d, 10, 0)), local(at(d, 11, 30)));
-        assert_eq!(event_time_label(&timed), "10.00 – 11.30");
+        assert_eq!(event_time_label(l, &timed), "10.00 – 11.30");
         let night = event(local(at(d, 22, 0)), local(at(date(2026, 10, 26), 2, 0)));
-        assert_eq!(event_time_label(&night), "25 Okt 22.00 – 26 Okt 02.00");
+        assert_eq!(event_time_label(l, &night), "25 Okt 22.00 – 26 Okt 02.00");
+    }
+
+    #[test]
+    fn event_times_in_english() {
+        let l = Lang::En;
+        let d = date(2026, 10, 25);
+        let one = event(EventTime::AllDay(d), EventTime::AllDay(date(2026, 10, 26)));
+        assert_eq!(event_time_label(l, &one), "All day");
+        let multi = event(
+            EventTime::AllDay(date(2026, 10, 24)),
+            EventTime::AllDay(date(2026, 10, 27)),
+        );
+        assert_eq!(event_time_label(l, &multi), "All day · 24 Oct – 26 Oct");
+        let night = event(local(at(d, 22, 0)), local(at(date(2026, 10, 26), 2, 0)));
+        assert_eq!(event_time_label(l, &night), "25 Oct 22:00 – 26 Oct 02:00");
     }
 
     #[test]
     fn note_times_relative_to_today() {
+        let l = Lang::Id;
         let today = date(2026, 10, 25);
-        assert_eq!(note_time_label(at(today, 9, 12), today), "hari ini 09.12");
         assert_eq!(
-            note_time_label(at(date(2026, 10, 24), 23, 0), today),
+            note_time_label(l, at(today, 9, 12), today),
+            "hari ini 09.12"
+        );
+        assert_eq!(
+            note_time_label(l, at(date(2026, 10, 24), 23, 0), today),
             "kemarin"
         );
         assert_eq!(
-            note_time_label(at(date(2026, 10, 23), 8, 0), today),
+            note_time_label(l, at(date(2026, 10, 23), 8, 0), today),
             "23 Okt"
         );
         assert_eq!(
-            note_time_label(at(date(2025, 10, 23), 8, 0), today),
+            note_time_label(l, at(date(2025, 10, 23), 8, 0), today),
             "23 Okt 2025"
         );
+    }
+
+    #[test]
+    fn note_times_in_english() {
+        let l = Lang::En;
+        let today = date(2026, 10, 25);
+        assert_eq!(note_time_label(l, at(today, 9, 12), today), "Today 09:12");
+        assert_eq!(
+            note_time_label(l, at(date(2026, 10, 24), 23, 0), today),
+            "Yesterday"
+        );
+        assert_eq!(
+            note_time_label(l, at(date(2025, 10, 23), 8, 0), today),
+            "23 Oct 2025"
+        );
+    }
+
+    #[test]
+    fn more_lines() {
+        assert_eq!(more_label(Lang::Id, 0), "Kembali ke atas");
+        assert_eq!(more_label(Lang::Id, 4), "+4 lagi");
+        assert_eq!(more_label(Lang::En, 0), "Back to top");
+        assert_eq!(more_label(Lang::En, 4), "+4 more");
     }
 
     #[test]
@@ -1012,23 +1044,44 @@ mod tests {
 
     #[test]
     fn pomodoro_labels_by_status() {
+        let l = Lang::Id;
         let t0 = Instant::now();
         let mut p = Pomodoro::new(PomoSettings::default());
-        assert_eq!(start_label(p.status()), "Mulai");
+        assert_eq!(start_label(l, p.status()), "Mulai");
         p.start_pause(t0);
-        assert_eq!(compact_label(&p), "Fokus 1/4");
-        assert_eq!(start_label(p.status()), "Jeda");
-        assert_eq!(ring_caption(&p), "Fokus");
+        assert_eq!(compact_label(l, &p), "Fokus 1/4");
+        assert_eq!(start_label(l, p.status()), "Jeda");
+        assert_eq!(ring_caption(l, &p), "Fokus");
         p.start_pause(t0);
-        assert_eq!(start_label(p.status()), "Lanjut");
-        assert_eq!(ring_caption(&p), "Fokus · dijeda");
+        assert_eq!(start_label(l, p.status()), "Lanjut");
+        assert_eq!(ring_caption(l, &p), "Fokus · dijeda");
         p.skip(t0);
-        assert_eq!(compact_label(&p), "Siap · klik");
-        assert_eq!(ring_caption(&p), "Istirahat siap");
+        assert_eq!(compact_label(l, &p), "Siap · klik");
+        assert_eq!(ring_caption(l, &p), "Istirahat siap");
         assert_eq!(phase_color(p.phase()), BREAK);
         p.start_pause(t0);
-        assert_eq!(compact_label(&p), "Istirahat");
-        assert_eq!(stepper_text(PomoField::Focus, p.settings()), "25 mnt");
-        assert_eq!(stepper_text(PomoField::Sessions, p.settings()), "4");
+        assert_eq!(compact_label(l, &p), "Istirahat");
+        assert_eq!(stepper_text(l, PomoField::Focus, p.settings()), "25 mnt");
+        assert_eq!(stepper_text(l, PomoField::Sessions, p.settings()), "4");
+        assert_eq!(field_label(l, PomoField::Sessions), "Jumlah sesi");
+    }
+
+    #[test]
+    fn pomodoro_labels_in_english() {
+        let l = Lang::En;
+        let t0 = Instant::now();
+        let mut p = Pomodoro::new(PomoSettings::default());
+        assert_eq!(start_label(l, p.status()), "Start");
+        p.start_pause(t0);
+        assert_eq!(compact_label(l, &p), "Focus 1/4");
+        assert_eq!(start_label(l, p.status()), "Pause");
+        p.start_pause(t0);
+        assert_eq!(start_label(l, p.status()), "Resume");
+        assert_eq!(ring_caption(l, &p), "Focus · paused");
+        p.skip(t0);
+        assert_eq!(compact_label(l, &p), "Ready · click");
+        assert_eq!(ring_caption(l, &p), "Break ready");
+        assert_eq!(stepper_text(l, PomoField::Focus, p.settings()), "25 min");
+        assert_eq!(field_label(l, PomoField::LongBreak), "Long break");
     }
 }

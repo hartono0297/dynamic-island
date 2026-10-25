@@ -9,6 +9,7 @@ use windows::Win32::System::Pipes::WaitNamedPipeW;
 use windows::core::HSTRING;
 
 use super::PIPE_NAME;
+use crate::i18n::{Key, tr};
 use crate::model::{Event, Notice, NoticeKind};
 
 /// How long to wait for a free pipe instance while the server is mid-handoff.
@@ -89,14 +90,14 @@ pub fn to_event(msg: HookMessage) -> Event {
         HookKind::Done => Event::Notice(Notice {
             key: format!("claude-done-{session_id}"),
             source: "Claude".to_string(),
-            title: "Claude selesai".to_string(),
+            title: tr(Key::ClaudeDone).to_string(),
             body: project,
             kind: NoticeKind::ClaudeDone { session_id },
         }),
         HookKind::Waiting => Event::Notice(Notice {
             key: format!("claude-wait-{session_id}"),
             source: "Claude".to_string(),
-            title: "Claude butuh respon".to_string(),
+            title: tr(Key::ClaudeWaiting).to_string(),
             body: message.unwrap_or(project),
             kind: NoticeKind::ClaudeWaiting { session_id },
         }),

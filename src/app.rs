@@ -38,6 +38,7 @@ use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_dra
 use crate::claude::install::{self, InstallOutcome};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::config::{self, Config, OnDisk, Repair, Style};
+use crate::i18n::{self, Key, tr};
 use crate::model::{Effect, Event, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
@@ -103,6 +104,7 @@ pub fn run() {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
     let config = config::load();
+    i18n::set_lang(config.language);
     let win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
     let renderer = Renderer::new().expect("create renderer");
     let hwnd = win.hwnd();
@@ -393,7 +395,10 @@ impl App {
                 };
                 if !self.sync.as_ref().is_some_and(|sync| sync.send(request)) {
                     // No sync thread to answer: the editor must not wait forever.
-                    let failed = Err("Gagal simpan: sinkron kalender berhenti".to_string());
+                    let failed = Err(i18n::save_failed_because(
+                        i18n::lang(),
+                        tr(Key::ReasonSyncStopped),
+                    ));
                     if let Some(message) = post_status(reply, failed) {
                         self.apply(Event::Notice(save_failed_notice(message)), now);
                     }
@@ -422,7 +427,7 @@ impl App {
 
     fn persist_notes(&mut self, now: Instant) {
         if let Err(error) = self.notes.save() {
-            let notice = island_notice("notes", "Gagal simpan catatan", &error.to_string());
+            let notice = island_notice("notes", tr(Key::NotesSaveFailed), &error.to_string());
             self.apply(Event::Notice(notice), now);
         }
     }
@@ -714,6 +719,7 @@ impl App {
         let google = |c: &Config| (c.google_client_id.clone(), c.google_client_secret.clone());
         let changed = google(&cfg) != google(&self.config);
         self.config = cfg;
+        i18n::set_lang(self.config.language);
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -1025,8 +1031,8 @@ fn notes_unreadable_notice(notes: &NotesStore) -> Option<Notice> {
     notes.load_failed().then(|| {
         island_notice(
             "notes-unreadable",
-            "notes.json tidak terbaca",
-            "Disimpan sebagai notes.json.bak saat menyimpan berikutnya",
+            tr(Key::NotesUnreadable),
+            tr(Key::NotesUnreadableBody),
         )
     })
 }
@@ -1056,41 +1062,37 @@ fn invalid_config_notice(repair: Option<&Repair>) -> Notice {
     let body = match repair {
         Some(Repair::BackedUp(path)) => {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            format!("Disalin ke {name} — cek lagi isinya")
+            i18n::config_copied_to(i18n::lang(), &name)
         }
-        Some(Repair::Blocked) => "Tidak bisa disalin — cek lagi isinya".into(),
-        Some(Repair::None) | None => "Cek lagi isinya — lihat README".into(),
+        Some(Repair::Blocked) => tr(Key::ConfigNotCopied).into(),
+        Some(Repair::None) | None => tr(Key::ConfigCheck).into(),
     };
-    island_notice("config-invalid", "config.json tidak valid", &body)
+    island_notice("config-invalid", tr(Key::ConfigInvalid), &body)
 }
 
 /// "Hubungkan Google" without a client ID in `config.json`.
 fn client_id_notice() -> Notice {
     Notice {
         key: "calendar-client-id".into(),
-        source: "Kalender".into(),
-        title: "Isi Google client ID dulu".into(),
-        body: "lihat README".into(),
+        source: tr(Key::SourceCalendar).into(),
+        title: tr(Key::ClientIdMissing).into(),
+        body: tr(Key::SeeReadme).into(),
         kind: NoticeKind::App { app_id: None },
     }
 }
 
 fn dnd_notice() -> Notice {
-    island_notice(
-        "dnd",
-        "Matiin popup Windows",
-        "Nyalain Do Not Disturb: Settings → System → Notifications",
-    )
+    island_notice("dnd", tr(Key::DndTitle), tr(Key::DndBody))
 }
 
 fn hook_notice(outcome: InstallOutcome) -> Notice {
     const SETTINGS: &str = r"~\.claude\settings.json";
     match outcome {
-        InstallOutcome::Installed => island_notice("hooks", "Hook Claude Code terpasang", SETTINGS),
+        InstallOutcome::Installed => island_notice("hooks", tr(Key::HooksInstalled), SETTINGS),
         InstallOutcome::AlreadyInstalled => {
-            island_notice("hooks", "Hook sudah terpasang", SETTINGS)
+            island_notice("hooks", tr(Key::HooksAlreadyInstalled), SETTINGS)
         }
-        InstallOutcome::Error(e) => island_notice("hooks", "Gagal pasang hook", &e),
+        InstallOutcome::Error(e) => island_notice("hooks", tr(Key::HooksFailed), &e),
     }
 }
 
@@ -1699,6 +1701,25 @@ mod tests {
         let connect = invalid_config_notice(None);
         assert_eq!(connect.title, "config.json tidak valid");
         assert_eq!(connect.kind, NoticeKind::App { app_id: None });
+    }
+
+    #[test]
+    fn island_notices_in_english() {
+        i18n::set_lang(i18n::Lang::En);
+        let bak = PathBuf::from(r"C:\x\DynamicIsland\config.json.bak");
+        let saved = invalid_config_notice(Some(&Repair::BackedUp(bak)));
+        assert_eq!(saved.title, "config.json is invalid");
+        assert_eq!(saved.body, "Copied to config.json.bak — check its contents");
+        let n = client_id_notice();
+        assert_eq!(
+            (n.source.as_str(), n.title.as_str()),
+            ("Calendar", "Add a Google client ID first")
+        );
+        assert_eq!(dnd_notice().title, "Turn off Windows pop-ups");
+        assert_eq!(
+            hook_notice(InstallOutcome::Installed).title,
+            "Claude Code hooks installed"
+        );
     }
 
     #[test]

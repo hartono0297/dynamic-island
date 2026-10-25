@@ -22,6 +22,7 @@ use windows::core::{HSTRING, w};
 
 use super::http::{Http, form_encode, url_decode};
 use crate::config::{self, Config};
+use crate::i18n::{self, Key};
 
 /// Read the calendar list (to know which calendars are `selected`) and
 /// list/insert/patch events. Source: Google Calendar API v3 reference,
@@ -36,14 +37,6 @@ const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const REFRESH_MARGIN_SECS: i64 = 60;
 /// `parse_redirect` error for a request that is not the OAuth redirect (e.g. `/favicon.ico`).
 const NO_CODE: &str = "no_code";
-
-const PAGE_OK: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
-    <p style=\"font:16px sans-serif\">Berhasil terhubung. Kembali ke island ya.</p>";
-const PAGE_FAILED: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
-    <p style=\"font:16px sans-serif\">Gagal terhubung — coba lagi dari island.</p>";
-const PAGE_MISSING_SCOPES: &str = "<!doctype html><meta charset=\"utf-8\"><title>Dynamic Island</title>\
-    <p style=\"font:16px sans-serif\">Izin Google belum lengkap — centang kedua izin, \
-    lalu coba lagi dari island.</p>";
 
 /// Google's own messages are cut to this many characters before they are shown.
 const MESSAGE_MAX: usize = 120;
@@ -427,12 +420,12 @@ fn wait_for_code<T>(
             Ok((stream, _)) => {
                 if let Some(code) = read_redirect(&stream, expected_state) {
                     let outcome = code.and_then(&mut exchange);
-                    let page = match &outcome {
-                        Ok(_) => PAGE_OK,
-                        Err(AuthError::MissingScopes) => PAGE_MISSING_SCOPES,
-                        Err(_) => PAGE_FAILED,
+                    let message = match &outcome {
+                        Ok(_) => Key::OauthConnected,
+                        Err(AuthError::MissingScopes) => Key::OauthScopes,
+                        Err(_) => Key::OauthFailed,
                     };
-                    respond(&stream, "200 OK", page);
+                    respond(&stream, "200 OK", &i18n::oauth_page(i18n::lang(), message));
                     return outcome;
                 }
             }

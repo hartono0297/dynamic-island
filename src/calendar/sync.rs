@@ -20,6 +20,7 @@ use super::{CalStatus, CalendarSnapshot, EventDraft, api, range_for};
 use crate::config::{self, Config};
 use crate::google::http::Http;
 use crate::google::oauth::{self, AuthError};
+use crate::i18n::{self, Key, Lang, text, tr};
 use crate::model::{CalView, Event, Notice, NoticeKind};
 
 /// Posted to the event editor after a save: `wparam` 1 = saved, 0 = failed with
@@ -87,8 +88,8 @@ impl SyncHandle {
 pub fn save_failed_notice(message: String) -> Notice {
     Notice {
         key: "calendar-save-failed".into(),
-        source: "Kalender".into(),
-        title: "Gagal simpan acara".into(),
+        source: tr(Key::SourceCalendar).into(),
+        title: tr(Key::SaveEventFailed).into(),
         body: message,
         kind: NoticeKind::App { app_id: None },
     }
@@ -172,16 +173,13 @@ fn status_for(e: &AuthError) -> CalStatus {
 /// unticked scopes, or a refusal from Google.
 fn google_notice(e: &AuthError) -> Option<Notice> {
     let (title, body) = match e {
-        AuthError::MissingScopes => (
-            "Izin Google belum lengkap",
-            "Centang kedua izin saat login".to_string(),
-        ),
-        AuthError::Google(message) => ("Google menolak", message.clone()),
+        AuthError::MissingScopes => (tr(Key::GoogleScopes), tr(Key::GoogleScopesBody).into()),
+        AuthError::Google(message) => (tr(Key::GoogleRefused), message.clone()),
         _ => return None,
     };
     Some(Notice {
         key: "calendar-google".into(),
-        source: "Kalender".into(),
+        source: tr(Key::SourceCalendar).into(),
         title: title.into(),
         body,
         kind: NoticeKind::App { app_id: None },
@@ -192,9 +190,9 @@ fn google_notice(e: &AuthError) -> Option<Notice> {
 /// `NotConfigured` means Google rejected the client ID or secret.
 fn login_notice(e: &AuthError, configured: bool) -> Option<Notice> {
     match e {
-        AuthError::NotConfigured if configured => google_notice(&AuthError::Google(
-            "Client ID atau secret ditolak — cek config.json".into(),
-        )),
+        AuthError::NotConfigured if configured => {
+            google_notice(&AuthError::Google(tr(Key::ClientRejected).into()))
+        }
         other => google_notice(other),
     }
 }
@@ -218,20 +216,18 @@ fn retry_unauthorized<T>(
 /// The editor's error line. Network messages that start with "HTTP " came
 /// from Google (a 5xx); any other network error means the request never got
 /// through.
-pub fn save_error_message(e: &AuthError) -> String {
-    match e {
-        AuthError::NotConfigured => "Gagal simpan: Google belum diatur".into(),
-        AuthError::NeedsLogin => "Gagal simpan: hubungkan Google dulu".into(),
-        AuthError::Reconnect | AuthError::Unauthorized => {
-            "Gagal simpan: hubungkan ulang Google".into()
-        }
-        AuthError::MissingScopes => "Gagal simpan: izin Google belum lengkap".into(),
-        AuthError::Google(m) => format!("Gagal simpan: Google menolak ({m})"),
-        AuthError::Network(m) if m.starts_with("HTTP ") => {
-            format!("Gagal simpan: Google menolak ({m})")
-        }
-        AuthError::Network(_) => "Gagal simpan: tidak ada koneksi".into(),
-    }
+pub fn save_error_message(lang: Lang, e: &AuthError) -> String {
+    let reason = |key| text(lang, key).to_string();
+    let reason = match e {
+        AuthError::NotConfigured => reason(Key::ReasonNotConfigured),
+        AuthError::NeedsLogin => reason(Key::ReasonNeedsLogin),
+        AuthError::Reconnect | AuthError::Unauthorized => reason(Key::ReasonReconnect),
+        AuthError::MissingScopes => reason(Key::ReasonScopes),
+        AuthError::Google(m) => i18n::google_refused(lang, m),
+        AuthError::Network(m) if m.starts_with("HTTP ") => i18n::google_refused(lang, m),
+        AuthError::Network(_) => reason(Key::ReasonOffline),
+    };
+    i18n::save_failed_because(lang, &reason)
 }
 
 /// Starts the sync thread. It sends the cached snapshot right away (status
@@ -346,7 +342,7 @@ impl Worker {
                     reply,
                 } => {
                     let result = self.save(event_id.as_deref(), calendar_id.as_deref(), &draft);
-                    let result = result.map_err(|e| save_error_message(&e));
+                    let result = result.map_err(|e| save_error_message(i18n::lang(), &e));
                     if let Some(message) = post_status(reply, result) {
                         // The editor was closed while saving: tell the island instead.
                         self.send(Event::Notice(save_failed_notice(message)));
@@ -702,26 +698,39 @@ mod tests {
     #[test]
     fn save_errors_are_indonesian() {
         assert_eq!(
-            save_error_message(&AuthError::Network(
-                "The server name cannot be resolved".into()
-            )),
+            save_error_message(
+                Lang::Id,
+                &AuthError::Network("The server name cannot be resolved".into())
+            ),
             "Gagal simpan: tidak ada koneksi"
         );
         assert_eq!(
-            save_error_message(&AuthError::Network("HTTP 403: Forbidden".into())),
+            save_error_message(Lang::Id, &AuthError::Network("HTTP 403: Forbidden".into())),
             "Gagal simpan: Google menolak (HTTP 403: Forbidden)"
         );
         assert_eq!(
-            save_error_message(&AuthError::Reconnect),
+            save_error_message(Lang::Id, &AuthError::Reconnect),
             "Gagal simpan: hubungkan ulang Google"
         );
         assert_eq!(
-            save_error_message(&AuthError::Google("Not Found".into())),
+            save_error_message(Lang::Id, &AuthError::Google("Not Found".into())),
             "Gagal simpan: Google menolak (Not Found)"
         );
         assert_eq!(
-            save_error_message(&AuthError::MissingScopes),
+            save_error_message(Lang::Id, &AuthError::MissingScopes),
             "Gagal simpan: izin Google belum lengkap"
+        );
+    }
+
+    #[test]
+    fn save_errors_in_english() {
+        assert_eq!(
+            save_error_message(Lang::En, &AuthError::Reconnect),
+            "Couldn't save: reconnect Google"
+        );
+        assert_eq!(
+            save_error_message(Lang::En, &AuthError::Network("timeout".into())),
+            "Couldn't save: no connection"
         );
     }
 
@@ -732,7 +741,7 @@ mod tests {
             (n.title.as_str(), n.body.as_str()),
             ("Izin Google belum lengkap", "Centang kedua izin saat login")
         );
-        let n = google_notice(&AuthError::Google(api::API_DISABLED.into())).unwrap();
+        let n = google_notice(&AuthError::Google(tr(Key::ApiDisabled).into())).unwrap();
         assert_eq!(
             (n.title.as_str(), n.body.as_str()),
             (
@@ -835,13 +844,13 @@ mod tests {
                 })
                 .collect()
         };
-        let disabled = google_notice(&AuthError::Google(api::API_DISABLED.into())).unwrap();
+        let disabled = google_notice(&AuthError::Google(tr(Key::ApiDisabled).into())).unwrap();
         let other = google_notice(&AuthError::Google("Forbidden".into())).unwrap();
         w.notify_once(disabled.clone());
         w.notify_once(disabled.clone());
         w.notify_once(other);
         w.notify_once(disabled);
-        assert_eq!(bodies(&rx), [api::API_DISABLED, "Forbidden"]);
+        assert_eq!(bodies(&rx), [tr(Key::ApiDisabled), "Forbidden"]);
         assert!(!dir.exists(), "nothing written");
     }
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::i18n::Lang;
 use crate::pomodoro::PomoSettings;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +23,8 @@ pub struct Config {
     /// OAuth desktop-client credentials for Google Calendar; empty until the user sets them.
     pub google_client_id: String,
     pub google_client_secret: String,
+    /// UI language, "id" or "en".
+    pub language: Lang,
 }
 
 impl Default for Config {
@@ -35,6 +38,7 @@ impl Default for Config {
             pomodoro: PomoSettings::default(),
             google_client_id: String::new(),
             google_client_secret: String::new(),
+            language: Lang::Id,
         }
     }
 }
@@ -81,8 +85,8 @@ pub fn read_at(path: &Path) -> OnDisk {
     classify(std::fs::read_to_string(path))
 }
 
-/// The island's own settings (`mem`: style, autostart, onboarding, pomodoro)
-/// over everything else as it is on disk (Google client, muted apps, battery
+/// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
+/// language) over everything else as it is on disk (Google client, muted apps, battery
 /// threshold), which the owner may have edited by hand while the island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
     Config {
@@ -90,6 +94,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         start_with_windows: mem.start_with_windows,
         onboarding_done: mem.onboarding_done,
         pomodoro: mem.pomodoro,
+        language: mem.language,
         ..disk
     }
 }
@@ -234,6 +239,7 @@ mod tests {
         assert!(c.start_with_windows);
         assert_eq!(c.muted_apps, vec!["Claude".to_string(), "Orca".to_string()]);
         assert!(!c.onboarding_done);
+        assert_eq!(c.language, Lang::Id);
     }
 
     #[test]
@@ -252,6 +258,7 @@ mod tests {
             },
             google_client_id: "id.apps.googleusercontent.com".into(),
             google_client_secret: "secret".into(),
+            language: Lang::En,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -274,10 +281,32 @@ mod tests {
         assert_eq!(c.pomodoro, PomoSettings::default());
         assert_eq!(c.google_client_id, "");
         assert_eq!(c.google_client_secret, "");
+        assert_eq!(c.language, Lang::Id);
     }
 
-    fn owned(c: &Config) -> (Style, bool, bool, PomoSettings) {
-        (c.style, c.start_with_windows, c.onboarding_done, c.pomodoro)
+    #[test]
+    fn language_is_a_lowercase_code() {
+        let en = Config {
+            language: Lang::En,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&en).unwrap();
+        assert!(json.contains(r#""language":"en""#), "{json}");
+        assert_eq!(parse(r#"{"language":"en"}"#).language, Lang::En);
+        assert_eq!(parse(r#"{"language":"id"}"#).language, Lang::Id);
+        // A typo keeps the rest of the file: only the language falls back.
+        let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
+        assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    fn owned(c: &Config) -> (Style, bool, bool, PomoSettings, Lang) {
+        (
+            c.style,
+            c.start_with_windows,
+            c.onboarding_done,
+            c.pomodoro,
+            c.language,
+        )
     }
 
     /// The island started with an empty client ID; the owner then added one
@@ -291,6 +320,7 @@ mod tests {
             // Stale copies of the island's own settings.
             style: Style::Pill,
             pomodoro: PomoSettings::default(),
+            language: Lang::Id,
             ..Config::default()
         };
         let mem = Config {
@@ -301,6 +331,7 @@ mod tests {
                 focus_min: 20,
                 ..PomoSettings::default()
             },
+            language: Lang::En,
             ..Config::default()
         };
         (disk, mem)

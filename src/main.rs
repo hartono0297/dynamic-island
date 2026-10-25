@@ -5,6 +5,7 @@ mod calendar;
 mod claude;
 mod config;
 mod google;
+mod i18n;
 mod model;
 mod notes;
 mod pomodoro;
@@ -21,6 +22,13 @@ fn attach_parent_console() {
     unsafe {
         let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
+}
+
+/// Demo modes (debug builds) read no config: `DI_LANG=en` picks English.
+#[cfg(debug_assertions)]
+fn demo_lang_from_env() {
+    let code = std::env::var("DI_LANG").unwrap_or_default();
+    i18n::set_lang(i18n::Lang::from_code(&code).unwrap_or_default());
 }
 
 fn main() {
@@ -46,11 +54,13 @@ fn main() {
         #[cfg(debug_assertions)]
         Some("--demo") => {
             attach_parent_console();
+            demo_lang_from_env();
             ui::demo::run();
         }
         #[cfg(debug_assertions)]
         Some("--demo-editor") => {
             attach_parent_console();
+            demo_lang_from_env();
             ui::editor::run_demo(std::env::args().nth(2).as_deref());
         }
         Some("--install-hooks") => {

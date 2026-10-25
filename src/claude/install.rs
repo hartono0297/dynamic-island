@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::i18n::{self, Key, tr};
+
 /// Claude Code hook events the island listens to.
 const EVENTS: [&str; 5] = [
     "Stop",
@@ -170,7 +172,7 @@ pub fn install_for_current_exe() -> InstallOutcome {
         Err(e) => return InstallOutcome::Error(e.to_string()),
     };
     let Some(home) = std::env::var_os("USERPROFILE") else {
-        return InstallOutcome::Error("USERPROFILE tidak diset".into());
+        return InstallOutcome::Error(tr(Key::UserProfileUnset).into());
     };
     let path = PathBuf::from(home).join(".claude").join("settings.json");
     install_at(&path, &format!("\"{}\" --hook", exe.display()))
@@ -195,14 +197,18 @@ fn try_install_at(path: &Path, command: &str) -> Result<bool, String> {
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     let mut settings = match original.as_deref() {
-        Some(text) if !text.trim().is_empty() => serde_json::from_str(text)
-            .map_err(|e| format!("{} bukan JSON yang valid: {e}", path.display()))?,
+        Some(text) if !text.trim().is_empty() => {
+            serde_json::from_str(text).map_err(|e| not_valid_json(path, &e))?
+        }
         _ => json!({}),
     };
 
     let changed = add_island_hooks(&mut settings, command);
     if !all_events_have_command(&settings, command) {
-        return Err(format!("format {} tidak dikenali", path.display()));
+        return Err(i18n::unknown_format(
+            i18n::lang(),
+            &path.display().to_string(),
+        ));
     }
     if !changed {
         return Ok(false);
@@ -237,6 +243,10 @@ pub fn uninstall_hooks() {
     }
 }
 
+fn not_valid_json(path: &Path, e: &serde_json::Error) -> String {
+    i18n::not_valid_json(i18n::lang(), &path.display().to_string(), &e.to_string())
+}
+
 /// True when island hooks were found and removed from the file at `path`.
 pub fn uninstall_at(path: &Path) -> Result<bool, String> {
     let text = match fs::read_to_string(path) {
@@ -247,8 +257,7 @@ pub fn uninstall_at(path: &Path) -> Result<bool, String> {
     if text.trim().is_empty() {
         return Ok(false);
     }
-    let mut settings: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("{} bukan JSON yang valid: {e}", path.display()))?;
+    let mut settings: Value = serde_json::from_str(&text).map_err(|e| not_valid_json(path, &e))?;
     if !remove_island_hooks(&mut settings) {
         return Ok(false);
     }

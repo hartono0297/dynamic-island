@@ -12,15 +12,11 @@ use serde_json::{Value, json};
 use super::{CalEvent, EventDraft, EventTime, fits_draft};
 use crate::google::http::{Http, form_encode, url_encode};
 use crate::google::oauth::{AuthError, short};
+use crate::i18n::{self, Key, tr};
 
 const BASE: &str = "https://www.googleapis.com/calendar/v3";
 /// Google's maximum page size for events.list.
 const PAGE_SIZE: &str = "2500";
-/// Shown for an event with no summary (Google's own UI says "(No title)").
-const NO_TITLE: &str = "(Tanpa judul)";
-/// The island's text for a 403 that means the Calendar API is off in the
-/// owner's Google Cloud project.
-pub const API_DISABLED: &str = "Google Calendar API belum diaktifkan — lihat README";
 
 /// A calendar the user shows in Google Calendar.
 #[derive(Clone, Debug, PartialEq)]
@@ -115,7 +111,7 @@ fn read_page<T: DeserializeOwned>(status: u16, body: &str) -> Result<Page<T>, Au
 }
 
 fn unreadable(status: u16) -> AuthError {
-    AuthError::Network(format!("HTTP {status}: jawaban tidak terbaca"))
+    AuthError::Network(i18n::unreadable_reply(i18n::lang(), status))
 }
 
 /// Lenient parse for the pure helpers: anything unreadable is an empty page.
@@ -172,8 +168,9 @@ fn events_from(
             let end = e.end.as_ref()?.to_event_time()?;
             // Editing an expanded instance of a recurring event is out of scope.
             let editable = writable && e.recurring_event_id.is_none() && fits_draft(&start, &end);
+            // Shown for an event with no summary, as Google's own UI does.
             let title = if e.summary.trim().is_empty() {
-                NO_TITLE.to_string()
+                tr(Key::NoTitle).to_string()
             } else {
                 e.summary
             };
@@ -285,7 +282,8 @@ fn http_error(status: u16, body: &str) -> AuthError {
         return AuthError::Reconnect;
     }
     if status == 403 && (has("accessNotConfigured") || has("SERVICE_DISABLED")) {
-        return AuthError::Google(API_DISABLED.into());
+        // The Calendar API is off in the owner's Google Cloud project.
+        return AuthError::Google(tr(Key::ApiDisabled).into());
     }
     // Rate limits pass; they read as offline until the next fetch.
     let rate_limited = status == 429
@@ -537,7 +535,7 @@ mod tests {
         assert_eq!(a.end, EventTime::AllDay(date(2026, 10, 29)));
         assert!(!a.editable, "a three-day event does not fit a draft");
         assert_eq!(evs[1].description, "bawa laptop");
-        assert_eq!(evs[2].title, NO_TITLE);
+        assert_eq!(evs[2].title, "(Tanpa judul)");
         assert!(evs[2].editable);
         assert!(
             parse_events(EVENTS, "cal1", None, false)
@@ -780,12 +778,12 @@ mod tests {
           "details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED"}]}}"#;
         assert_eq!(
             http_error(403, disabled),
-            AuthError::Google(API_DISABLED.into())
+            AuthError::Google(tr(Key::ApiDisabled).into())
         );
         let details_only = r#"{"error":{"message":"x","details":[{"reason":"SERVICE_DISABLED"}]}}"#;
         assert_eq!(
             http_error(403, details_only),
-            AuthError::Google(API_DISABLED.into())
+            AuthError::Google(tr(Key::ApiDisabled).into())
         );
     }
 
