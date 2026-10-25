@@ -109,6 +109,42 @@ fn group_has_command(group: &Value, command: &str) -> bool {
         .is_some_and(|hooks| hooks.iter().any(|hook| hook["command"] == command))
 }
 
+fn is_island_hook(hook: &Value) -> bool {
+    hook["command"]
+        .as_str()
+        .is_some_and(|c| c.to_ascii_lowercase().ends_with(ISLAND_COMMAND_SUFFIX))
+}
+
+/// Drops every hook written by any copy of the island, plus the groups and
+/// event lists left empty by that. Foreign hooks stay untouched. True when
+/// anything changed.
+pub fn remove_island_hooks(settings: &mut Value) -> bool {
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    hooks.retain(|_, groups| {
+        let Some(list) = groups.as_array_mut() else {
+            return true;
+        };
+        let before = list.len();
+        list.retain_mut(|group| {
+            let Some(inner) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                return true;
+            };
+            let had = inner.len();
+            inner.retain(|hook| !is_island_hook(hook));
+            if inner.len() == had {
+                return true;
+            }
+            changed = true;
+            !inner.is_empty()
+        });
+        before == 0 || !list.is_empty()
+    });
+    changed
+}
+
 fn all_events_have_command(settings: &Value, command: &str) -> bool {
     EVENTS.iter().all(|event| {
         settings["hooks"][*event]
@@ -182,6 +218,46 @@ fn try_install_at(path: &Path, command: &str) -> Result<bool, String> {
     // Write beside the target, then swap, so a failed write never truncates settings.json.
     let temp = dir.join(TEMP_NAME);
     fs::write(&temp, text).map_err(|e| e.to_string())?;
+    fs::rename(&temp, path).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// `--uninstall-hooks` mode: removes the island's hooks from
+/// `%USERPROFILE%\.claude\settings.json`, used by the uninstall script.
+pub fn uninstall_hooks() {
+    let Some(home) = std::env::var_os("USERPROFILE") else {
+        eprintln!("USERPROFILE tidak diset");
+        return;
+    };
+    let path = PathBuf::from(home).join(".claude").join("settings.json");
+    match uninstall_at(&path) {
+        Ok(true) => println!("Hook Dynamic Island dihapus."),
+        Ok(false) => println!("Tidak ada hook Dynamic Island."),
+        Err(e) => eprintln!("Gagal menghapus hook: {e}"),
+    }
+}
+
+/// True when island hooks were found and removed from the file at `path`.
+pub fn uninstall_at(path: &Path) -> Result<bool, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    if text.trim().is_empty() {
+        return Ok(false);
+    }
+    let mut settings: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("{} bukan JSON yang valid: {e}", path.display()))?;
+    if !remove_island_hooks(&mut settings) {
+        return Ok(false);
+    }
+    let mut out = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    out.push('\n');
+    let dir = path.parent().unwrap_or(Path::new("."));
+    write_backup_once(&dir.join(BACKUP_NAME), &text)?;
+    let temp = dir.join(TEMP_NAME);
+    fs::write(&temp, out).map_err(|e| e.to_string())?;
     fs::rename(&temp, path).map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -465,5 +541,40 @@ mod tests {
             fs::read_to_string(dir.settings()).unwrap(),
             r#"{"hooks":[]}"#
         );
+    }
+
+    #[test]
+    fn remove_drops_island_hooks_and_keeps_foreign_ones() {
+        let mut v = json!({"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}});
+        add_island_hooks(&mut v, NEW);
+        assert!(remove_island_hooks(&mut v));
+        assert_eq!(
+            v,
+            json!({"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"orca.cmd"}]}]}})
+        );
+        assert!(!remove_island_hooks(&mut v));
+    }
+
+    #[test]
+    fn remove_handles_odd_shapes_without_panicking() {
+        let mut v = json!({"hooks":{"Stop":[{"matcher":"*"}, "x", null], "Other": "y"}});
+        let before = v.clone();
+        assert!(!remove_island_hooks(&mut v));
+        assert_eq!(v, before);
+        assert!(!remove_island_hooks(&mut json!([1, 2])));
+    }
+
+    #[test]
+    fn uninstall_at_rewrites_file_and_reports_missing() {
+        let dir = TempDir::new("uninstall");
+        assert_eq!(uninstall_at(&dir.settings()), Ok(false));
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(uninstall_at(&dir.settings()), Ok(true));
+        let v: Value = serde_json::from_str(&fs::read_to_string(dir.settings()).unwrap()).unwrap();
+        assert_eq!(v, json!({"hooks":{}}));
+        assert_eq!(uninstall_at(&dir.settings()), Ok(false));
+        fs::write(dir.settings(), "{not json").unwrap();
+        assert!(uninstall_at(&dir.settings()).is_err());
+        assert_eq!(fs::read_to_string(dir.settings()).unwrap(), "{not json");
     }
 }

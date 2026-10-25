@@ -13,25 +13,28 @@ Desainnya ada di `docs/superpowers/specs/2026-10-25-dynamic-island-design.md` (v
 - **Notes** lokal, ditulis di jendela kecil bertema gelap.
 - Animasi membesar/mengecil dan pindah halaman lebih mulus; equalizer bergerak saat musik diputar.
 
-## Setup
+## Install
 
-### 1. Toolchain (sekali saja)
-
-- **Rust** lewat [rustup](https://rustup.rs), target default `x86_64-pc-windows-msvc`.
-- **Visual Studio 2022 Build Tools** dengan workload **Desktop development with C++** (MSVC) dan **Windows SDK** (Windows 11 SDK).
-
-Jalankan `cargo` dari **PowerShell atau cmd**, bukan Git Bash: `link.exe` milik Git ikut ada di PATH dan menutupi linker MSVC, jadi build gagal di tahap link.
-
-### 2. Build dan jalankan
+Windows 11 64-bit. Buka **PowerShell** (tidak perlu admin), tempel satu baris ini, Enter:
 
 ```powershell
-cargo build --release
-.\target\release\dynamic-island.exe
+irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/install.ps1 | iex
 ```
 
-Exe-nya satu file (~750 KB) dan jalan langsung dari `target\release`. Kalau exe dipindah, jalankan lagi tray → "Pasang hook Claude Code" supaya hook menunjuk ke path baru (value autostart diperbarui sendiri setiap island start).
+Script-nya mengunduh rilis terbaru dari [Releases](https://github.com/hartono0297/dynamic-island/releases), mengecek checksum SHA-256, memasang `dynamic-island.exe` ke `%LOCALAPPDATA%\Programs\DynamicIsland`, membuat shortcut di Start Menu, lalu menjalankan island. Exe-nya satu file (~870 KB) tanpa runtime tambahan.
 
-Kalau island sedang jalan, keluar dulu dari tray sebelum `cargo build --release`: exe yang sedang dipakai tidak bisa ditimpa.
+- **Update:** jalankan baris yang sama lagi. Island lama ditutup, exe diganti, island jalan lagi. Setting, notes, dan login Google tetap.
+- **Tanpa script:** unduh `dynamic-island-<versi>.zip` dari Releases, ekstrak, lalu klik kanan `install.ps1` → *Run with PowerShell* (atau `powershell -ExecutionPolicy Bypass -File .\install.ps1`). Exe-nya juga bisa langsung dijalankan dari folder mana saja.
+- **Uninstall:**
+
+  ```powershell
+  irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/uninstall.ps1 | iex
+  ```
+
+  Ini menghapus hook Claude Code milik island, autostart, shortcut, dan folder program. Data di `%APPDATA%\DynamicIsland` (setting, notes, login Google) tetap disimpan; untuk ikut menghapusnya, jalankan `$env:DI_PURGE = '1'` dulu sebelum baris uninstall.
+- **Windows SmartScreen:** exe-nya belum ditandatangani (code signing berbayar). Kalau Windows memperingatkan saat exe dibuka dari hasil unduhan manual, pilih *More info → Run anyway*.
+
+## Setelah install
 
 Saat pertama jalan:
 
@@ -39,7 +42,7 @@ Saat pertama jalan:
 - Island menampilkan petunjuk Do Not Disturb dan membuka halaman Settings → Notifications.
 - `%APPDATA%\DynamicIsland\config.json` dibuat, dan island didaftarkan untuk jalan otomatis saat login (bisa dimatikan, lihat di bawah).
 
-### 3. Matikan popup Windows (Do Not Disturb)
+### 1. Matikan popup Windows (Do Not Disturb)
 
 Supaya notifikasi tidak muncul dobel (popup Windows di kanan bawah + island), nyalakan **Do Not Disturb**: Settings → System → Notifications → Do not disturb. Island tetap menerima notifikasinya; popup Windows tidak muncul lagi. Island tidak mengubah setting ini sendiri (tidak ada API resmi untuk itu).
 
@@ -47,7 +50,7 @@ Konsekuensinya: notifikasi prioritas (telepon, alarm, dan aplikasi yang kamu izi
 
 Petunjuk ini bisa dibuka lagi dari tray → **Cara matiin popup Windows**.
 
-### 4. Hook Claude Code (opsional)
+### 2. Hook Claude Code (opsional)
 
 Tray → **Pasang hook Claude Code**. Ini menambahkan hook `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse`, dan `SessionEnd` ke `%USERPROFILE%\.claude\settings.json` yang memanggil `"...\dynamic-island.exe" --hook`.
 
@@ -58,13 +61,28 @@ Tray → **Pasang hook Claude Code**. Ini menambahkan hook `Stop`, `Notification
 
 Notifikasi "Claude butuh respon" hanya muncul untuk notifikasi Claude yang memang menunggu kamu (minta izin, menunggu input, atau dialog pertanyaan); notifikasi lain dari Claude Code diabaikan. Notifikasi ini tetap tampil sampai ada event Claude berikutnya untuk sesi yang sama (termasuk sesi ditutup, `SessionEnd`), atau sampai diklik.
 
-### 5. Jalan otomatis saat login
+### 3. Jalan otomatis saat login
 
 Tray → **Jalan saat Windows start** (default: nyala). Ini menulis/menghapus value `DynamicIsland` di `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
-### 6. Google Calendar (opsional)
+### 4. Google Calendar (opsional)
 
 Halaman Kalender butuh project Google Cloud milikmu sendiri. Langkahnya ada di [Setup Google Calendar](#setup-google-calendar). Tanpa itu, semua fitur lain tetap jalan dan halaman Kalender hanya menampilkan tombol "Hubungkan Google".
+
+## Build dari source
+
+1. **Rust** lewat [rustup](https://rustup.rs), target default `x86_64-pc-windows-msvc`.
+2. **Visual Studio 2022 Build Tools** dengan workload **Desktop development with C++** (MSVC) dan **Windows SDK** (Windows 11 SDK).
+3. Dari **PowerShell atau cmd** (bukan Git Bash: `link.exe` milik Git menutupi linker MSVC):
+
+   ```powershell
+   cargo build --release
+   .\target\release\dynamic-island.exe
+   ```
+
+C runtime di-link statis (`.cargo/config.toml`), jadi exe hasil build jalan di PC tanpa Visual C++ Redistributable. Kalau island sedang jalan dari `target\release`, keluar dulu dari tray sebelum build: exe yang sedang dipakai tidak bisa ditimpa. Untuk memasang hasil build sendiri: `powershell -ExecutionPolicy Bypass -File .\install.ps1` dari folder yang berisi `dynamic-island.exe` dan `install.ps1` (salin exe-nya ke samping script dulu).
+
+Rilis baru: push tag `vX.Y.Z`; GitHub Actions (`.github/workflows/release.yml`) membangun exe dan mengunggah `dynamic-island.exe`, checksum-nya, dan zip ke Releases.
 
 ## Pemakaian
 
@@ -194,7 +212,7 @@ Kalau file sudah tidak valid saat island start, island memakai default untuk sem
 
 Tanpa package identity, island membaca daftar notifikasi **setiap 1 detik** (polling). Biayanya sekitar 15–30 ms CPU per detik saat idle (±2–3% satu core). Fitur lain tidak terpengaruh.
 
-Kalau mau idle mendekati 0, exe bisa diberi package identity lewat sparse package; island lalu otomatis berlangganan event `NotificationChanged` dan hanya membaca saat ada perubahan (plus satu pembacaan cadangan tiap 60 detik):
+Kalau mau idle mendekati 0, exe bisa diberi package identity lewat sparse package (khusus [build dari source](#build-dari-source): package-nya menunjuk ke `target\release`, bukan ke hasil install script); island lalu otomatis berlangganan event `NotificationChanged` dan hanya membaca saat ada perubahan (plus satu pembacaan cadangan tiap 60 detik):
 
 1. Jalankan (PowerShell biasa, tanpa admin):
    ```powershell
@@ -229,9 +247,11 @@ Saat idle tidak ada gambar ulang sama sekali. Equalizer musik menggambar ulang ~
 
 - **Notifikasi tidak masuk ke island:** cek izin di Settings → Privacy & security → Notifications (akses notifikasi untuk aplikasi). Lalu jalankan probe dari terminal:
   ```powershell
-  .\target\release\dynamic-island.exe --probe-notifications
+  & "$env:LOCALAPPDATA\Programs\DynamicIsland\dynamic-island.exe" --probe-notifications
   ```
+  (Kalau build sendiri: `.\target\release\dynamic-island.exe --probe-notifications`.)
   Probe meminta izin kalau belum ada, mencetak apakah mode event aktif (`Change events: subscribed` / `unavailable`), lalu notifikasi yang masuk selama 60 detik. Kirim toast uji dari terminal lain dengan `powershell -ExecutionPolicy Bypass -File .\scripts\send-test-toast.ps1` (tambahkan `-Long` di belakangnya untuk teks 300 karakter dengan emoji).
+- **Install gagal "Rilis ... tidak punya dynamic-island.exe" atau checksum tidak cocok:** coba lagi beberapa menit kemudian (rilis mungkin baru diunggah), atau unduh zip dari Releases secara manual.
 - **Probe khusus build debug** (`cargo build`, lalu `.\target\debug\dynamic-island.exe <arg>`):
   - `--probe-media`: cetak media yang sedang diputar setiap kali berubah.
   - `--probe-system`: cetak status baterai dan fullscreen setiap detik.
@@ -248,7 +268,7 @@ Saat idle tidak ada gambar ulang sama sekali. Equalizer musik menggambar ulang ~
 - **"Google Calendar API belum diaktifkan — lihat README":** Google Calendar API belum di-enable di project yang punya client ID-mu. Ulangi langkah 2 Setup Google Calendar di project yang **sama**, tunggu beberapa menit, lalu klik Hubungkan Google.
 - **"config.json tidak valid":** ada salah ketik di `config.json`, biasanya koma yang ketinggalan atau berlebih. Perbaiki salah ketiknya; kalau island sudah membuat `config.json.bak` dan menulis file baru, salin field-mu dari `.bak` ke `config.json`.
 - **Kalender bertanda "offline":** island gagal mengambil data (tidak ada internet, Wi-Fi hotel minta login, Google sedang bermasalah, atau batas permintaan Google sedang tercapai). Penolakan dari Google tidak tampil sebagai offline, lihat "Google menolak". Satu kalender lain (bukan kalender utama) yang gagal dimuat dilewati saja; acara kalender lainnya tetap tampil. Data terakhir tetap tampil; island mencoba lagi saat halaman Kalender dibuka atau tiap 10 menit.
-- **Animasi terasa patah-patah:** jalankan island dengan `$env:DI_FRAME_LOG = "1"` di PowerShell yang sama sebelum `.\target\release\dynamic-island.exe`. Jarak antar frame setiap animasi (ms) ditulis ke `%TEMP%\di-frames.log`.
+- **Animasi terasa patah-patah:** keluar dari island lewat tray, lalu jalankan `$env:DI_FRAME_LOG = "1"; & "$env:LOCALAPPDATA\Programs\DynamicIsland\dynamic-island.exe"` di PowerShell. Jarak antar frame setiap animasi (ms) ditulis ke `%TEMP%\di-frames.log`.
 
 ## Batasan
 

@@ -57,6 +57,10 @@ fn main() {
             attach_parent_console();
             claude::install::install_hooks();
         }
+        Some("--uninstall-hooks") => {
+            attach_parent_console();
+            claude::install::uninstall_hooks();
+        }
         Some(other) => {
             attach_parent_console();
             eprintln!("dynamic-island: unknown argument `{other}`");

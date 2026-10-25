@@ -1,0 +1,42 @@
+name: release
+
+# Pushing a tag like v2.0.0 builds the exe and publishes a GitHub release with:
+#   dynamic-island.exe, dynamic-island.exe.sha256 (used by install.ps1)
+#   dynamic-island-<tag>.zip (exe + install/uninstall scripts + README)
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          New-Item -ItemType Directory dist, pkg | Out-Null
+          Copy-Item target/release/dynamic-island.exe dist/
+          $hash = (Get-FileHash dist/dynamic-island.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path dist/dynamic-island.exe.sha256 -Value "$hash  dynamic-island.exe" -NoNewline -Encoding ascii
+          Copy-Item dist/dynamic-island.exe, install.ps1, uninstall.ps1, README.md pkg/
+          Compress-Archive -Path pkg/* -DestinationPath "dist/dynamic-island-$tag.zip"
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create '${{ github.ref_name }}' (Get-ChildItem dist).FullName --title '${{ github.ref_name }}' --generate-notes
