@@ -29,9 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, SW_SHOWNORMAL,
     SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
     WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
-    WM_TIMER,
+    WM_SETTINGCHANGE, WM_TIMER,
 };
-use windows::core::w;
+use windows::core::{PCWSTR, w};
 
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
@@ -46,6 +46,7 @@ use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
+use crate::theme::{self, Theme};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
@@ -105,6 +106,8 @@ pub fn run() {
     }
     let config = config::load();
     i18n::set_lang(config.language);
+    theme::set_system_light(theme::read_system_light());
+    theme::set_current(Theme::of(&config));
     let win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
     let renderer = Renderer::new().expect("create renderer");
     let hwnd = win.hwnd();
@@ -725,6 +728,17 @@ impl App {
             // The next calendar view asks again, now with the new client.
             self.calendar_asked = None;
         }
+        self.apply_theme();
+    }
+
+    /// Puts a changed accent, surface or window mode into effect: the island
+    /// redraws and an open editor restyles. Compared with the theme in effect
+    /// rather than the old config, so a caller may set the fields first.
+    fn apply_theme(&mut self) {
+        if theme::set_current(Theme::of(&self.config)) {
+            editor::restyle_open_editor();
+            self.draw(Instant::now());
+        }
     }
 
     fn set_style(&mut self, style: Style) {
@@ -776,6 +790,7 @@ impl App {
             notes_page: state.notes_page(),
             day_page: state.day_page(),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
+            palette: theme::island_palette(&self.config),
         };
         if let Err(error) = self
             .renderer
@@ -1272,6 +1287,22 @@ fn run_deferred() {
     }
 }
 
+/// `WM_SETTINGCHANGE` for "ImmersiveColorSet": the Windows app mode (light or
+/// dark) or the accent changed.
+fn is_color_set_change(lparam: LPARAM) -> bool {
+    let area = PCWSTR(lparam.0 as *const u16);
+    !area.is_null() && unsafe { area.to_string() }.is_ok_and(|a| a == "ImmersiveColorSet")
+}
+
+/// Windows switched between light and dark apps: windows following it restyle.
+/// The island itself is dark either way.
+fn on_system_theme_changed() {
+    let changed = theme::set_system_light(theme::read_system_light());
+    if changed && theme::current().window == theme::WindowTheme::System {
+        editor::restyle_open_editor();
+    }
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -1354,6 +1385,12 @@ unsafe extern "system" fn wnd_proc(
         WM_DPICHANGED | WM_DISPLAYCHANGE => {
             reposition();
             LRESULT(0)
+        }
+        WM_SETTINGCHANGE => {
+            if is_color_set_change(lparam) {
+                on_system_theme_changed();
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_DESTROY => {
             drain_editor_results(hwnd);

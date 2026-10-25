@@ -8,6 +8,7 @@
 //! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
+//! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
 
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,7 @@ use crate::i18n::{Key, tr};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
+use crate::theme::{self, Accent, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
 
@@ -181,6 +183,11 @@ pub fn run() {
     let hold: Option<usize> = env("DI_DEMO_STEP");
     let frozen_t: Option<f32> = env("DI_DEMO_T");
     let slide: f32 = env("DI_DEMO_SLIDE").unwrap_or(0.0);
+    let name = |var| std::env::var(var).unwrap_or_default();
+    let palette = theme::island(
+        Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
+        Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
+    );
     let steps = 2 * SCENES.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -244,6 +251,7 @@ pub fn run() {
                 notes_page: 0,
                 day_page: scene.day_page,
                 page_slide: slide,
+                palette,
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");

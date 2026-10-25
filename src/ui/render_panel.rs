@@ -19,7 +19,7 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    Frame, GLYPH_NEXT, GLYPH_PAUSE, GLYPH_PLAY, GLYPH_PREV, Renderer, SECONDARY_ALPHA, TEXT, color,
+    Frame, GLYPH_NEXT, GLYPH_PAUSE, GLYPH_PLAY, GLYPH_PREV, Renderer, SECONDARY_ALPHA, color,
     d2d_rect,
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -35,15 +35,10 @@ use crate::ui::panel_layout::{
     stepper_value, waiting_strip,
 };
 
-const ACCENT: u32 = 0x4F8CFF;
+/// Pomodoro phases keep their red and green whatever the accent.
 const FOCUS: u32 = 0xEF5350;
 const BREAK: u32 = 0x2ECC71;
-const TRACK: u32 = 0x2A2A2C;
 const CLAUDE: u32 = 0xD97757;
-/// Note rows, the view selector, the strip and week columns.
-const SURFACE: u32 = 0x1C1C1E;
-const SEGMENT_ON: u32 = 0x3A3A3C;
-const DOT_OFF: u32 = 0x555555;
 const OFFLINE_W: f32 = 52.0;
 const GLYPH_LEFT: &str = "\u{E76B}";
 const GLYPH_RIGHT: &str = "\u{E76C}";
@@ -110,7 +105,8 @@ impl Renderer {
         }
         let (dots, active) = page_dots(s, page);
         for (i, dot) in dots.into_iter().enumerate() {
-            self.set_color(if i == active { TEXT } else { DOT_OFF }, 1.0);
+            let p = &self.palette;
+            self.set_color(if i == active { p.accent } else { p.dot_off }, 1.0);
             self.fill_round(dot, dot.w / 2.0);
         }
         // No clicks on a page still sliding in: its controls are not where
@@ -161,7 +157,7 @@ impl Renderer {
                 h: header.h - 6.0,
             };
             header.w = (header.w - OFFLINE_W - 8.0).max(0.0);
-            self.set_color(TRACK, 1.0);
+            self.set_color(self.palette.track, 1.0);
             self.fill_round(tag, tag.h / 2.0);
             self.text(
                 text(lang, Key::Offline),
@@ -182,12 +178,12 @@ impl Renderer {
             w: last.right() - first.x + 4.0,
             ..first
         };
-        self.set_color(SURFACE, 1.0);
+        self.set_color(self.palette.raised, 1.0);
         self.fill_round(track, 7.0);
         for (view, r) in l.view_buttons {
             let on = view == l.view;
             if on {
-                self.set_color(SEGMENT_ON, 1.0);
+                self.set_color(self.palette.raised_hi, 1.0);
                 self.fill_round(inset(r, 0.0, 2.0), 5.0);
             }
             let label = text(
@@ -215,7 +211,7 @@ impl Renderer {
                     self.paint_day_cell(*d, *r, today, l.selected, frame.cal_anchor, events);
                 }
                 // Divider between the grid and the list.
-                self.set_color(TRACK, 1.0);
+                self.set_color(self.palette.track, 1.0);
                 self.fill_round(
                     Rect {
                         x: l.list.x - 8.5,
@@ -247,16 +243,18 @@ impl Renderer {
                         h: col.h - WEEK_HEAD_H - 2.0,
                         ..*col
                     };
-                    self.set_color(0x111113, 1.0);
+                    let p = self.palette;
+                    self.set_color(p.column, 1.0);
                     self.fill_round(body, 6.0);
                     let label = format!("{} {}", i18n::day_short(lang, *d), d.day());
                     if *d == today {
-                        self.set_color(TEXT, 1.0);
+                        self.set_color(p.accent, 1.0);
                         self.fill_round(head, 6.0);
-                        self.text_colored(&label, &self.fonts.small_center_bold, head, 0, 1.0);
+                        let bold = &self.fonts.small_center_bold;
+                        self.text_colored(&label, bold, head, p.on_accent, 1.0);
                     } else {
                         if *d == l.selected {
-                            self.stroke_round(inset(head, 0.5, 0.5), 6.0, 0.5);
+                            self.stroke_round(inset(head, 0.5, 0.5), 6.0, p.accent);
                         }
                         self.text(&label, &self.fonts.small_center, head, 1.0);
                     }
@@ -281,13 +279,15 @@ impl Renderer {
         let number = d.day().to_string();
         let digits = Rect { h: r.h - 3.0, ..r };
         let is_today = d == today;
+        let p = self.palette;
         if is_today {
-            self.set_color(TEXT, 1.0);
+            self.set_color(p.accent, 1.0);
             self.fill_round(r, 6.0);
-            self.text_colored(&number, &self.fonts.small_center_bold, digits, 0, 1.0);
+            let bold = &self.fonts.small_center_bold;
+            self.text_colored(&number, bold, digits, p.on_accent, 1.0);
         } else {
             if d == selected {
-                self.stroke_round(inset(r, 0.5, 0.5), 6.0, 0.6);
+                self.stroke_round(inset(r, 0.5, 0.5), 6.0, p.accent);
             }
             let in_month = d.month() == anchor.month() && d.year() == anchor.year();
             let alpha = if in_month { 1.0 } else { 0.35 };
@@ -295,9 +295,9 @@ impl Renderer {
         }
         if let Some(first) = events_on(events, d).first() {
             let dot = if is_today {
-                0
+                p.on_accent
             } else {
-                first.color.unwrap_or(ACCENT)
+                first.color.unwrap_or(p.accent)
             };
             self.set_color(dot, 1.0);
             self.fill_round(
@@ -325,7 +325,7 @@ impl Renderer {
             let Some(ev) = events.iter().find(|e| &e.id == id) else {
                 continue;
             };
-            self.set_color(ev.color.unwrap_or(ACCENT), 1.0);
+            self.set_color(ev.color.unwrap_or(self.palette.accent), 1.0);
             self.fill_round(
                 Rect {
                     x: r.x + 2.0,
@@ -372,7 +372,7 @@ impl Renderer {
             0.8,
         );
         if let Some(r) = l.connect {
-            self.set_color(ACCENT, 1.0);
+            self.set_color(self.palette.accent, 1.0);
             self.fill_round(r, 7.0);
             let label = text(
                 lang,
@@ -382,7 +382,8 @@ impl Renderer {
                     Key::ConnectGoogle
                 },
             );
-            self.text_colored(label, &self.fonts.body_center, r, 0xFFFFFF, 1.0);
+            let ink = self.palette.on_accent;
+            self.text_colored(label, &self.fonts.body_center, r, ink, 1.0);
         }
     }
 
@@ -448,7 +449,7 @@ impl Renderer {
                 alpha,
             );
             for (button, glyph) in [(minus, "\u{2212}"), (plus, "+")] {
-                self.set_color(TRACK, alpha);
+                self.set_color(self.palette.track, alpha);
                 self.fill_round(button, 6.0);
                 self.text(glyph, &self.fonts.body_center, button, alpha);
             }
@@ -469,7 +470,7 @@ impl Renderer {
             1.0,
         );
         for (r, key) in [(l.reset, Key::Reset), (l.skip, Key::Skip)] {
-            self.set_color(TRACK, 1.0);
+            self.set_color(self.palette.track, 1.0);
             self.fill_round(r, 7.0);
             self.text(text(lang, key), &self.fonts.body_center, r, 1.0);
         }
@@ -502,7 +503,7 @@ impl Renderer {
             let Some(note) = notes.iter().find(|n| &n.id == id) else {
                 continue;
             };
-            self.set_color(SURFACE, 1.0);
+            self.set_color(self.palette.raised, 1.0);
             self.fill_round(*r, 8.0);
             let inner = inset(*r, 10.0, 0.0);
             self.text(
@@ -578,7 +579,7 @@ impl Renderer {
     /// Orange dot and "Claude butuh respon · {project}".
     fn paint_strip(&self, s: ShapeRect, notice: &Notice) {
         let r = waiting_strip(s);
-        self.set_color(SURFACE, 1.0);
+        self.set_color(self.palette.raised, 1.0);
         self.fill_round(r, 8.0);
         self.set_color(CLAUDE, 1.0);
         self.fill_round(
@@ -652,7 +653,7 @@ impl Renderer {
             radiusY: r,
         };
         unsafe {
-            target.brush.SetColor(&color(TRACK, 1.0));
+            target.brush.SetColor(&color(self.palette.track, 1.0));
             target.rt.DrawEllipse(&ellipse, &target.brush, stroke, None);
         }
         let p = progress.clamp(0.0, 1.0);
@@ -725,11 +726,11 @@ impl Renderer {
         unsafe { target.brush.SetColor(&color(rgb, alpha)) };
     }
 
-    /// A 1 px outline in the text color.
-    fn stroke_round(&self, r: Rect, radius: f32, alpha: f32) {
+    /// A 1 px outline.
+    fn stroke_round(&self, r: Rect, radius: f32, rgb: u32) {
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
-            target.brush.SetColor(&color(TEXT, alpha));
+            target.brush.SetColor(&color(rgb, 1.0));
             target.rt.DrawRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
                     rect: d2d_rect(r),

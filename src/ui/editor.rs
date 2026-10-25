@@ -1,4 +1,5 @@
-//! The note and event editors: small dark Win32 windows under the panel,
+//! The note and event editors: small Win32 windows under the panel, dark or
+//! light per the window mode (`theme::current_window`),
 //! because the layered island cannot host native text controls. At most one
 //! editor exists at a time; it lives on the island's UI thread and reports to
 //! the island with `WM_APP_EDITOR_RESULT`.
@@ -24,9 +25,10 @@ use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
     CreateSolidBrush, DEFAULT_CHARSET, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
-    FONT_QUALITY, FW_NORMAL, GdiFlush, GetMonitorInfoW, HBRUSH, HDC, HFONT, HGDIOBJ,
+    FONT_QUALITY, FW_NORMAL, FillRect, GdiFlush, GetMonitorInfoW, HBRUSH, HDC, HFONT, HGDIOBJ,
     MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    SRCCOPY, SelectObject, SetBkColor, SetTextColor,
+    RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SRCCOPY, SelectObject,
+    SetBkColor, SetTextColor,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -47,18 +49,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetDlgCtrlID, GetForegroundWindow, GetNextDlgTabItem, GetParent, GetWindow,
     GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL, IDOK, IsChild, IsWindow,
     LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
-    ShowWindow, SwitchToThisWindow, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE,
-    WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
-    WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, SwitchToThisWindow, WA_INACTIVE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT,
+    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use crate::calendar::EventDraft;
 use crate::i18n::{Key, tr};
+use crate::theme::{self, WindowPalette};
 use crate::ui::app_icon;
 
 /// Sent to the event editor after a save (defined by the sync thread, which
@@ -131,14 +134,10 @@ const EVENT_SIZE: (f32, f32) = (420.0, 260.0);
 /// Gap between the anchor (the panel's bottom edge) and the editor, in px.
 const GAP: i32 = 8;
 
-const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
-    COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
+/// `0xRRGGBB` as GDI's `0x00BBGGRR`.
+const fn colorref(rgb: u32) -> COLORREF {
+    COLORREF((rgb >> 16) & 0xFF | (rgb & 0xFF00) | (rgb & 0xFF) << 16)
 }
-const BG: COLORREF = rgb(0x20, 0x20, 0x22);
-/// Text fields sit a step lighter than the window so they read as fields.
-const FIELD: COLORREF = rgb(0x2B, 0x2B, 0x2E);
-const TEXT: COLORREF = rgb(0xEE, 0xEE, 0xEE);
-const ERROR_TEXT: COLORREF = rgb(0xFF, 0x6B, 0x6B);
 
 /// Centered under `anchor` with a `GAP`, then moved inside `work` (or pinned
 /// to its top-left corner when it is bigger than `work`).
@@ -232,9 +231,10 @@ enum Role {
     /// Push button or checkbox: Enter clicks it.
     Button = 3,
     /// Date/time picker: Enter saves; Esc closes its drop-down first.
-    /// Painted dark by `paint_dark`.
+    /// Painted in the window colours by `paint_themed`.
     Picker = 4,
-    /// A picker's spin buttons or drop-down calendar: only painted dark.
+    /// A picker's spin buttons or drop-down calendar: only painted by
+    /// `paint_themed`.
     Paint = 5,
 }
 
@@ -462,6 +462,9 @@ struct Editor {
     scale: f32,
     fonts: Fonts,
     controls: Vec<(i32, HWND)>,
+    /// Controls drawn with a visual style (buttons, checkbox, fields' scroll
+    /// bars): switched between the dark and light style.
+    themed: Vec<HWND>,
     /// Set once the window was active: only then does deactivation close a note.
     was_active: bool,
     /// The final result was posted.
@@ -470,9 +473,9 @@ struct Editor {
 
 /// Segoe UI at the editor's DPI, deleted on drop (after the controls are gone).
 struct Fonts {
-    /// ClearType, for everything that paints itself dark.
+    /// ClearType, for everything that paints itself in the window colours.
     text: HFONT,
-    /// Grayscale anti-aliasing for the pickers: `darken` maps gray shades
+    /// Grayscale anti-aliasing for the pickers: `tone` maps gray shades
     /// cleanly but would leave ClearType's colored fringes as they are.
     gray: HFONT,
 }
@@ -493,7 +496,7 @@ impl Fonts {
         };
         send(control, WM_SETFONT, font.0 as usize, 1);
         if id == ID_DATE {
-            // The drop-down calendar, also painted by `paint_dark`.
+            // The drop-down calendar, also painted by `paint_themed`.
             send(control, DTM_SETMCFONT, self.gray.0 as usize, 1);
         }
     }
@@ -518,18 +521,84 @@ thread_local! {
     static STATUS_LABEL: Cell<(isize, bool)> = const { Cell::new((0, false)) };
     /// The control that last had the keyboard focus, restored on reactivation.
     static LAST_FOCUS: Cell<isize> = const { Cell::new(0) };
-    static BRUSHES: Cell<Option<(HBRUSH, HBRUSH)>> = const { Cell::new(None) };
+    /// Per window mode (dark, light).
+    static BRUSHES: Cell<[Option<(HBRUSH, HBRUSH)>; 2]> = const { Cell::new([None; 2]) };
 }
 
-/// `(window, field)` brushes, created once and kept for the process lifetime.
-fn brushes() -> (HBRUSH, HBRUSH) {
+/// `(window, field)` brushes of `p`'s mode, created once per mode and kept
+/// for the process lifetime (the background and field colours depend only on
+/// the mode).
+fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
     BRUSHES.with(|b| {
-        b.get().unwrap_or_else(|| {
-            let made = unsafe { (CreateSolidBrush(BG), CreateSolidBrush(FIELD)) };
-            b.set(Some(made));
-            made
-        })
+        let mut all = b.get();
+        let slot = &mut all[usize::from(p.light)];
+        if let Some(made) = *slot {
+            return made;
+        }
+        let made = unsafe {
+            (
+                CreateSolidBrush(colorref(p.bg)),
+                CreateSolidBrush(colorref(p.field)),
+            )
+        };
+        *slot = Some(made);
+        b.set(all);
+        made
     })
+}
+
+/// Title bar and control styles of `hwnd` for `p`'s mode.
+fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
+    let dark = i32::from(!p.light);
+    let style = if p.light {
+        w!("Explorer")
+    } else {
+        w!("DarkMode_Explorer")
+    };
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const i32 as *const c_void,
+            size_of::<i32>() as u32,
+        );
+        for control in themed {
+            let _ = SetWindowTheme(*control, style, None);
+        }
+    }
+}
+
+/// Restyles the open editor (if any) for the window palette now in effect:
+/// title bar, control styles, then a full repaint, which picks the colours
+/// up from `theme::current_window`.
+pub fn restyle_open_editor() {
+    let open = EDITOR.with(|cell| {
+        cell.try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|ed| (ed.hwnd, ed.themed.clone())))
+    });
+    let Some((hwnd, themed)) = open else {
+        return;
+    };
+    apply_mode(hwnd, &themed, &theme::current_window());
+    unsafe {
+        // The caption repaints in the new mode only when the frame changes.
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+        let _ = RedrawWindow(
+            Some(hwnd),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
+        );
+    }
 }
 
 /// Runs `f` on the editor for `hwnd`, or returns `None` when there is none or
@@ -607,7 +676,7 @@ fn register_class(instance: HINSTANCE) -> Result<()> {
             hIcon: icon,
             hIconSm: icon_small,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hbrBackground: brushes().0,
+            // No class brush: WM_ERASEBKGND paints the current mode's colour.
             lpszClassName: CLASS_NAME,
             ..Default::default()
         };
@@ -722,18 +791,8 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
             None,
         )?
     };
-    let dark: i32 = 1;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &dark as *const i32 as *const c_void,
-            size_of::<i32>() as u32,
-        );
-    }
-
     let fonts = Fonts::new(scale);
-    let controls = match create_controls(hwnd, instance, &kind, &fonts) {
+    let (controls, themed) = match create_controls(hwnd, instance, &kind, &fonts) {
         Ok(controls) => controls,
         Err(error) => {
             unsafe {
@@ -765,6 +824,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         scale,
         fonts,
         controls,
+        themed,
         was_active: false,
         finished: false,
     };
@@ -774,6 +834,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
     STATUS_LABEL.set((editor.control(ID_STATUS).map_or(0, |h| h.0 as isize), false));
     let first = editor.control(ID_TEXT).or(editor.control(ID_TITLE));
     LAST_FOCUS.set(first.map_or(0, |h| h.0 as isize));
+    apply_mode(hwnd, &editor.themed, &theme::current_window());
     let stored = EDITOR.with(|cell| match cell.try_borrow_mut() {
         Ok(mut slot) => {
             *slot = Some(editor);
@@ -825,13 +886,18 @@ fn focus_last(hwnd: HWND) {
     }
 }
 
+/// Each control's id and window.
+type Controls = Vec<(i32, HWND)>;
+
+/// The controls, and those of them drawn with a visual style.
 fn create_controls(
     parent: HWND,
     instance: HINSTANCE,
     kind: &EditorKind,
     fonts: &Fonts,
-) -> Result<Vec<(i32, HWND)>> {
+) -> Result<(Controls, Vec<HWND>)> {
     let mut controls = Vec::new();
+    let mut themed = Vec::new();
     for spec in specs(kind) {
         let mut style = WS_CHILD | WS_VISIBLE | WINDOW_STYLE(spec.style);
         if spec.role.is_some() {
@@ -854,12 +920,13 @@ fn create_controls(
             )?
         };
         fonts.apply(hwnd, spec.id);
+        // Push buttons, checkbox and scroll bars take the mode's visual style
+        // (`apply_mode`). The pickers ignore dark styles and colors, so
+        // `paint_themed` recolors them.
+        if spec.role.is_some() {
+            themed.push(hwnd);
+        }
         unsafe {
-            // Dark push buttons, checkbox and scroll bars. The pickers ignore
-            // dark themes and colors, so `paint_dark` recolors them.
-            if spec.role.is_some() {
-                let _ = SetWindowTheme(hwnd, w!("DarkMode_Explorer"), None);
-            }
             if let Some(role) = spec.role {
                 let _ = SetWindowSubclass(hwnd, Some(control_proc), SUBCLASS_ID, role as usize);
             }
@@ -877,7 +944,7 @@ fn create_controls(
         }
         controls.push((spec.id, hwnd));
     }
-    Ok(controls)
+    Ok((controls, themed))
 }
 
 impl Editor {
@@ -1252,22 +1319,35 @@ fn on_destroy(hwnd: HWND) {
 fn color_control(wparam: WPARAM, lparam: LPARAM, msg: u32) -> LRESULT {
     let hdc = HDC(wparam.0 as *mut c_void);
     let control = HWND(lparam.0 as *mut c_void);
-    let (window, field) = brushes();
+    let p = theme::current_window();
+    let (window, field) = brushes(&p);
     let id = unsafe { GetDlgCtrlID(control) };
     // Read-only edits ask with WM_CTLCOLORSTATIC.
     let is_field = msg == WM_CTLCOLOREDIT || matches!(id, ID_TEXT | ID_TITLE | ID_NOTES);
     let (status, error) = STATUS_LABEL.get();
     let text = if error && status != 0 && status == lparam.0 {
-        ERROR_TEXT
+        p.error
     } else {
-        TEXT
+        p.text
     };
     unsafe {
-        SetTextColor(hdc, text);
-        SetBkColor(hdc, if is_field { FIELD } else { BG });
+        SetTextColor(hdc, colorref(text));
+        SetBkColor(hdc, colorref(if is_field { p.field } else { p.bg }));
     }
     let brush = if is_field { field } else { window };
     LRESULT(brush.0 as isize)
+}
+
+/// The window background in the current mode's colour.
+fn erase_background(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+    let hdc = HDC(wparam.0 as *mut c_void);
+    let mut rc = RECT::default();
+    unsafe {
+        if GetClientRect(hwnd, &mut rc).is_ok() {
+            FillRect(hdc, &rc, brushes(&theme::current_window()).0);
+        }
+    }
+    LRESULT(1)
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -1278,6 +1358,7 @@ unsafe extern "system" fn wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => color_control(wparam, lparam, msg),
+        WM_ERASEBKGND => erase_background(hwnd, wparam),
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
@@ -1340,29 +1421,30 @@ unsafe extern "system" fn wnd_proc(
 
 const SUBCLASS_ID: usize = 1;
 
-/// Maps a light-theme pixel (`0x00RRGGBB`) onto the dark palette: white
-/// becomes `FIELD`, black becomes `TEXT`, grays fall in between. Colored
+/// Maps a light-theme pixel (`0x00RRGGBB`) onto the window palette: white
+/// becomes `field`, black becomes `text`, grays fall in between (in dark mode
+/// this inverts them; in light mode it is nearly the identity). Colored
 /// pixels (the blue selection, the today marker) keep their color.
-fn darken(px: u32) -> u32 {
+fn tone(px: u32, field: u32, text: u32) -> u32 {
     let channel = |v: u32, shift: u32| (v >> shift) & 0xFF;
     let (r, g, b) = (channel(px, 16), channel(px, 8), channel(px, 0));
     if r.max(g).max(b) - r.min(g).min(b) > 48 {
         return px;
     }
     let ink = 255 - (r * 299 + g * 587 + b * 114) / 1000;
-    let mix = |shift_colorref: u32| {
-        let from = channel(FIELD.0, shift_colorref);
-        let to = channel(TEXT.0, shift_colorref);
+    let mix = |shift: u32| {
+        let (from, to) = (channel(field, shift), channel(text, shift));
         (from * (255 - ink) + to * ink) / 255
     };
-    // COLORREF is 0x00BBGGRR.
-    (mix(0) << 16) | (mix(8) << 8) | mix(16)
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
 }
 
 /// Paints a control that ignores dark colors (the date/time pickers, their
 /// spin buttons and the drop-down calendar): it draws itself into an
-/// off-screen bitmap via `WM_PRINTCLIENT`, then `darken` recolors it.
-fn paint_dark(hwnd: HWND) {
+/// off-screen bitmap via `WM_PRINTCLIENT`, then `tone` recolors it for the
+/// current window mode.
+fn paint_themed(hwnd: HWND) {
+    let p = theme::current_window();
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(hwnd, &mut ps);
@@ -1394,7 +1476,7 @@ fn paint_dark(hwnd: HWND) {
                     let len = (w as usize).saturating_mul(h as usize);
                     let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, len);
                     for px in pixels {
-                        *px = darken(*px);
+                        *px = tone(*px, p.field, p.text);
                     }
                 }
                 let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
@@ -1434,10 +1516,10 @@ unsafe extern "system" fn control_proc(
     if matches!(role, Some(Role::Picker | Role::Paint)) {
         match msg {
             WM_PAINT => {
-                paint_dark(hwnd);
+                paint_themed(hwnd);
                 return LRESULT(0);
             }
-            // `paint_dark` paints the background too.
+            // `paint_themed` paints the background too.
             WM_ERASEBKGND => return LRESULT(1),
             _ => {}
         }
@@ -1518,6 +1600,10 @@ unsafe extern "system" fn control_proc(
 /// opens one editor under where the panel would be, with a hidden owner that
 /// prints each result. `EventSave` gets a failure after 1.5 s, then success on
 /// the next try. Ends when the editor closes.
+///
+/// `DI_WINDOW=system|dark|light` picks the window mode (default: system), and
+/// `DI_WINDOW_FLIP=ms` swaps dark and light after that long, to check the
+/// live restyle.
 #[cfg(debug_assertions)]
 pub fn run_demo(which: Option<&str>) {
     use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY;
@@ -1547,6 +1633,21 @@ pub fn run_demo(which: Option<&str>) {
                         unsafe { PostQuitMessage(0) };
                     }
                 }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == FLIP_TIMER => {
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), FLIP_TIMER);
+                }
+                let mut t = theme::current();
+                t.window = if theme::current_window().light {
+                    WindowTheme::Dark
+                } else {
+                    WindowTheme::Light
+                };
+                theme::set_current(t);
+                println!("demo-editor: window mode now {}", t.window.name());
+                restyle_open_editor();
                 LRESULT(0)
             }
             WM_TIMER => {
@@ -1580,6 +1681,15 @@ pub fn run_demo(which: Option<&str>) {
             _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         }
     }
+
+    const FLIP_TIMER: usize = 2;
+    use crate::theme::{Theme, WindowTheme};
+    let mode = std::env::var("DI_WINDOW").unwrap_or_default();
+    theme::set_system_light(theme::read_system_light());
+    theme::set_current(Theme {
+        window: WindowTheme::from_name(&mode).unwrap_or_default(),
+        ..Theme::default()
+    });
 
     let date = chrono::Local::now().date_naive();
     let draft = |title: &str| EventDraft {
@@ -1666,6 +1776,10 @@ pub fn run_demo(which: Option<&str>) {
             Ok(editor) => {
                 DEMO_EDITOR.set(editor.0 as isize);
                 println!("demo-editor: hwnd {:#x}", editor.0 as usize);
+                let flip = std::env::var("DI_WINDOW_FLIP").ok();
+                if let Some(ms) = flip.and_then(|v| v.parse::<u32>().ok()) {
+                    SetTimer(Some(owner), FLIP_TIMER, ms, None);
+                }
             }
             Err(error) => {
                 eprintln!("demo-editor: open failed: {error}");
@@ -1868,16 +1982,28 @@ mod tests {
     }
 
     #[test]
-    fn darken_maps_light_grays_and_keeps_colors() {
-        let field = 0x2B2B2E;
-        let text = 0xEEEEEE;
-        assert_eq!(darken(0xFFFFFF), field);
-        assert_eq!(darken(0x000000), text);
+    fn tone_maps_light_grays_and_keeps_colors() {
+        use crate::theme::{Accent, WindowTheme};
+        let dark = theme::window(Accent::Blue, WindowTheme::Dark, false);
+        let darken = |px| tone(px, dark.field, dark.text);
+        assert_eq!(darken(0xFFFFFF), dark.field);
+        assert_eq!(darken(0x000000), dark.text);
         // Blue selection highlight stays.
         assert_eq!(darken(0x0078D7), 0x0078D7);
         // A mid gray lands between the two.
         let mid = darken(0x808080);
-        assert!(mid & 0xFF > 0x2E && mid & 0xFF < 0xEE);
+        assert!(mid & 0xFF > dark.field & 0xFF && mid & 0xFF < dark.text & 0xFF);
+        // Light mode leaves the native look nearly as it is.
+        let light = theme::window(Accent::Blue, WindowTheme::Light, false);
+        let lighten = |px| tone(px, light.field, light.text);
+        assert_eq!(lighten(0xFFFFFF), 0xFFFFFF);
+        assert_eq!(lighten(0x000000), light.text);
+        assert_eq!(lighten(0x0078D7), 0x0078D7);
+    }
+
+    #[test]
+    fn colorref_swaps_red_and_blue() {
+        assert_eq!(colorref(0x1B2B3C), COLORREF(0x3C2B1B));
     }
 
     #[test]

@@ -51,16 +51,14 @@ use crate::config::Style;
 use crate::model::{CalView, Hit, MediaInfo, Notice, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
+use crate::theme::{self, Accent, Palette};
 
 // Page drawing lives in its own file; as a child module it shares the
 // renderer's private state and helpers.
 #[path = "render_panel.rs"]
 mod panel;
 
-const TEXT: u32 = 0xF2F2F2;
 const SECONDARY_ALPHA: f32 = 0.7;
-const BAR_COLOR: u32 = 0x7FD18B;
-const ART_PLACEHOLDER: u32 = 0x2C2C2E;
 /// Decoded album art kept at once: one per size drawn (compact and media page).
 const ART_SLOTS: usize = 2;
 /// Glyphs shared by Segoe Fluent Icons and Segoe MDL2 Assets.
@@ -96,6 +94,8 @@ pub struct Frame<'a> {
     /// came from beside it. Positive = it came in from the right (scrolled to
     /// a later page).
     pub page_slide: f32,
+    /// Island colours (surface and accent).
+    pub palette: Palette,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
@@ -115,6 +115,8 @@ pub struct Renderer {
     round_cap: ID2D1StrokeStyle,
     /// Origin of the equalizer animation's clock.
     epoch: Instant,
+    /// The palette of the frame being drawn.
+    palette: Palette,
 }
 
 struct Fonts {
@@ -245,6 +247,7 @@ impl Renderer {
                 scale: 1.0,
                 round_cap,
                 epoch: Instant::now(),
+                palette: theme::island(Accent::default(), theme::Surface::default()),
             })
         }
     }
@@ -260,6 +263,7 @@ impl Renderer {
         opacity: f32,
     ) -> Result<()> {
         let opacity = opacity.clamp(0.0, 1.0);
+        self.palette = frame.palette;
         self.scale = win.scale();
         self.regions = HitRegions::default();
         self.ensure_surface(win.size())?;
@@ -358,7 +362,7 @@ impl Renderer {
             let rt = self.d2d.CreateDCRenderTarget(&props)?;
             // Layered windows cannot use ClearType: it has no alpha channel.
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            let brush = rt.CreateSolidColorBrush(&color(TEXT, 1.0), None)?;
+            let brush = rt.CreateSolidColorBrush(&color(self.palette.text, 1.0), None)?;
             let layer = rt.CreateLayer(None)?;
             self.target = Some(Target { rt, brush, layer });
         }
@@ -399,7 +403,7 @@ impl Renderer {
         let radius = corner_radius(style, shape);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
-            target.brush.SetColor(&color(0, 1.0));
+            target.brush.SetColor(&color(self.palette.surface, 1.0));
             match style {
                 Style::Pill => target.rt.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
@@ -456,7 +460,7 @@ impl Renderer {
         // clock can wrap at 10 s without a jump and stays precise for f32.
         let t = (now.saturating_duration_since(self.epoch).as_secs_f64() % 10.0) as f32;
         let heights = equalizer_heights(t, media.playing);
-        unsafe { target.brush.SetColor(&color(BAR_COLOR, 1.0)) };
+        unsafe { target.brush.SetColor(&color(self.palette.accent, 1.0)) };
         for (i, h) in heights.into_iter().enumerate() {
             let bar = Rect {
                 x: layout.bars.x + i as f32 * (BAR_W + BAR_GAP),
@@ -511,7 +515,7 @@ impl Renderer {
         };
         let target = self.target.as_ref().expect("target ensured by paint");
         let Some(bitmap) = bitmap else {
-            unsafe { target.brush.SetColor(&color(ART_PLACEHOLDER, 1.0)) };
+            unsafe { target.brush.SetColor(&color(self.palette.placeholder, 1.0)) };
             self.fill_round(area, radius);
             self.text(GLYPH_MUSIC, &self.fonts.icon, area, SECONDARY_ALPHA);
             return Ok(());
@@ -662,7 +666,7 @@ impl Renderer {
     }
 
     fn text(&self, text: &str, format: &IDWriteTextFormat, area: Rect, alpha: f32) {
-        self.text_colored(text, format, area, TEXT, alpha);
+        self.text_colored(text, format, area, self.palette.text, alpha);
     }
 
     /// One line of text in `area`, trimmed with an ellipsis when too long.

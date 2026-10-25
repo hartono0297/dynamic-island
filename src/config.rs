@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::i18n::Lang;
 use crate::pomodoro::PomoSettings;
+use crate::theme::{Accent, Surface, WindowTheme};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
@@ -25,6 +26,11 @@ pub struct Config {
     pub google_client_secret: String,
     /// UI language, "id" or "en".
     pub language: Lang,
+    pub accent: Accent,
+    /// The island's fill; the island itself is always dark.
+    pub surface: Surface,
+    /// Editors and settings window: follow Windows, or always dark / light.
+    pub window_theme: WindowTheme,
 }
 
 impl Default for Config {
@@ -39,6 +45,9 @@ impl Default for Config {
             google_client_id: String::new(),
             google_client_secret: String::new(),
             language: Lang::Id,
+            accent: Accent::Blue,
+            surface: Surface::Black,
+            window_theme: WindowTheme::System,
         }
     }
 }
@@ -86,8 +95,9 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language) over everything else as it is on disk (Google client, muted apps, battery
-/// threshold), which the owner may have edited by hand while the island ran.
+/// language, theme) over everything else as it is on disk (Google client, muted
+/// apps, battery threshold), which the owner may have edited by hand while the
+/// island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
     Config {
         style: mem.style,
@@ -95,6 +105,9 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         onboarding_done: mem.onboarding_done,
         pomodoro: mem.pomodoro,
         language: mem.language,
+        accent: mem.accent,
+        surface: mem.surface,
+        window_theme: mem.window_theme,
         ..disk
     }
 }
@@ -240,6 +253,9 @@ mod tests {
         assert_eq!(c.muted_apps, vec!["Claude".to_string(), "Orca".to_string()]);
         assert!(!c.onboarding_done);
         assert_eq!(c.language, Lang::Id);
+        assert_eq!(c.accent, Accent::Blue);
+        assert_eq!(c.surface, Surface::Black);
+        assert_eq!(c.window_theme, WindowTheme::System);
     }
 
     #[test]
@@ -259,8 +275,42 @@ mod tests {
             google_client_id: "id.apps.googleusercontent.com".into(),
             google_client_secret: "secret".into(),
             language: Lang::En,
+            accent: Accent::Orange,
+            surface: Surface::Graphite,
+            window_theme: WindowTheme::Light,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn theme_fields_are_names_and_typos_fall_back() {
+        let c = Config {
+            accent: Accent::Purple,
+            surface: Surface::Graphite,
+            window_theme: WindowTheme::Dark,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        for field in [
+            r#""accent":"Purple""#,
+            r#""surface":"Graphite""#,
+            r#""window_theme":"Dark""#,
+        ] {
+            assert!(json.contains(field), "{json}");
+        }
+        let hand = parse(r#"{"accent":"green","surface":"GRAPHITE","window_theme":"light"}"#);
+        assert_eq!(
+            (hand.accent, hand.surface, hand.window_theme),
+            (Accent::Green, Surface::Graphite, WindowTheme::Light)
+        );
+        // A typo keeps the rest of the file: only that field falls back.
+        let typo = parse(r#"{"style":"Notch","accent":"teal","surface":"grey","window_theme":1}"#);
+        assert_eq!(typo, Config::default(), "a non-string is still invalid");
+        let typo = parse(r#"{"style":"Notch","accent":"teal","surface":"grey"}"#);
+        assert_eq!(
+            (typo.style, typo.accent, typo.surface),
+            (Style::Notch, Accent::Blue, Surface::Black)
+        );
     }
 
     #[test]
@@ -282,6 +332,10 @@ mod tests {
         assert_eq!(c.google_client_id, "");
         assert_eq!(c.google_client_secret, "");
         assert_eq!(c.language, Lang::Id);
+        assert_eq!(
+            (c.accent, c.surface, c.window_theme),
+            (Accent::Blue, Surface::Black, WindowTheme::System)
+        );
     }
 
     #[test]
@@ -299,13 +353,27 @@ mod tests {
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
     }
 
-    fn owned(c: &Config) -> (Style, bool, bool, PomoSettings, Lang) {
+    type Owned = (
+        Style,
+        bool,
+        bool,
+        PomoSettings,
+        Lang,
+        Accent,
+        Surface,
+        WindowTheme,
+    );
+
+    fn owned(c: &Config) -> Owned {
         (
             c.style,
             c.start_with_windows,
             c.onboarding_done,
             c.pomodoro,
             c.language,
+            c.accent,
+            c.surface,
+            c.window_theme,
         )
     }
 
@@ -321,6 +389,9 @@ mod tests {
             style: Style::Pill,
             pomodoro: PomoSettings::default(),
             language: Lang::Id,
+            accent: Accent::Blue,
+            surface: Surface::Black,
+            window_theme: WindowTheme::System,
             ..Config::default()
         };
         let mem = Config {
@@ -332,6 +403,9 @@ mod tests {
                 ..PomoSettings::default()
             },
             language: Lang::En,
+            accent: Accent::Red,
+            surface: Surface::Graphite,
+            window_theme: WindowTheme::Light,
             ..Config::default()
         };
         (disk, mem)

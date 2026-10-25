@@ -11,6 +11,7 @@ mod notes;
 mod pomodoro;
 mod sources;
 mod state;
+mod theme;
 mod ui;
 
 use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
