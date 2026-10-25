@@ -4,6 +4,7 @@ mod app;
 mod claude;
 mod config;
 mod model;
+mod pomodoro;
 mod sources;
 mod state;
 mod ui;

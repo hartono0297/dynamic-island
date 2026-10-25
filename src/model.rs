@@ -66,6 +66,15 @@ pub enum Effect {
     Media(MediaCommand),
 }
 
+/// A Pomodoro setting the panel's steppers can change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PomoField {
+    Focus,
+    ShortBreak,
+    LongBreak,
+    Sessions,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum View {
     Hidden,
