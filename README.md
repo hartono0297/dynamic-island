@@ -1,6 +1,17 @@
 # Dynamic Island untuk Windows
 
-"Dynamic island" kecil di tengah atas layar Windows 11: kontrol musik, semua notifikasi toast Windows, notifikasi "Claude selesai/menunggu" dari Claude Code, dan peringatan baterai low. Ditulis dalam Rust (Win32 + Direct2D), tanpa browser engine dan tanpa runtime tambahan. Desain lengkapnya ada di `docs/superpowers/specs/2026-10-25-dynamic-island-design.md`.
+"Dynamic island" kecil di tengah atas layar Windows 11. Notch hitamnya selalu ada; di-hover jadi panel dengan empat halaman: **Kalender** (Google Calendar, bisa tambah dan edit acara), **Pomodoro**, **Notes**, dan **Musik**. Selain itu island tetap menampilkan semua notifikasi toast Windows, notifikasi "Claude selesai/menunggu" dari Claude Code, dan peringatan baterai low. Ditulis dalam Rust (Win32 + Direct2D), tanpa browser engine dan tanpa runtime tambahan.
+
+Desainnya ada di `docs/superpowers/specs/2026-10-25-dynamic-island-design.md` (v1) dan `docs/superpowers/specs/2026-10-25-dynamic-island-v2-panel-design.md` (v2).
+
+## Yang baru di v2
+
+- **Notch selalu terlihat.** Saat tidak ada apa-apa, island tampil sebagai notch/pill hitam kosong seukuran tampilan compact. Hanya ngumpet saat ada aplikasi fullscreen.
+- **Panel saat hover**, ganti halaman dengan roda mouse: Kalender → Pomodoro → Notes → Musik.
+- **Google Calendar**: tampilan Hari / Minggu / Bulan, tambah acara, edit acara. Perlu setup sekali, lihat [Setup Google Calendar](#setup-google-calendar).
+- **Pomodoro** dengan lingkaran progres, di panel maupun di tampilan kecil.
+- **Notes** lokal, ditulis di jendela kecil bertema gelap.
+- Animasi membesar/mengecil dan pindah halaman lebih mulus; equalizer bergerak saat musik diputar.
 
 ## Setup
 
@@ -18,7 +29,9 @@ cargo build --release
 .\target\release\dynamic-island.exe
 ```
 
-Exe-nya satu file (~430 KB) dan jalan langsung dari `target\release`. Kalau exe dipindah, jalankan lagi tray → "Pasang hook Claude Code" supaya hook menunjuk ke path baru (value autostart diperbarui sendiri setiap island start).
+Exe-nya satu file (~750 KB) dan jalan langsung dari `target\release`. Kalau exe dipindah, jalankan lagi tray → "Pasang hook Claude Code" supaya hook menunjuk ke path baru (value autostart diperbarui sendiri setiap island start).
+
+Kalau island sedang jalan, keluar dulu dari tray sebelum `cargo build --release`: exe yang sedang dipakai tidak bisa ditimpa.
 
 Saat pertama jalan:
 
@@ -49,16 +62,113 @@ Notifikasi "Claude butuh respon" hanya muncul untuk notifikasi Claude yang meman
 
 Tray → **Jalan saat Windows start** (default: nyala). Ini menulis/menghapus value `DynamicIsland` di `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
+### 6. Google Calendar (opsional)
+
+Halaman Kalender butuh project Google Cloud milikmu sendiri. Langkahnya ada di [Setup Google Calendar](#setup-google-calendar). Tanpa itu, semua fitur lain tetap jalan dan halaman Kalender hanya menampilkan tombol "Hubungkan Google".
+
 ## Pemakaian
 
-- **Tray icon** (klik kiri atau kanan): Gaya Pill / Notch, Jalan saat Windows start, Cara matiin popup Windows, Pasang hook Claude Code, Keluar.
-- **Musik:** diamkan kursor sebentar (~0,35 detik) di atas island atau klik untuk memperbesar dan memunculkan tombol prev / play-pause / next.
+- **Tray icon** (klik kiri atau kanan): Gaya: Pill, Gaya: Notch, Jalan saat Windows start, Cara matiin popup Windows, Pasang hook Claude Code, Keluar.
+- **Dua gaya:** **Pill** melayang 8 px dari tepi atas dengan semua sudut bulat; **Notch** menempel ke tepi atas dengan bahu melengkung. Semua tampilan (notch kosong, panel, pomodoro kecil, notifikasi) mengikuti gaya yang dipilih.
+- **Tampilan kecil**, urutan prioritas dari yang tertinggi: notifikasi sementara (app, Claude selesai, baterai, pomodoro selesai) → "Claude butuh respon" → pomodoro (jalan, dijeda, atau menunggu diklik) → musik (cover + equalizer yang bergerak selama lagu diputar) → notch kosong.
 - **Klik notifikasi:** membuka aplikasi sumbernya (bukan chat spesifiknya) lalu menutup notifikasi dari island. Notifikasinya tetap ada di Notification Center Windows.
-- **Fullscreen** (game, video, presentasi): island ngumpet; notifikasi baru tetap muncul sebentar.
+- **Fullscreen** (game, video, presentasi): semuanya ngumpet, termasuk notch kosong dan panel; notifikasi baru tetap muncul sebentar.
+- Di luar bentuk island, klik tembus ke jendela di bawahnya.
 
-### config.json
+### Panel
 
-`%APPDATA%\DynamicIsland\config.json`, dibaca saat island start (edit manual → keluar dari tray lalu jalankan lagi):
+- **Buka:** diamkan kursor sebentar (~0,35 detik) di atas island. Kursor yang sekadar lewat tidak membukanya. Kursor keluar → panel mengecil lagi.
+- **Pindah halaman:** putar roda mouse di atas panel. Scroll ke bawah = halaman berikutnya (Kalender → Pomodoro → Notes → Musik), scroll ke atas = sebelumnya; tidak berputar dari Musik balik ke Kalender. Titik di bawah panel menunjukkan halaman yang aktif. Island tidak perlu diklik dulu supaya roda mouse sampai.
+- Panel dibuka lagi di halaman terakhir yang dilihat.
+- **Notifikasi masuk saat panel terbuka:** panel mengecil jadi notifikasi itu (~5 detik, bisa diklik), lalu terbuka lagi kalau kursor masih di atasnya. Selama notifikasi sementara tampil, hover tidak membuka panel.
+- **"Claude butuh respon"** tidak menahan panel: tampil sebagai strip kecil di atas panel. Klik strip itu untuk menutupnya.
+- Selama jendela note atau acara terbuka, panel tetap terbuka.
+
+### Kalender
+
+- Tombol **Hari / Minggu / Bulan** di kanan atas; panah di sebelah judul pindah ke hari/minggu/bulan sebelumnya atau berikutnya.
+- **Bulan:** grid tanggal, hari ini disorot, tanggal yang punya acara diberi titik. Klik tanggal → daftar acaranya di kanan.
+- **Minggu:** 7 kolom dengan acara per hari. Kolom yang kepenuhan menampilkan "+N"; klik untuk membuka hari itu di tampilan Hari.
+- **Hari:** daftar acara urut jam.
+- **"+N lagi"**: daftar tidak muat. Dari tampilan Bulan, klik untuk membuka hari itu di tampilan Hari; di tampilan Hari, klik untuk menampilkan acara berikutnya. "Kembali ke atas" mengulang dari awal.
+- **"+ Tambah acara"** atau klik acara → jendela kecil di bawah panel: Judul, Tanggal, Seharian, Mulai, Selesai, Catatan. **Simpan** (atau Ctrl+Enter) mengirim ke Google Calendar; **Batal** atau Esc menutup tanpa menyimpan. Kalau gagal simpan, pesannya tampil di jendela itu dan isiannya tidak hilang.
+- Acara baru masuk ke kalender utama (primary). Yang ditampilkan: acara dari semua kalender yang dicentang di Google Calendar.
+- **Hanya-baca di island:** acara berulang, acara beberapa hari, dan acara dari kalender yang tidak bisa kamu ubah. Jendelanya hanya menampilkan isi dan tombol **Tutup**. Ubah acara seperti itu di Google Calendar web.
+- Menghapus acara tidak bisa dari island.
+- **Pembaruan:** data diambil saat halaman Kalender dibuka (kalau sudah lebih dari 1 menit), setiap pindah periode, dan otomatis tiap 10 menit. Zona waktu mengikuti Windows.
+- **Offline:** data terakhir tetap ditampilkan dengan tanda "offline" di judul. Data itu disimpan di `calendar-cache.json`, jadi tetap ada setelah island dijalankan ulang.
+
+### Pomodoro
+
+- Lingkaran progres besar dengan sisa waktu, label fase (Fokus / Istirahat / Istirahat panjang), "Sesi n dari N", dan tombol **Mulai/Jeda/Lanjut**, **Reset**, **Lewati**.
+- Durasi diatur dengan tombol **−** / **+**: Fokus 5–120 menit (langkah 5), Istirahat 1–30 menit, Istirahat panjang 5–60 menit (langkah 5), Jumlah sesi 1–12. Default 25 / 5 / 15 menit, 4 sesi. Tersimpan di `config.json`. Tombolnya redup (tidak bisa diubah) selama fase berjalan atau dijeda.
+- Saat timer jalan dan panel tertutup: lingkaran kecil + sisa waktu (mm:ss) + "Fokus 2/4" atau "Istirahat". Merah = fokus, hijau = istirahat.
+- **Fase selesai:** bunyi notifikasi Windows sekali, notifikasi ~5 detik ("Fokus selesai · Istirahat 5 menit · klik untuk mulai"), lalu island kecil menetap di "Siap · klik". **Fase berikutnya baru mulai setelah diklik**, di island kecil atau tombol Mulai di panel.
+- Setelah Jumlah sesi fokus, istirahatnya istirahat panjang.
+- Timer tidak disimpan: keluar dari island = pomodoro mulai dari awal.
+
+### Notes
+
+- Daftar note (baris pertama + waktu terakhir diubah), terbaru di atas. Kalau tidak muat, klik "+N lagi" untuk halaman berikutnya ("Kembali ke atas" mengulang). Roda mouse tetap untuk pindah halaman panel, bukan menggulir daftar.
+- **"+ Baru"** atau klik note → jendela kecil bertema gelap dengan kotak teks biasa (copy-paste, undo, emoji, IME jalan).
+- **Tersimpan otomatis** saat jendela ditutup: Ctrl+Enter, Esc, atau klik di luar jendela.
+- **Hapus** (note yang sudah ada): menghapus note itu. Mengosongkan teksnya juga menghapus note.
+- Disimpan lokal di `%APPDATA%\DynamicIsland\notes.json`, tidak disinkron ke mana pun. Kalau file itu rusak dan tidak bisa dibaca, island memindahkannya ke `notes.json.bak` (atau `.bak2`, `.bak3`…) sebelum menyimpan, jadi isinya tidak tertimpa.
+
+### Musik
+
+Halaman ke-4: cover, judul, artis, dan tombol prev / play-pause / next untuk media yang sedang diputar di aplikasi mana pun (Spotify, browser, dll.). Saat panel tertutup, musik tampil di island kecil dengan equalizer yang bergerak selama lagu diputar (berhenti saat dijeda).
+
+## Setup Google Calendar
+
+Island memakai Google Calendar API resmi lewat OAuth "Desktop app", dengan project Google Cloud milikmu sendiri. Cukup sekali.
+
+1. Buka [Google Cloud Console](https://console.cloud.google.com/) dan buat project baru (pemilih project di bar atas → **New project**). Namanya bebas, misalnya "Dynamic Island".
+2. **APIs & Services → Library** → cari **Google Calendar API** → **Enable**.
+3. Atur consent screen: buka **Google Auth Platform** (atau **APIs & Services → OAuth consent screen**, yang membuka halaman yang sama) → **Get started**.
+   - App name: bebas. User support email: email kamu.
+   - Audience: **External**.
+   - Contact information: email kamu. Setujui kebijakan data pengguna, lalu **Create**.
+4. **Audience → Test users → Add users** → masukkan alamat Gmail yang kalendernya mau ditampilkan → **Save**. Publishing status tetap **Testing** (lihat catatan 7 hari di bawah).
+5. **Clients → Create client** → Application type **Desktop app** → nama bebas → **Create**. Salin **Client ID** dan **Client secret**. (Di tampilan konsol lama: **Credentials → Create credentials → OAuth client ID**.) Tidak perlu mengisi redirect URI: island memakai redirect loopback `http://127.0.0.1:<port>` yang otomatis diizinkan untuk Desktop app.
+6. Buka `%APPDATA%\DynamicIsland\config.json` dan isi dua field ini, lalu simpan filenya:
+   ```json
+   "google_client_id": "1234567890-abc...apps.googleusercontent.com",
+   "google_client_secret": "GOCSPX-..."
+   ```
+   Island tidak perlu ditutup atau dijalankan ulang: `config.json` dibaca lagi setiap kali kamu klik Hubungkan Google.
+7. Hover island → halaman **Kalender** → **Hubungkan Google**. Browser default terbuka:
+   - Pilih akun yang tadi didaftarkan sebagai test user.
+   - Google menampilkan layar "Google hasn't verified this app" karena app-nya milikmu sendiri dan belum diverifikasi. Pilih **Continue**.
+   - Izinkan dua akses yang diminta: **lihat dan ubah acara** di kalendermu (scope `https://www.googleapis.com/auth/calendar.events`) dan **lihat daftar kalender** yang kamu ikuti (scope `https://www.googleapis.com/auth/calendar.calendarlist.readonly`, supaya island tahu kalender mana yang dicentang).
+   - Browser menampilkan "Berhasil terhubung. Kembali ke island ya." dan acaramu muncul di panel. Login ditunggu sampai 5 menit; lewat dari itu, klik Hubungkan Google lagi.
+
+Kalau client ID masih kosong, klik Hubungkan Google memunculkan "Isi Google client ID dulu · lihat README".
+
+### Login ulang tiap 7 hari (status "Testing")
+
+Selama publishing status project masih **Testing**, Google memberi refresh token yang **kedaluwarsa setelah 7 hari** untuk scope kalender. Setelah itu halaman Kalender menampilkan **Hubungkan ulang Google**; klik dan login lagi seperti langkah 7.
+
+Supaya tidak perlu login ulang tiap minggu: Google Auth Platform → **Audience** → **Publish app** → status jadi **In production**. Untuk pemakaian pribadi kamu tidak perlu mengajukan verifikasi; konsekuensinya layar "Google hasn't verified this app" tetap muncul setiap login (pilih **Advanced** → lanjutkan ke app-mu). Setelah pindah status, klik **Hubungkan ulang Google** sekali supaya dapat token baru tanpa batas 7 hari.
+
+### Di mana kredensialnya disimpan
+
+- **Client ID dan client secret** ada di `%APPDATA%\DynamicIsland\config.json` sebagai **teks biasa**. Untuk Desktop app, client secret menurut Google memang tidak benar-benar rahasia (semua orang yang punya exe-nya bisa membacanya), tapi tetap jangan bagikan file ini.
+- **Token login** disimpan terenkripsi dengan DPAPI Windows di `%APPDATA%\DynamicIsland\google-token.bin`; hanya akun Windows-mu di komputer ini yang bisa membukanya. Token tidak pernah dicetak ke log atau console.
+- **Memutus koneksi:** keluar dari island, hapus `google-token.bin`, lalu cabut akses app-nya di [myaccount.google.com/permissions](https://myaccount.google.com/permissions). Kalau Google menolak token (dicabut atau kedaluwarsa), island menghapus file itu sendiri dan menampilkan Hubungkan ulang Google.
+
+## config.json dan file data
+
+Semua data island ada di `%APPDATA%\DynamicIsland\`:
+
+| File | Isi |
+|---|---|
+| `config.json` | Pengaturan (tabel di bawah) |
+| `notes.json` | Notes |
+| `calendar-cache.json` | Salinan terakhir data kalender, untuk mode offline |
+| `google-token.bin` | Token Google, terenkripsi DPAPI |
+
+`config.json` dibaca saat island start; `google_client_id` dan `google_client_secret` dibaca lagi setiap klik Hubungkan Google. Field lain yang diedit manual baru berlaku setelah island dijalankan ulang (tray → Keluar, lalu jalankan lagi). Island juga menulis file ini sendiri saat gaya, autostart, atau durasi pomodoro diubah, tapi hanya mengganti field miliknya; isian manualmu tidak tertimpa.
 
 | Field | Default | Keterangan |
 |---|---|---|
@@ -67,8 +177,11 @@ Tray → **Jalan saat Windows start** (default: nyala). Ini menulis/menghapus va
 | `start_with_windows` | `true` | Sama dengan toggle di tray |
 | `muted_apps` | `["Claude", "Orca"]` | Toast dari aplikasi yang namanya mengandung salah satu teks ini (huruf besar/kecil diabaikan) tidak ditampilkan. Default-nya menyaring Claude desktop dan Orca karena notifikasi Claude sudah datang dari hook |
 | `onboarding_done` | `false` | Set `false` untuk mengulang langkah pertama jalan |
+| `pomodoro` | `{"focus_min": 25, "short_break_min": 5, "long_break_min": 15, "sessions": 4}` | Diatur dari halaman Pomodoro. Nilai di luar rentang tombol −/+ dikembalikan ke batasnya |
+| `google_client_id` | `""` | Client ID OAuth Desktop app (lihat Setup Google Calendar) |
+| `google_client_secret` | `""` | Client secret pasangannya |
 
-JSON yang rusak dianggap kosong dan semua field kembali ke default.
+JSON yang rusak dianggap kosong dan semua field kembali ke default. Field yang tidak ada (misalnya config dari v1) memakai default-nya.
 
 ## Mode event untuk notifikasi (opsional)
 
@@ -92,6 +205,19 @@ Kalau mau idle mendekati 0, exe bisa diberi package identity lewat sparse packag
 
 Cek hasilnya dengan `--probe-notifications` (lihat Troubleshooting): baris `Change events: subscribed` berarti mode event aktif. Kalau berlangganan event gagal, island kembali ke polling 1 detik dengan sendirinya.
 
+## Pemakaian resource
+
+Diukur di build release v2 (polling notifikasi 1 detik, tanpa package identity):
+
+| Kondisi | Hasil |
+|---|---|
+| Idle (notch kosong), 30 detik | 0,55–0,78 detik CPU (±2–3% satu core, hampir semuanya polling notifikasi); thread UI 0 ms |
+| RAM saat start | ~34 MB working set / ~9 MB private |
+| RAM setelah panel, jendela note/acara, dan notifikasi dipakai | ~49–52 MB working set / ~20–23 MB private |
+| Pomodoro jalan, tampilan kecil, 30 detik | 0,81 detik CPU; thread UI 47 ms (satu gambar ulang per detik) |
+
+Saat idle tidak ada gambar ulang sama sekali. Equalizer musik menggambar ulang ~30 kali per detik hanya selama lagu diputar dan island dalam tampilan kecil musik; CPU-nya saat itu belum diukur.
+
 ## Troubleshooting
 
 - **Notifikasi tidak masuk ke island:** cek izin di Settings → Privacy & security → Notifications (akses notifikasi untuk aplikasi). Lalu jalankan probe dari terminal:
@@ -102,14 +228,22 @@ Cek hasilnya dengan `--probe-notifications` (lihat Troubleshooting): baris `Chan
 - **Probe khusus build debug** (`cargo build`, lalu `.\target\debug\dynamic-island.exe <arg>`):
   - `--probe-media`: cetak media yang sedang diputar setiap kali berubah.
   - `--probe-system`: cetak status baterai dan fullscreen setiap detik.
-  - `--demo`: putar semua bentuk island (Pill lalu Notch) setiap 2 detik dengan data contoh. Jalan terus sampai prosesnya dimatikan.
+  - `--demo`: putar semua bentuk island, termasuk panel, pomodoro, dan notes dengan data contoh (Pill lalu Notch) setiap 2 detik. Jalan terus sampai prosesnya dimatikan.
+  - `--demo-editor <jenis>`: buka satu jendela editor dengan data contoh. Jenisnya `note`, `note-new`, `event`, `event-new`, atau `event-ro`.
 
   Hentikan dengan Ctrl+C, atau `Stop-Process -Name dynamic-island` (ini ikut menghentikan island utama kalau sedang jalan).
-- **Island tidak muncul sama sekali:** wajar saat tidak ada musik dan notifikasi (island disembunyikan). Cek tray icon; hanya satu instance yang bisa jalan.
+- **Island tidak terlihat sama sekali:** notch kosong selalu tampil kecuali saat ada aplikasi fullscreen. Kalau tidak ada, cek tray icon; hanya satu instance yang bisa jalan.
 - **Hook Claude tidak memunculkan apa-apa:** pastikan island jalan dan `settings.json` berisi hook dengan path exe yang benar (pasang ulang dari tray).
+- **"Isi Google client ID dulu":** `google_client_id` di `config.json` masih kosong, atau filenya belum disimpan. Isi, simpan, lalu klik Hubungkan Google lagi.
+- **Kalender tetap "Hubungkan Google" setelah login, atau Google menolak client:** cek client ID dan secret tersalin utuh, tipenya **Desktop app**, Google Calendar API sudah di-enable di project yang sama, dan akunmu ada di daftar Test users.
+- **Kalender bertanda "offline":** island gagal mengambil data (tidak ada internet, Wi-Fi hotel minta login, atau Google sedang bermasalah). Data terakhir tetap tampil; island mencoba lagi saat halaman Kalender dibuka atau tiap 10 menit.
+- **Animasi terasa patah-patah:** jalankan island dengan `$env:DI_FRAME_LOG = "1"` di PowerShell yang sama sebelum `.\target\release\dynamic-island.exe`. Jarak antar frame setiap animasi (ms) ditulis ke `%TEMP%\di-frames.log`.
 
-## Batasan v1
+## Batasan
 
 - Hanya monitor utama.
 - Tidak ada balas langsung atau tombol aksi untuk notifikasi (API resmi tidak menyediakannya).
 - Aplikasi yang tidak memakai toast Windows (kemungkinan chat Steam) tidak tertangkap.
+- Kalender hanya Google Calendar (bukan Outlook/Microsoft 365 atau iCal). Dari island tidak bisa menghapus acara, mengundang peserta, mengatur pengingat, atau membuat/mengubah acara berulang dan acara beberapa hari.
+- Notes hanya lokal, tidak disinkron.
+- Pomodoro tidak punya statistik/riwayat dan tidak bertahan setelah island ditutup.
