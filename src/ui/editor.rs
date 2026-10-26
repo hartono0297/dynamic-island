@@ -69,7 +69,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use super::editor_layout::{
-    CHEVRON, Form, Item, Labels, Layout, ROW_ICON, Shortcut, Spec, Text, layout,
+    CHEVRON, DANGER_PAD, Form, Item, Labels, Layout, ROW_ICON, Shortcut, Spec, Text, layout,
 };
 use super::editor_paint::{Align, Gfx, Painter, Target};
 use super::editor_popover::{
@@ -334,12 +334,14 @@ impl Mode {
         )
     }
 
-    /// Simpan is on: the title is filled in, a timed event ends after it
-    /// starts, and nothing is being saved. Notes and reminders always allow
-    /// it (a reminder says what is missing when it is pressed).
+    /// Simpan is on: the title (an event's) or text (a reminder's) is filled
+    /// in, a timed event ends after it starts, and nothing is being saved.
+    /// A note always allows it. A reminder's time is checked when it is
+    /// pressed (a one-off in the past says so).
     fn can_save(&self, title: &str) -> bool {
         match self {
-            Mode::Note { .. } | Mode::Reminder { .. } => true,
+            Mode::Note { .. } => true,
+            Mode::Reminder { .. } => !title.trim().is_empty(),
             Mode::Event {
                 ev,
                 read_only,
@@ -1050,6 +1052,40 @@ fn focus_last(hwnd: HWND) {
     }
 }
 
+/// What a popover for `item` opens with, `today` being the local date: the
+/// reminder's calendar dims the days before today and its time list names
+/// the times of day; the event's do neither.
+fn popover_kind(mode: &Mode, item: Item, today: NaiveDate) -> Option<Kind> {
+    match (mode, item) {
+        (Mode::Event { ev, .. }, Item::DateChip) => Some(Kind::Date {
+            selected: ev.date,
+            today: ev.today,
+            dim_past: false,
+        }),
+        (Mode::Reminder { date, .. }, Item::DateChip) => Some(Kind::Date {
+            selected: *date,
+            today,
+            dim_past: true,
+        }),
+        (Mode::Event { ev, .. }, Item::StartChip) => Some(Kind::Time {
+            value: ev.start,
+            start: None,
+            periods: false,
+        }),
+        (Mode::Event { ev, .. }, Item::EndChip) => Some(Kind::Time {
+            value: ev.end,
+            start: Some(ev.start),
+            periods: false,
+        }),
+        (Mode::Reminder { time, .. }, Item::TimeChip) => Some(Kind::Time {
+            value: *time,
+            start: None,
+            periods: true,
+        }),
+        _ => None,
+    }
+}
+
 /// The labels for the layout, in `lang`.
 struct LabelText {
     date: String,
@@ -1060,20 +1096,29 @@ struct LabelText {
 }
 
 fn label_text(mode: &Mode, lang: Lang) -> LabelText {
+    let now = chrono::Local::now().date_naive();
     let (date, start, end, time, today) = match mode {
-        Mode::Event { ev, .. } => (Some(ev.date), Some(ev.start), Some(ev.end), None, ev.today),
-        Mode::Reminder { date, time, .. } => (
-            Some(*date),
+        Mode::Event { ev, .. } => (
+            i18n::editor_date(lang, ev.date),
+            Some(ev.start),
+            Some(ev.end),
+            None,
+            ev.today,
+        ),
+        Mode::Reminder {
+            date, time, repeat, ..
+        } => (
+            i18n::reminder_date_chip(lang, *repeat, *date, now),
             None,
             None,
             Some(*time),
-            chrono::Local::now().date_naive(),
+            now,
         ),
-        Mode::Note { .. } => (None, None, None, None, chrono::Local::now().date_naive()),
+        Mode::Note { .. } => (String::new(), None, None, None, now),
     };
     let t = |v: Option<NaiveTime>| v.map(|t| i18n::time_label(lang, t)).unwrap_or_default();
     LabelText {
-        date: date.map(|d| i18n::editor_date(lang, d)).unwrap_or_default(),
+        date,
         start: t(start),
         end: t(end),
         time: t(time),
@@ -1122,6 +1167,11 @@ fn compute_layout(mode: &Mode, error: bool, lang: Lang, gfx: &Gfx) -> Layout {
                 &labels.pills[3],
             ],
             all_day: text(lang, Key::AllDayToggle),
+            repeat: [
+                text(lang, Key::RepeatOnce),
+                text(lang, Key::RepeatDaily),
+                text(lang, Key::RepeatWeekly),
+            ],
             delete: text(lang, Key::Delete),
             cancel: text(lang, cancel),
             save: text(lang, Key::Save),
@@ -1299,29 +1349,7 @@ impl Editor {
 
     /// What a popover for `item` opens with.
     fn popover_kind(&self, item: Item) -> Option<Kind> {
-        match (&self.mode, item) {
-            (Mode::Event { ev, .. }, Item::DateChip) => Some(Kind::Date {
-                selected: ev.date,
-                today: ev.today,
-            }),
-            (Mode::Reminder { date, .. }, Item::DateChip) => Some(Kind::Date {
-                selected: *date,
-                today: chrono::Local::now().date_naive(),
-            }),
-            (Mode::Event { ev, .. }, Item::StartChip) => Some(Kind::Time {
-                value: ev.start,
-                start: None,
-            }),
-            (Mode::Event { ev, .. }, Item::EndChip) => Some(Kind::Time {
-                value: ev.end,
-                start: Some(ev.start),
-            }),
-            (Mode::Reminder { time, .. }, Item::TimeChip) => Some(Kind::Time {
-                value: *time,
-                start: None,
-            }),
-            _ => None,
-        }
+        popover_kind(&self.mode, item, chrono::Local::now().date_naive())
     }
 
     /// `item`'s rect on screen.
@@ -1526,11 +1554,15 @@ impl Editor {
                     }
                 }
             }
-            Mode::Reminder { repeat, .. } => {
+            Mode::Reminder {
+                date, time, repeat, ..
+            } => {
                 chip(Item::DateChip, &labels.date, true, false);
-                chip(Item::TimeChip, &labels.time, false, false);
+                chip(Item::TimeChip, &labels.time, true, false);
                 if let Some(track) = l.repeat_track {
-                    pt.segment_track(track, 1.0);
+                    // `.seg`: a field-filled track with a hairline.
+                    pt.fill_round(track, radius::CONTROL, p.field, 1.0);
+                    pt.hairline(track, radius::CONTROL, p.border, 1.0);
                     for (r, key) in [
                         (Repeat::Once, Key::RepeatOnce),
                         (Repeat::Daily, Key::RepeatDaily),
@@ -1546,19 +1578,47 @@ impl Editor {
                         } else if hovered(item) {
                             pt.fill_round(seg, radius::SEGMENT, p.text, 0.07);
                         }
-                        let ink = if on { p.on_accent } else { p.text };
-                        pt.text(tr(key), Text::Body, Align::Center, seg, ink, 1.0);
+                        let (style, ink) = if on {
+                            (Text::SmallStrong, p.on_accent)
+                        } else {
+                            (Text::Small, p.secondary)
+                        };
+                        pt.text(tr(key), style, Align::Center, seg, ink, 1.0);
                         if ring_on(item) {
                             focus_ring(pt, seg, radius::SEGMENT);
                         }
                     }
+                }
+                if let Some(line) = l.summary {
+                    let now = chrono::Local::now().naive_local();
+                    let s = i18n::reminder_summary(lang, *repeat, *date, *time, now);
+                    let (ink, strong) = if s.passed {
+                        (p.error, p.error)
+                    } else {
+                        (p.secondary, p.text)
+                    };
+                    draw_runs(
+                        pt,
+                        line,
+                        &[
+                            (&s.lead, Text::Small, ink),
+                            (&s.bold, Text::SmallStrong, strong),
+                            (&s.tail, Text::Small, ink),
+                        ],
+                    );
                 }
             }
             Mode::Note { .. } => {}
         }
 
         if let (Some(err), Some(key)) = (l.error, self.error) {
-            pt.text(tr(key), Text::Mini, Align::Left, err, p.error, 1.0);
+            // The reminder's error sits in its summary's place, at its size.
+            let style = if self.mode.form() == Form::Reminder {
+                Text::Small
+            } else {
+                Text::Mini
+            };
+            pt.text(tr(key), style, Align::Left, err, p.error, 1.0);
         }
 
         if let Some(b) = l.notes_box {
@@ -1594,6 +1654,9 @@ impl Editor {
             (None, Mode::Event { calendar_id, .. }) => {
                 Some((account_label(lang, calendar_id.as_deref()), false))
             }
+            (None, Mode::Reminder { id: None, .. }) => {
+                Some((text(lang, Key::SavedOnThisComputer).to_owned(), false))
+            }
             _ => None,
         };
         if let Some((s, error)) = footer {
@@ -1623,6 +1686,19 @@ impl Editor {
                 };
                 pt.fill_round(*r, full, fill, a);
                 pt.text(label, Text::ButtonStrong, Align::Center, *r, p.on_accent, a);
+            } else if *item == Item::Delete && self.mode.form() == Form::Reminder {
+                // `.btn.dng`: no fill until hovered, the text in the error colour.
+                if pressed {
+                    pt.fill_round(*r, full, p.button_hover, 1.0);
+                } else if h {
+                    pt.fill_round(*r, full, p.hover, 1.0);
+                }
+                let inner = Rect {
+                    x: r.x + DANGER_PAD.0,
+                    w: r.w - DANGER_PAD.0,
+                    ..*r
+                };
+                pt.text(label, Text::Button, Align::Left, inner, p.error, 1.0);
             } else {
                 let fill = if pressed {
                     mix(p.button_hover, p.text, 0.06)
@@ -1643,6 +1719,23 @@ impl Editor {
                 focus_ring(pt, *r, full);
             }
         }
+    }
+}
+
+/// Runs of text one after another on one line in `r`, each in its own
+/// style and colour (the reminder's summary), clipped at `r`'s right.
+fn draw_runs(pt: &Painter, r: Rect, runs: &[(&str, Text, u32)]) {
+    let mut x = r.x;
+    for (s, style, ink) in runs {
+        if s.is_empty() {
+            continue;
+        }
+        let w = (r.right() - x).max(0.0);
+        if w <= 0.0 {
+            break;
+        }
+        pt.text(s, *style, Align::Left, Rect { x, w, ..r }, *ink, 1.0);
+        x += pt.width(s, *style);
     }
 }
 
@@ -1848,6 +1941,8 @@ fn activate(hwnd: HWND, item: Item, keyboard: bool) {
 fn save_next(ed: &mut Editor) -> Next {
     match ed.mode.form() {
         Form::Note => Next::Close,
+        // Simpan is off without text: nothing happens, as with the button.
+        Form::Reminder if !ed.mode.can_save(&ed.title) => Next::Nothing,
         Form::Reminder => match ed.save_reminder() {
             Some(result) => Next::Finish(result),
             None => Next::Refresh,
@@ -2482,7 +2577,7 @@ fn demo_popover(which: &str) {
     activate(hwnd, item, true);
 }
 
-/// `--demo-editor note|note-new|event|event-new|event-ro|event-allday|event-bad|reminder|reminder-new`
+/// `--demo-editor note|note-new|event|event-new|event-ro|event-allday|event-bad|reminder|reminder-new|reminder-weekly|reminder-past`
 /// (debug builds only): opens one editor under where the panel would be,
 /// with a hidden owner that prints each result. `EventSave` gets a failure
 /// after 1.5 s, then success on the next try. Ends when the editor closes.
@@ -2655,22 +2750,41 @@ pub fn run_demo(which: Option<&str>) {
         ),
         "reminder" => EditorKind::Reminder {
             id: Some("demo-reminder".into()),
-            text: "Minum obat setelah makan".into(),
-            date: date + chrono::Days::new(1),
+            text: "Minum vitamin".into(),
+            date,
             time: hm(8, 0),
             repeat: Repeat::Daily,
         },
-        "reminder-new" => EditorKind::Reminder {
-            id: None,
-            text: String::new(),
-            date,
-            time: hm(17, 0),
+        "reminder-new" => {
+            // Like the panel's "+ Baru": the next full hour.
+            let now = chrono::Local::now().naive_local();
+            let next = now.date().and_time(hm(now.hour(), 0)) + chrono::Duration::hours(1);
+            EditorKind::Reminder {
+                id: None,
+                text: String::new(),
+                date: next.date(),
+                time: next.time(),
+                repeat: Repeat::Once,
+            }
+        }
+        "reminder-weekly" => EditorKind::Reminder {
+            id: Some("demo-reminder".into()),
+            text: "Backup file proyek".into(),
+            date: date - chrono::Days::new(5),
+            time: hm(9, 0),
+            repeat: Repeat::Weekly,
+        },
+        "reminder-past" => EditorKind::Reminder {
+            id: Some("demo-reminder".into()),
+            text: "Kirim revisi denah ke klien".into(),
+            date: date - chrono::Days::new(1),
+            time: hm(16, 30),
             repeat: Repeat::Once,
         },
         other => {
             eprintln!(
                 "demo-editor: unknown kind `{other}` (note|note-new|event|event-new|event-ro|\
-                 event-allday|event-bad|reminder|reminder-new)"
+                 event-allday|event-bad|reminder|reminder-new|reminder-weekly|reminder-past)"
             );
             return;
         }
@@ -3163,6 +3277,105 @@ mod tests {
         );
     }
 
+    fn reminder_mode(date: NaiveDate, time: NaiveTime, repeat: Repeat) -> Mode {
+        Mode::Reminder {
+            id: None,
+            date,
+            time,
+            repeat,
+        }
+    }
+
+    #[test]
+    fn reminder_save_needs_text() {
+        let mode = reminder_mode(date(27), t(8, 0), Repeat::Once);
+        assert!(!mode.can_save(""));
+        assert!(!mode.can_save("  \t "));
+        assert!(mode.can_save("Minum obat"));
+        assert!(mode.can_save("  x "));
+        // Notes always save; events still follow their own rules.
+        assert!(Mode::Note { id: None }.can_save(""));
+    }
+
+    #[test]
+    fn reminder_start_in_the_past_saves_unless_it_is_a_one_off() {
+        let now = 1_000_000;
+        let day = 86_400;
+        // A daily or weekly reminder whose start lies days back saves: it
+        // starts at its next time.
+        for repeat in [Repeat::Daily, Repeat::Weekly] {
+            assert_eq!(
+                validate_reminder("Minum vitamin", Some(now - 3 * day), repeat, now),
+                Ok(()),
+                "{repeat:?}"
+            );
+        }
+        // A one-off in the past is refused, even a second ago.
+        assert_eq!(
+            validate_reminder("Kirim revisi", Some(now - day), Repeat::Once, now),
+            Err(Key::TimePassed)
+        );
+        assert_eq!(
+            validate_reminder("Kirim revisi", Some(now), Repeat::Once, now),
+            Err(Key::TimePassed)
+        );
+    }
+
+    #[test]
+    fn reminder_popovers_dim_the_past_and_name_times_of_day() {
+        let today = date(26);
+        let mode = reminder_mode(date(27), t(16, 30), Repeat::Weekly);
+        assert_eq!(
+            popover_kind(&mode, Item::DateChip, today),
+            Some(Kind::Date {
+                selected: date(27),
+                today,
+                dim_past: true,
+            })
+        );
+        assert_eq!(
+            popover_kind(&mode, Item::TimeChip, today),
+            Some(Kind::Time {
+                value: t(16, 30),
+                start: None,
+                periods: true,
+            })
+        );
+        // The event's popovers are as they were.
+        let event = event_mode(false, false, ev(false, t(10, 0), t(11, 0)));
+        assert!(matches!(
+            popover_kind(&event, Item::DateChip, today),
+            Some(Kind::Date {
+                dim_past: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            popover_kind(&event, Item::StartChip, today),
+            Some(Kind::Time {
+                start: None,
+                periods: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            popover_kind(&event, Item::EndChip, today),
+            Some(Kind::Time {
+                periods: false,
+                start: Some(_),
+                ..
+            })
+        ));
+        // The chips read as the design's.
+        let labels = label_text(&mode, Lang::Id);
+        assert!(labels.date.starts_with("Mulai "), "{}", labels.date);
+        assert_eq!(labels.time, "16.30");
+        let once = reminder_mode(date(27), t(16, 30), Repeat::Once);
+        let en = label_text(&once, Lang::En);
+        assert_eq!(en.time, "16:30");
+        assert!(!en.date.starts_with("From"));
+    }
+
     #[test]
     fn reminder_picks_land_on_its_chips() {
         let mode = Mode::Reminder {
@@ -3172,7 +3385,6 @@ mod tests {
             repeat: Repeat::Once,
         };
         assert_eq!(mode.form(), Form::Reminder);
-        assert!(mode.can_save(""), "a reminder says what is missing on save");
         assert_eq!(title_key(&mode), Key::EditorEditReminder);
         assert!(mode.enabled(Item::Delete));
     }

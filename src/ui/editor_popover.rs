@@ -135,6 +135,20 @@ pub fn entry_duration(lang: i18n::Lang, t: NaiveTime, start: Option<NaiveTime>) 
     }
 }
 
+/// The time of day the reminder's list names beside its row: 08:00 pagi,
+/// 12:00 siang, 17:00 sore, 20:00 malam (morning, noon, afternoon,
+/// evening); `None` for every other time.
+pub fn period_label(lang: i18n::Lang, t: NaiveTime) -> Option<&'static str> {
+    let key = match (t.hour(), t.minute()) {
+        (8, 0) => Key::PeriodMorning,
+        (12, 0) => Key::PeriodNoon,
+        (17, 0) => Key::PeriodAfternoon,
+        (20, 0) => Key::PeriodEvening,
+        _ => return None,
+    };
+    Some(i18n::text(lang, key))
+}
+
 /// The end after the start moved from `old_start` to `new_start`: the same
 /// length (an hour when the old end was not after the old start), cut at
 /// the end of the day.
@@ -250,11 +264,16 @@ pub(super) enum Kind {
     Date {
         selected: NaiveDate,
         today: NaiveDate,
+        /// Days before today drawn dim (the reminder's picker).
+        dim_past: bool,
     },
     Time {
         value: NaiveTime,
         /// The event's start, for the end list's durations.
         start: Option<NaiveTime>,
+        /// Name the times of day beside 08:00, 12:00, 17:00 and 20:00 (the
+        /// reminder's list).
+        periods: bool,
     },
 }
 
@@ -271,10 +290,12 @@ enum Content {
         /// The keyboard's day, drawn as the pick; its month is shown.
         cursor: NaiveDate,
         hover: Option<NaiveDate>,
+        dim_past: bool,
     },
     Times {
         entries: Vec<NaiveTime>,
         start: Option<NaiveTime>,
+        periods: bool,
         /// The chip's value when opened, in the accent.
         value: Option<usize>,
         /// The keyboard's row.
@@ -455,12 +476,21 @@ pub(super) fn open(editor: HWND, chip: RECT, gfx: Rc<Gfx>, item: Item, kind: Kin
     };
     set_frame(hwnd, &theme::current_window(), true);
     let content = match kind {
-        Kind::Date { selected, today } => Content::Calendar {
+        Kind::Date {
+            selected,
+            today,
+            dim_past,
+        } => Content::Calendar {
             today,
             cursor: selected,
             hover: None,
+            dim_past,
         },
-        Kind::Time { value, start } => {
+        Kind::Time {
+            value,
+            start,
+            periods,
+        } => {
             let entries = time_entries(value, start);
             let at = entries
                 .iter()
@@ -470,6 +500,7 @@ pub(super) fn open(editor: HWND, chip: RECT, gfx: Rc<Gfx>, item: Item, kind: Kin
                 scroll: scroll_for(cursor, entries.len(), None),
                 entries,
                 start,
+                periods,
                 value: at,
                 cursor,
                 hover: None,
@@ -747,10 +778,12 @@ impl Popover {
                     today,
                     cursor,
                     hover,
-                } => paint_calendar(painter, *today, *cursor, *hover),
+                    dim_past,
+                } => paint_calendar(painter, *today, *cursor, *hover, *dim_past),
                 Content::Times {
                     entries,
                     start,
+                    periods,
                     value,
                     cursor,
                     scroll,
@@ -758,7 +791,17 @@ impl Popover {
                     invalid,
                     ..
                 } => paint_times(
-                    painter, entries, *start, *value, *cursor, *scroll, *hover, *invalid,
+                    painter,
+                    entries,
+                    RowNote {
+                        start: *start,
+                        periods: *periods,
+                    },
+                    *value,
+                    *cursor,
+                    *scroll,
+                    *hover,
+                    *invalid,
                 ),
             },
         );
@@ -788,7 +831,29 @@ impl CellCanvas for Painter<'_> {
     }
 }
 
-fn paint_calendar(pt: &Painter, today: NaiveDate, cursor: NaiveDate, hover: Option<NaiveDate>) {
+/// How day `d` of the calendar showing `cursor` is drawn: the cursor is the
+/// pick; with `dim_past`, days before `today` are dim.
+fn calendar_day_state(
+    d: NaiveDate,
+    today: NaiveDate,
+    cursor: NaiveDate,
+    hover: Option<NaiveDate>,
+    dim_past: bool,
+) -> DayState {
+    DayState {
+        hover: hover == Some(d),
+        past: dim_past && d < today,
+        ..DayState::of(d, today, cursor, cursor)
+    }
+}
+
+fn paint_calendar(
+    pt: &Painter,
+    today: NaiveDate,
+    cursor: NaiveDate,
+    hover: Option<NaiveDate>,
+    dim_past: bool,
+) {
     let p = pt.p;
     let lang = i18n::lang();
     let title = rect(CAL_PAD + 2.0, CAL_PAD, 180.0, CAL_HEAD_H);
@@ -826,10 +891,7 @@ fn paint_calendar(pt: &Painter, today: NaiveDate, cursor: NaiveDate, hover: Opti
         hover: Some(p.hover),
     };
     for (d, r) in &grid {
-        let state = DayState {
-            hover: hover == Some(*d),
-            ..DayState::of(*d, today, cursor, cursor)
-        };
+        let state = calendar_day_state(*d, today, cursor, hover, dim_past);
         paint_day(pt, *d, day_geometry(*r, 0.0, DAY_CIRCLE), state, &look);
     }
     let rule = rect(CAL_PAD, CAL_FOOT_Y, CAL_W - 2.0 * CAL_PAD, 1.0);
@@ -848,11 +910,30 @@ fn paint_calendar(pt: &Painter, today: NaiveDate, cursor: NaiveDate, hover: Opti
     pt.text(&label, Text::Small, Align::Right, picked, p.secondary, 1.0);
 }
 
+/// What the time list writes right of each row.
+#[derive(Clone, Copy)]
+struct RowNote {
+    /// The end list: the length after this start.
+    start: Option<NaiveTime>,
+    /// The reminder's list: the time of day.
+    periods: bool,
+}
+
+impl RowNote {
+    fn text(self, lang: i18n::Lang, t: NaiveTime) -> String {
+        if self.periods {
+            period_label(lang, t).unwrap_or_default().to_owned()
+        } else {
+            entry_duration(lang, t, self.start)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_times(
     pt: &Painter,
     entries: &[NaiveTime],
-    start: Option<NaiveTime>,
+    note: RowNote,
     value: Option<usize>,
     cursor: usize,
     scroll: usize,
@@ -908,8 +989,10 @@ fn paint_times(
             pt.stroke(r, ROW_RADIUS, 1.0, p.accent, 0.8);
         }
         let inner = rect(r.x + 10.0, r.y, r.w - 20.0, r.h);
+        // A time of day stays secondary on the picked row (`.times small`).
         let (style, ink, ink2) = if on {
-            (Text::BodyStrong, p.accent, p.accent)
+            let note_ink = if note.periods { p.secondary } else { p.accent };
+            (Text::BodyStrong, p.accent, note_ink)
         } else {
             (Text::Body, p.text, p.secondary)
         };
@@ -921,8 +1004,8 @@ fn paint_times(
             ink,
             1.0,
         );
-        let length = entry_duration(lang, *t, start);
-        pt.text(&length, Text::Mini, Align::Right, inner, ink2, 1.0);
+        let side = note.text(lang, *t);
+        pt.text(&side, Text::Mini, Align::Right, inner, ink2, 1.0);
     }
 }
 
@@ -1340,6 +1423,64 @@ mod tests {
         // An end before the start (an invalid event) still shows in the list.
         let bad = time_entries(t(9, 30), Some(start));
         assert_eq!(bad[0], t(9, 30));
+    }
+
+    #[test]
+    fn the_reminder_list_names_four_times_of_day() {
+        let id: Vec<(NaiveTime, &str)> = time_entries(t(9, 0), None)
+            .into_iter()
+            .filter_map(|x| period_label(Lang::Id, x).map(|p| (x, p)))
+            .collect();
+        assert_eq!(
+            id,
+            [
+                (t(8, 0), "pagi"),
+                (t(12, 0), "siang"),
+                (t(17, 0), "sore"),
+                (t(20, 0), "malam")
+            ]
+        );
+        assert_eq!(period_label(Lang::En, t(8, 0)), Some("morning"));
+        assert_eq!(period_label(Lang::En, t(12, 0)), Some("noon"));
+        assert_eq!(period_label(Lang::En, t(17, 0)), Some("afternoon"));
+        assert_eq!(period_label(Lang::En, t(20, 0)), Some("evening"));
+        assert_eq!(period_label(Lang::Id, t(8, 15)), None);
+        // Rows say the period only in the reminder's list; the event's
+        // lists keep their durations (the end) or nothing (the start).
+        let reminder = RowNote {
+            start: None,
+            periods: true,
+        };
+        assert_eq!(reminder.text(Lang::Id, t(17, 0)), "sore");
+        assert_eq!(reminder.text(Lang::Id, t(17, 15)), "");
+        let end = RowNote {
+            start: Some(t(16, 0)),
+            periods: false,
+        };
+        assert_eq!(end.text(Lang::Id, t(17, 0)), "1 j");
+        let start = RowNote {
+            start: None,
+            periods: false,
+        };
+        assert_eq!(start.text(Lang::Id, t(8, 0)), "");
+    }
+
+    #[test]
+    fn the_reminder_calendar_dims_days_before_today() {
+        let today = date(2026, 10, 26);
+        let cursor = date(2026, 10, 27);
+        let state = |d, dim| calendar_day_state(d, today, cursor, None, dim);
+        assert!(state(date(2026, 10, 25), true).past);
+        assert!(state(date(2026, 9, 28), true).past);
+        assert!(!state(today, true).past);
+        assert!(!state(cursor, true).past);
+        // The event's picker dims nothing.
+        assert!(!state(date(2026, 10, 25), false).past);
+        let day = date(2026, 10, 20);
+        let hovered = calendar_day_state(day, today, cursor, Some(day), true);
+        assert!(hovered.hover && hovered.past && hovered.in_month);
+        assert!(state(cursor, true).selected);
+        assert!(state(today, true).today);
     }
 
     #[test]
