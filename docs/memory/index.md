@@ -12,6 +12,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[studio-font-sources]]
 - [[studio-icons]]
 - [[studio-calendar-day-view]]
+- [[studio-media-progress-timer]]
 
 ## Gotchas
 

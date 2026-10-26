@@ -1,18 +1,22 @@
 ---
 tags: [gotcha, fonts, render]
-date: 2026-10-26
+date: 2026-10-27
 ---
 
 # DM Sans `tnum` widens the space character
 
-DM Sans's tabular-figures feature also widens the space, so text with `tnum`
-on the whole line shows wide gaps between words. The settings window avoids it
-by setting `tnum` only on the digit runs (`Font::tabular` in
-`src/ui/settings_controls.rs`).
+DM Sans's tabular-figures feature also widens the space (U+0020), so `tnum` on
+a whole line shows wide gaps between words ("Minum  vitamin").
 
-Open: the island renderer (`src/ui/render.rs`) still applies one tabular
-typography to every line, so it probably has the same gaps. Check it and apply
-the digits-only approach there if it shows.
+Rule: apply `tnum` to ASCII digit runs only. `fonts::text_layout` does this with
+one `DWRITE_TEXT_RANGE` per run from `fonts::digit_runs` (lazy, UTF-16 offsets),
+so clock and timer digits stay tabular while spaces stay normal. The settings
+window has its own digit-run path (`Font::tabular` in
+`src/ui/settings_controls.rs`). Never pass a whole-line tabular typography to
+SetTypography.
+
+A test builds a real DirectWrite layout and checks the typography lands on digits
+only and that a no-digit string measures the same as with no features.
 
 See [[studio-font-loading]].
 
