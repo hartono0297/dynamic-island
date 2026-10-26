@@ -26,7 +26,16 @@ pub const SIDEBAR_W: f32 = 184.0;
 const PAD: f32 = 24.0;
 const CARD_GAP: f32 = 12.0;
 const ROW_H: f32 = 52.0;
-pub const CARD_RADIUS: f32 = 12.0;
+
+// Studio radius scale (docs/design/studio-ui.html): card 14, control 10
+// (segmented track, sidebar item, text field), the segment inside a track 8,
+// and chips, buttons, toggles and stepper buttons fully rounded. `FULL` is
+// clamped to half the shape's height when drawn.
+pub const CARD_RADIUS: f32 = 14.0;
+pub const CONTROL_RADIUS: f32 = 10.0;
+pub const SEGMENT_RADIUS: f32 = 8.0;
+pub const FULL_RADIUS: f32 = 999.0;
+
 /// Horizontal padding inside a card.
 const INSET: f32 = 16.0;
 const CONTENT_X: f32 = SIDEBAR_W + PAD;
@@ -36,38 +45,51 @@ const TITLE_H: f32 = 32.0;
 const FIRST_CARD_Y: f32 = TITLE_Y + TITLE_H + 16.0;
 /// Segmented controls and steppers.
 pub const CONTROL_H: f32 = 28.0;
-pub const BUTTON_H: f32 = 32.0;
+pub const BUTTON_H: f32 = 30.0;
 /// Inner padding of a segmented control's track.
-const SEG_PAD: f32 = 3.0;
+const SEG_PAD: f32 = 2.0;
 const SEG_TEXT_PAD: f32 = 14.0;
 const SEG_MIN_W: f32 = 64.0;
 /// Segments share one width unless that makes the control wider than this.
 const SEG_EQUAL_MAX: f32 = 280.0;
 pub const TOGGLE_W: f32 = 40.0;
 pub const TOGGLE_H: f32 = 22.0;
-pub const SWATCH: f32 = 24.0;
-const SWATCH_GAP: f32 = 12.0;
-/// Swatches take clicks a little outside the circle.
+pub const SWATCH: f32 = 22.0;
+const SWATCH_GAP: f32 = 10.0;
+/// Swatches take clicks a little outside the circle; the selection ring
+/// (a 2 px gap and a 1.5 px line) stays inside this margin.
 const SWATCH_SLOP: f32 = 4.0;
+pub const SWATCH_RING_GAP: f32 = 2.0;
+pub const SWATCH_RING_W: f32 = 1.5;
 pub const STEP_BUTTON: f32 = 28.0;
 const STEP_VALUE_W: f32 = 64.0;
 const BUTTON_PAD: f32 = 16.0;
-const BUTTON_MIN_W: f32 = 88.0;
+const BUTTON_MIN_W: f32 = 80.0;
+/// An icon-only button (the About links).
+const ICON_BUTTON: f32 = 32.0;
+pub const EXTERNAL_GLYPH: f32 = 16.0;
 const LINK_PAD: f32 = 8.0;
 /// Space taken by the glyph after a link's label.
 pub const LINK_GLYPH_W: f32 = 18.0;
 const GAP: f32 = 8.0;
-const NAV_X: f32 = 8.0;
+const LOGO: f32 = 28.0;
+const NAV_X: f32 = 10.0;
 const NAV_W: f32 = SIDEBAR_W - 2.0 * NAV_X;
 const NAV_Y: f32 = 72.0;
 const NAV_H: f32 = 36.0;
-const NAV_GAP: f32 = 4.0;
+const NAV_GAP: f32 = 2.0;
 const PREVIEW_H: f32 = 112.0;
 const FIELD_ROW_H: f32 = 44.0;
 const FIELD_H: f32 = 32.0;
-/// A status dot before a row's description.
-const DOT: f32 = 8.0;
-const DOT_GAP: f32 = 6.0;
+/// The uppercase label above a card (Integrations).
+const EYEBROW_H: f32 = 18.0;
+const EYEBROW_GAP: f32 = 8.0;
+/// A status chip: dot, gap, text, with this padding on each side.
+pub const CHIP_H: f32 = 20.0;
+const CHIP_PAD: f32 = 8.0;
+pub const DOT: f32 = 6.0;
+const DOT_GAP: f32 = 5.0;
+const ABOUT_LOGO: f32 = 64.0;
 const BATTERY_RANGE: (u8, u8, u8) = (5, 50, 5);
 
 pub const REPO_URL: &str = "https://github.com/hartono0297/dynamic-island";
@@ -144,10 +166,12 @@ pub enum Font {
     Value,
     AboutName,
     AboutVersion,
+    /// The uppercase label above a card ("GOOGLE CALENDAR").
+    Eyebrow,
 }
 
 impl Font {
-    pub const ALL: [Font; 9] = [
+    pub const ALL: [Font; 10] = [
         Font::Brand,
         Font::Nav,
         Font::Title,
@@ -157,16 +181,18 @@ impl Font {
         Font::Value,
         Font::AboutName,
         Font::AboutVersion,
+        Font::Eyebrow,
     ];
 
-    /// Studio scale: Fraunces Italic 20 for titles (14 for the brand), DM Sans
-    /// 12 for text and 10.5 for descriptions.
+    /// Studio scale: Fraunces Italic 20 for titles (16 for the brand, the
+    /// smallest size Fraunces is used at), DM Sans 12 for text and 10.5 for
+    /// descriptions.
     pub fn size(self) -> f32 {
         match self {
-            Font::Brand => 14.0,
+            Font::Brand => 16.0,
             Font::Title | Font::AboutName => 20.0,
             Font::Nav | Font::Label | Font::Control | Font::Value | Font::AboutVersion => 12.0,
-            Font::Desc => 10.5,
+            Font::Desc | Font::Eyebrow => 10.5,
         }
     }
 
@@ -179,9 +205,14 @@ impl Font {
     pub fn weight(self) -> u16 {
         match self {
             Font::Brand | Font::Title | Font::AboutName | Font::Label => 500,
-            Font::Value => 600,
-            Font::Nav | Font::Desc | Font::Control | Font::AboutVersion => 400,
+            Font::Eyebrow => 600,
+            Font::Nav | Font::Desc | Font::Control | Font::Value | Font::AboutVersion => 400,
         }
+    }
+
+    /// Numbers line up (tabular figures): the stepper values.
+    pub fn tabular(self) -> bool {
+        self == Font::Value
     }
 }
 
@@ -199,7 +230,10 @@ impl Measure for Estimate {
     fn width(&self, text: &str, font: Font) -> f32 {
         let per_char = if font.display() {
             // Fraunces Italic runs narrower than DM Sans.
-            0.62
+            0.56
+        } else if font == Font::Eyebrow {
+            // All capitals.
+            0.8
         } else if font.weight() >= 500 {
             0.66
         } else {
@@ -286,6 +320,8 @@ pub enum ButtonKind {
     Confirm,
     /// Accent text without a fill, followed by an "open" glyph.
     Link,
+    /// Only the "open" glyph; the label names it but is not drawn.
+    External,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -367,6 +403,15 @@ impl Control {
     }
 }
 
+/// A fully rounded status chip: a dot and a short text in the tone's colour
+/// on a faint wash of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chip {
+    pub rect: Rect,
+    pub dot: Rect,
+    pub label: Text,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Nav {
     pub section: Section,
@@ -386,8 +431,8 @@ pub struct Layout {
     pub dividers: Vec<Rect>,
     pub texts: Vec<Text>,
     pub controls: Vec<Control>,
-    /// Status dots before a description.
-    pub dots: Vec<(Rect, Tone)>,
+    /// Status chips (Integrations).
+    pub chips: Vec<Chip>,
     /// The live island preview (Appearance).
     pub preview: Option<Rect>,
     /// The large logo (About).
@@ -572,13 +617,59 @@ impl Builder<'_> {
         r
     }
 
+    /// A hairline across the whole card, between two rows.
     fn divider(&mut self, card: Rect, y: f32) {
         self.l.dividers.push(Rect {
-            x: card.x + INSET,
+            x: card.x + 1.0,
             y: y - 0.5,
-            w: card.w - 2.0 * INSET,
+            w: card.w - 2.0,
             h: 1.0,
         });
+    }
+
+    /// An uppercase label above the next card, in the space it takes.
+    fn eyebrow(&mut self, key: Key, w: f32) {
+        let rect = Rect {
+            x: CONTENT_X + 2.0,
+            y: self.y,
+            w,
+            h: EYEBROW_H,
+        };
+        let label = text(self.lang, key).to_uppercase();
+        self.text(rect, label, Font::Eyebrow, Tone::Secondary, Align::Left);
+        self.y += EYEBROW_H + EYEBROW_GAP;
+    }
+
+    /// A status chip starting at `x`, centred on `cy`, at most `max_w` wide.
+    fn chip(&mut self, x: f32, cy: f32, label: String, tone: Tone, max_w: f32) {
+        let text_w = self.w(&label, Font::Desc);
+        let w = (2.0 * CHIP_PAD + DOT + DOT_GAP + text_w).min(max_w.max(0.0));
+        let rect = Rect {
+            x,
+            y: cy - CHIP_H / 2.0,
+            w,
+            h: CHIP_H,
+        };
+        let dot = Rect {
+            x: x + CHIP_PAD,
+            y: cy - DOT / 2.0,
+            w: DOT,
+            h: DOT,
+        };
+        let text_x = dot.right() + DOT_GAP;
+        let label = Text {
+            rect: Rect {
+                x: text_x,
+                y: rect.y,
+                w: (rect.right() - CHIP_PAD - text_x).max(0.0),
+                h: CHIP_H,
+            },
+            text: label,
+            font: Font::Desc,
+            tone,
+            align: Align::Left,
+        };
+        self.l.chips.push(Chip { rect, dot, label });
     }
 
     fn text(&mut self, rect: Rect, s: String, font: Font, tone: Tone, align: Align) -> usize {
@@ -592,16 +683,16 @@ impl Builder<'_> {
         self.l.texts.len() - 1
     }
 
-    /// A row's label and description, left of `control_x`. With `dot`, the
-    /// description starts after a status dot in its tone. Returns the
-    /// description's index in `texts`.
+    /// A row's label and description, left of `control_x`. With `chip`, the
+    /// description is a status chip in its tone. Returns the description's
+    /// index in `texts` (none for a chip).
     fn row_text(
         &mut self,
         card: Rect,
         y: f32,
         label: String,
         desc: Option<(String, Tone)>,
-        dot: bool,
+        chip: bool,
         control_x: f32,
     ) -> Option<usize> {
         let x = card.x + INSET;
@@ -616,6 +707,17 @@ impl Builder<'_> {
             self.text(rect, label, Font::Label, Tone::Primary, Align::Left);
             return None;
         };
+        if chip {
+            let label_rect = Rect {
+                x,
+                y: y + 5.0,
+                w,
+                h: 20.0,
+            };
+            self.text(label_rect, label, Font::Label, Tone::Primary, Align::Left);
+            self.chip(x, y + 25.0 + CHIP_H / 2.0, desc, tone, w);
+            return None;
+        }
         let label_rect = Rect {
             x,
             y: y + 7.0,
@@ -623,27 +725,13 @@ impl Builder<'_> {
             h: 20.0,
         };
         self.text(label_rect, label, Font::Label, Tone::Primary, Align::Left);
-        let mut dx = 0.0;
-        if dot {
-            self.l.dots.push((
-                Rect {
-                    x,
-                    y: y + 28.0 + (16.0 - DOT) / 2.0,
-                    w: DOT,
-                    h: DOT,
-                },
-                tone,
-            ));
-            dx = DOT + DOT_GAP;
-        }
         let desc_rect = Rect {
-            x: x + dx,
+            x,
             y: y + 28.0,
-            w: (w - dx).max(0.0),
+            w,
             h: 16.0,
         };
-        let text_tone = if dot { Tone::Secondary } else { tone };
-        Some(self.text(desc_rect, desc, Font::Desc, text_tone, Align::Left))
+        Some(self.text(desc_rect, desc, Font::Desc, tone, Align::Left))
     }
 
     /// A segmented control right-aligned at `right`, centered on `cy`.
@@ -759,6 +847,7 @@ impl Builder<'_> {
             .fold(0.0, f32::max);
         match kind {
             ButtonKind::Link => widest + 2.0 * LINK_PAD + LINK_GLYPH_W,
+            ButtonKind::External => ICON_BUTTON,
             _ => (widest + 2.0 * BUTTON_PAD).max(BUTTON_MIN_W),
         }
     }
@@ -776,10 +865,10 @@ impl Builder<'_> {
         let mut x = right - total;
         let left = x;
         for (hit, label, kind, enabled, w) in items {
-            let h = if kind == ButtonKind::Link {
-                CONTROL_H
-            } else {
-                BUTTON_H
+            let h = match kind {
+                ButtonKind::Link => CONTROL_H,
+                ButtonKind::External => ICON_BUTTON,
+                _ => BUTTON_H,
             };
             self.l.controls.push(Control::Button(Button {
                 hit,
@@ -800,17 +889,18 @@ impl Builder<'_> {
 
     fn sidebar(&mut self) {
         self.l.logo = Rect {
-            x: 20.0,
+            x: NAV_X + 8.0,
             y: 22.0,
-            w: 28.0,
-            h: 28.0,
+            w: LOGO,
+            h: LOGO,
         };
+        let brand_x = self.l.logo.right() + 8.0;
         self.l.brand = Some(Text {
             rect: Rect {
-                x: 56.0,
+                x: brand_x,
                 y: 22.0,
-                w: SIDEBAR_W - 56.0 - 4.0,
-                h: 28.0,
+                w: SIDEBAR_W - brand_x - 2.0,
+                h: LOGO,
             },
             text: "Dynamic Island".into(),
             font: Font::Brand,
@@ -1096,17 +1186,17 @@ fn pomodoro_page(b: &mut Builder, s: &State) {
 
 fn integrations(b: &mut Builder, s: &State) {
     let g = s.google;
-    let card = b.card(ROW_H + 2.0 * FIELD_ROW_H + 8.0 + ROW_H);
-
-    // Header: name and status, the setup guide on the right.
+    // Above the card: its name, and the setup guide on the right.
     let guide = b.t(Key::SetupGuide);
     let w = b.button_w(&[&guide], ButtonKind::Link);
     let item = (Hit::GoogleGuide, guide, ButtonKind::Link, true, w);
-    let x = b.buttons(RIGHT + LINK_PAD, card.y + ROW_H / 2.0, vec![item]);
-    let (key, tone) = status_key(g.status);
-    let desc = Some((b.t(key), tone));
-    b.row_text(card, card.y, b.t(Key::GoogleCalendar), desc, true, x);
-    b.divider(card, card.y + ROW_H);
+    let x = b.buttons(
+        CONTENT_X + CONTENT_W + LINK_PAD,
+        b.y + EYEBROW_H / 2.0,
+        vec![item],
+    );
+    b.eyebrow(Key::GoogleCalendar, x - GAP - CONTENT_X - 2.0);
+    let card = b.card(6.0 + 2.0 * FIELD_ROW_H + ROW_H);
 
     // Client ID and secret: label column, then the field.
     let labels = [b.t(Key::ClientId), b.t(Key::ClientSecret)];
@@ -1115,7 +1205,7 @@ fn integrations(b: &mut Builder, s: &State) {
         .map(|l| b.w(l, Font::Label))
         .fold(0.0, f32::max);
     let field_x = card.x + INSET + label_w + 2.0 * GAP;
-    let top = card.y + ROW_H + 4.0;
+    let top = card.y + 6.0;
     for (i, (field, label)) in [Field::ClientId, Field::ClientSecret]
         .into_iter()
         .zip(labels)
@@ -1139,10 +1229,9 @@ fn integrations(b: &mut Builder, s: &State) {
             },
         ));
     }
-    let buttons_y = top + 2.0 * FIELD_ROW_H + 4.0;
-    b.divider(card, buttons_y);
+    let buttons_y = top + 2.0 * FIELD_ROW_H;
 
-    // Buttons, with a short message on their left.
+    // Buttons, with the status chip (or a short message) on their left.
     let (save, connect) = (b.t(Key::Save), b.t(Key::Connect));
     let (disconnect, sure) = (b.t(Key::Disconnect), b.t(Key::ConfirmShort));
     // A login to forget: connected, offline, or one Google stopped accepting.
@@ -1194,17 +1283,27 @@ fn integrations(b: &mut Builder, s: &State) {
     ];
     let row_cy = buttons_y + ROW_H / 2.0;
     let x = b.buttons(RIGHT, row_cy, items);
-    if let Some((note, tone)) = s.google_note {
-        let rect = Rect {
-            x: card.x + INSET,
-            y: row_cy - 9.0,
-            w: (x - 2.0 * GAP - card.x - INSET).max(0.0),
-            h: 18.0,
-        };
-        b.text(rect, note.to_owned(), Font::Desc, tone, Align::Left);
+    let left_w = (x - 2.0 * GAP - card.x - INSET).max(0.0);
+    match s.google_note {
+        // A message after a click stands in for the status for a few seconds.
+        Some((note, tone)) => {
+            let rect = Rect {
+                x: card.x + INSET,
+                y: row_cy - 9.0,
+                w: left_w,
+                h: 18.0,
+            };
+            b.text(rect, note.to_owned(), Font::Desc, tone, Align::Left);
+        }
+        None => {
+            let (key, tone) = status_key(g.status);
+            b.chip(card.x + INSET, row_cy, b.t(key), tone, left_w);
+        }
     }
 
     // Claude Code hooks.
+    b.y += EYEBROW_GAP;
+    b.eyebrow(Key::ClaudeCode, CONTENT_W - 2.0);
     let card = b.card(ROW_H);
     let (install, remove) = (b.t(Key::InstallHooks), b.t(Key::RemoveHooks));
     // Unreadable settings (`None`): both stay on, so a click reports why.
@@ -1239,74 +1338,83 @@ fn integrations(b: &mut Builder, s: &State) {
 }
 
 fn about(b: &mut Builder, s: &State) {
-    let logo = 64.0;
+    // The logo with the name, version and tagline beside it.
+    let top = FIRST_CARD_Y + 2.0;
     b.l.about_logo = Some(Rect {
-        x: CONTENT_X + (CONTENT_W - logo) / 2.0,
-        y: FIRST_CARD_Y + 4.0,
-        w: logo,
-        h: logo,
+        x: CONTENT_X + 2.0,
+        y: top,
+        w: ABOUT_LOGO,
+        h: ABOUT_LOGO,
     });
+    let text_x = CONTENT_X + 2.0 + ABOUT_LOGO + 16.0;
     let line = |y, h| Rect {
-        x: CONTENT_X,
+        x: text_x,
         y,
-        w: CONTENT_W,
+        w: CONTENT_X + CONTENT_W - text_x,
         h,
     };
-    let name_y = FIRST_CARD_Y + 4.0 + logo + 10.0;
     b.text(
-        line(name_y, 28.0),
+        line(top + 2.0, 26.0),
         "Dynamic Island".into(),
         Font::AboutName,
         Tone::Primary,
-        Align::Center,
+        Align::Left,
     );
     let version = version_label(b.lang, s.version);
     b.text(
-        line(name_y + 28.0, 18.0),
+        line(top + 28.0, 18.0),
         version,
         Font::AboutVersion,
         Tone::Secondary,
-        Align::Center,
+        Align::Left,
     );
     let tagline = b.t(Key::AboutTagline);
     b.text(
-        line(name_y + 46.0, 18.0),
+        line(top + 46.0, 18.0),
         tagline,
         Font::AboutVersion,
         Tone::Secondary,
-        Align::Center,
+        Align::Left,
     );
-    b.y = name_y + 46.0 + 18.0 + 20.0;
+    b.y = top + ABOUT_LOGO + 18.0;
 
     let card = b.card(3.0 * ROW_H);
+    // Web pages open from a bare "open" glyph; the data folder has a button.
     let rows = [
         (
             Hit::Repo,
             Key::SourceCode,
-            "hartono0297/dynamic-island".to_owned(),
+            "github.com/hartono0297/dynamic-island".to_owned(),
             Key::OpenGithub,
+            ButtonKind::External,
         ),
         (
             Hit::Releases,
             Key::Updates,
             b.t(Key::UpdatesDesc),
             Key::SeeReleases,
+            ButtonKind::External,
         ),
         (
             Hit::DataFolder,
             Key::DataFolder,
             r"%APPDATA%\DynamicIsland".to_owned(),
             Key::OpenDataFolder,
+            ButtonKind::Secondary,
         ),
     ];
-    // One width for the three buttons, so they line up.
-    let labels: Vec<String> = rows.iter().map(|r| b.t(r.3)).collect();
-    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let w = b.button_w(&refs, ButtonKind::Secondary);
-    for (i, ((hit, label, desc, _), button)) in rows.into_iter().zip(labels).enumerate() {
+    for (i, (hit, label, desc, button, kind)) in rows.into_iter().enumerate() {
         let y = card.y + i as f32 * ROW_H;
-        let item = (hit, button, ButtonKind::Secondary, true, w);
-        let x = b.buttons(RIGHT, y + ROW_H / 2.0, vec![item]);
+        let button = b.t(button);
+        let w = b.button_w(&[&button], kind);
+        let item = (hit, button, kind, true, w);
+        // The glyph, not its larger click area, ends at the content edge.
+        let right = if kind == ButtonKind::External {
+            RIGHT + (ICON_BUTTON - EXTERNAL_GLYPH) / 2.0
+        } else {
+            RIGHT
+        };
+        let x = b.buttons(right, y + ROW_H / 2.0, vec![item]);
         b.row_text(card, y, b.t(label), Some((desc, Tone::Secondary)), false, x);
         if i > 0 {
             b.divider(card, y);
@@ -1443,13 +1551,34 @@ mod tests {
 
     #[test]
     fn controls_and_fields_sit_inside_their_cards() {
+        let content = Rect {
+            x: CONTENT_X,
+            y: 0.0,
+            w: CONTENT_W + LINK_PAD,
+            h: CLIENT_H,
+        };
         for (section, lang, l) in all_layouts() {
             for c in &l.controls {
                 let bounds = c.bounds();
+                // The setup guide link sits on the line above its card.
+                if let Control::Button(b) = c
+                    && b.kind == ButtonKind::Link
+                {
+                    assert!(inside(bounds, content), "{section:?} {lang:?}: {c:?}");
+                    assert!(l.cards.iter().all(|card| !overlaps(bounds, *card)));
+                    continue;
+                }
                 assert!(
                     l.cards.iter().any(|card| inside(bounds, *card)),
                     "{section:?} {lang:?}: {c:?} outside every card"
                 );
+            }
+            for chip in &l.chips {
+                assert!(
+                    l.cards.iter().any(|card| inside(chip.rect, *card)),
+                    "{section:?} {lang:?}: {chip:?}"
+                );
+                assert!(inside(chip.dot, chip.rect) && inside(chip.label.rect, chip.rect));
             }
             for (f, r) in &l.fields {
                 assert!(
@@ -1476,6 +1605,7 @@ mod tests {
                 .map(|c| (format!("{c:?}"), c.bounds()))
                 .collect();
             boxes.extend(l.fields.iter().map(|(f, r)| (format!("{f:?}"), *r)));
+            boxes.extend(l.chips.iter().map(|c| (format!("{c:?}"), c.rect)));
             for (i, (na, a)) in boxes.iter().enumerate() {
                 for (nb, b) in &boxes[i + 1..] {
                     assert!(!overlaps(*a, *b), "{section:?} {lang:?}: {na} / {nb}");
@@ -1500,6 +1630,7 @@ mod tests {
             texts.extend(l.title.iter());
             texts.extend(l.brand.iter());
             texts.extend(l.nav.iter().map(|n| &n.label));
+            texts.extend(l.chips.iter().map(|c| &c.label));
             for c in &l.controls {
                 if let Control::Stepper { value, .. } = c {
                     texts.push(value);
@@ -1525,6 +1656,8 @@ mod tests {
                     Control::Button(b) if b.kind == ButtonKind::Link => {
                         vec![(b.label.as_str(), b.rect, LINK_GLYPH_W)]
                     }
+                    // The label is not drawn.
+                    Control::Button(b) if b.kind == ButtonKind::External => Vec::new(),
                     Control::Button(b) => vec![(b.label.as_str(), b.rect, 0.0)],
                     _ => Vec::new(),
                 };
@@ -1783,6 +1916,72 @@ mod tests {
         }
         let l = layout(Section::Appearance, &states()[0], &Estimate);
         assert!(l.segmented(Group::Shell).is_none());
+    }
+
+    #[test]
+    fn studio_radius_scale() {
+        assert_eq!(
+            (CARD_RADIUS, CONTROL_RADIUS, SEGMENT_RADIUS),
+            (14.0, 10.0, 8.0)
+        );
+        // Fully rounded: wider than half of any chip, button or toggle.
+        assert!(FULL_RADIUS >= CHIP_H.max(BUTTON_H).max(TOGGLE_H).max(STEP_BUTTON) / 2.0);
+        // The segment and its track keep the same gap all round.
+        assert_eq!(CONTROL_RADIUS - SEGMENT_RADIUS, SEG_PAD);
+    }
+
+    #[test]
+    fn integrations_show_the_status_as_chips() {
+        let base = states()[0].clone();
+        for status in [
+            CalStatus::NotConfigured,
+            CalStatus::NeedsLogin,
+            CalStatus::Reconnect,
+            CalStatus::Ok,
+            CalStatus::Offline,
+        ] {
+            let s = State {
+                google: GoogleState {
+                    status,
+                    ..base.google
+                },
+                hooks: Some(HookState {
+                    complete: true,
+                    any: true,
+                }),
+                ..base.clone()
+            };
+            let l = layout(Section::Integrations, &s, &Estimate);
+            let (key, tone) = status_key(status);
+            let chips: Vec<(&str, Tone)> = l
+                .chips
+                .iter()
+                .map(|c| (c.label.text.as_str(), c.label.tone))
+                .collect();
+            assert_eq!(
+                chips,
+                [
+                    (text(s.lang, key), tone),
+                    (text(s.lang, Key::HooksOn), Tone::Good)
+                ]
+            );
+            // A message after a click stands in for the Google status.
+            let noted = State {
+                google_note: Some(("Tersimpan", Tone::Good)),
+                ..s.clone()
+            };
+            let l = layout(Section::Integrations, &noted, &Estimate);
+            assert_eq!(l.chips.len(), 1);
+            assert!(l.texts.iter().any(|t| t.text == "Tersimpan"));
+        }
+        // Each card has its uppercase name above it.
+        let l = layout(Section::Integrations, &base, &Estimate);
+        for key in [Key::GoogleCalendar, Key::ClaudeCode] {
+            let name = text(base.lang, key).to_uppercase();
+            let label = l.texts.iter().find(|t| t.text == name).expect("eyebrow");
+            assert_eq!(label.font, Font::Eyebrow);
+            assert!(l.cards.iter().any(|c| c.y > label.rect.bottom()));
+        }
     }
 
     #[test]
