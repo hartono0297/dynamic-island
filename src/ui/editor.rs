@@ -2562,7 +2562,7 @@ mod tests {
     #[test]
     fn tone_maps_light_grays_and_keeps_colors() {
         use crate::theme::{Accent, WindowTheme};
-        let dark = theme::window(Accent::Blue, WindowTheme::Dark, false);
+        let dark = theme::window(Accent::Terracotta, WindowTheme::Dark, false);
         let darken = |px| tone(px, dark.field, dark.text);
         assert_eq!(darken(0xFFFFFF), dark.field);
         assert_eq!(darken(0x000000), dark.text);
@@ -2572,7 +2572,7 @@ mod tests {
         let mid = darken(0x808080);
         assert!(mid & 0xFF > dark.field & 0xFF && mid & 0xFF < dark.text & 0xFF);
         // Light mode leaves the native look nearly as it is.
-        let light = theme::window(Accent::Blue, WindowTheme::Light, false);
+        let light = theme::window(Accent::Terracotta, WindowTheme::Light, false);
         let lighten = |px| tone(px, light.field, light.text);
         assert_eq!(lighten(0xFFFFFF), 0xFFFFFF);
         assert_eq!(lighten(0x000000), light.text);
@@ -2744,7 +2744,7 @@ mod tests {
     fn picked_segment_is_in_the_accent() {
         use crate::theme::{Accent, WindowTheme};
         for mode in [WindowTheme::Dark, WindowTheme::Light] {
-            let p = theme::window(Accent::Green, mode, false);
+            let p = theme::window(Accent::Sage, mode, false);
             assert_eq!(segment_colors(&p, true, false), (p.accent, p.on_accent));
             assert_eq!(segment_colors(&p, true, true), (p.accent, p.on_accent));
             assert_eq!(segment_colors(&p, false, false), (p.button, p.text));

@@ -14,9 +14,13 @@ use crate::config::Config;
 
 /// Declares a settings enum stored in config.json by its variant name. An
 /// unknown name (a typo while editing by hand) reads as the default instead of
-/// making the whole config invalid.
+/// making the whole config invalid. Optional `aliases` map names an older
+/// version wrote onto current variants; they are read, never written.
 macro_rules! named_enum {
-    ($(#[$doc:meta])* $name:ident { $default:ident $(, $other:ident)* $(,)? }) => {
+    (
+        $(#[$doc:meta])* $name:ident { $default:ident $(, $other:ident)* $(,)? }
+        $(aliases { $($alias:literal => $target:ident),* $(,)? })?
+    ) => {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
         pub enum $name {
@@ -45,12 +49,22 @@ macro_rules! named_enum {
                 }
             }
 
-            /// Case-insensitive.
+            /// Older names and the variants they now read as.
+            const ALIASES: &[(&str, $name)] = &[$($(($alias, $name::$target),)*)?];
+
+            /// Case-insensitive; a current name first, then an alias.
             pub fn from_name(name: &str) -> Option<Self> {
+                let name = name.trim();
                 Self::ALL
                     .iter()
                     .copied()
-                    .find(|v| v.name().eq_ignore_ascii_case(name.trim()))
+                    .find(|v| v.name().eq_ignore_ascii_case(name))
+                    .or_else(|| {
+                        Self::ALIASES
+                            .iter()
+                            .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
+                            .map(|(_, v)| *v)
+                    })
             }
         }
 
@@ -71,12 +85,21 @@ macro_rules! named_enum {
 
 named_enum! {
     /// Accent colour of the island and the windows.
-    Accent { Blue, Purple, Green, Orange, Pink, Red }
+    Accent { Terracotta, Sage, Ochre, Clay, Olive, Plum }
+    aliases {
+        "Blue" => Terracotta,
+        "Green" => Sage,
+        "Orange" => Ochre,
+        "Pink" => Clay,
+        "Purple" => Plum,
+        "Red" => Terracotta,
+    }
 }
 
 named_enum! {
     /// The island's fill.
-    Surface { Black, Graphite }
+    Surface { Espresso, Graphite }
+    aliases { "Black" => Espresso }
 }
 
 named_enum! {
@@ -85,32 +108,48 @@ named_enum! {
 }
 
 impl Accent {
+    /// The accent on the island and in dark windows.
     pub fn rgb(self) -> u32 {
         match self {
-            Accent::Blue => 0x4F8CFF,
-            Accent::Purple => 0xA78BFA,
-            Accent::Green => 0x30D158,
-            Accent::Orange => 0xFF9F0A,
-            Accent::Pink => 0xFF6482,
-            Accent::Red => 0xFF453A,
+            Accent::Terracotta => 0xE2683C,
+            Accent::Sage => 0x9DB59A,
+            Accent::Ochre => 0xD9A441,
+            Accent::Clay => 0xC9826B,
+            Accent::Olive => 0xA3A55A,
+            Accent::Plum => 0xB07A9A,
         }
     }
 
-    /// Text and marks drawn on an accent fill: white where it keeps at least
-    /// 3:1 contrast, near-black on the lighter accents.
+    /// Text and marks drawn on `rgb()`: espresso ink, which reads on every
+    /// one of these mid-light earth tones.
     pub fn ink(self) -> u32 {
+        0x17120F
+    }
+
+    /// The accent in light windows: a darker shade that holds 3:1 against
+    /// the light background and cards.
+    pub fn light_rgb(self) -> u32 {
         match self {
-            Accent::Blue | Accent::Red => 0xFFFFFF,
-            Accent::Purple | Accent::Green | Accent::Orange | Accent::Pink => 0x000000,
+            Accent::Terracotta => 0xC9542B,
+            Accent::Sage => 0x6C7D6A,
+            Accent::Ochre => 0x96712D,
+            Accent::Clay => 0xA36957,
+            Accent::Olive => 0x7A7C44,
+            Accent::Plum => 0x996A86,
         }
+    }
+
+    /// Text and marks drawn on `light_rgb()`.
+    pub fn light_ink(self) -> u32 {
+        0xFFFBF5
     }
 }
 
 impl Surface {
     pub fn rgb(self) -> u32 {
         match self {
-            Surface::Black => 0x000000,
-            Surface::Graphite => 0x1C1C1E,
+            Surface::Espresso => 0x17120F,
+            Surface::Graphite => 0x221B17,
         }
     }
 }
@@ -160,10 +199,10 @@ pub struct Palette {
 }
 
 pub fn island(accent: Accent, surface: Surface) -> Palette {
-    // Black keeps the island's original greys; graphite lifts each a step.
+    // Warm browns over espresso; graphite lifts each a step.
     let (raised, raised_hi, track, column, placeholder, dot_off) = match surface {
-        Surface::Black => (0x1C1C1E, 0x3A3A3C, 0x2A2A2C, 0x111113, 0x2C2C2E, 0x555555),
-        Surface::Graphite => (0x2C2C2E, 0x48484A, 0x3A3A3C, 0x252527, 0x3A3A3C, 0x636366),
+        Surface::Espresso => (0x241D18, 0x3A2F27, 0x332A23, 0x1D1713, 0x332A23, 0x4A3E35),
+        Surface::Graphite => (0x2E2620, 0x463A31, 0x3D332B, 0x272019, 0x3D332B, 0x574A40),
     };
     Palette {
         surface: surface.rgb(),
@@ -173,7 +212,7 @@ pub fn island(accent: Accent, surface: Surface) -> Palette {
         column,
         placeholder,
         dot_off,
-        text: 0xF2F2F2,
+        text: 0xF4EDE4,
         accent: accent.rgb(),
         on_accent: accent.ink(),
     }
@@ -185,8 +224,8 @@ pub fn island_palette(cfg: &Config) -> Palette {
 
 /// The CLI's terminal (the panel card and the window's output), the same in
 /// both window modes: background and text.
-pub const TERMINAL_BG: u32 = 0x0C0C0E;
-pub const TERMINAL_TEXT: u32 = 0xE6E6E6;
+pub const TERMINAL_BG: u32 = 0x0F0C0A;
+pub const TERMINAL_TEXT: u32 = 0xF4EDE4;
 
 /// Colours of ordinary windows (editors, settings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,36 +254,36 @@ pub fn window(accent: Accent, mode: WindowTheme, system_light: bool) -> WindowPa
         WindowTheme::Dark => false,
         WindowTheme::Light => true,
     };
-    let (accent, on_accent) = (accent.rgb(), accent.ink());
     if light {
         WindowPalette {
             light,
-            bg: 0xF3F3F5,
-            card: 0xFFFFFF,
-            border: 0x00000014,
-            text: 0x1B1B1D,
-            secondary: 0x6B6B70,
-            accent,
-            on_accent,
+            bg: 0xF4EEE6,
+            card: 0xFFFBF5,
+            border: 0x221A141A,
+            text: 0x221A14,
+            // The design's #7A6B5D falls just short of 4.5:1 on bg.
+            secondary: 0x786A5C,
+            accent: accent.light_rgb(),
+            on_accent: accent.light_ink(),
             field: 0xFFFFFF,
-            button: 0xF6F6F8,
-            button_hover: 0xEBEBEE,
+            button: 0xEFE6DA,
+            button_hover: 0xEADFD1,
             error: 0xC42B1C,
         }
     } else {
         WindowPalette {
             light,
-            bg: 0x1B1B1D,
-            card: 0x242427,
-            border: 0xFFFFFF14,
-            text: 0xF2F2F2,
-            secondary: 0xA0A0A5,
-            accent,
-            on_accent,
-            field: 0x2B2B2E,
-            button: 0x2E2E32,
-            button_hover: 0x38383C,
-            error: 0xFF6B6B,
+            bg: 0x1E1814,
+            card: 0x272019,
+            border: 0xF4EDE414,
+            text: 0xF4EDE4,
+            secondary: 0xA89A8B,
+            accent: accent.rgb(),
+            on_accent: accent.ink(),
+            field: 0x2C241D,
+            button: 0x33291F,
+            button_hover: 0x3D3227,
+            error: 0xEF7A6E,
         }
     }
 }
@@ -317,15 +356,17 @@ mod tests {
         assert_eq!(
             hex,
             [
-                (Accent::Blue, 0x4F8CFF),
-                (Accent::Purple, 0xA78BFA),
-                (Accent::Green, 0x30D158),
-                (Accent::Orange, 0xFF9F0A),
-                (Accent::Pink, 0xFF6482),
-                (Accent::Red, 0xFF453A),
+                (Accent::Terracotta, 0xE2683C),
+                (Accent::Sage, 0x9DB59A),
+                (Accent::Ochre, 0xD9A441),
+                (Accent::Clay, 0xC9826B),
+                (Accent::Olive, 0xA3A55A),
+                (Accent::Plum, 0xB07A9A),
             ]
         );
-        assert_eq!(Accent::default(), Accent::Blue);
+        assert_eq!(Accent::default(), Accent::Terracotta);
+        assert_eq!(Surface::default(), Surface::Espresso);
+        assert_eq!(Accent::Terracotta.light_rgb(), 0xC9542B);
     }
 
     fn luminance(rgb: u32) -> f64 {
@@ -350,42 +391,52 @@ mod tests {
         for a in Accent::ALL {
             let c = contrast(a.rgb(), a.ink());
             assert!(c >= 3.0, "{a:?}: {c:.2}");
-            // White only where it reads; the lighter accents get dark ink.
-            assert_eq!(
-                a.ink() == 0xFFFFFF,
-                contrast(a.rgb(), 0xFFFFFF) >= 3.0,
-                "{a:?}"
-            );
+            // The espresso ink reads as body text on every accent.
+            assert!(c >= 4.5, "{a:?}: {c:.2}");
         }
     }
 
     #[test]
-    fn black_surface_keeps_the_original_island_colours() {
-        let p = island(Accent::Blue, Surface::Black);
+    fn light_mode_accents_read_on_the_light_window() {
+        let p = window(Accent::Terracotta, WindowTheme::Light, false);
+        for a in Accent::ALL {
+            let (fill, ink) = (a.light_rgb(), a.light_ink());
+            for surface in [p.bg, p.card] {
+                let c = contrast(fill, surface);
+                assert!(c >= 3.0, "{a:?} on {surface:06X}: {c:.2}");
+            }
+            let c = contrast(fill, ink);
+            assert!(c >= 3.0, "{a:?} ink: {c:.2}");
+        }
+    }
+
+    #[test]
+    fn espresso_surface_matches_the_pinned_island_colours() {
+        let p = island(Accent::Terracotta, Surface::Espresso);
         assert_eq!(
             p,
             Palette {
-                surface: 0x000000,
-                raised: 0x1C1C1E,
-                raised_hi: 0x3A3A3C,
-                track: 0x2A2A2C,
-                column: 0x111113,
-                placeholder: 0x2C2C2E,
-                dot_off: 0x555555,
-                text: 0xF2F2F2,
-                accent: 0x4F8CFF,
-                on_accent: 0xFFFFFF,
+                surface: 0x17120F,
+                raised: 0x241D18,
+                raised_hi: 0x3A2F27,
+                track: 0x332A23,
+                column: 0x1D1713,
+                placeholder: 0x332A23,
+                dot_off: 0x4A3E35,
+                text: 0xF4EDE4,
+                accent: 0xE2683C,
+                on_accent: 0x17120F,
             }
         );
     }
 
     #[test]
     fn graphite_lightens_everything_raised() {
-        let black = island(Accent::Orange, Surface::Black);
-        let graphite = island(Accent::Orange, Surface::Graphite);
-        assert_eq!(graphite.surface, 0x1C1C1E);
-        assert_eq!((graphite.accent, graphite.on_accent), (0xFF9F0A, 0x000000));
-        assert_eq!(graphite.text, black.text, "the island stays dark");
+        let espresso = island(Accent::Ochre, Surface::Espresso);
+        let graphite = island(Accent::Ochre, Surface::Graphite);
+        assert_eq!(graphite.surface, 0x221B17);
+        assert_eq!((graphite.accent, graphite.on_accent), (0xD9A441, 0x17120F));
+        assert_eq!(graphite.text, espresso.text, "the island stays dark");
         let raised = |p: &Palette| {
             [
                 p.raised,
@@ -396,8 +447,8 @@ mod tests {
                 p.dot_off,
             ]
         };
-        for (b, g) in raised(&black).into_iter().zip(raised(&graphite)) {
-            assert!(luminance(g) > luminance(b), "{g:06X} vs {b:06X}");
+        for (e, g) in raised(&espresso).into_iter().zip(raised(&graphite)) {
+            assert!(luminance(g) > luminance(e), "{g:06X} vs {e:06X}");
             // Still a visible step above the graphite surface.
             assert!(luminance(g) > luminance(graphite.surface), "{g:06X}");
         }
@@ -405,13 +456,18 @@ mod tests {
 
     #[test]
     fn window_modes_match_the_pinned_hex_values() {
-        let dark = window(Accent::Blue, WindowTheme::Dark, true);
+        let dark = window(Accent::Terracotta, WindowTheme::Dark, true);
         assert!(!dark.light);
         assert_eq!(
             (dark.bg, dark.card, dark.border, dark.text, dark.secondary),
-            (0x1B1B1D, 0x242427, 0xFFFFFF14, 0xF2F2F2, 0xA0A0A5)
+            (0x1E1814, 0x272019, 0xF4EDE414, 0xF4EDE4, 0xA89A8B)
         );
-        let light = window(Accent::Pink, WindowTheme::Light, false);
+        assert_eq!(
+            (dark.field, dark.button, dark.button_hover),
+            (0x2C241D, 0x33291F, 0x3D3227)
+        );
+        assert_eq!((dark.accent, dark.on_accent), (0xE2683C, 0x17120F));
+        let light = window(Accent::Terracotta, WindowTheme::Light, false);
         assert!(light.light);
         assert_eq!(
             (
@@ -421,9 +477,13 @@ mod tests {
                 light.text,
                 light.secondary
             ),
-            (0xF3F3F5, 0xFFFFFF, 0x00000014, 0x1B1B1D, 0x6B6B70)
+            (0xF4EEE6, 0xFFFBF5, 0x221A141A, 0x221A14, 0x786A5C)
         );
-        assert_eq!((light.accent, light.on_accent), (0xFF6482, 0x000000));
+        assert_eq!(
+            (light.field, light.button, light.button_hover),
+            (0xFFFFFF, 0xEFE6DA, 0xEADFD1)
+        );
+        assert_eq!((light.accent, light.on_accent), (0xC9542B, 0xFFFBF5));
         for p in [dark, light] {
             assert!(contrast(p.text, p.bg) >= 7.0);
             assert!(contrast(p.text, p.field) >= 7.0);
@@ -434,15 +494,18 @@ mod tests {
 
     #[test]
     fn system_follows_the_windows_flag() {
-        let sys = |light| window(Accent::Blue, WindowTheme::System, light);
-        assert_eq!(sys(true), window(Accent::Blue, WindowTheme::Light, false));
-        assert_eq!(sys(false), window(Accent::Blue, WindowTheme::Dark, true));
+        let sys = |light| window(Accent::Sage, WindowTheme::System, light);
+        assert_eq!(sys(true), window(Accent::Sage, WindowTheme::Light, false));
+        assert_eq!(sys(false), window(Accent::Sage, WindowTheme::Dark, true));
         let cfg = Config::default();
         assert_eq!(cfg.window_theme, WindowTheme::System);
         let t = Theme::of(&cfg);
         assert!(window(t.accent, t.window, true).light);
         assert!(!window(t.accent, t.window, false).light);
-        assert_eq!(island_palette(&cfg), island(Accent::Blue, Surface::Black));
+        assert_eq!(
+            island_palette(&cfg),
+            island(Accent::Terracotta, Surface::Espresso)
+        );
     }
 
     #[test]
@@ -450,10 +513,41 @@ mod tests {
         for a in Accent::ALL {
             assert_eq!(Accent::from_name(a.name()), Some(*a));
         }
-        assert_eq!(Accent::from_name("orange"), Some(Accent::Orange));
+        assert_eq!(Accent::from_name("ochre"), Some(Accent::Ochre));
         assert_eq!(Surface::from_name(" GRAPHITE "), Some(Surface::Graphite));
         assert_eq!(WindowTheme::from_name("light"), Some(WindowTheme::Light));
         assert_eq!(Accent::from_name("teal"), None);
+        assert_eq!(Surface::from_name("grey"), None);
+        assert_eq!(WindowTheme::from_name("black"), None);
+    }
+
+    #[test]
+    fn old_names_read_as_their_studio_colours() {
+        for (old, new) in [
+            ("Blue", Accent::Terracotta),
+            ("Green", Accent::Sage),
+            ("Orange", Accent::Ochre),
+            ("Pink", Accent::Clay),
+            ("Purple", Accent::Plum),
+            ("Red", Accent::Terracotta),
+        ] {
+            assert_eq!(Accent::from_name(old), Some(new), "{old}");
+            let shouted = format!("  {}  ", old.to_uppercase());
+            assert_eq!(Accent::from_name(&shouted), Some(new), "{old}");
+        }
+        assert_eq!(Surface::from_name("black"), Some(Surface::Espresso));
+        // Aliases are read, never written.
+        for a in Accent::ALL {
+            assert!(Accent::ALIASES.iter().all(|(old, _)| *old != a.name()));
+        }
+        assert_eq!(
+            serde_json::to_string(&Accent::from_name("Blue").unwrap()).unwrap(),
+            "\"Terracotta\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Surface>("\"Black\"").unwrap(),
+            Surface::Espresso
+        );
     }
 
     #[test]
