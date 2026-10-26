@@ -126,4 +126,13 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 - CLI commands get no input (stdin), so interactive programs won't work; one command runs at a time.
 - The pomodoro timer is not kept when the island quits.
 
+## Fonts / credits
+
+The exe embeds Latin subsets of three typefaces, all under the SIL Open Font License 1.1:
+
+- **Fraunces** by Undercase Type (italic, for titles and the large clock)
+- **DM Sans** and **DM Mono** by Colophon Foundry, commissioned by Google Fonts (text, numbers, CLI)
+
+Licence texts and copyright lines are in [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt). [`scripts/make-fonts.ps1`](scripts/make-fonts.ps1) rebuilds the files from pinned upstream sources.
+
 Design notes and plans: [`docs/superpowers/`](docs/superpowers/).
