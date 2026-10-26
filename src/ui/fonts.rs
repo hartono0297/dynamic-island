@@ -295,8 +295,12 @@ pub fn tabular_figures(dwrite: &IDWriteFactory) -> Result<IDWriteTypography> {
 }
 
 /// `text` laid out in a `width` × `height` box with `format` (its alignment,
-/// wrapping and trimming) and `typography` over the whole string. The same
-/// box `DrawText` would use, but able to carry OpenType features.
+/// wrapping and trimming) and `typography` on each run of ASCII digits only.
+/// The same box `DrawText` would use, but able to carry OpenType features.
+///
+/// Only the digits get the features: DM Sans's `tnum` also widens the space,
+/// so applying it to the whole string opens wide gaps between words. Times
+/// and dates keep fixed-width figures because all their digits are covered.
 pub fn text_layout(
     dwrite: &IDWriteFactory,
     text: &[u16],
@@ -307,15 +311,33 @@ pub fn text_layout(
 ) -> Result<IDWriteTextLayout> {
     unsafe {
         let layout = dwrite.CreateTextLayout(text, format, width.max(0.0), height.max(0.0))?;
-        layout.SetTypography(
-            typography,
-            DWRITE_TEXT_RANGE {
-                startPosition: 0,
-                length: text.len() as u32,
-            },
-        )?;
+        for (start, length) in digit_runs(text) {
+            layout.SetTypography(
+                typography,
+                DWRITE_TEXT_RANGE {
+                    startPosition: start,
+                    length,
+                },
+            )?;
+        }
         Ok(layout)
     }
+}
+
+/// Each run of ASCII digits in `text` as `(start, length)` in UTF-16 units,
+/// in order. Lazy, so a layout pays no allocation for it.
+pub fn digit_runs(text: &[u16]) -> impl Iterator<Item = (u32, u32)> + '_ {
+    let is_digit = |c: &u16| (u16::from(b'0')..=u16::from(b'9')).contains(c);
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        let start = i + text[i..].iter().position(is_digit)?;
+        let len = text[start..]
+            .iter()
+            .position(|c| !is_digit(c))
+            .unwrap_or(text.len() - start);
+        i = start + len;
+        Some((start as u32, len as u32))
+    })
 }
 
 // ---- GDI ----
@@ -522,6 +544,66 @@ mod tests {
             let typography = tabular_figures(&dwrite).expect("typography");
             text_layout(&dwrite, &wide, &format, 100.0, 20.0, &typography).expect("layout");
         }
+    }
+
+    fn runs(s: &str) -> Vec<(u32, u32)> {
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        digit_runs(&wide).collect()
+    }
+
+    #[test]
+    fn digit_runs_cover_only_the_digits() {
+        assert!(runs("").is_empty());
+        assert!(runs("Minum vitamin").is_empty());
+        assert_eq!(runs("14:32"), [(0, 2), (3, 2)]);
+        assert_eq!(runs("Monday, 26 October"), [(8, 2)]);
+        assert_eq!(runs("7 pm"), [(0, 1)]);
+        assert_eq!(runs("Room 12"), [(5, 2)]);
+        assert_eq!(runs("2026"), [(0, 4)]);
+        assert_eq!(runs("a1b23c"), [(1, 1), (3, 2)]);
+        // Offsets are UTF-16 units: "é" is one unit, the emoji two.
+        assert_eq!(runs("é 9"), [(2, 1)]);
+        assert_eq!(runs("\u{1F345} 25:00"), [(3, 2), (6, 2)]);
+        // Non-ASCII digits are not figures DM Sans tabulates.
+        assert!(runs("\u{0661}\u{FF12}").is_empty());
+    }
+
+    #[test]
+    fn tabular_typography_lands_on_digits_only() {
+        let dwrite = factory();
+        let face = Face::for_role(&dwrite, Role::Text);
+        let format = face
+            .format(&dwrite, DWRITE_FONT_WEIGHT_NORMAL, 13.0)
+            .expect("format");
+        let typography = tabular_figures(&dwrite).expect("typography");
+        let wide: Vec<u16> = "Mon, 26 Oct".encode_utf16().collect();
+        let layout =
+            text_layout(&dwrite, &wide, &format, 200.0, 20.0, &typography).expect("layout");
+        let at = |pos: u32| unsafe {
+            let mut typography = None;
+            let mut range = DWRITE_TEXT_RANGE::default();
+            layout
+                .GetTypography(pos, &mut typography, Some(&mut range))
+                .expect("typography query");
+            typography.map(|t: IDWriteTypography| (t, range))
+        };
+        // The space and letters carry no typography; the digits do.
+        assert!(at(0).is_none());
+        assert!(at(4).is_none());
+        let (_, range) = at(5).expect("digits are tabular");
+        assert_eq!((range.startPosition, range.length), (5, 2));
+        assert!(at(7).is_none());
+        // Text without digits measures exactly as with no features at all.
+        let width = |layout: IDWriteTextLayout| unsafe {
+            let mut m = Default::default();
+            layout.GetMetrics(&mut m).expect("metrics");
+            m.widthIncludingTrailingWhitespace
+        };
+        let words: Vec<u16> = "Minum vitamin".encode_utf16().collect();
+        let plain = unsafe { dwrite.CreateTypography() }.expect("plain");
+        let tab = text_layout(&dwrite, &words, &format, 200.0, 20.0, &typography);
+        let none = text_layout(&dwrite, &words, &format, 200.0, 20.0, &plain);
+        assert_eq!(width(tab.expect("layout")), width(none.expect("layout")));
     }
 
     #[test]
