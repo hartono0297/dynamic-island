@@ -3,10 +3,14 @@ pub mod cli_window;
 #[cfg(debug_assertions)]
 pub mod demo;
 pub mod editor;
+pub mod editor_layout;
+pub mod editor_paint;
+pub mod editor_popover;
 pub mod fonts;
 pub mod frame_clock;
 pub mod geometry;
 pub mod icons;
+pub mod month_grid;
 pub mod panel_layout;
 pub mod render;
 pub mod settings;
