@@ -1,15 +1,16 @@
 //! Layout of the open panel's pages, the waiting strip, the page dots and the
 //! compact pomodoro, in window logical pixels. Pure and deterministic: text is
-//! trimmed by the renderer inside the rects given here.
+//! trimmed by the renderer inside the rects given here, and the one width that
+//! depends on text (the calendar title, which the arrows follow) is passed in.
 
-use chrono::{Days, NaiveDate};
+use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
-use crate::calendar::{CalEvent, CalStatus, events_on, range_for};
+use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::cli::CARD_LINES;
 use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::notes::Note;
-use crate::reminders::Reminder;
+use crate::reminders::{Reminder, local_time};
 
 /// A clickable rect and what clicking it means.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,33 +23,37 @@ pub struct Region {
 pub struct CalendarLayout {
     pub view: CalView,
     pub selected: NaiveDate,
-    /// Month name, week range or day title.
+    /// Month name, week range or day title, as wide as the title drawn.
     pub header: Rect,
     /// Hari, Minggu, Bulan.
     pub view_buttons: [(CalView, Rect); 3],
+    /// Right after the title.
     pub prev: Rect,
     pub next: Rect,
-    /// Month view: one rect above each grid column for its weekday
-    /// initial (`i18n::weekday_initials`).
+    /// Month view: one rect above each grid column for its weekday name.
     pub weekday_labels: Vec<Rect>,
     /// Month view: 42 days, Monday first.
     pub month_cells: Vec<(NaiveDate, Rect)>,
     /// Week view: 7 columns, Monday first; the top `WEEK_HEAD_H` holds the
-    /// clickable day label.
+    /// clickable day name and number.
     pub week_columns: Vec<(NaiveDate, Rect)>,
-    /// Week view: "+N" under a column's rows, with the hidden count.
+    /// Week view: "+N" at a column's foot, with the hidden count.
     pub week_more: Vec<(NaiveDate, usize, Rect)>,
-    /// The area the event list (month: right column, day: full width) or the
-    /// week columns occupy.
+    /// Month: the event list right of the grid. Week: the columns. Day: the
+    /// timeline (its first hour line at the top).
     pub list: Rect,
     /// Month view: the selected day's caption at the top of the list.
     pub caption: Option<Rect>,
-    /// Event id and row.
+    /// Event id and row (month list), chip (week) or all-day band and
+    /// time block (day).
     pub rows: Vec<(String, Rect)>,
-    /// Month and day list: events after the shown rows and the "+N lagi"
-    /// rect; in the day view a count of 0 means the last chunk ("Kembali ke
-    /// atas").
+    /// Month and day: events after the shown ones and the "+N lagi" rect;
+    /// in the day view a count of 0 means the last page ("Kembali ke atas").
     pub more: Option<(usize, Rect)>,
+    /// Day view: the hour lines shown, each hour with its line's y.
+    pub hours: Vec<(u32, f32)>,
+    /// Day view of today: the "now" line's y, when inside the hours shown.
+    pub now_y: Option<f32>,
     /// "+ Tambah acara".
     pub add: Rect,
     /// "Hubungkan Google" / "Hubungkan ulang Google".
@@ -60,28 +65,38 @@ pub struct CalendarLayout {
 pub struct PomodoroLayout {
     /// "Pomodoro".
     pub header: Rect,
+    /// "25 · 5 · 15 menit", right of the title.
+    pub durations: Rect,
     pub ring_center: (f32, f32),
     pub ring_radius: f32,
-    /// The countdown, centred on the ring: as wide as the stroke's inner edge
-    /// at the digits' top and bottom, so text centred in it never meets it.
+    /// The countdown, a little above the ring's centre: as wide as the
+    /// stroke's inner edge allows at the digits' top and bottom, so text
+    /// centred in it never meets it.
     pub time: Rect,
-    /// The phase ("Fokus · dijeda"), right of the ring.
+    /// The phase in capitals ("FOKUS"), under the countdown inside the ring.
     pub phase: Rect,
-    /// "Sesi 2 dari 4", under the phase.
+    /// "Sesi 2 dari 4" and its dots, right of the ring.
     pub session: Rect,
+    /// The big round primary button: start, pause or resume.
     pub start_pause: Rect,
+    /// The small round buttons either side of it.
     pub reset: Rect,
     pub skip: Rect,
+    /// "Berikutnya: Istirahat 5 menit".
+    pub next_up: Rect,
 }
 
-/// The notes and reminders pages: a title, "+ Baru" and a list of rows.
+/// The notes and reminders pages: a title, "+ Baru" and the items.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListLayout {
     /// "Notes" / "Pengingat" title.
     pub header: Rect,
     /// "+ Baru".
     pub new_button: Rect,
-    /// Note or reminder id and row.
+    /// Reminders: each day group's heading in this chunk, by the day it
+    /// stands for ("Hari ini", "Besok", a date). Empty for notes.
+    pub groups: Vec<(NaiveDate, Rect)>,
+    /// Note id and card, or reminder id and row.
     pub rows: Vec<(String, Rect)>,
     /// Items after this chunk and the clickable rect: "+N lagi", or
     /// "Kembali ke atas" when the count is 0 (last chunk).
@@ -133,25 +148,34 @@ const PAD_X: f32 = 20.0;
 const PAD_TOP: f32 = 14.0;
 const STRIP_TOP: f32 = 8.0;
 const STRIP_H: f32 = 24.0;
-const DOT: f32 = 6.0;
+const DOT: f32 = 5.0;
 const DOT_GAP: f32 = 6.0;
-const DOT_BOTTOM: f32 = 12.0;
+const DOT_BOTTOM: f32 = 11.0;
 /// Clear space between the content and the page dots.
 const ABOVE_DOTS: f32 = 6.0;
 const HEADER_H: f32 = 22.0;
 const HEADER_GAP: f32 = 6.0;
 
 const NAV_W: f32 = 22.0;
+const NAV_GAP: f32 = 2.0;
+/// Between the title and its arrows.
+const TITLE_NAV_GAP: f32 = 8.0;
+/// Between the arrows and the view selector, at the least.
+const NAV_SEG_GAP: f32 = 12.0;
 const VIEW_BUTTON_W: f32 = 50.0;
-const VIEW_BUTTON_GAP: f32 = 2.0;
-const CELL_W: f32 = 28.0;
-const CELL_H: f32 = 24.0;
-const CELL_GAP_X: f32 = 4.0;
+/// The view selector's track reaches this far around its buttons.
+pub const SEG_PAD: f32 = 2.0;
+
+const CELL_W: f32 = 36.0;
+/// Month rows are at most this far apart; less when the strip takes room.
+const CELL_PITCH_MAX: f32 = 32.0;
 const CELL_GAP_Y: f32 = 2.0;
-const LABEL_H: f32 = 14.0;
+const LABEL_H: f32 = 16.0;
+/// Each side of the line between the month grid and its list.
 const LIST_GAP: f32 = 16.0;
 const CAPTION_H: f32 = 18.0;
-const ROW_H: f32 = 34.0;
+const CAPTION_GAP: f32 = 6.0;
+const ROW_H: f32 = 38.0;
 const MORE_H: f32 = 20.0;
 const MORE_W: f32 = 90.0;
 const ADD_W: f32 = 130.0;
@@ -160,38 +184,76 @@ const ADD_GAP: f32 = 4.0;
 const CONNECT_W: f32 = 180.0;
 const CONNECT_H: f32 = 26.0;
 const CONNECT_GAP: f32 = 6.0;
+
 const WEEK_GAP: f32 = 6.0;
-/// Height of the clickable day label at the top of a week column.
-pub const WEEK_HEAD_H: f32 = 20.0;
-const WEEK_ROWS: usize = 3;
+/// Height of the clickable day name and number at the top of a week column.
+pub const WEEK_HEAD_H: f32 = 36.0;
+/// Event chips sit this far inside their column.
+const CHIP_PAD: f32 = 5.0;
+/// A timed event's chip (title over time) and an all-day band.
+const CHIP_H: f32 = 30.0;
+const BAND_H: f32 = 20.0;
+const CHIP_GAP: f32 = 4.0;
+const WEEK_MORE_H: f32 = 16.0;
+const WEEK_ADD_GAP: f32 = 6.0;
+
+/// The day view's all-day bands: per page, and how wide one gets.
+const ALL_DAY_H: f32 = 22.0;
+const ALL_DAY_PER_PAGE: usize = 2;
+const ALL_DAY_MAX_W: f32 = 300.0;
+const ALL_DAY_GAP: f32 = 6.0;
+/// One hour of the day view's timeline.
+const HOUR_H: f32 = 22.0;
+/// Room left of the timeline for "09.00".
+pub const HOUR_GUTTER: f32 = 40.0;
+/// Half an hour label's height: kept clear above the first line.
+const HOUR_LABEL_HALF: f32 = 6.0;
+const BLOCK_INSET: f32 = 8.0;
+/// Blocks end this short of the right edge, as in the design.
+const BLOCK_RIGHT: f32 = 100.0;
+const LANE_GAP: f32 = 4.0;
+const MIN_BLOCK_H: f32 = 18.0;
+/// The first hour shown on a day without timed events.
+const DAY_START_H: u32 = 8;
+const MIN_HOURS: u32 = 2;
 
 /// Big enough that the widest countdown (Fraunces It 48) clears the stroke;
-/// the design's r = 100 does not fit under the waiting strip (192 of 198 px).
+/// the design's r = 100 does not fit under the waiting strip.
 const RING_RADIUS: f32 = 92.0;
 /// The ring's stroke, centred on `RING_RADIUS`.
 pub const RING_STROKE: f32 = 8.0;
-/// The countdown's box: one Fraunces It 48 line (59.2 px) centred on the ring.
+/// The countdown's box: one Fraunces It 48 line (59.2 px).
 const TIME_H: f32 = 60.0;
-/// The digits' ink reaches this far above and below the ring's centre
+/// The digits' ink reaches this far above and below the box's centre
 /// (Fraunces It 48 measures cy - 17 to cy + 18).
 const TIME_INK_HALF: f32 = 18.0;
-/// Between the ring and the column of labels and buttons.
-const RING_GAP: f32 = 48.0;
-const PHASE_H: f32 = 24.0;
-const SESSION_H: f32 = 18.0;
-const SESSION_GAP: f32 = 2.0;
-const ACTION_GAP: f32 = 18.0;
-const ACTION_H: f32 = 30.0;
-const START_W: f32 = 84.0;
-const ACTION_W: f32 = 72.0;
-const ACTION_SPACING: f32 = 8.0;
-/// The buttons' row: the widest thing in the column.
-const COLUMN_W: f32 = START_W + 2.0 * (ACTION_SPACING + ACTION_W);
+/// The countdown sits this far above the ring's centre, the phase under it.
+const TIME_LIFT: f32 = 9.0;
+const PHASE_GAP: f32 = 8.0;
+const PHASE_H: f32 = 16.0;
+/// Between the ring and the column of the session, buttons and next phase.
+const RING_GAP: f32 = 36.0;
+const COLUMN_W: f32 = 230.0;
+const SESSION_H: f32 = 20.0;
+const COLUMN_GAP: f32 = 18.0;
+const PRIMARY_D: f32 = 62.0;
+const SECONDARY_D: f32 = 44.0;
+const CONTROL_GAP: f32 = 14.0;
+const NEXT_H: f32 = 18.0;
+const DURATIONS_W: f32 = 160.0;
 
 const NEW_W: f32 = 64.0;
-const NOTE_H: f32 = 40.0;
-const NOTE_GAP: f32 = 4.0;
-const NOTES_MORE_W: f32 = 120.0;
+const LIST_TOP_GAP: f32 = 6.0;
+const REMINDER_H: f32 = 29.0;
+const GROUP_H: f32 = 18.0;
+/// Above every day group but the chunk's first.
+const GROUP_GAP: f32 = 6.0;
+const NOTE_COLUMNS: usize = 2;
+const NOTE_ROWS: usize = 2;
+const NOTE_GAP: f32 = 9.0;
+const NOTE_MAX_H: f32 = 92.0;
+const LIST_MORE_GAP: f32 = 4.0;
+const LIST_MORE_W: f32 = 120.0;
 
 const CLI_STATUS_W: f32 = 160.0;
 const CLI_LINE_H: f32 = 20.0;
@@ -202,16 +264,22 @@ const CLI_GAP: f32 = 12.0;
 
 const TILE_GAP: f32 = 10.0;
 /// Tiles stay this short when the panel has room to spare.
-const TILE_MAX_H: f32 = 84.0;
-const TILE_GLYPH_H: f32 = 30.0;
+const TILE_MAX_H: f32 = 98.0;
+const TILE_GLYPH_H: f32 = 28.0;
 const TILE_LABEL_H: f32 = 16.0;
-const TILE_INNER_GAP: f32 = 6.0;
+const TILE_INNER_GAP: f32 = 8.0;
 
-const MEDIA_ART: f32 = 128.0;
-const MEDIA_BUTTON_W: f32 = 56.0;
-const MEDIA_BUTTON_H: f32 = 44.0;
-const MEDIA_BUTTON_STEP: f32 = 72.0;
-const LYRICS_W: f32 = 64.0;
+const COVER: f32 = 196.0;
+const COVER_GAP: f32 = 24.0;
+const MEDIA_LABEL_H: f32 = 14.0;
+const MEDIA_TITLE_H: f32 = 38.0;
+const MEDIA_ARTIST_H: f32 = 18.0;
+const MEDIA_CONTROLS_GAP: f32 = 26.0;
+const MEDIA_PLAY: f32 = 48.0;
+const MEDIA_SIDE_W: f32 = 32.0;
+const MEDIA_BUTTON_GAP: f32 = 12.0;
+const LYRICS_W: f32 = 66.0;
+const LYRICS_H: f32 = 26.0;
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect {
@@ -332,10 +400,35 @@ fn stack(
     }
 }
 
+/// An event's minutes on `day`, start and end clipped to the day; one with
+/// no length counts as half an hour.
+fn minutes_on(ev: &CalEvent, day: NaiveDate) -> (i64, i64) {
+    let day_start = day.and_time(NaiveTime::MIN);
+    let minute = |t: &EventTime| {
+        let at = match t {
+            EventTime::AllDay(d) => d.and_time(NaiveTime::MIN),
+            EventTime::At(t) => t.naive_local(),
+        };
+        (at - day_start).num_minutes().clamp(0, 24 * 60)
+    };
+    let start = minute(&ev.start).min(24 * 60 - 1);
+    let end = minute(&ev.end);
+    (
+        start,
+        if end > start {
+            end
+        } else {
+            (start + 30).min(24 * 60)
+        },
+    )
+}
+
 /// Month: grid on the left, the selected day's events on the right. Week:
-/// seven columns of up to three events. Day: the selected day's events, chunk
-/// `day_page` (wrapping) when they do not all fit. `events` is the whole
-/// snapshot; each day's share comes from `events_on`.
+/// seven columns of event chips. Day: all-day bands over an hour timeline;
+/// `day_page` (wrapping) pages through what does not fit. `events` is the
+/// whole snapshot; each day's share comes from `events_on`. `title_w` is the
+/// drawn title's width (the arrows follow it); `now` the local time, which
+/// the day view of today keeps in sight and marks.
 #[allow(clippy::too_many_arguments)]
 pub fn calendar_layout(
     s: ShapeRect,
@@ -346,22 +439,27 @@ pub fn calendar_layout(
     status: &CalStatus,
     day_page: usize,
     strip: bool,
+    title_w: f32,
+    now: Option<NaiveDateTime>,
 ) -> CalendarLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
     let (l, r) = (left(s), right(s));
 
-    // Header row, right to left: view selector, next, prev; the title takes the rest.
-    let seg_w = 3.0 * VIEW_BUTTON_W + 2.0 * VIEW_BUTTON_GAP;
-    let seg_x = r - seg_w;
+    // Header row: the title and its arrows on the left, the view selector
+    // on the right.
+    let seg_w = 3.0 * VIEW_BUTTON_W;
+    let seg_x = r - SEG_PAD - seg_w;
     let views = [CalView::Day, CalView::Week, CalView::Month];
     let view_buttons = std::array::from_fn(|i| {
-        let x = seg_x + i as f32 * (VIEW_BUTTON_W + VIEW_BUTTON_GAP);
+        let x = seg_x + i as f32 * VIEW_BUTTON_W;
         (views[i], rect(x, top, VIEW_BUTTON_W, HEADER_H))
     });
-    let next = rect(seg_x - 12.0 - NAV_W, top, NAV_W, HEADER_H);
-    let prev = rect(next.x - 4.0 - NAV_W, top, NAV_W, HEADER_H);
-    let header = rect(l, top, prev.x - 8.0 - l, HEADER_H);
+    let nav_w = 2.0 * NAV_W + NAV_GAP;
+    let title_max = seg_x - SEG_PAD - NAV_SEG_GAP - nav_w - TITLE_NAV_GAP - l;
+    let header = rect(l, top, title_w.clamp(0.0, title_max.max(0.0)), HEADER_H);
+    let prev = rect(header.right() + TITLE_NAV_GAP, top, NAV_W, HEADER_H);
+    let next = rect(prev.right() + NAV_GAP, top, NAV_W, HEADER_H);
     let body = header.bottom() + HEADER_GAP;
 
     let ids_on = |d: NaiveDate| -> Vec<String> {
@@ -391,32 +489,37 @@ pub fn calendar_layout(
         caption: None,
         rows: Vec::new(),
         more: None,
+        hours: Vec::new(),
+        now_y: None,
         add: Rect::default(),
         connect: None,
     };
 
     match view {
         CalView::Month => {
-            let col_x = |c: usize| l + c as f32 * (CELL_W + CELL_GAP_X);
+            let col_x = |c: usize| l + c as f32 * CELL_W;
             layout.weekday_labels = (0..7)
                 .map(|c| rect(col_x(c), body, CELL_W, LABEL_H))
                 .collect();
             let cells_y = body + LABEL_H + CELL_GAP_Y;
+            let pitch = ((bottom - cells_y + CELL_GAP_Y) / 6.0)
+                .floor()
+                .min(CELL_PITCH_MAX);
             let (first, _) = range_for(CalView::Month, anchor);
             layout.month_cells = (0..42usize)
                 .filter_map(|i| {
                     let d = first.checked_add_days(Days::new(i as u64))?;
-                    let y = cells_y + (i / 7) as f32 * (CELL_H + CELL_GAP_Y);
-                    Some((d, rect(col_x(i % 7), y, CELL_W, CELL_H)))
+                    let y = cells_y + (i / 7) as f32 * pitch;
+                    Some((d, rect(col_x(i % 7), y, CELL_W, pitch - CELL_GAP_Y)))
                 })
                 .collect();
-            let list_x = col_x(6) + CELL_W + LIST_GAP;
+            let list_x = col_x(7) + 2.0 * LIST_GAP;
             let list = rect(list_x, body, r - list_x, bottom - body);
             let caption = rect(list.x, list.y, list.w, CAPTION_H);
             let st = stack(
                 list.x,
                 list.w,
-                caption.bottom() + 4.0,
+                caption.bottom() + CAPTION_GAP,
                 bottom,
                 ids_on(selected),
                 0,
@@ -429,48 +532,57 @@ pub fn calendar_layout(
             layout.add = st.add;
             layout.connect = st.connect;
         }
-        CalView::Day => {
-            let list = rect(l, body, r - l, bottom - body);
-            let st = stack(
-                list.x,
-                list.w,
-                list.y,
-                bottom,
-                ids_on(selected),
-                day_page,
-                wants_connect,
-            );
-            layout.list = list;
-            layout.rows = st.rows;
-            layout.more = st.more;
-            layout.add = st.add;
-            layout.connect = st.connect;
-        }
+        CalView::Day => day_timeline(
+            &mut layout,
+            (l, r, body, bottom),
+            events,
+            day_page,
+            wants_connect,
+            now,
+        ),
         CalView::Week => {
             let (monday, _) = range_for(CalView::Week, anchor);
             let col_w = (r - l - 6.0 * WEEK_GAP) / 7.0;
-            let col_h = WEEK_HEAD_H + WEEK_ROWS as f32 * ROW_H + MORE_H;
+            let col_h = bottom - body - WEEK_ADD_GAP - ADD_H;
             for i in 0..7usize {
                 let Some(d) = monday.checked_add_days(Days::new(i as u64)) else {
                     break;
                 };
                 let x = l + i as f32 * (col_w + WEEK_GAP);
-                layout.week_columns.push((d, rect(x, body, col_w, col_h)));
-                let ids = ids_on(d);
-                let rows_y = body + WEEK_HEAD_H;
-                if ids.len() > WEEK_ROWS {
-                    let more = rect(x, rows_y + WEEK_ROWS as f32 * ROW_H, col_w, MORE_H);
-                    layout.week_more.push((d, ids.len() - WEEK_ROWS, more));
+                let column = rect(x, body, col_w, col_h);
+                layout.week_columns.push((d, column));
+                let on = events_on(events, d);
+                let heights: Vec<f32> = on
+                    .iter()
+                    .map(|e| if e.all_day() { BAND_H } else { CHIP_H })
+                    .collect();
+                let chips_top = body + WEEK_HEAD_H;
+                let avail = column.bottom() - CHIP_PAD - chips_top;
+                let all: f32 = heights.iter().map(|h| h + CHIP_GAP).sum::<f32>() - CHIP_GAP;
+                let room = if all <= avail {
+                    avail
+                } else {
+                    avail - WEEK_MORE_H - CHIP_GAP
+                };
+                let mut y = chips_top;
+                let mut shown = 0;
+                for (ev, h) in on.iter().zip(&heights) {
+                    if y + h > chips_top + room {
+                        break;
+                    }
+                    let chip = rect(x + CHIP_PAD, y, col_w - 2.0 * CHIP_PAD, *h);
+                    layout.rows.push((ev.id.clone(), chip));
+                    y += h + CHIP_GAP;
+                    shown += 1;
                 }
-                layout.rows.extend(
-                    ids.into_iter()
-                        .take(WEEK_ROWS)
-                        .enumerate()
-                        .map(|(j, id)| (id, rect(x, rows_y + j as f32 * ROW_H, col_w, ROW_H))),
-                );
+                if shown < on.len() {
+                    let foot = column.bottom() - CHIP_PAD - WEEK_MORE_H;
+                    let more = rect(x + CHIP_PAD, foot, col_w - 2.0 * CHIP_PAD, WEEK_MORE_H);
+                    layout.week_more.push((d, on.len() - shown, more));
+                }
             }
             layout.list = rect(l, body, r - l, col_h);
-            layout.add = rect(l, layout.list.bottom() + 6.0, ADD_W, ADD_H);
+            layout.add = rect(l, layout.list.bottom() + WEEK_ADD_GAP, ADD_W, ADD_H);
             // As tall as in the other views, centered on the "+ Tambah acara" row.
             let y = layout.add.y + (ADD_H - CONNECT_H) / 2.0;
             layout.connect =
@@ -480,46 +592,212 @@ pub fn calendar_layout(
     layout
 }
 
-/// Big ring on the left; the phase, the session and the three buttons in a
-/// column on its right, centred on the ring. Ring and column together are
-/// centred in the panel.
+/// The day view: an optional connect button, the all-day bands, then an
+/// hour timeline with the timed events as blocks (side by side where they
+/// overlap), and "+ Tambah acara" with "+N lagi" at the foot.
+///
+/// Pages: the first shows the hours from just before the first event (or
+/// around `now` on today); each further one the hours of the earliest event
+/// not seen yet, and the next two all-day bands when there are more than
+/// two. "+N lagi" counts what the following pages add.
+fn day_timeline(
+    layout: &mut CalendarLayout,
+    (l, r, body, bottom): (f32, f32, f32, f32),
+    events: &[CalEvent],
+    day_page: usize,
+    wants_connect: bool,
+    now: Option<NaiveDateTime>,
+) {
+    let day = layout.selected;
+    let mut y = body;
+    if wants_connect {
+        let c = rect(l, y, (r - l).min(CONNECT_W), CONNECT_H);
+        y = c.bottom() + CONNECT_GAP;
+        layout.connect = Some(c);
+    }
+    let on = events_on(events, day);
+    let (all_day, timed): (Vec<&CalEvent>, Vec<&CalEvent>) =
+        on.into_iter().partition(|e| e.all_day());
+    let band_y = y;
+    if !all_day.is_empty() {
+        y += ALL_DAY_H + ALL_DAY_GAP;
+    }
+    let foot = bottom - ADD_H;
+    layout.add = rect(l, foot, ADD_W, ADD_H);
+    let tl_top = y + HOUR_LABEL_HALF;
+    let tl_bottom = foot - ADD_GAP - HOUR_LABEL_HALF;
+    let span = (((tl_bottom - tl_top) / HOUR_H).floor().max(0.0) as u32).clamp(MIN_HOURS, 24);
+
+    let minutes: Vec<(i64, i64)> = timed.iter().map(|e| minutes_on(e, day)).collect();
+    let in_window =
+        |h: u32, (s, e): (i64, i64)| s < i64::from(h + span) * 60 && e > i64::from(h) * 60;
+    let mut first = minutes
+        .first()
+        .map_or(DAY_START_H, |(s, _)| ((*s / 60) as u32).saturating_sub(1));
+    let today_now = now.filter(|n| n.date() == day);
+    if let Some(n) = today_now {
+        if !(first..first + span).contains(&n.hour()) {
+            first = n.hour().saturating_sub(span / 2);
+        }
+    }
+    let mut windows = vec![first.min(24 - span)];
+    let mut seen: Vec<bool> = minutes.iter().map(|m| in_window(windows[0], *m)).collect();
+    while let Some(i) = seen.iter().position(|s| !s) {
+        let h = ((minutes[i].0 / 60) as u32).min(24 - span);
+        windows.push(h);
+        for (seen, m) in seen.iter_mut().zip(&minutes) {
+            *seen |= in_window(h, *m);
+        }
+    }
+    let band_pages = if all_day.len() <= ALL_DAY_PER_PAGE {
+        1
+    } else {
+        all_day.len().div_ceil(ALL_DAY_PER_PAGE)
+    };
+    let pages = windows.len().max(band_pages);
+    let page = day_page % pages;
+    let window = windows[page.min(windows.len() - 1)];
+
+    // All-day bands of this page.
+    let bands: &[&CalEvent] = if all_day.len() <= ALL_DAY_PER_PAGE {
+        &all_day
+    } else if page < band_pages {
+        let start = page * ALL_DAY_PER_PAGE;
+        &all_day[start..(start + ALL_DAY_PER_PAGE).min(all_day.len())]
+    } else {
+        &[]
+    };
+    if !bands.is_empty() {
+        let k = bands.len() as f32;
+        let w = ((r - l - (k - 1.0) * ALL_DAY_GAP) / k).min(ALL_DAY_MAX_W);
+        for (i, ev) in bands.iter().enumerate() {
+            let x = l + i as f32 * (w + ALL_DAY_GAP);
+            layout
+                .rows
+                .push((ev.id.clone(), rect(x, band_y, w, ALL_DAY_H)));
+        }
+    }
+
+    // The timeline and its blocks.
+    let y_of = |minute: i64| tl_top + (minute - i64::from(window) * 60) as f32 / 60.0 * HOUR_H;
+    let tl_end = tl_top + span as f32 * HOUR_H;
+    layout.list = rect(l, tl_top, r - l, tl_end - tl_top);
+    layout.hours = (0..=span)
+        .map(|k| (window + k, tl_top + k as f32 * HOUR_H))
+        .collect();
+    layout.now_y = today_now.and_then(|n| {
+        let minute = i64::from(n.hour() * 60 + n.minute());
+        let y = y_of(minute);
+        (tl_top..=tl_end).contains(&y).then_some(y)
+    });
+    let mut blocks: Vec<(String, f32, f32)> = timed
+        .iter()
+        .zip(&minutes)
+        .filter(|(_, m)| in_window(window, **m))
+        .map(|(ev, (s, e))| {
+            let (y0, y1) = (y_of(*s).max(tl_top), y_of(*e).min(tl_end));
+            let h = (y1 - y0 - 2.0).max(MIN_BLOCK_H);
+            let top = (y0 + 1.0).min(tl_end - h);
+            (ev.id.clone(), top, h)
+        })
+        .collect();
+    blocks.sort_by(|a, b| a.1.total_cmp(&b.1));
+    // Each block goes in the first lane free at its top.
+    let mut lane_ends: Vec<f32> = Vec::new();
+    let lanes: Vec<usize> = blocks
+        .iter()
+        .map(|(_, top, h)| {
+            let lane = match lane_ends.iter().position(|end| *end <= *top) {
+                Some(i) => i,
+                None => {
+                    lane_ends.push(0.0);
+                    lane_ends.len() - 1
+                }
+            };
+            lane_ends[lane] = top + h + 1.0;
+            lane
+        })
+        .collect();
+    let area_x = l + HOUR_GUTTER + BLOCK_INSET;
+    let area_w = r - BLOCK_RIGHT - area_x;
+    let n = lane_ends.len().max(1) as f32;
+    let lane_w = (area_w - (n - 1.0) * LANE_GAP) / n;
+    for ((id, top, h), lane) in blocks.into_iter().zip(lanes) {
+        let x = area_x + lane as f32 * (lane_w + LANE_GAP);
+        layout.rows.push((id, rect(x, top, lane_w, h)));
+    }
+
+    // "+N lagi": what the next pages add; "Kembali ke atas" on the last.
+    if pages > 1 {
+        let shown_bands = if all_day.len() <= ALL_DAY_PER_PAGE {
+            all_day.len()
+        } else {
+            ((page + 1) * ALL_DAY_PER_PAGE).min(all_day.len())
+        };
+        let shown_timed = minutes
+            .iter()
+            .filter(|m| {
+                windows[..=page.min(windows.len() - 1)]
+                    .iter()
+                    .any(|w| in_window(*w, **m))
+            })
+            .count();
+        let later = all_day.len() + timed.len() - shown_bands - shown_timed;
+        let count = if page + 1 == pages { 0 } else { later };
+        let more = rect(layout.add.right() + 12.0, foot, MORE_W, ADD_H);
+        layout.more = Some((count, more));
+    }
+}
+
+/// Big ring on the left with the countdown and the phase inside; right of
+/// it a column with the session, the three round buttons (the primary one
+/// in the middle) and the phase that comes next. Ring and column together
+/// are centred in the panel.
 pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
     let (l, r) = (left(s), right(s));
-    let header = rect(l, top, r - l, HEADER_H);
+    let durations = rect(r - DURATIONS_W, top, DURATIONS_W, HEADER_H);
+    let header = rect(l, top, durations.x - 8.0 - l, HEADER_H);
     let body = header.bottom() + 8.0;
-    let body_h = bottom - body;
-    let group_w = 2.0 * RING_RADIUS + RING_GAP + COLUMN_W;
+    let cy = body + (bottom - body) / 2.0;
+    let outer = RING_RADIUS + RING_STROKE / 2.0;
+    let group_w = 2.0 * outer + RING_GAP + COLUMN_W;
     let group_x = l + ((r - l) - group_w) / 2.0;
-    let cy = body + body_h / 2.0;
-    let ring_center = (group_x + RING_RADIUS, cy);
+    let cx = group_x + outer;
     let inner = RING_RADIUS - RING_STROKE / 2.0;
-    let half_w = (inner * inner - TIME_INK_HALF * TIME_INK_HALF).sqrt();
+    // Widest where the inner edge allows at the farther of the ink's edges.
+    let half_at = |dy: f32| (inner * inner - dy * dy).max(0.0).sqrt();
+    let time_cy = cy - TIME_LIFT;
+    let time_half = half_at(TIME_LIFT + TIME_INK_HALF);
     let time = rect(
-        ring_center.0 - half_w,
-        cy - TIME_H / 2.0,
-        2.0 * half_w,
+        cx - time_half,
+        time_cy - TIME_H / 2.0,
+        2.0 * time_half,
         TIME_H,
     );
+    let phase_y = time_cy + TIME_INK_HALF + PHASE_GAP;
+    let phase_half = half_at(phase_y + PHASE_H - cy);
+    let phase = rect(cx - phase_half, phase_y, 2.0 * phase_half, PHASE_H);
 
-    let x = group_x + 2.0 * RING_RADIUS + RING_GAP;
-    let column_h = PHASE_H + SESSION_GAP + SESSION_H + ACTION_GAP + ACTION_H;
-    let y = cy - column_h / 2.0;
-    let phase = rect(x, y, COLUMN_W, PHASE_H);
-    let session = rect(x, phase.bottom() + SESSION_GAP, COLUMN_W, SESSION_H);
-    let action_y = session.bottom() + ACTION_GAP;
-    let start_pause = rect(x, action_y, START_W, ACTION_H);
-    let reset = rect(
-        start_pause.right() + ACTION_SPACING,
-        action_y,
-        ACTION_W,
-        ACTION_H,
+    let x = group_x + 2.0 * outer + RING_GAP;
+    let column_h = SESSION_H + COLUMN_GAP + PRIMARY_D + COLUMN_GAP + NEXT_H;
+    let session = rect(x, cy - column_h / 2.0, COLUMN_W, SESSION_H);
+    let row_y = session.bottom() + COLUMN_GAP;
+    let side_y = row_y + (PRIMARY_D - SECONDARY_D) / 2.0;
+    let reset = rect(x, side_y, SECONDARY_D, SECONDARY_D);
+    let start_pause = rect(reset.right() + CONTROL_GAP, row_y, PRIMARY_D, PRIMARY_D);
+    let skip = rect(
+        start_pause.right() + CONTROL_GAP,
+        side_y,
+        SECONDARY_D,
+        SECONDARY_D,
     );
-    let skip = rect(reset.right() + ACTION_SPACING, action_y, ACTION_W, ACTION_H);
+    let next_up = rect(x, start_pause.bottom() + COLUMN_GAP, COLUMN_W, NEXT_H);
     PomodoroLayout {
         header,
-        ring_center,
+        durations,
+        ring_center: (cx, cy),
         ring_radius: RING_RADIUS,
         time,
         phase,
@@ -527,90 +805,189 @@ pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
         start_pause,
         reset,
         skip,
+        next_up,
     }
 }
 
-/// Rows of 40 px, as many as fit. When they do not all fit, the list shows
-/// chunk `notes_page` (wrapping) and a "+N lagi" / "Kembali ke atas" line.
-pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool) -> ListLayout {
-    list_layout(s, notes.iter().map(|n| n.id.as_str()), notes_page, strip)
-}
-
-/// The upcoming reminders, laid out like the notes.
-pub fn reminders_layout(
-    s: ShapeRect,
-    reminders: &[Reminder],
-    page: usize,
-    strip: bool,
-) -> ListLayout {
-    list_layout(s, reminders.iter().map(|r| r.id.as_str()), page, strip)
-}
-
-fn list_layout<'a>(
-    s: ShapeRect,
-    ids: impl ExactSizeIterator<Item = &'a str>,
-    page: usize,
-    strip: bool,
-) -> ListLayout {
+/// The title and "+ Baru" of the notes and reminders pages, and the y the
+/// items start at.
+fn list_header(s: ShapeRect, strip: bool) -> (Rect, Rect, f32) {
     let top = content_top(s, strip);
-    let bottom = content_bottom(s);
     let (l, r) = (left(s), right(s));
     let header = rect(l, top, r - l - NEW_W - 8.0, HEADER_H);
     let new_button = rect(r - NEW_W, top, NEW_W, HEADER_H);
-    let list_y = header.bottom() + 8.0;
-    let pitch = NOTE_H + NOTE_GAP;
-    let n = ids.len();
-    let k = rows_that_fit(n, bottom - list_y, pitch, NOTE_GAP, MORE_H).max(1);
-    let (start, shown) = chunk(n, k, page);
-    let rows = ids
+    (header, new_button, header.bottom() + LIST_TOP_GAP)
+}
+
+/// Cards in two columns, newest top left, two rows of them. When there are
+/// more, the page shows chunk `notes_page` (wrapping) and a "+N lagi" /
+/// "Kembali ke atas" line under the cards.
+pub fn notes_layout(s: ShapeRect, notes: &[Note], notes_page: usize, strip: bool) -> ListLayout {
+    let (header, new_button, list_y) = list_header(s, strip);
+    let (l, r) = (left(s), right(s));
+    let bottom = content_bottom(s);
+    let per_page = NOTE_COLUMNS * NOTE_ROWS;
+    let rows_f = NOTE_ROWS as f32;
+    let card_h = ((bottom - list_y - LIST_MORE_GAP - MORE_H - (rows_f - 1.0) * NOTE_GAP) / rows_f)
+        .min(NOTE_MAX_H);
+    let card_w = (r - l - (NOTE_COLUMNS as f32 - 1.0) * NOTE_GAP) / NOTE_COLUMNS as f32;
+    let n = notes.len();
+    let (start, shown) = chunk(n, per_page, notes_page);
+    let rows = notes
+        .iter()
         .skip(start)
         .take(shown)
         .enumerate()
-        .map(|(i, id)| {
-            let y = list_y + i as f32 * pitch;
-            (id.to_owned(), rect(l, y, r - l, NOTE_H))
+        .map(|(i, note)| {
+            let (row, col) = ((i / NOTE_COLUMNS) as f32, (i % NOTE_COLUMNS) as f32);
+            let x = l + col * (card_w + NOTE_GAP);
+            let y = list_y + row * (card_h + NOTE_GAP);
+            (note.id.clone(), rect(x, y, card_w, card_h))
         })
         .collect();
-    let more = (n > k).then(|| {
-        let y = list_y + shown as f32 * pitch;
-        (n - start - shown, rect(l, y, NOTES_MORE_W, MORE_H))
+    let more = (n > per_page).then(|| {
+        let y = list_y + rows_f * card_h + (rows_f - 1.0) * NOTE_GAP + LIST_MORE_GAP;
+        (n - start - shown, rect(l, y, LIST_MORE_W, MORE_H))
     });
     ListLayout {
         header,
         new_button,
+        groups: Vec::new(),
         rows,
         more,
     }
 }
 
-/// The v1 expanded arrangement at panel scale: large art on the left, title
-/// over artist beside it, prev / play-pause / next under the text.
+/// The upcoming reminders in rows grouped by day, each group under its
+/// heading: overdue ones join today's group. When they do not all fit, the
+/// page shows chunk `page` (wrapping), each chunk starting with its group's
+/// heading, and a "+N lagi" / "Kembali ke atas" line.
+pub fn reminders_layout(
+    s: ShapeRect,
+    reminders: &[Reminder],
+    page: usize,
+    strip: bool,
+    today: NaiveDate,
+) -> ListLayout {
+    let (header, new_button, list_y) = list_header(s, strip);
+    let (l, r) = (left(s), right(s));
+    let bottom = content_bottom(s);
+    let days: Vec<NaiveDate> = reminders
+        .iter()
+        .map(|x| {
+            local_time(x.due_unix)
+                .map_or(today, |t| t.date())
+                .max(today)
+        })
+        .collect();
+    // Height of items `start..end` from the top of a chunk.
+    let height = |start: usize, end: usize| -> f32 {
+        (start..end)
+            .map(|i| {
+                let heading = if i == start {
+                    GROUP_H
+                } else if days[i] != days[i - 1] {
+                    GROUP_GAP + GROUP_H
+                } else {
+                    0.0
+                };
+                heading + REMINDER_H
+            })
+            .sum()
+    };
+    let n = days.len();
+    let mut chunks = Vec::new();
+    if height(0, n) <= bottom - list_y {
+        chunks.push((0, n));
+    } else {
+        let room = bottom - list_y - LIST_MORE_GAP - MORE_H;
+        let mut start = 0;
+        while start < n {
+            let mut end = start + 1;
+            while end < n && height(start, end + 1) <= room {
+                end += 1;
+            }
+            chunks.push((start, end));
+            start = end;
+        }
+    }
+    let mut groups = Vec::new();
+    let mut rows = Vec::new();
+    let mut y = list_y;
+    let mut more = None;
+    if let Some(&(start, end)) = chunks.get(page % chunks.len().max(1)) {
+        for i in start..end {
+            if i == start || days[i] != days[i - 1] {
+                if i != start {
+                    y += GROUP_GAP;
+                }
+                groups.push((days[i], rect(l, y, r - l, GROUP_H)));
+                y += GROUP_H;
+            }
+            rows.push((reminders[i].id.clone(), rect(l, y, r - l, REMINDER_H)));
+            y += REMINDER_H;
+        }
+        if chunks.len() > 1 {
+            more = Some((n - end, rect(l, y + LIST_MORE_GAP, LIST_MORE_W, MORE_H)));
+        }
+    }
+    ListLayout {
+        header,
+        new_button,
+        groups,
+        rows,
+        more,
+    }
+}
+
+/// The big cover on the left; beside it, centred on it, "SEDANG DIPUTAR",
+/// the title over the artist, and the transport row (prev, the round
+/// play/pause, next) with "Lirik" at its right end.
 pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
-    let art = rect(
-        left(s) + 20.0,
-        top + (bottom - top - MEDIA_ART) / 2.0,
-        MEDIA_ART,
-        MEDIA_ART,
+    let (l, r) = (left(s), right(s));
+    let side = COVER.min(bottom - top);
+    let art = rect(l, top + (bottom - top - side) / 2.0, side, side);
+    let x = art.right() + COVER_GAP;
+    let w = r - x;
+    let block_h = MEDIA_LABEL_H
+        + 6.0
+        + MEDIA_TITLE_H
+        + 2.0
+        + MEDIA_ARTIST_H
+        + MEDIA_CONTROLS_GAP
+        + MEDIA_PLAY;
+    let label = rect(x, art.y + (side - block_h) / 2.0, w, MEDIA_LABEL_H);
+    let title = rect(x, label.bottom() + 6.0, w, MEDIA_TITLE_H);
+    let artist = rect(x, title.bottom() + 2.0, w, MEDIA_ARTIST_H);
+    let row_y = artist.bottom() + MEDIA_CONTROLS_GAP;
+    let prev = rect(x, row_y, MEDIA_SIDE_W, MEDIA_PLAY);
+    let play = rect(
+        prev.right() + MEDIA_BUTTON_GAP,
+        row_y,
+        MEDIA_PLAY,
+        MEDIA_PLAY,
     );
-    let text_x = art.right() + 24.0;
-    let text_w = right(s) - 20.0 - text_x;
-    let button_y = art.bottom() - MEDIA_BUTTON_H;
-    let button = |i: f32| {
-        rect(
-            text_x + i * MEDIA_BUTTON_STEP,
-            button_y,
-            MEDIA_BUTTON_W,
-            MEDIA_BUTTON_H,
-        )
-    };
+    let next = rect(
+        play.right() + MEDIA_BUTTON_GAP,
+        row_y,
+        MEDIA_SIDE_W,
+        MEDIA_PLAY,
+    );
+    let lyrics = rect(
+        r - LYRICS_W,
+        row_y + (MEDIA_PLAY - LYRICS_H) / 2.0,
+        LYRICS_W,
+        LYRICS_H,
+    );
     ExpandedLayout {
         art,
-        title: rect(text_x, art.y + 14.0, text_w, 26.0),
-        artist: rect(text_x, art.y + 42.0, text_w, 22.0),
-        buttons: [button(0.0), button(1.0), button(2.0)],
-        lyrics: rect(right(s) - LYRICS_W, top, LYRICS_W, HEADER_H),
+        label,
+        title,
+        artist,
+        buttons: [prev, play, next],
+        lyrics,
     }
 }
 
@@ -683,11 +1060,11 @@ pub fn tile_parts(tile: Rect) -> (Rect, Rect) {
     (glyph, label)
 }
 
-/// Small ring on the left (center, radius 11), then the time and label.
+/// Small ring on the left (center, radius 8), then the time and label.
 pub fn pomodoro_compact_layout(s: ShapeRect) -> ((f32, f32), f32, Rect) {
-    const RADIUS: f32 = 11.0;
+    const RADIUS: f32 = 8.0;
     let center = (s.x + 22.0, s.y + s.h / 2.0);
-    let text_x = center.0 + RADIUS + 9.0;
+    let text_x = center.0 + RADIUS + 10.0;
     let text = rect(text_x, s.y, s.x + s.w - 18.0 - text_x, s.h);
     (center, RADIUS, text)
 }
@@ -803,6 +1180,45 @@ mod tests {
         (0..n).map(|i| all_day(&format!("ev{i}"), d)).collect()
     }
 
+    fn at(d: NaiveDate, h: u32, m: u32) -> NaiveDateTime {
+        d.and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap())
+    }
+
+    fn timed(id: &str, start: NaiveDateTime, end: NaiveDateTime) -> CalEvent {
+        use chrono::{Local, TimeZone};
+        let local = |t| EventTime::At(Local.from_local_datetime(&t).earliest().unwrap());
+        CalEvent {
+            start: local(start),
+            end: local(end),
+            ..all_day(id, start.date())
+        }
+    }
+
+    /// The title width the tests assume ("Oktober 2026" in Fraunces It 20).
+    const TITLE_W: f32 = 130.0;
+
+    /// The layout without a title width or a clock: tests that only page
+    /// or count need neither.
+    #[allow(clippy::too_many_arguments)]
+    fn calendar_layout(
+        s: ShapeRect,
+        view: CalView,
+        anchor: NaiveDate,
+        selected: NaiveDate,
+        events: &[CalEvent],
+        status: &CalStatus,
+        day_page: usize,
+        strip: bool,
+    ) -> CalendarLayout {
+        super::calendar_layout(
+            s, view, anchor, selected, events, status, day_page, strip, TITLE_W, None,
+        )
+    }
+
+    fn reminders_layout(s: ShapeRect, r: &[Reminder], page: usize, strip: bool) -> ListLayout {
+        super::reminders_layout(s, r, page, strip, oct25())
+    }
+
     fn notes(n: usize) -> Vec<Note> {
         (0..n)
             .map(|i| Note {
@@ -844,7 +1260,43 @@ mod tests {
                 e
             }));
         }
+        // A busy timed day too: overlapping, short and late events.
+        let d = date(2026, 10, 26);
+        for (i, (h0, m0, h1, m1)) in [
+            (9, 0, 10, 30),
+            (9, 30, 11, 0),
+            (10, 0, 10, 10),
+            (13, 0, 14, 0),
+            (13, 0, 13, 5),
+            (21, 0, 23, 30),
+            (23, 50, 23, 50),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            events.push(timed(&format!("t{i}"), at(d, h0, m0), at(d, h1, m1)));
+        }
         let mut out = Vec::new();
+        for page in [0, 1, 2, 3] {
+            for now in [None, Some(at(d, 13, 10)), Some(at(d, 23, 59))] {
+                let l = super::calendar_layout(
+                    s,
+                    CalView::Day,
+                    d,
+                    d,
+                    &events,
+                    &CalStatus::NeedsLogin,
+                    page,
+                    strip,
+                    600.0,
+                    now,
+                );
+                out.push((
+                    format!("day timed p{page} {now:?}"),
+                    PageLayout::Calendar(l),
+                ));
+            }
+        }
         for view in [CalView::Day, CalView::Week, CalView::Month] {
             for status in [CalStatus::Ok, CalStatus::Reconnect] {
                 for page in [0, 1, 9] {
@@ -905,8 +1357,8 @@ mod tests {
                 let (dots, active) = page_dots(s, page);
                 assert_eq!(active, i, "{page:?}");
                 for d in dots {
-                    assert_eq!((d.w, d.h), (6.0, 6.0));
-                    assert_eq!(d.bottom(), s.y + s.h - 12.0);
+                    assert_eq!((d.w, d.h), (5.0, 5.0));
+                    assert_eq!(d.bottom(), s.y + s.h - 11.0);
                 }
                 for pair in dots.windows(2) {
                     assert_eq!(pair[1].x - pair[0].right(), 6.0);
@@ -938,9 +1390,9 @@ mod tests {
             assert_eq!(pair[0].0.succ_opt(), Some(pair[1].0));
         }
         let first = l.month_cells[0].1;
-        assert_eq!((first.w, first.h), (28.0, 24.0));
+        assert_eq!((first.w, first.h), (36.0, 30.0));
         assert_eq!(first.x, s.x + 20.0);
-        assert_eq!(l.month_cells[1].1.x, first.right() + 4.0);
+        assert_eq!(l.month_cells[1].1.x, first.right());
         assert_eq!(l.month_cells[7].1.y, first.bottom() + 2.0);
         assert_eq!(l.month_cells[7].1.x, first.x);
         assert!(first.y >= l.header.bottom() + 6.0);
@@ -950,8 +1402,28 @@ mod tests {
             assert_eq!((label.x, label.w), (cell.x, cell.w));
             assert!(label.bottom() <= cell.y);
         }
-        // The list sits right of the grid.
-        assert_eq!(l.list.x, l.month_cells[6].1.right() + 16.0);
+        // The list sits right of the grid, past the dividing line.
+        assert_eq!(l.list.x, l.month_cells[6].1.right() + 32.0);
+        // The arrows follow the title; the selector keeps to the right.
+        assert_eq!(l.header.w, TITLE_W);
+        assert_eq!(l.prev.x, l.header.right() + 8.0);
+        assert!(l.next.x >= l.prev.right());
+        assert!(l.next.right() + 12.0 <= l.view_buttons[0].1.x);
+        assert_eq!(l.view_buttons[2].1.right() + SEG_PAD, s.x + s.w - 20.0);
+        // A long title is cut short so nothing overlaps.
+        let wide = super::calendar_layout(
+            s,
+            CalView::Month,
+            date(2026, 10, 1),
+            date(2026, 10, 25),
+            &[],
+            &CalStatus::Ok,
+            0,
+            false,
+            900.0,
+            None,
+        );
+        assert!(wide.next.right() + 12.0 <= wide.view_buttons[0].1.x - SEG_PAD + 0.01);
         assert_eq!(l.list.right(), s.x + s.w - 20.0);
         assert!(l.week_columns.is_empty());
     }
@@ -959,7 +1431,7 @@ mod tests {
     #[test]
     fn week_columns_monday_to_sunday() {
         let s = panel(Style::Pill);
-        let events = many_events(5, date(2026, 10, 21));
+        let events = many_events(9, date(2026, 10, 21));
         let l = calendar_layout(
             s,
             CalView::Week,
@@ -974,11 +1446,35 @@ mod tests {
         assert_eq!(days.first(), Some(&date(2026, 10, 19)));
         assert_eq!(days.last(), Some(&date(2026, 10, 25)));
         assert_eq!(days.len(), 7);
-        assert_eq!(l.rows.len(), 3, "at most 3 rows per column");
+        let shown = l.rows.len();
+        assert!((3..9).contains(&shown), "{shown} chips");
         assert_eq!(l.week_more.len(), 1);
         assert_eq!(l.week_more[0].0, date(2026, 10, 21));
-        assert_eq!(l.week_more[0].1, 2);
+        assert_eq!(l.week_more[0].1, 9 - shown);
         assert!(l.month_cells.is_empty());
+        // Chips sit inside their column under its head, the "+N" at its foot.
+        let (_, col) = l.week_columns[2];
+        for (_, chip) in &l.rows {
+            assert!(chip.x > col.x && chip.right() < col.right());
+            assert!(chip.y >= col.y + WEEK_HEAD_H && chip.bottom() <= l.week_more[0].2.y);
+        }
+        assert!(l.week_more[0].2.bottom() <= col.bottom());
+        // Few events all fit, all-day bands shorter than timed chips.
+        let d = date(2026, 10, 22);
+        let mut few = many_events(2, d);
+        few.push(timed("t", at(d, 10, 0), at(d, 11, 0)));
+        let l = calendar_layout(
+            s,
+            CalView::Week,
+            oct25(),
+            oct25(),
+            &few,
+            &CalStatus::Ok,
+            0,
+            false,
+        );
+        assert_eq!((l.rows.len(), l.week_more.len()), (3, 0));
+        assert!(l.rows[0].1.h < l.rows[2].1.h);
     }
 
     #[test]
@@ -995,14 +1491,17 @@ mod tests {
             0,
             false,
         );
-        assert!(!l.rows.is_empty());
+        // Twenty all-day events: two bands a page.
+        assert_eq!(l.rows.len(), 2);
         let (hidden, more) = l.more.expect("overflow");
         assert_eq!(hidden, 20 - l.rows.len());
         let (dots, _) = page_dots(s, Page::Calendar);
         assert!(l.add.bottom() <= dots[0].y, "everything above the dots");
         assert!(more.y >= l.rows.last().unwrap().1.bottom());
+        assert_eq!((more.y, more.h), (l.add.y, l.add.h), "beside the add row");
         for (_, r) in &l.rows {
-            assert_eq!(r.h, 34.0);
+            assert_eq!(r.h, 22.0);
+            assert!(r.bottom() <= l.list.y, "bands above the timeline");
         }
         // Few events: all shown, no "+N".
         let l = calendar_layout(
@@ -1093,18 +1592,110 @@ mod tests {
     }
 
     #[test]
+    fn day_timeline_places_blocks_by_time_and_marks_now() {
+        let s = panel(Style::Pill);
+        let d = date(2026, 10, 26);
+        let mut events = vec![all_day("expo", d)];
+        events.push(timed("review", at(d, 10, 0), at(d, 11, 30)));
+        events.push(timed("mep", at(d, 14, 0), at(d, 15, 0)));
+        events.push(timed("late", at(d, 21, 0), at(d, 22, 0)));
+        let day = |page, now| {
+            super::calendar_layout(
+                s,
+                CalView::Day,
+                d,
+                d,
+                &events,
+                &CalStatus::Ok,
+                page,
+                false,
+                200.0,
+                now,
+            )
+        };
+        let l = day(0, Some(at(d, 13, 10)));
+        // 09.00 to 16.00, as in the design: from an hour before the first event.
+        let hours: Vec<u32> = l.hours.iter().map(|(h, _)| *h).collect();
+        assert_eq!(hours, (9..=16).collect::<Vec<_>>());
+        let line = |h: u32| l.hours.iter().find(|(x, _)| *x == h).unwrap().1;
+        for pair in l.hours.windows(2) {
+            assert_eq!(pair[1].1 - pair[0].1, 22.0);
+        }
+        let row = |id: &str| l.rows.iter().find(|(x, _)| x == id).map(|(_, r)| *r);
+        let band = row("expo").expect("all-day band");
+        assert!(band.bottom() <= line(9));
+        let review = row("review").expect("10.00 block");
+        assert!((review.y - line(10)).abs() <= 1.0);
+        assert!(
+            (review.bottom() - (line(11) + 11.0)).abs() <= 1.0,
+            "an hour and a half"
+        );
+        let mep = row("mep").expect("14.00 block");
+        assert!((mep.y - line(14)).abs() <= 1.0);
+        assert_eq!(row("late"), None, "21.00 is on the next page");
+        // The blocks leave the hour labels' gutter free.
+        assert!(review.x >= l.list.x + HOUR_GUTTER);
+        // Now: between 13.00 and 14.00, a sixth of the way.
+        let now = l.now_y.expect("now line");
+        assert!((now - (line(13) + 22.0 / 6.0)).abs() < 0.01);
+        assert_eq!(l.more.map(|m| m.0), Some(1));
+        // Page two shows the late event; the all-day band stays.
+        let p1 = day(1, Some(at(d, 13, 10)));
+        assert!(p1.rows.iter().any(|(id, _)| id == "late"));
+        assert!(p1.rows.iter().any(|(id, _)| id == "expo"));
+        assert_eq!(p1.now_y, None, "13.10 is not in these hours");
+        assert_eq!(p1.more.map(|m| m.0), Some(0), "last page: back to top");
+        assert_eq!(day(2, None).hours, day(0, None).hours, "wraps");
+        // Another day has no now line; an evening "now" moves the hours.
+        assert_eq!(day(0, None).now_y, None);
+        let evening = day(0, Some(at(d, 19, 30)));
+        assert!(evening.now_y.is_some());
+        assert!(evening.hours[0].0 <= 19 && evening.hours.last().unwrap().0 > 19);
+        // Overlapping events go side by side.
+        let both = [
+            timed("a", at(d, 10, 0), at(d, 11, 0)),
+            timed("b", at(d, 10, 30), at(d, 12, 0)),
+        ];
+        let l = super::calendar_layout(
+            s,
+            CalView::Day,
+            d,
+            d,
+            &both,
+            &CalStatus::Ok,
+            0,
+            false,
+            200.0,
+            None,
+        );
+        let (a, b) = (l.rows[0].1, l.rows[1].1);
+        assert!(disjoint(a, b));
+        assert_eq!(a.w, b.w);
+        assert!(a.right() <= b.x || b.right() <= a.x);
+        assert_eq!(l.more, None);
+    }
+
+    #[test]
     fn notes_list_caps_rows() {
         let s = panel(Style::Pill);
         let all = notes(30);
         let l = notes_layout(s, &all, 0, false);
         let k = l.rows.len();
-        assert!(k >= 3, "at least three rows fit, got {k}");
-        assert!(k < 30);
+        assert_eq!(k, 4, "two rows of two cards");
         assert_eq!(l.rows[0].0, "n0");
         assert_eq!(l.more.as_ref().map(|m| m.0), Some(30 - k));
         for (_, r) in &l.rows {
-            assert_eq!(r.h, 40.0);
+            assert_eq!(r.h, 92.0);
         }
+        // Two columns: newest top left, then across.
+        let r: Vec<Rect> = l.rows.iter().map(|(_, r)| *r).collect();
+        assert_eq!((r[0].y, r[1].y), (r[0].y, r[0].y));
+        assert_eq!((r[2].x, r[3].x), (r[0].x, r[1].x));
+        assert_eq!(r[1].x - r[0].right(), 9.0);
+        assert_eq!(r[2].y - r[0].bottom(), 9.0);
+        assert_eq!(r[0].x, left(s));
+        assert!((r[1].right() - right(s)).abs() < 0.01);
+        assert!(l.groups.is_empty());
         let (dots, _) = page_dots(s, Page::Notes);
         assert!(l.more.unwrap().1.bottom() <= dots[0].y);
 
@@ -1142,13 +1733,56 @@ mod tests {
         let last = reminders_layout(s, &all, chunks - 1, false);
         assert_eq!(last.more.as_ref().map(|m| m.0), Some(0), "back to top");
         assert_eq!(reminders_layout(s, &all, chunks, false).rows[0].0, "r0");
-        // Three fit without paging; the rows match the notes page's.
+        // Three fit without paging, under one heading (overdue ones join
+        // today's group).
         let three = reminders_layout(s, &all[..3], 0, false);
         assert_eq!((three.rows.len(), three.more.is_none()), (3, true));
+        assert_eq!(three.groups.len(), 1);
+        assert_eq!(three.groups[0].0, oct25());
+        assert!(three.groups[0].1.bottom() <= three.rows[0].1.y);
         let notes3 = notes_layout(s, &notes(3), 0, false);
-        let rects = |l: &ListLayout| l.rows.iter().map(|(_, r)| *r).collect::<Vec<_>>();
-        assert_eq!(rects(&three), rects(&notes3));
         assert_eq!(three.new_button, notes3.new_button);
+        // Every chunk starts with its heading.
+        assert_eq!(second.groups[0].1, first.groups[0].1);
+    }
+
+    #[test]
+    fn reminders_group_by_day_with_overdue_under_today() {
+        use chrono::{Local, TimeZone};
+        let s = panel(Style::Pill);
+        let today = oct25();
+        let due = |id: &str, t: NaiveDateTime| Reminder {
+            id: id.into(),
+            text: id.into(),
+            due_unix: Local
+                .from_local_datetime(&t)
+                .earliest()
+                .unwrap()
+                .timestamp(),
+            repeat: Default::default(),
+            done: false,
+        };
+        let all = [
+            due("late", at(date(2026, 10, 24), 8, 0)),
+            due("today", at(today, 16, 30)),
+            due("tomorrow", at(date(2026, 10, 26), 9, 30)),
+            due("tomorrow2", at(date(2026, 10, 26), 13, 0)),
+            due("friday", at(date(2026, 10, 30), 13, 0)),
+        ];
+        let l = super::reminders_layout(s, &all, 0, false, today);
+        let days: Vec<NaiveDate> = l.groups.iter().map(|(d, _)| *d).collect();
+        assert_eq!(days, [today, date(2026, 10, 26), date(2026, 10, 30)]);
+        assert_eq!(l.rows.len(), 5);
+        assert_eq!(l.more, None);
+        // Each heading sits over its first row; later groups a step apart.
+        let row = |id: &str| l.rows.iter().find(|(x, _)| x == id).unwrap().1;
+        assert_eq!(l.groups[0].1.bottom(), row("late").y);
+        assert_eq!(row("today").y, row("late").bottom());
+        assert_eq!(l.groups[1].1.bottom(), row("tomorrow").y);
+        assert!(l.groups[1].1.y > row("today").bottom());
+        assert_eq!(l.groups[2].1.bottom(), row("friday").y);
+        let (dots, _) = page_dots(s, Page::Reminders);
+        assert!(row("friday").bottom() <= dots[0].y);
     }
 
     #[test]
@@ -1187,7 +1821,7 @@ mod tests {
 
             let (a, b) = (media_panel_layout(s, false), media_panel_layout(s, true));
             assert!(b.art.y > a.art.y && b.art.y >= strip.bottom());
-            assert_eq!(b.lyrics.y - a.lyrics.y, 24.0);
+            assert!(b.lyrics.y > a.lyrics.y && b.label.y > a.label.y);
         }
     }
 
@@ -1451,10 +2085,13 @@ mod tests {
                                 w: 2.0 * r,
                                 h: 2.0 * r,
                             });
-                            drawn.extend([l.time, l.phase, l.session]);
+                            drawn.extend([l.time, l.phase, l.session, l.durations, l.next_up]);
                         }
-                        PageLayout::Notes(l) | PageLayout::Reminders(l) => drawn.push(l.header),
-                        PageLayout::Media(l) => drawn.extend([l.art, l.title, l.artist]),
+                        PageLayout::Notes(l) | PageLayout::Reminders(l) => {
+                            drawn.push(l.header);
+                            drawn.extend(l.groups.iter().map(|(_, r)| *r));
+                        }
+                        PageLayout::Media(l) => drawn.extend([l.art, l.label, l.title, l.artist]),
                         PageLayout::Cli(l) => {
                             drawn.extend([l.header, l.status]);
                             drawn.extend(l.lines);
@@ -1489,41 +2126,54 @@ mod tests {
                     cy + outer <= content_bottom(s) + 0.01,
                     "{style:?} strip={strip}"
                 );
-                // The countdown box is centred on the ring and wide enough for
-                // the widest countdown in Fraunces It 48 ("100:00", 157.7 px).
+                assert!(cy - outer >= l.header.bottom() - 0.01);
+                // The countdown box is centred on the ring's axis, a little
+                // above its centre, and wide enough for the widest countdown
+                // in Fraunces It 48 ("100:00", 157.7 px).
                 assert!((l.time.x + l.time.w / 2.0 - cx).abs() < 0.01);
-                assert!((l.time.y + l.time.h / 2.0 - cy).abs() < 0.01);
+                let time_cy = l.time.y + l.time.h / 2.0;
+                assert!(time_cy < cy && cy - time_cy <= 12.0);
                 assert!(l.time.w >= 158.0, "time box {}", l.time.w);
-                // The digits' ink band (cy - 18 .. cy + 18) across the box stays
-                // inside the stroke's inner edge.
+                // The digits' ink band across the box stays inside the
+                // stroke's inner edge.
                 let inner = l.ring_radius - RING_STROKE / 2.0;
-                let corner = (l.time.w / 2.0).hypot(TIME_INK_HALF);
+                let far = (time_cy - TIME_INK_HALF - cy).abs();
+                let corner = (l.time.w / 2.0).hypot(far);
                 assert!(corner <= inner + 0.01, "corner {corner} vs inner {inner}");
+                // The phase sits under the digits, inside the ring too.
+                assert!(l.phase.y >= time_cy + TIME_INK_HALF);
+                assert!((l.phase.x + l.phase.w / 2.0 - cx).abs() < 0.01);
+                let low = l.phase.bottom() - cy;
+                assert!((l.phase.w / 2.0).hypot(low) <= inner + 0.01);
+                assert!(l.phase.w >= 120.0, "phase box {}", l.phase.w);
                 assert!(cx < s.x + s.w / 2.0, "ring in the left half");
                 // Ring and column together sit centred in the panel.
-                let group_l = cx - l.ring_radius;
-                let group_r = l.skip.right();
+                let group_l = cx - outer;
+                let group_r = l.session.right();
                 let (ml, mr) = (group_l - left(s), right(s) - group_r);
                 assert!((ml - mr).abs() < 0.01, "{style:?}: margins {ml} / {mr}");
                 // The column starts right of the ring, top to bottom.
-                for r in [l.phase, l.session, l.start_pause] {
-                    assert!(r.x >= cx + l.ring_radius + 8.0, "{r:?} right of the ring");
+                for r in [l.session, l.reset, l.next_up] {
+                    assert!(r.x >= cx + outer + 8.0, "{r:?} right of the ring");
                 }
-                assert!(l.phase.bottom() <= l.session.y);
                 assert!(l.session.bottom() <= l.start_pause.y);
-                // The buttons share a row, in order, without touching.
-                for b in [l.reset, l.skip] {
-                    assert_eq!((b.y, b.h), (l.start_pause.y, l.start_pause.h));
+                assert!(l.start_pause.bottom() <= l.next_up.y);
+                // Reset, the big primary button, skip: in order, round,
+                // centred on one line, without touching.
+                assert!(l.reset.right() < l.start_pause.x && l.start_pause.right() < l.skip.x);
+                assert!(l.start_pause.w > l.reset.w);
+                for b in [l.reset, l.start_pause, l.skip] {
+                    assert_eq!(b.w, b.h, "round");
+                    let mid = b.y + b.h / 2.0;
+                    assert!((mid - (l.start_pause.y + l.start_pause.h / 2.0)).abs() < 0.01);
                 }
-                assert!(l.start_pause.right() < l.reset.x && l.reset.right() < l.skip.x);
-                // Labels span the buttons' row, so centred text lines up over it.
-                assert_eq!(l.phase.x, l.start_pause.x);
-                assert_eq!(l.phase.right(), l.skip.right());
+                assert!(l.skip.right() <= l.session.right());
                 // The column is centred on the ring, below the header.
-                let mid = (l.phase.y + l.skip.bottom()) / 2.0;
+                let mid = (l.session.y + l.next_up.bottom()) / 2.0;
                 assert!((mid - cy).abs() < 0.01);
-                assert!(l.phase.y >= l.header.bottom());
-                assert!(cy - outer >= l.header.bottom() - 0.01);
+                // Durations right of the title.
+                assert!(l.header.right() < l.durations.x);
+                assert_eq!(l.durations.right(), right(s));
             }
         }
     }
@@ -1533,7 +2183,7 @@ mod tests {
         for style in [Style::Pill, Style::Notch] {
             let s = shape_for(style, ShapeKind::PomodoroCompact);
             let ((cx, cy), r, text) = pomodoro_compact_layout(s);
-            assert_eq!(r, 11.0);
+            assert_eq!(r, 8.0);
             assert_eq!(cy, s.y + s.h / 2.0);
             assert!(cx - r - 1.5 >= s.x + 4.0);
             assert!(text.x >= cx + r);
@@ -1550,15 +2200,30 @@ mod media_tests {
     use crate::ui::geometry::{ShapeKind, shape_for};
 
     #[test]
-    fn lyric_button_sits_top_right_clear_of_the_rest() {
+    fn lyric_button_ends_the_transport_row() {
         for style in [Style::Pill, Style::Notch] {
             let s = shape_for(style, ShapeKind::Panel);
             for strip in [false, true] {
                 let l = media_panel_layout(s, strip);
                 assert_eq!(l.lyrics.right(), right(s));
-                assert_eq!(l.lyrics.y, content_top(s, strip));
-                // Above the title and the art, so nothing overlaps it.
-                assert!(l.lyrics.bottom() <= l.title.y && l.lyrics.bottom() <= l.art.y);
+                // On the buttons' line, right of them, touching none.
+                let [prev, play, next] = l.buttons;
+                let mid = |r: Rect| r.y + r.h / 2.0;
+                assert!((mid(l.lyrics) - mid(play)).abs() < 0.01);
+                assert!(prev.right() < play.x && play.right() < next.x);
+                assert!(next.right() < l.lyrics.x);
+                assert_eq!(play.w, play.h, "the round primary button");
+                // The text column: label, title, artist, then the row.
+                assert!(l.label.bottom() <= l.title.y && l.title.bottom() <= l.artist.y);
+                assert!(l.artist.bottom() <= play.y);
+                assert!(l.label.x >= l.art.right() + 16.0);
+                // A big square cover, centred between the header and the dots.
+                assert_eq!(l.art.w, l.art.h);
+                assert!(l.art.w >= 180.0, "{:?}", l.art);
+                assert_eq!(l.art.x, left(s));
+                let gap_top = l.art.y - content_top(s, strip);
+                let gap_bottom = content_bottom(s) - l.art.bottom();
+                assert!((gap_top - gap_bottom).abs() < 0.01);
             }
         }
     }

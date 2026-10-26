@@ -196,6 +196,55 @@ pub struct Palette {
     pub accent: u32,
     /// Text and marks on an accent fill.
     pub on_accent: u32,
+    /// Captions, times, hour labels, inactive segments.
+    pub secondary: u32,
+    /// Status colours, fixed whatever the accent: sage for breaks, event
+    /// dots and all-day events; ochre for battery and "Terlewat"; plum for
+    /// a third event colour.
+    pub sage: u32,
+    pub ochre: u32,
+    pub plum: u32,
+}
+
+impl Palette {
+    /// The pomodoro's focus phase: the accent.
+    pub fn focus(&self) -> u32 {
+        self.accent
+    }
+
+    /// The pomodoro's breaks: sage.
+    pub fn rest(&self) -> u32 {
+        self.sage
+    }
+}
+
+/// Corner radii of the Studio scale, in logical px. A chip is fully rounded
+/// (half its height) and has no constant.
+pub mod radius {
+    /// The open panel.
+    pub const PANEL: f32 = 30.0;
+    /// The island's notices, both styles.
+    pub const NOTICE: f32 = 26.0;
+    /// The media page's album cover.
+    pub const COVER: f32 = 22.0;
+    /// Shortcut tiles.
+    pub const TILE: f32 = 18.0;
+    /// Cards: the notes page's.
+    pub const CARD: f32 = 14.0;
+    /// A notice's badge.
+    pub const BADGE: f32 = 13.0;
+    /// Week view day columns.
+    pub const COLUMN: f32 = 12.0;
+    /// Controls: the view selector's track, buttons.
+    pub const CONTROL: f32 = 10.0;
+    /// Day view event blocks.
+    pub const BLOCK: f32 = 9.0;
+    /// A segment inside a control, the all-day band.
+    pub const SEGMENT: f32 = 8.0;
+    /// Week view event chips.
+    pub const EVENT_CHIP: f32 = 7.0;
+    /// The compact album art.
+    pub const ART: f32 = 6.0;
 }
 
 pub fn island(accent: Accent, surface: Surface) -> Palette {
@@ -215,6 +264,10 @@ pub fn island(accent: Accent, surface: Surface) -> Palette {
         text: 0xF4EDE4,
         accent: accent.rgb(),
         on_accent: accent.ink(),
+        secondary: 0xA89A8B,
+        sage: Accent::Sage.rgb(),
+        ochre: Accent::Ochre.rgb(),
+        plum: Accent::Plum.rgb(),
     }
 }
 
@@ -426,8 +479,30 @@ mod tests {
                 text: 0xF4EDE4,
                 accent: 0xE2683C,
                 on_accent: 0x17120F,
+                secondary: 0xA89A8B,
+                sage: 0x9DB59A,
+                ochre: 0xD9A441,
+                plum: 0xB07A9A,
             }
         );
+        assert_eq!((p.focus(), p.rest()), (0xE2683C, 0x9DB59A));
+    }
+
+    #[test]
+    fn island_text_and_status_colours_read_on_every_surface() {
+        for &surface in Surface::ALL {
+            let p = island(Accent::Terracotta, surface);
+            assert!(contrast(p.text, p.surface) >= 7.0, "{surface:?}");
+            assert!(contrast(p.secondary, p.surface) >= 4.5, "{surface:?}");
+            assert!(contrast(p.secondary, p.raised) >= 4.5, "{surface:?}");
+            for status in [p.sage, p.ochre, p.plum] {
+                assert!(contrast(status, p.surface) >= 4.5, "{status:06X}");
+            }
+        }
+        // Status colours stay put whatever the accent.
+        let plum = island(Accent::Plum, Surface::Espresso);
+        assert_eq!((plum.sage, plum.ochre), (0x9DB59A, 0xD9A441));
+        assert_eq!((plum.focus(), plum.rest()), (0xB07A9A, 0x9DB59A));
     }
 
     #[test]

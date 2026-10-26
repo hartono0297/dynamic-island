@@ -139,6 +139,7 @@ keys! {
     NotesUnreadableBody => "Disimpan sebagai notes.json.bak saat menyimpan berikutnya",
         "Will be saved as notes.json.bak on the next save";
     Missed => "Terlewat", "Missed";
+    MarkDone => "Selesai", "Done";
     RemindersSaveFailed => "Gagal simpan pengingat", "Couldn't save reminders";
     RemindersUnreadable => "reminders.json tidak terbaca", "Can't read reminders.json";
     RemindersUnreadableBody => "Disimpan sebagai reminders.json.bak saat menyimpan berikutnya",
@@ -185,6 +186,7 @@ keys! {
     ViewMonth => "Bulan", "Month";
     BackToTop => "Kembali ke atas", "Back to top";
     AddEventRow => "+ Tambah acara", "+ Add event";
+    AddEvent => "Tambah acara", "Add event";
     ConnectGoogle => "Hubungkan Google", "Connect Google";
     ReconnectGoogle => "Hubungkan ulang Google", "Reconnect Google";
     AllDay => "Seharian", "All day";
@@ -204,6 +206,7 @@ keys! {
     Paused => "dijeda", "paused";
     Ready => "siap", "ready";
     ReadyClick => "Siap · klik", "Ready · click";
+    NextUp => "Berikutnya:", "Next:";
 
     // Reminders page.
     Reminders => "Pengingat", "Reminders";
@@ -218,6 +221,7 @@ keys! {
     // Notes page.
     Notes => "Notes", "Notes";
     NewNote => "+ Baru", "+ New";
+    New => "Baru", "New";
     NotesEmpty => "Belum ada catatan. Klik + Baru untuk menulis.",
         "No notes yet. Click + New to write one.";
     Today => "hari ini", "Today";
@@ -227,6 +231,7 @@ keys! {
     NothingPlaying => "Tidak ada musik yang diputar", "Nothing playing";
     NothingPlayingHint => "Putar lagu di aplikasi mana pun", "Play music in any app";
     LyricsButton => "Lirik", "Lyrics";
+    NowPlaying => "Sedang diputar", "Now playing";
 
     // CLI page and window.
     Cli => "CLI", "CLI";
@@ -408,6 +413,20 @@ pub fn session_of(lang: Lang, k: u32, total: u32) -> String {
     }
 }
 
+/// "25 · 5 · 15 menit": focus, break and long break beside the pomodoro title.
+pub fn pomo_durations(lang: Lang, focus: u32, short: u32, long: u32) -> String {
+    let unit = pick(lang, "menit", "min");
+    format!("{focus} · {short} · {long} {unit}")
+}
+
+/// "Istirahat 5 menit", "Break · 5 min": the phase after this one.
+pub fn phase_minutes(lang: Lang, phase: &str, minutes: u32) -> String {
+    match lang {
+        Lang::Id => format!("{phase} {minutes} menit"),
+        Lang::En => format!("{phase} · {minutes} min"),
+    }
+}
+
 /// "+3 lagi" under a list that does not fit.
 pub fn more_count(lang: Lang, n: usize) -> String {
     match lang {
@@ -549,19 +568,12 @@ const DAYS_EN: [&str; 7] = [
 ];
 const DAYS_SHORT_ID: [&str; 7] = ["Sen", "Sel", "Rab", "Kam", "Jum", "Sab", "Min"];
 const DAYS_SHORT_EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const INITIALS_ID: [&str; 7] = ["S", "S", "R", "K", "J", "S", "M"];
-const INITIALS_EN: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
 
 fn pick<T>(lang: Lang, id: T, en: T) -> T {
     match lang {
         Lang::Id => id,
         Lang::En => en,
     }
-}
-
-/// One-letter weekday headers of the month grid, Monday first.
-pub fn weekday_initials(lang: Lang) -> [&'static str; 7] {
-    pick(lang, INITIALS_ID, INITIALS_EN)
 }
 
 fn weekday(d: NaiveDate) -> usize {
@@ -590,10 +602,17 @@ pub fn month_title(lang: Lang, d: NaiveDate) -> String {
     format!("{} {}", months[d.month0() as usize], d.year())
 }
 
-/// "Minggu, 25 Okt", "Sunday, 25 Oct".
-pub fn day_title(lang: Lang, d: NaiveDate) -> String {
+/// "Senin, 26 Oktober", "Monday, 26 October": the day view's title and the
+/// month view's caption.
+pub fn day_title_long(lang: Lang, d: NaiveDate) -> String {
     let days = pick(lang, DAYS_ID, DAYS_EN);
-    format!("{}, {}", days[weekday(d)], short_date(lang, d))
+    let months = pick(lang, MONTHS_ID, MONTHS_EN);
+    format!(
+        "{}, {} {}",
+        days[weekday(d)],
+        d.day(),
+        months[d.month0() as usize]
+    )
 }
 
 /// The week from `monday`: "19 – 25 Okt 2026", "28 Sep – 4 Okt 2026",
@@ -672,7 +691,7 @@ mod tests {
     fn dates_in_indonesian() {
         let l = Lang::Id;
         assert_eq!(month_title(l, date(2026, 10, 25)), "Oktober 2026");
-        assert_eq!(day_title(l, date(2026, 10, 25)), "Minggu, 25 Okt");
+        assert_eq!(day_title_long(l, date(2026, 10, 26)), "Senin, 26 Oktober");
         assert_eq!(week_title(l, date(2026, 10, 19)), "19 – 25 Okt 2026");
         assert_eq!(week_title(l, date(2026, 9, 28)), "28 Sep – 4 Okt 2026");
         assert_eq!(
@@ -680,7 +699,7 @@ mod tests {
             "29 Des 2025 – 4 Jan 2026"
         );
         assert_eq!(day_short(l, date(2026, 10, 19)), "Sen");
-        assert_eq!(weekday_initials(l), ["S", "S", "R", "K", "J", "S", "M"]);
+        assert_eq!(day_title_long(l, date(2026, 10, 25)), "Minggu, 25 Oktober");
     }
 
     #[test]
@@ -688,7 +707,7 @@ mod tests {
         let l = Lang::En;
         assert_eq!(month_title(l, date(2026, 10, 25)), "October 2026");
         assert_eq!(month_title(l, date(2026, 5, 1)), "May 2026");
-        assert_eq!(day_title(l, date(2026, 10, 25)), "Sunday, 25 Oct");
+        assert_eq!(day_title_long(l, date(2026, 10, 26)), "Monday, 26 October");
         assert_eq!(week_title(l, date(2026, 10, 19)), "19 – 25 Oct 2026");
         assert_eq!(week_title(l, date(2026, 9, 28)), "28 Sep – 4 Oct 2026");
         assert_eq!(
@@ -696,7 +715,7 @@ mod tests {
             "29 Dec 2025 – 4 Jan 2026"
         );
         assert_eq!(day_short(l, date(2026, 10, 21)), "Wed");
-        assert_eq!(weekday_initials(l), ["M", "T", "W", "T", "F", "S", "S"]);
+        assert_eq!(day_title_long(l, date(2026, 10, 25)), "Sunday, 25 October");
     }
 
     #[test]
@@ -726,6 +745,10 @@ mod tests {
         );
         assert_eq!(session_of(Lang::Id, 1, 4), "Sesi 1 dari 4");
         assert_eq!(session_of(Lang::En, 1, 4), "Session 1 of 4");
+        assert_eq!(pomo_durations(Lang::Id, 25, 5, 15), "25 · 5 · 15 menit");
+        assert_eq!(pomo_durations(Lang::En, 50, 10, 20), "50 · 10 · 20 min");
+        assert_eq!(phase_minutes(Lang::Id, "Istirahat", 5), "Istirahat 5 menit");
+        assert_eq!(phase_minutes(Lang::En, "Focus", 25), "Focus · 25 min");
         assert_eq!(more_count(Lang::Id, 3), "+3 lagi");
         assert_eq!(more_count(Lang::En, 3), "+3 more");
         assert_eq!(battery_body(Lang::Id, 18), "Sisa 18%. Colokin charger.");

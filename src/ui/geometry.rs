@@ -1,9 +1,11 @@
 //! Layout math for the island, in logical pixels (96 DPI). Pure functions, so
 //! the renderer only draws what this module decides.
 
+use super::icons::Icon;
 use super::panel_layout::Region;
 use crate::config::Style;
 use crate::model::{Hit, Notice, NoticeKind};
+use crate::theme::{Palette, radius};
 
 pub const WINDOW_W: f32 = 620.0;
 pub const WINDOW_H: f32 = 330.0;
@@ -31,6 +33,8 @@ pub enum ShapeKind {
 
 /// Pill floats this far below the top edge; Notch is flush with it.
 const PILL_TOP: f32 = 8.0;
+/// Bottom corners of the Notch's compact shapes.
+const NOTCH_COMPACT_RADIUS: f32 = 16.0;
 
 pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     let (w, h) = match kind {
@@ -40,17 +44,17 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::Panel => (560.0, 290.0),
     };
-    let compact = h == 34.0;
-    let (y, radius) = match style {
-        Style::Pill => (PILL_TOP, if compact { h / 2.0 } else { 26.0 }),
-        Style::Notch => (
-            0.0,
-            match kind {
-                _ if compact => 16.0,
-                ShapeKind::Panel => 26.0,
-                _ => 22.0,
-            },
-        ),
+    // The panel and notices round the same in both styles; compact shapes
+    // are a full pill floating, a gentler curve hanging from the edge.
+    let radius = match kind {
+        ShapeKind::Panel => radius::PANEL,
+        ShapeKind::Notice => radius::NOTICE,
+        _ if style == Style::Pill => h / 2.0,
+        _ => NOTCH_COMPACT_RADIUS,
+    };
+    let y = match style {
+        Style::Pill => PILL_TOP,
+        Style::Notch => 0.0,
     };
     ShapeRect {
         x: (WINDOW_W - w) / 2.0,
@@ -155,24 +159,28 @@ pub struct CompactLayout {
     pub bars: Rect,
 }
 
-/// Media page: album art, title over artist, transport buttons.
+/// Media page: big album art; beside it a caption, title over artist, and
+/// the transport buttons with "Lirik" at the row's right end.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpandedLayout {
     pub art: Rect,
+    /// "SEDANG DIPUTAR" above the title.
+    pub label: Rect,
     pub title: Rect,
     pub artist: Rect,
-    /// Prev, play/pause, next.
+    /// Prev, play/pause (the round primary button), next.
     pub buttons: [Rect; 3],
-    /// "Lirik": lyrics in the notch on or off (top right).
+    /// "Lirik": lyrics in the notch on or off.
     pub lyrics: Rect,
 }
 
-/// Notice: round badge, title over body.
+/// Notice: rounded badge, title over body, an optional action chip.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoticeLayout {
     pub badge: Rect,
     pub title: Rect,
     pub body: Rect,
+    pub action: Option<Rect>,
 }
 
 /// Equalizer: 4 bars, 3 px wide, 2 px apart, up to 14 px tall.
@@ -240,18 +248,31 @@ pub fn lyric_layout(s: ShapeRect) -> Rect {
     text_box(s.x + PAD_X, s.x + s.w - PAD_X, s.y, s.h)
 }
 
-pub fn notice_layout(s: ShapeRect) -> NoticeLayout {
+/// `action`: room for the chip naming what a click does ("Selesai",
+/// "Mulai") at the right, the text stopping short of it.
+pub fn notice_layout(s: ShapeRect, action: bool) -> NoticeLayout {
     const BADGE: f32 = 40.0;
     const PAD_L: f32 = 18.0;
     const PAD_R: f32 = 20.0;
+    const ACTION_W: f32 = 66.0;
+    const ACTION_H: f32 = 24.0;
+    const ACTION_GAP: f32 = 10.0;
     let badge = square(s.x + PAD_L, s.y + (s.h - BADGE) / 2.0, BADGE);
     let left = badge.right() + 12.0;
-    let right = s.x + s.w - PAD_R;
     let mid = s.y + s.h / 2.0;
+    let edge = s.x + s.w - PAD_R;
+    let action = action.then(|| Rect {
+        x: edge - ACTION_W,
+        y: mid - ACTION_H / 2.0,
+        w: ACTION_W,
+        h: ACTION_H,
+    });
+    let right = action.map_or(edge, |a| a.x - ACTION_GAP);
     NoticeLayout {
         badge,
-        title: text_box(left, right, mid - 19.0, 19.0),
-        body: text_box(left, right, mid + 1.0, 18.0),
+        title: text_box(left, right, mid - 18.0, 18.0),
+        body: text_box(left, right, mid + 1.0, 16.0),
+        action,
     }
 }
 
@@ -281,16 +302,55 @@ impl HitRegions {
     }
 }
 
-/// Badge fill as 0xRRGGBB: WhatsApp green, Claude orange, battery amber,
-/// pomodoro red, reminders in the island's `accent`, else grey.
-pub fn badge_color(notice: &Notice, accent: u32) -> u32 {
+/// Claude's brand orange: its badge and the waiting strip's dot.
+pub const CLAUDE: u32 = 0xD97757;
+/// WhatsApp's brand green.
+pub const WHATSAPP: u32 = 0x25D366;
+/// How strongly a tinted badge shows its colour over the island.
+const BADGE_TINT: f32 = 0.2;
+
+/// A notice badge: a rounded square of `fill` at `alpha`, and either `icon`
+/// or the source's first letter in `ink`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BadgeStyle {
+    pub fill: u32,
+    pub alpha: f32,
+    pub ink: u32,
+    pub icon: Option<Icon>,
+}
+
+/// Reminders on a solid accent with a bell; the island's own notices on a
+/// tint of their colour (Claude orange, battery ochre, pomodoro sage); apps
+/// by their letter, WhatsApp on its green tint, others on `raised_hi`.
+pub fn badge_style(notice: &Notice, p: &Palette) -> BadgeStyle {
+    let tint = |color: u32, icon| BadgeStyle {
+        fill: color,
+        alpha: BADGE_TINT,
+        ink: color,
+        icon: Some(icon),
+    };
     match notice.kind {
-        NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => 0xD97757,
-        NoticeKind::BatteryLow => 0xF5A524,
-        NoticeKind::Pomodoro => 0xEF5350,
-        NoticeKind::Reminder { .. } => accent,
-        NoticeKind::App { .. } if notice.source.to_lowercase().contains("whatsapp") => 0x25D366,
-        NoticeKind::App { .. } => 0x5A5A5E,
+        NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => {
+            tint(CLAUDE, Icon::Sparkle)
+        }
+        NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
+        NoticeKind::Pomodoro => tint(p.rest(), Icon::Timer),
+        NoticeKind::Reminder { .. } => BadgeStyle {
+            fill: p.accent,
+            alpha: 1.0,
+            ink: p.on_accent,
+            icon: Some(Icon::Bell),
+        },
+        NoticeKind::App { .. } if notice.source.to_lowercase().contains("whatsapp") => BadgeStyle {
+            icon: None,
+            ..tint(WHATSAPP, Icon::Mail)
+        },
+        NoticeKind::App { .. } => BadgeStyle {
+            fill: p.raised_hi,
+            alpha: 1.0,
+            ink: p.text,
+            icon: None,
+        },
     }
 }
 
@@ -335,17 +395,18 @@ mod tests {
                 y: 8.0,
                 w: 560.0,
                 h: 290.0,
-                radius: 26.0
+                radius: 30.0
             }
         );
         let n = shape_for(Style::Notch, ShapeKind::Panel);
         assert_eq!(
             (n.x, n.y, n.w, n.h, n.radius),
-            (30.0, 0.0, 560.0, 290.0, 26.0)
+            (30.0, 0.0, 560.0, 290.0, 30.0)
         );
         // The panel fits the window with the Pill's top gap.
         assert!(p.y + p.h <= WINDOW_H);
-        assert_eq!(corner_radius(Style::Notch, n), 26.0);
+        assert_eq!(corner_radius(Style::Notch, n), 30.0);
+        assert_eq!(corner_radius(Style::Pill, p), 30.0);
     }
 
     #[test]
@@ -400,12 +461,20 @@ mod tests {
             assert!(text.x - m.x >= corner_radius(style, m));
 
             let n = shape_for(style, ShapeKind::Notice);
-            let l = notice_layout(n);
+            let l = notice_layout(n, false);
             for r in [l.badge, l.title, l.body] {
                 assert!(inside(n, r), "{style:?} notice {r:?}");
             }
             assert_eq!((l.badge.w, l.badge.h), (40.0, 40.0));
             assert!(l.title.x >= l.badge.right() && l.title.bottom() <= l.body.y);
+            assert_eq!(l.action, None);
+            // With an action chip the text stops short of it.
+            let a = notice_layout(n, true);
+            let chip = a.action.expect("action chip");
+            assert!(inside(n, chip), "{style:?} chip {chip:?}");
+            assert!(a.title.right() < chip.x && a.body.right() < chip.x);
+            assert!(chip.right() <= n.x + n.w - corner_radius(style, n) / 2.0);
+            assert_eq!((a.badge, a.title.x), (l.badge, l.title.x));
         }
     }
 
@@ -455,28 +524,37 @@ mod tests {
 
     #[test]
     fn badge_colors_by_source_and_kind() {
+        use crate::theme::{Accent, Surface, island};
+        let p = island(Accent::Plum, Surface::Espresso);
+        let fill = |n: &Notice| {
+            let b = badge_style(n, &p);
+            (b.fill, b.ink, b.icon)
+        };
         let app = |s: &str| notice(s, NoticeKind::App { app_id: None });
-        assert_eq!(badge_color(&app("WhatsApp"), ACCENT), 0x25D366);
-        assert_eq!(badge_color(&app("whatsapp beta"), ACCENT), 0x25D366);
-        assert_eq!(badge_color(&app("Discord"), ACCENT), 0x5A5A5E);
+        assert_eq!(fill(&app("WhatsApp")), (WHATSAPP, WHATSAPP, None));
+        assert_eq!(fill(&app("whatsapp beta")), (WHATSAPP, WHATSAPP, None));
+        assert_eq!(fill(&app("Discord")), (p.raised_hi, p.text, None));
+        assert_eq!(badge_style(&app("Discord"), &p).alpha, 1.0);
         let done = NoticeKind::ClaudeDone {
             session_id: "s".into(),
         };
-        assert_eq!(badge_color(&notice("Claude", done), ACCENT), 0xD97757);
+        let claude = (CLAUDE, CLAUDE, Some(Icon::Sparkle));
+        assert_eq!(fill(&notice("Claude", done)), claude);
         let waiting = NoticeKind::ClaudeWaiting {
             session_id: "s".into(),
         };
-        assert_eq!(badge_color(&notice("Claude", waiting), ACCENT), 0xD97757);
-        assert_eq!(
-            badge_color(&notice("Baterai", NoticeKind::BatteryLow), ACCENT),
-            0xF5A524
-        );
-        // Reminders follow the accent.
+        assert_eq!(fill(&notice("Claude", waiting)), claude);
+        let battery = notice("Baterai", NoticeKind::BatteryLow);
+        assert_eq!(fill(&battery), (0xD9A441, 0xD9A441, Some(Icon::Battery)));
+        assert!(badge_style(&battery, &p).alpha < 0.5, "a tint");
+        let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
+        assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
+        // Reminders follow the accent, solid, with its ink.
         let reminder = NoticeKind::Reminder { id: "r".into() };
-        assert_eq!(badge_color(&notice("Pengingat", reminder), ACCENT), ACCENT);
+        let r = badge_style(&notice("Pengingat", reminder), &p);
+        assert_eq!((r.fill, r.alpha), (0xB07A9A, 1.0));
+        assert_eq!((r.ink, r.icon), (p.on_accent, Some(Icon::Bell)));
     }
-
-    const ACCENT: u32 = 0x123456;
 
     #[test]
     fn badge_letter_is_first_char_uppercased() {
@@ -525,14 +603,21 @@ mod tests {
     fn radii_match_plan() {
         let radius = |style, kind| shape_for(style, kind).radius;
         assert_eq!(radius(Style::Pill, ShapeKind::Notice), 26.0);
-        assert_eq!(radius(Style::Pill, ShapeKind::Panel), 26.0);
+        assert_eq!(radius(Style::Pill, ShapeKind::Panel), 30.0);
         assert_eq!(radius(Style::Pill, ShapeKind::PomodoroCompact), 17.0);
         assert_eq!(radius(Style::Notch, ShapeKind::MediaCompact), 16.0);
         assert_eq!(radius(Style::Notch, ShapeKind::PomodoroCompact), 16.0);
         assert_eq!(radius(Style::Pill, ShapeKind::MediaLyric), 17.0);
         assert_eq!(radius(Style::Notch, ShapeKind::MediaLyric), 16.0);
-        assert_eq!(radius(Style::Notch, ShapeKind::Notice), 22.0);
-        assert_eq!(radius(Style::Notch, ShapeKind::Panel), 26.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::Notice), 26.0);
+        assert_eq!(radius(Style::Notch, ShapeKind::Panel), 30.0);
+        // Drawn as stored: no clamping at rest.
+        for style in [Style::Pill, Style::Notch] {
+            for kind in [ShapeKind::Notice, ShapeKind::Panel] {
+                let s = shape_for(style, kind);
+                assert_eq!(corner_radius(style, s), s.radius, "{style:?} {kind:?}");
+            }
+        }
     }
 
     #[test]
