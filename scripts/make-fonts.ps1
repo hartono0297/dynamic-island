@@ -245,6 +245,14 @@ function Write-Utf8Lf([string]$Path, [string]$Text) {
 if (-not $WorkDir) {
     $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ('dynamic-island-fonts-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 }
+# Make WorkDir absolute against $PWD. Windows PowerShell 5.1 does not move the
+# process working directory on Set-Location, so a relative path would resolve
+# to one place for cmdlets and another for py/python and their arguments.
+$WorkDir = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkDir))
+$repoPrefix = [IO.Path]::GetFullPath($Repo).TrimEnd('\') + '\'
+if (($WorkDir.TrimEnd('\') + '\').StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "WorkDir '$WorkDir' is inside the repo; pass a directory outside $Repo"
+}
 if ((Test-Path $WorkDir) -and (Get-ChildItem -Force $WorkDir | Select-Object -First 1)) {
     throw "WorkDir '$WorkDir' is not empty; pass a fresh directory"
 }
