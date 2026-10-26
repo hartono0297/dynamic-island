@@ -1,10 +1,12 @@
 //! `--demo` (debug builds only): cycles through every view, 2 s each, Pill
-//! then Notch, with long text and fake calendar, notes and pomodoro data, so
-//! the window and renderer can be checked by eye and by screen capture. Runs
+//! then Notch, with fake calendar, notes, reminders and pomodoro data (some
+//! of it long, to check trimming), so the window and renderer can be checked
+//! by eye and by screen capture against `docs/design/studio-ui.pdf`. Runs
 //! until the process is killed.
 //!
 //! Environment knobs for screenshots:
 //! - `DI_DEMO_STEP=n` holds step `n` (see `SCENES`; Notch adds `SCENES.len()`).
+//!   A scene's name works too: `DI_DEMO_STEP=cal-day`, or `notch:cal-day`.
 //! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
@@ -36,7 +38,7 @@ use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
-use crate::theme::{self, Accent, Surface};
+use crate::theme::{self, Accent, Palette, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
 
@@ -46,6 +48,8 @@ enum Pomo {
     Running,
     Paused,
     Ready,
+    /// A short break, running.
+    Break,
 }
 
 #[derive(Clone, Copy)]
@@ -58,7 +62,7 @@ struct Scene {
     status: CalStatus,
     day_page: usize,
     notes: usize,
-    /// Sample reminders on the reminder page: 3 or 12.
+    /// Sample reminders on the reminder page: 5 or 12.
     reminders: usize,
     strip: bool,
     /// Position in `DEMO_LRC` for the lyric view.
@@ -67,6 +71,8 @@ struct Scene {
     lyrics_on: bool,
     /// What the CLI page's card shows.
     cli: CliDemo,
+    /// The track with very long names instead of the design's.
+    long_media: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -83,9 +89,21 @@ enum View0 {
     MediaCompact,
     PomodoroCompact,
     Panel(Page),
-    /// A due reminder's notice.
-    ReminderNotice,
+    Notice(DemoNotice),
     MediaLyric,
+}
+
+/// One notice of each badge style.
+#[derive(Clone, Copy, PartialEq)]
+enum DemoNotice {
+    /// A due reminder: accent badge, "Selesai".
+    Reminder,
+    /// A finished focus phase: badge and "Mulai" in the break's sage.
+    Pomodoro,
+    Claude,
+    Battery,
+    /// An app's notification: the letter badge.
+    App,
 }
 
 const BASE: Scene = Scene {
@@ -96,12 +114,13 @@ const BASE: Scene = Scene {
     cal_view: CalView::Month,
     status: CalStatus::Ok,
     day_page: 0,
-    notes: 5,
-    reminders: 3,
+    notes: 4,
+    reminders: 5,
     strip: false,
     lyric_at: 2_000,
     lyrics_on: false,
     cli: CliDemo::Empty,
+    long_media: false,
 };
 
 /// Made-up lyrics: a metadata tag, an offset, a line timed twice, an
@@ -131,7 +150,16 @@ const fn panel(name: &'static str, page: Page) -> Scene {
     }
 }
 
-const SCENES: [Scene; 26] = [
+const fn notice(name: &'static str, which: DemoNotice) -> Scene {
+    Scene {
+        name,
+        kind: ShapeKind::Notice,
+        view: View0::Notice(which),
+        ..BASE
+    }
+}
+
+const SCENES: [Scene; 33] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -187,23 +215,38 @@ const SCENES: [Scene; 26] = [
         pomo: Pomo::Running,
         ..panel("pomodoro", Page::Pomodoro)
     },
-    panel("reminders-3", Page::Reminders),
+    Scene {
+        pomo: Pomo::Break,
+        ..panel("pomodoro-break", Page::Pomodoro)
+    },
+    panel("reminders-5", Page::Reminders),
     Scene {
         reminders: 12,
         ..panel("reminders-12", Page::Reminders)
     },
+    notice("reminder-notice", DemoNotice::Reminder),
+    // Focus done: the short break waits, so badge and chip are sage.
     Scene {
-        name: "reminder-notice",
-        kind: ShapeKind::Notice,
-        view: View0::ReminderNotice,
-        ..BASE
+        pomo: Pomo::Ready,
+        ..notice("notice-pomodoro", DemoNotice::Pomodoro)
     },
-    panel("notes-5", Page::Notes),
+    notice("notice-claude", DemoNotice::Claude),
+    notice("notice-battery", DemoNotice::Battery),
+    notice("notice-app", DemoNotice::App),
+    panel("notes-4", Page::Notes),
+    Scene {
+        notes: 6,
+        ..panel("notes-6", Page::Notes)
+    },
     Scene {
         notes: 30,
         ..panel("notes-30", Page::Notes)
     },
     panel("media", Page::Media),
+    Scene {
+        long_media: true,
+        ..panel("media-long", Page::Media)
+    },
     Scene {
         strip: true,
         ..panel("strip", Page::Calendar)
@@ -227,6 +270,22 @@ const SCENES: [Scene; 26] = [
     panel("shortcuts", Page::Shortcuts),
 ];
 
+/// `DI_DEMO_STEP`: a step number, or a scene's name (Pill), or
+/// `notch:` and a name.
+fn held_step(value: &str) -> Option<usize> {
+    if let Ok(n) = value.trim().parse() {
+        return Some(n);
+    }
+    let (offset, name) = match value.trim().strip_prefix("notch:") {
+        Some(name) => (SCENES.len(), name),
+        None => (0, value.trim()),
+    };
+    SCENES
+        .iter()
+        .position(|s| s.name == name)
+        .map(|i| i + offset)
+}
+
 fn env<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok()?.parse().ok()
 }
@@ -238,24 +297,27 @@ pub fn run() {
     let win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
     let mut renderer = Renderer::new().expect("create renderer");
     let media = MediaInfo {
-        title: "Sampai Jadi Debu (Live at Synchronize Festival 2024, Extended Version)".into(),
-        artist: "Banda Neira feat. Hindia, Kunto Aji, Nadin Amizah & Friends".into(),
+        title: "Senja di Kemang".into(),
+        artist: "Studio Ruang".into(),
         playing: true,
         art: Some(test_art()),
     };
-    let today = Local::now().date_naive();
-    let calendar = demo_calendar(today);
-    let notes5 = demo_notes(today);
-    let notes30 = many_notes(today);
-    let reminders3 = demo_reminders(today);
-    let reminders12 = many_reminders(today);
-    let reminder_notice = Notice {
-        key: "demo-reminder".into(),
-        source: tr(Key::SourceReminder).into(),
-        title: "Minum obat setelah makan siang".into(),
-        body: format!("{} · {}", tr(Key::Missed), "12.30"),
-        kind: NoticeKind::Reminder { id: "demo".into() },
+    let long_media = MediaInfo {
+        title: "Sampai Jadi Debu (Live at Synchronize Festival 2024, Extended Version)".into(),
+        artist: "Banda Neira feat. Hindia, Kunto Aji, Nadin Amizah & Friends".into(),
+        ..media.clone()
     };
+    let today = Local::now().date_naive();
+    let name = |var| std::env::var(var).unwrap_or_default();
+    let palette = theme::island(
+        Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
+        Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
+    );
+    let calendar = demo_calendar(today, &palette);
+    let notes = demo_notes(today);
+    let notes30 = many_notes(today);
+    let reminders5 = demo_reminders(today);
+    let reminders12 = many_reminders(today);
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -265,14 +327,11 @@ pub fn run() {
             session_id: "demo".into(),
         },
     };
-    let hold: Option<usize> = env("DI_DEMO_STEP");
+    let hold: Option<usize> = std::env::var("DI_DEMO_STEP")
+        .ok()
+        .and_then(|v| held_step(&v));
     let frozen_t: Option<f32> = env("DI_DEMO_T");
     let slide: f32 = env("DI_DEMO_SLIDE").unwrap_or(0.0);
-    let name = |var| std::env::var(var).unwrap_or_default();
-    let palette = theme::island(
-        Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
-        Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
-    );
     let clock_on = std::env::var("DI_CLOCK").map_or(true, |v| v != "0");
     let lyric_at: Option<u64> = env("DI_LYRIC_AT");
     let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
@@ -313,7 +372,7 @@ pub fn run() {
                 View0::MediaCompact => View::MediaCompact,
                 View0::PomodoroCompact => View::PomodoroCompact,
                 View0::Panel(page) => View::Panel(page),
-                View0::ReminderNotice => View::Notice(reminder_notice.clone()),
+                View0::Notice(which) => View::Notice(demo_notice(which)),
                 View0::MediaLyric => View::MediaLyric,
             };
             let lyric_state = demo_lyrics(lyric_at.unwrap_or(scene.lyric_at), lyric_fade, now);
@@ -325,10 +384,17 @@ pub fn run() {
                 status: scene.status,
                 ..calendar.clone()
             };
-            let notes: &[Note] = if scene.notes == 30 { &notes30 } else { &notes5 };
+            let notes: &[Note] = match scene.notes {
+                30 => &notes30,
+                n => &notes[..n.min(notes.len())],
+            };
             let frame = Frame {
                 view: &view,
-                media: Some(&media),
+                media: Some(if scene.long_media {
+                    &long_media
+                } else {
+                    &media
+                }),
                 pomodoro: &pomodoro,
                 now,
                 today,
@@ -343,7 +409,7 @@ pub fn run() {
                 reminders: if scene.reminders == 12 {
                     &reminders12
                 } else {
-                    &reminders3
+                    &reminders5
                 },
                 reminders_page: 0,
                 day_page: scene.day_page,
@@ -359,6 +425,51 @@ pub fn run() {
             }
         }
         std::thread::sleep(Duration::from_millis(if animated { 33 } else { 16 }));
+    }
+}
+
+/// One notice per badge style, with the design's texts.
+fn demo_notice(which: DemoNotice) -> Notice {
+    let notice = |source: &str, title: &str, body: String, kind| Notice {
+        key: "demo".into(),
+        source: source.into(),
+        title: title.into(),
+        body,
+        kind,
+    };
+    match which {
+        DemoNotice::Reminder => notice(
+            tr(Key::SourceReminder),
+            "Kirim revisi denah ke klien",
+            format!("{} · {}", tr(Key::Missed), "16.30"),
+            NoticeKind::Reminder { id: "demo".into() },
+        ),
+        DemoNotice::Pomodoro => notice(
+            "Pomodoro",
+            tr(Key::FocusDone),
+            crate::i18n::focus_done_body(crate::i18n::lang(), 5),
+            NoticeKind::Pomodoro,
+        ),
+        DemoNotice::Claude => notice(
+            "Claude",
+            tr(Key::ClaudeWaiting),
+            "dynamic-island · izin menjalankan perintah".into(),
+            NoticeKind::ClaudeWaiting {
+                session_id: "demo".into(),
+            },
+        ),
+        DemoNotice::Battery => notice(
+            tr(Key::SourceBattery),
+            tr(Key::BatteryLow),
+            crate::i18n::battery_body(crate::i18n::lang(), 20),
+            NoticeKind::BatteryLow,
+        ),
+        DemoNotice::App => notice(
+            "Mail",
+            "Rani · Mail",
+            "Denah lantai 2 sudah saya kirim, cek ya".into(),
+            NoticeKind::App { app_id: None },
+        ),
     }
 }
 
@@ -441,8 +552,8 @@ fn scene(step: usize) -> (Style, Scene) {
     (style, SCENES[step % SCENES.len()])
 }
 
-/// Focus session 2 of 4 with 18:42 left (running or paused), or a short break
-/// ready to start.
+/// Focus session 2 of 4 with 18:42 left (running or paused), a short break
+/// ready to start, or one running with 3:20 left.
 fn demo_pomodoro(which: Pomo, now: Instant) -> Pomodoro {
     let mut p = Pomodoro::new(PomoSettings::default());
     if which == Pomo::Idle {
@@ -450,6 +561,12 @@ fn demo_pomodoro(which: Pomo, now: Instant) -> Pomodoro {
     }
     if which == Pomo::Ready {
         p.skip(now);
+        return p;
+    }
+    if which == Pomo::Break {
+        // Focus 1 → short break, 1:40 in.
+        p.skip(now);
+        p.start_pause(now.checked_sub(Duration::from_secs(100)).unwrap_or(now));
         return p;
     }
     // Focus 1 → short break → focus 2.
@@ -473,9 +590,14 @@ fn local(d: NaiveDate, h: u32, m: u32) -> EventTime {
     )
 }
 
-/// Six events on today: all-day, multi-day all-day, three timed (one past
-/// midnight), and one with a very long title.
-fn demo_calendar(today: NaiveDate) -> CalendarSnapshot {
+/// Today: an exhibition running over several days and a birthday (all
+/// day), a review three hours before the current hour and a meeting the hour
+/// after it (so the day view shows the "now" line between them, as in the
+/// design), a coffee at 07.00 and a render from 22.00 past midnight: they
+/// never fit one window, so the day view always has a second page ("+N
+/// lagi", then "Kembali ke atas"). The rest of the week has an event most
+/// days, one of them with a very long title.
+fn demo_calendar(today: NaiveDate, p: &Palette) -> CalendarSnapshot {
     let day = |n: i64| {
         if n >= 0 {
             today + Days::new(n as u64)
@@ -493,48 +615,99 @@ fn demo_calendar(today: NaiveDate) -> CalendarSnapshot {
         color,
         editable: true,
     };
+    // Keeps the review on today and the meeting before midnight.
+    let h = Local::now().hour().clamp(3, 20);
     let events = vec![
-        ev(
-            "bday",
-            "Ulang tahun Rani",
-            EventTime::AllDay(today),
-            EventTime::AllDay(day(1)),
-            Some(0xF5A524),
-        ),
         ev(
             "expo",
             "Pameran arsitektur Jakarta",
             EventTime::AllDay(day(-1)),
             EventTime::AllDay(day(3)),
-            Some(0x9B59B6),
+            Some(p.sage),
+        ),
+        ev(
+            "bday",
+            "Ulang tahun Rani",
+            EventTime::AllDay(today),
+            EventTime::AllDay(day(1)),
+            Some(p.plum),
+        ),
+        ev(
+            "standup",
+            "Kopi pagi dengan tim",
+            local(today, 7, 0),
+            local(today, 7, 45),
+            Some(p.plum),
         ),
         ev(
             "review",
             "Review desain klien",
-            local(today, 10, 0),
-            local(today, 11, 30),
+            local(today, h - 3, 0),
+            local(today, h - 2, 30),
             None,
         ),
         ev(
             "rapat",
-            "Rapat koordinasi kontraktor, struktur, MEP dan pemilik proyek gedung kantor",
-            local(today, 14, 0),
-            local(today, 15, 0),
-            None,
-        ),
-        ev(
-            "dinner",
-            "Makan malam keluarga",
-            local(today, 19, 0),
-            local(today, 21, 0),
-            Some(0x2ECC71),
+            "Rapat koordinasi MEP",
+            local(today, h + 1, 0),
+            local(today, h + 2, 0),
+            Some(p.ochre),
         ),
         ev(
             "render",
             "Render final malam",
             local(today, 22, 0),
             local(day(1), 2, 0),
-            Some(0xEF5350),
+            None,
+        ),
+        ev(
+            "survey",
+            "Survey lokasi Kemang",
+            local(day(1), 8, 30),
+            local(day(1), 10, 0),
+            Some(p.sage),
+        ),
+        ev(
+            "present",
+            "Presentasi",
+            local(day(2), 13, 0),
+            local(day(2), 14, 0),
+            None,
+        ),
+        ev(
+            "gym",
+            "Gym",
+            local(day(4), 7, 0),
+            local(day(4), 8, 0),
+            Some(p.plum),
+        ),
+        ev(
+            "rab",
+            "Kirim RAB",
+            local(day(4), 16, 0),
+            local(day(4), 17, 0),
+            Some(p.ochre),
+        ),
+        ev(
+            "family",
+            "Keluarga",
+            local(day(6), 11, 0),
+            local(day(6), 13, 0),
+            Some(p.sage),
+        ),
+        ev(
+            "long",
+            "Rapat koordinasi kontraktor, struktur, MEP dan pemilik proyek gedung kantor",
+            local(day(-5), 9, 0),
+            local(day(-5), 10, 0),
+            None,
+        ),
+        ev(
+            "site",
+            "Cek progres lapangan",
+            local(day(-12), 14, 0),
+            local(day(-12), 15, 0),
+            None,
         ),
     ];
     CalendarSnapshot {
@@ -553,7 +726,10 @@ fn stamp(t: NaiveDateTime) -> i64 {
         .map_or(0, |t| t.timestamp())
 }
 
+/// The design's four cards (newest first), then two more for the second
+/// chunk: one with a single line, one from last year.
 fn demo_notes(today: NaiveDate) -> Vec<Note> {
+    let now = Local::now().timestamp();
     let at = |d: NaiveDate, h, m| stamp(d.and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap()));
     let note = |id: &str, text: &str, updated| Note {
         id: id.into(),
@@ -563,27 +739,33 @@ fn demo_notes(today: NaiveDate) -> Vec<Note> {
     vec![
         note(
             "n1",
-            "Revisi denah lantai 2 — geser tangga ke timur",
-            at(today, 9, 12),
+            "Ide fasad\nKisi-kisi kayu vertikal, jarak 8 cm, bayangan sore jatuh ke ruang tamu.",
+            now - 10 * 60,
         ),
         note(
             "n2",
-            "Beli tinta printer A3",
-            at(today - Days::new(1), 16, 0),
+            "Daftar material\nBata ekspos, terakota lantai 30×30, kaca low-e, baja ringan.",
+            now - 3600,
         ),
         note(
             "n3",
-            "\n  Ide: fasad pakai roster bata ekspos\ndetail menyusul",
-            at(today - Days::new(2), 8, 0),
+            "\n  Catatan rapat\nKlien minta skylight di tangga. Cek ulang beban atap, \
+             lalu kirim revisi potongan dan detail kusen jendela kamar tidur.",
+            at(today - Days::new(1), 16, 0),
         ),
         note(
             "n4",
-            "Catatan rapat: klien minta jendela lebih besar di semua kamar tidur dan ruang keluarga menghadap taman belakang",
-            at(today - Days::new(9), 11, 0),
+            "Belanja\nKopi, kertas kalkir A2, pensil 2B, cutter.",
+            at(today - Days::new(4), 8, 0),
         ),
         note(
             "n5",
             "Perpanjang lisensi software",
+            at(today - Days::new(9), 11, 0),
+        ),
+        note(
+            "n6",
+            "Arsip proyek lama\nPindahkan ke drive eksternal.",
             at(today - Days::new(400), 11, 0),
         ),
     ]
@@ -600,11 +782,16 @@ fn many_notes(today: NaiveDate) -> Vec<Note> {
         .collect()
 }
 
-/// One already due (a daily one, 25 minutes ago), one later today with a
-/// long text, one weekly tomorrow.
+/// Today: one overdue ("Terlewat"), one later, one daily (repeat icon);
+/// tomorrow one; and a weekly one later in the week (a date heading).
 fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
     let now = Local::now().naive_local();
     let whole = |t: NaiveDateTime| t.with_second(0).unwrap_or(t);
+    // The two later ones stay before midnight, so they stay under today.
+    let left = i64::from(24 * 60 - 1 - (now.hour() * 60 + now.minute()));
+    let later = |want: i64, share: i64, min: i64| {
+        now + chrono::Duration::minutes(want.min(left * share / 3).max(min))
+    };
     let r = |id: &str, text: &str, at: NaiveDateTime, repeat| Reminder {
         id: id.into(),
         text: text.into(),
@@ -612,23 +799,36 @@ fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
         repeat,
         done: false,
     };
+    let on = |d: NaiveDate, h, m| d.and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap());
     vec![
         r(
             "r1",
-            "Minum obat",
-            whole(now - chrono::Duration::minutes(25)),
-            Repeat::Daily,
+            "Minum vitamin",
+            whole(now - chrono::Duration::hours(2)),
+            Repeat::Once,
         ),
         r(
             "r2",
-            "Telepon klien soal revisi fasad dan jendela kamar tidur lantai dua",
-            whole(now + chrono::Duration::hours(3)),
+            "Kirim revisi denah lantai 2 ke klien",
+            whole(later(90, 1, 1)),
             Repeat::Once,
         ),
         r(
             "r3",
-            "Kirim gambar kerja ke kontraktor",
-            (today + Days::new(1)).and_time(NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+            "Backup file proyek",
+            whole(later(150, 2, 2)),
+            Repeat::Daily,
+        ),
+        r(
+            "r4",
+            "Survey lokasi Kemang",
+            on(today + Days::new(1), 9, 30),
+            Repeat::Once,
+        ),
+        r(
+            "r5",
+            "Telepon vendor kaca soal kaca low-e untuk fasad depan dan skylight tangga",
+            on(today + Days::new(3), 13, 0),
             Repeat::Weekly,
         ),
     ]
@@ -652,11 +852,12 @@ fn many_reminders(today: NaiveDate) -> Vec<Reminder> {
         .collect()
 }
 
-/// A 64×40 orange-to-purple gradient BMP, non-square to exercise the crop.
+/// A 240×192 cover like the design's: a terracotta sky darkening downwards,
+/// a pale sun, a thin horizon. Not square, to exercise the crop.
 fn test_art() -> Vec<u8> {
-    const W: u32 = 64;
-    const H: u32 = 40;
-    let row = W * 3; // 192 bytes: already 4-byte aligned
+    const W: u32 = 240;
+    const H: u32 = 192;
+    let row = W * 3; // 720 bytes: already 4-byte aligned
     let pixels = row * H;
     let mut bmp = Vec::with_capacity((54 + pixels) as usize);
     bmp.extend_from_slice(b"BM");
@@ -669,12 +870,36 @@ fn test_art() -> Vec<u8> {
     bmp.extend_from_slice(&1u16.to_le_bytes());
     bmp.extend_from_slice(&24u16.to_le_bytes());
     bmp.extend_from_slice(&[0u8; 24]);
-    let (from, to) = ([0xD9, 0x86, 0x4A], [0x7A, 0x3B, 0x6B]);
-    for y in 0..H {
+    let stops: [(f32, [f32; 3]); 3] = [
+        (0.0, [0xE2 as f32, 0x68 as f32, 0x3C as f32]),
+        (0.55, [0xB4 as f32, 0x45 as f32, 0x2A as f32]),
+        (1.0, [0x5A as f32, 0x2A as f32, 0x1C as f32]),
+    ];
+    let sky = |t: f32| -> [f32; 3] {
+        let (a, b) = if t < stops[1].0 {
+            (stops[0], stops[1])
+        } else {
+            (stops[1], stops[2])
+        };
+        let k = (t - a.0) / (b.0 - a.0);
+        std::array::from_fn(|i| a.1[i] + (b.1[i] - a.1[i]) * k)
+    };
+    let sun = [0xF2 as f32, 0xC2 as f32, 0x7A as f32];
+    let line = [0xD8 as f32, 0xB8 as f32, 0xA0 as f32];
+    // BMP rows run bottom-up.
+    for y in (0..H).rev() {
         for x in 0..W {
-            let t = (x + y) as f32 / (W + H - 2) as f32;
-            let mix = |i: usize| (from[i] as f32 + (to[i] as f32 - from[i] as f32) * t) as u8;
-            bmp.extend_from_slice(&[mix(2), mix(1), mix(0)]);
+            let (fx, fy) = (x as f32, y as f32);
+            let mut c = sky((fy / (H - 1) as f32 + fx / (W - 1) as f32 * 0.15).min(1.0));
+            // The sun's edge blends over a pixel, so it stays round scaled up.
+            let (dx, dy) = (fx + 0.5 - W as f32 * 0.68, fy + 0.5 - H as f32 * 0.3);
+            let edge = H as f32 * 0.19 - (dx * dx + dy * dy).sqrt();
+            let cover = (edge + 0.5).clamp(0.0, 1.0);
+            c = std::array::from_fn(|i| c[i] + (sun[i] - c[i]) * cover);
+            if y == H * 78 / 100 {
+                c = std::array::from_fn(|i| (c[i] + line[i]) / 2.0);
+            }
+            bmp.extend_from_slice(&[c[2] as u8, c[1] as u8, c[0] as u8]);
         }
     }
     bmp

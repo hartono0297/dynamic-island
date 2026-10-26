@@ -6,18 +6,19 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
     D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_ROUND,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
-    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE,
-    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
-    ID2D1Bitmap, ID2D1Brush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry, ID2D1Layer,
-    ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+    D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush,
+    ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry, ID2D1Layer, ID2D1PathGeometry,
+    ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_MEDIUM,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -42,20 +43,21 @@ use chrono::NaiveDate;
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
-    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_layout,
+    BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
+    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_action, notice_layout,
 };
 use super::icons::{Icon, IconSet};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::cli::Shell;
 use crate::config::Style;
+use crate::i18n;
 use crate::lyrics::ShownLine;
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
 use crate::reminders::Reminder;
-use crate::theme::{self, Accent, Palette};
+use crate::theme::{self, Accent, Palette, radius};
 
 // Page drawing lives in its own file; as a child module it shares the
 // renderer's private state and helpers.
@@ -151,29 +153,53 @@ pub struct Renderer {
 }
 
 struct Fonts {
+    /// Notice titles, the compact pomodoro's countdown: DM Sans 12.5 medium.
     title: IDWriteTextFormat,
+    /// Body text: DM Sans 12.
     secondary: IDWriteTextFormat,
+    /// Event, note and reminder titles: DM Sans 12 medium.
+    body_medium: IDWriteTextFormat,
+    /// A notice badge's letter.
     badge: IDWriteTextFormat,
-    /// The idle clock.
+    /// The idle clock: Fraunces It 16.
     clock: IDWriteTextFormat,
-    /// The lyric line in the notch.
+    /// The lyric line in the notch: Fraunces It 16.
     lyric: IDWriteTextFormat,
     /// The rest sign of an instrumental gap, larger than the words.
     lyric_rest: IDWriteTextFormat,
-    /// Page titles ("Oktober 2026", "Pomodoro", "Notes").
+    /// Page titles ("Oktober 2026", "Pomodoro", "Notes"): Fraunces It 20.
     heading: IDWriteTextFormat,
+    /// Captions: DM Sans 10.5.
     small: IDWriteTextFormat,
     small_center: IDWriteTextFormat,
     small_center_bold: IDWriteTextFormat,
-    tiny: IDWriteTextFormat,
-    tiny_center: IDWriteTextFormat,
+    /// Hour labels, group headings, weekday names: DM Sans 9.5.
+    micro: IDWriteTextFormat,
+    micro_center: IDWriteTextFormat,
+    /// Week view chips: title and time.
+    chip_title: IDWriteTextFormat,
+    chip_time: IDWriteTextFormat,
+    /// Month grid days, and today's in bold: DM Sans 11.5.
+    cell: IDWriteTextFormat,
+    cell_bold: IDWriteTextFormat,
+    /// Week view day numbers: DM Sans 15 medium.
+    day_number: IDWriteTextFormat,
+    /// Tile labels, times, small buttons: DM Sans 11.
+    eleven: IDWriteTextFormat,
+    eleven_center: IDWriteTextFormat,
+    button: IDWriteTextFormat,
+    button_center: IDWriteTextFormat,
+    /// The compact media title: DM Sans 12.
+    compact: IDWriteTextFormat,
+    /// A note card's text under its title: wraps, trimmed at the bottom.
+    snippet: IDWriteTextFormat,
     body_center: IDWriteTextFormat,
     body_right: IDWriteTextFormat,
+    /// The pomodoro countdown: Fraunces It 48.
     big_time: IDWriteTextFormat,
-    /// The pomodoro page's phase beside the ring.
-    phase: IDWriteTextFormat,
-    media_title: IDWriteTextFormat,
-    media_artist: IDWriteTextFormat,
+    /// The media page's title (Fraunces It 28) and artist.
+    song: IDWriteTextFormat,
+    artist: IDWriteTextFormat,
     /// The CLI card: DM Mono, else Cascadia Mono or Consolas.
     mono: IDWriteTextFormat,
 }
@@ -483,7 +509,8 @@ impl Renderer {
                 Ok(())
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
-            View::Notice(notice) => self.paint_notice(shape, notice),
+            // A pomodoro notice shows while the next phase waits (Ready).
+            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro),
             View::Idle => {
                 // Without the clock, idle is the empty shape.
                 if let Some(time) = &frame.clock {
@@ -501,14 +528,15 @@ impl Renderer {
 
     fn paint_compact(&mut self, shape: ShapeRect, media: &MediaInfo, now: Instant) -> Result<()> {
         let layout = compact_layout(shape);
-        self.paint_art(layout.art, 5.0, media.art.as_deref())?;
-        let label = if media.artist.is_empty() {
-            &media.title
-        } else {
+        self.paint_art(layout.art, radius::ART, media.art.as_deref())?;
+        // The song, as in the design; the artist when the player gives no title.
+        let label = if media.title.is_empty() {
             &media.artist
+        } else {
+            &media.title
         };
         let target = self.target.as_ref().expect("target ensured by paint");
-        self.text(label, &self.fonts.secondary, layout.text, SECONDARY_ALPHA);
+        self.text(label, &self.fonts.compact, layout.text, 1.0);
         // Every bar's frequency × 10 s is a whole number of cycles, so the
         // clock can wrap at 10 s without a jump and stays precise for f32.
         let t = (now.saturating_duration_since(self.epoch).as_secs_f64() % 10.0) as f32;
@@ -555,43 +583,45 @@ impl Renderer {
         line(lyric.text, rising, t);
     }
 
-    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice) -> Result<()> {
-        let layout = notice_layout(shape);
-        let fill = badge_color(notice, self.palette.accent);
-        let target = self.target.as_ref().expect("target ensured by paint");
-        unsafe {
-            target.brush.SetColor(&color(fill, 1.0));
-            let r = layout.badge.w / 2.0;
-            target.rt.FillEllipse(
-                &D2D1_ELLIPSE {
-                    point: Vector2::new(layout.badge.x + r, layout.badge.y + r),
-                    radiusX: r,
-                    radiusY: r,
-                },
-                &target.brush,
-            );
-        }
-        if matches!(notice.kind, NoticeKind::Reminder { .. }) {
-            // A bell in the accent's ink, without the duotone: it sits on the accent.
-            let ink = self.palette.on_accent;
-            self.icon_colored(Icon::Bell, layout.badge, 18.0, ink, 1.0, None);
-        } else {
-            // Dark letter on the light fills (WhatsApp green, amber), white otherwise.
-            let ink = match fill {
-                0x25D366 => 0x0B3D1F,
-                0xF5A524 => 0x3D2A00,
-                _ => 0xFFFFFF,
+    /// Badge, title over body, and the chip naming what a click does
+    /// (`notice_action`): a reminder is then done, a pomodoro phase waiting
+    /// to start starts (in that phase's colour).
+    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice, pomo: &Pomodoro) -> Result<()> {
+        let p = self.palette;
+        let next = pomo.phase();
+        let action = notice_action(&notice.kind, pomo.status()).map(|key| {
+            let fill = match notice.kind {
+                NoticeKind::Pomodoro => p.phase(next),
+                _ => p.accent,
             };
-            let letter = badge_letter(&notice.source);
-            self.text_colored(&letter, &self.fonts.badge, layout.badge, ink, 1.0);
+            (key, fill, p.on_accent)
+        });
+        let layout = notice_layout(shape, action.is_some());
+        let badge = badge_style(notice, &p, next);
+        self.set_color(badge.fill, badge.alpha);
+        self.fill_round(layout.badge, radius::BADGE);
+        match badge.icon {
+            // Line only: the duotone would vanish on a tint of its own colour.
+            Some(icon) => self.icon_colored(icon, layout.badge, 20.0, badge.ink, 1.0, None),
+            None => {
+                let letter = badge_letter(&notice.source);
+                self.text_colored(&letter, &self.fonts.badge, layout.badge, badge.ink, 1.0);
+            }
         }
         self.text(&notice.title, &self.fonts.title, layout.title, 1.0);
-        self.text(
+        self.text_colored(
             &notice.body,
-            &self.fonts.secondary,
+            &self.fonts.small,
             layout.body,
-            SECONDARY_ALPHA,
+            p.secondary,
+            1.0,
         );
+        if let (Some(chip), Some((key, fill, ink))) = (layout.action, action) {
+            self.set_color(fill, 1.0);
+            self.fill_round(chip, chip.h / 2.0);
+            let label = i18n::tr(key);
+            self.text_colored(label, &self.fonts.button_center, chip, ink, 1.0);
+        }
         Ok(())
     }
 
@@ -787,6 +817,35 @@ impl Renderer {
         self.text_colored(text, format, area, self.palette.text, alpha);
     }
 
+    /// Text in the palette's secondary colour (captions, times, labels).
+    fn text2(&self, text: &str, format: &IDWriteTextFormat, area: Rect) {
+        self.text_colored(text, format, area, self.palette.secondary, 1.0);
+    }
+
+    /// Sets the shared brush for the fills that follow.
+    fn set_color(&self, rgb: u32, alpha: f32) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe { target.brush.SetColor(&color(rgb, alpha)) };
+    }
+
+    /// How wide `text` is drawn in `format` on one line, in logical px.
+    fn text_width(&self, text: &str, format: &IDWriteTextFormat) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let Ok(layout) =
+            fonts::text_layout(&self.dwrite, &wide, format, 4096.0, 64.0, &self.tabular)
+        else {
+            return 0.0;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        match unsafe { layout.GetMetrics(&mut metrics) } {
+            Ok(()) => metrics.widthIncludingTrailingWhitespace,
+            Err(_) => 0.0,
+        }
+    }
+
     /// One line of text in `area`, trimmed with an ellipsis when too long and
     /// clipped to it, with tabular figures (a layout, since `DrawText` cannot
     /// carry OpenType features).
@@ -839,25 +898,53 @@ impl Fonts {
         );
         // Studio scale: body 12, captions 10.5, code 11; Fraunces only from 16 px.
         let (body, caption) = (12.0, 10.5);
+        let snippet = text.format(dwrite, normal, caption)?;
+        unsafe {
+            snippet.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            snippet.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            snippet.SetLineSpacing(
+                windows::Win32::Graphics::DirectWrite::DWRITE_LINE_SPACING_METHOD_UNIFORM,
+                15.0,
+                12.0,
+            )?;
+            let ellipsis = dwrite.CreateEllipsisTrimmingSign(&snippet)?;
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            snippet.SetTrimming(&trimming, &ellipsis)?;
+        }
         Ok(Self {
-            title: line(&text, semi, 13.0)?,
+            title: line(&text, medium, 12.5)?,
             secondary: line(&text, normal, body)?,
-            badge: centered(&text, semi, 17.0)?,
-            clock: centered(&text, semi, 13.0)?,
-            lyric: centered(&text, semi, 13.0)?,
+            body_medium: line(&text, medium, body)?,
+            badge: centered(&text, semi, 16.0)?,
+            clock: centered(&display, normal, 16.0)?,
+            lyric: centered(&display, normal, 16.0)?,
             lyric_rest: centered(&text, normal, 19.0)?,
             heading: line(&display, medium, 20.0)?,
             small: line(&text, normal, caption)?,
             small_center: centered(&text, normal, caption)?,
             small_center_bold: centered(&text, semi, caption)?,
-            tiny: line(&text, normal, caption)?,
-            tiny_center: centered(&text, normal, caption)?,
+            micro: line(&text, normal, 9.5)?,
+            micro_center: centered(&text, normal, 9.5)?,
+            chip_title: line(&text, medium, 9.5)?,
+            chip_time: line(&text, normal, 9.0)?,
+            cell: centered(&text, normal, 11.5)?,
+            cell_bold: centered(&text, semi, 11.5)?,
+            day_number: centered(&text, medium, 15.0)?,
+            eleven: line(&text, normal, 11.0)?,
+            eleven_center: centered(&text, normal, 11.0)?,
+            button: line(&text, medium, 11.0)?,
+            button_center: centered(&text, medium, 11.0)?,
+            compact: line(&text, normal, body)?,
+            snippet,
             body_center: centered(&text, normal, body)?,
             body_right: aligned(&text, normal, body, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
             big_time: centered(&display, normal, 48.0)?,
-            phase: centered(&text, semi, 15.0)?,
-            media_title: line(&display, medium, 18.0)?,
-            media_artist: line(&text, normal, body)?,
+            song: line(&display, medium, 28.0)?,
+            artist: line(&text, normal, 12.5)?,
             mono: line(&mono, normal, 11.0)?,
         })
     }
@@ -903,6 +990,17 @@ fn d2d_rect(r: Rect) -> D2D_RECT_F {
     }
 }
 
+/// `a` moved `t` of the way to `b`, channel by channel (0xRRGGBB): the
+/// tinted text on tinted fills (event blocks) without new colours.
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let channel = |shift: u32| {
+        let (x, y) = (((a >> shift) & 0xFF) as f32, ((b >> shift) & 0xFF) as f32);
+        ((x + (y - x) * t).round() as u32) << shift
+    };
+    channel(16) | channel(8) | channel(0)
+}
+
 /// 0xRRGGBB plus alpha as a Direct2D color (straight alpha; Direct2D premultiplies).
 fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     let channel = |shift: u32| ((rgb >> shift) & 0xFF) as f32 / 255.0;
@@ -917,6 +1015,15 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mix_blends_each_channel() {
+        assert_eq!(mix(0x000000, 0xFFFFFF, 0.0), 0x000000);
+        assert_eq!(mix(0x000000, 0xFFFFFF, 1.0), 0xFFFFFF);
+        assert_eq!(mix(0xE2683C, 0xF4EDE4, 0.5), 0xEBAB90);
+        assert_eq!(mix(0x102030, 0x102030, 0.7), 0x102030);
+        assert_eq!(mix(0x00FF00, 0xFF0000, 2.0), 0xFF0000, "clamped");
+    }
 
     fn sizes(cache: &[CachedArt<u32>]) -> Vec<(usize, u32)> {
         cache.iter().map(|a| (a.key.0, a.pixels)).collect()
