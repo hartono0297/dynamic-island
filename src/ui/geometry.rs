@@ -185,18 +185,20 @@ pub struct NoticeLayout {
     pub action: Option<Rect>,
 }
 
-/// Equalizer: 4 bars, 3 px wide, 2 px apart, up to 14 px tall.
-pub const BAR_COUNT: usize = 4;
-pub const BAR_W: f32 = 3.0;
+/// Equalizer (the design's `.eq`): 5 bars, 2.5 px wide, 2 px apart, up to
+/// 13 px tall.
+pub const BAR_COUNT: usize = 5;
+pub const BAR_W: f32 = 2.5;
 pub const BAR_GAP: f32 = 2.0;
-pub const BAR_MAX_H: f32 = 14.0;
+pub const BAR_MAX_H: f32 = 13.0;
 
 /// Equalizer bar heights `t` seconds into playback: each bar follows
 /// `BAR_MAX_H × (0.35 + 0.65 × |sin(2π·f·t + φ)|)`. Paused bars rest at the
-/// middle of that range.
+/// middle of that range. Every `f × 10 s` is a whole number of cycles, so the
+/// render clock can wrap at 10 s without a jump.
 pub fn equalizer_heights(t: f32, playing: bool) -> [f32; BAR_COUNT] {
-    const FREQ: [f32; BAR_COUNT] = [1.7, 2.3, 1.3, 2.9];
-    const PHASE: [f32; BAR_COUNT] = [0.0, 1.1, 2.3, 0.6];
+    const FREQ: [f32; BAR_COUNT] = [1.7, 2.3, 1.3, 2.9, 2.1];
+    const PHASE: [f32; BAR_COUNT] = [0.0, 1.1, 2.3, 0.6, 1.7];
     std::array::from_fn(|i| {
         let wave = if playing {
             (std::f32::consts::TAU * FREQ[i] * t + PHASE[i]).sin().abs()
@@ -468,6 +470,9 @@ mod tests {
             }
             assert_eq!(l.art.w, 22.0);
             assert!(l.text.x >= l.art.right() && l.text.right() <= l.bars.x);
+            // 5 × 2.5 px bars with 4 × 2 px gaps, 13 px tall.
+            assert_eq!((l.bars.w, l.bars.h), (20.5, 13.0));
+            assert!(l.text.w >= 100.0, "{style:?} compact text {:?}", l.text);
 
             let m = shape_for(style, ShapeKind::MediaLyric);
             let text = lyric_layout(m);
@@ -683,8 +688,19 @@ mod tests {
     fn equalizer_follows_formula_and_rests_when_paused() {
         let at0 = equalizer_heights(0.0, true);
         let expect = |phase: f32| BAR_MAX_H * (0.35 + 0.65 * phase.sin().abs());
-        for (h, phase) in at0.iter().zip([0.0, 1.1, 2.3, 0.6]) {
+        assert_eq!(at0.len(), 5);
+        for (h, phase) in at0.iter().zip([0.0, 1.1, 2.3, 0.6, 1.7]) {
             assert!((h - expect(phase)).abs() < 1e-4);
+        }
+        // The render clock wraps at 10 s: every bar is back where it started.
+        for t in [0.0, 0.37, 2.5, 7.9] {
+            let (a, b) = (
+                equalizer_heights(t, true),
+                equalizer_heights(t + 10.0, true),
+            );
+            for (x, y) in a.iter().zip(b) {
+                assert!((x - y).abs() < 1e-3, "t={t}: {x} vs {y}");
+            }
         }
         // Bar 0 (1.7 Hz) peaks a quarter period in.
         let peak = equalizer_heights(1.0 / (4.0 * 1.7), true)[0];
