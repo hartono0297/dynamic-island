@@ -283,7 +283,16 @@ const COVER_GAP: f32 = 24.0;
 const MEDIA_LABEL_H: f32 = 14.0;
 const MEDIA_TITLE_H: f32 = 38.0;
 const MEDIA_ARTIST_H: f32 = 18.0;
-const MEDIA_CONTROLS_GAP: f32 = 26.0;
+/// The progress bar: this far below the artist, this thick; the times row
+/// under it.
+const MEDIA_BAR_GAP: f32 = 18.0;
+const MEDIA_BAR_H: f32 = 4.0;
+const MEDIA_TIMES_GAP: f32 = 6.0;
+const MEDIA_TIMES_H: f32 = 13.0;
+/// From the bar's top to the times' bottom.
+const MEDIA_PROGRESS_H: f32 = MEDIA_BAR_H + MEDIA_TIMES_GAP + MEDIA_TIMES_H;
+/// Between the times and the transport row.
+const MEDIA_CONTROLS_GAP: f32 = 14.0;
 const MEDIA_PLAY: f32 = 48.0;
 const MEDIA_SIDE_W: f32 = 32.0;
 const MEDIA_BUTTON_GAP: f32 = 12.0;
@@ -1007,8 +1016,18 @@ pub fn reminders_layout(
     }
 }
 
+/// The Music page's progress bar (a thin full-width track) and, under it,
+/// the elapsed time at its left and the total at its right.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MediaProgress {
+    pub bar: Rect,
+    pub elapsed: Rect,
+    pub total: Rect,
+}
+
 /// The big cover on the left; beside it, centred on it, "SEDANG DIPUTAR",
-/// the title over the artist, and the transport row (prev, the round
+/// the title over the artist, room for the progress bar and its times
+/// (`media_progress_layout`), and the transport row (prev, the round
 /// play/pause, next) with "Lirik" at its right end.
 pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
     let top = content_top(s, strip);
@@ -1023,12 +1042,14 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
         + MEDIA_TITLE_H
         + 2.0
         + MEDIA_ARTIST_H
+        + MEDIA_BAR_GAP
+        + MEDIA_PROGRESS_H
         + MEDIA_CONTROLS_GAP
         + MEDIA_PLAY;
     let label = rect(x, art.y + (side - block_h) / 2.0, w, MEDIA_LABEL_H);
     let title = rect(x, label.bottom() + 6.0, w, MEDIA_TITLE_H);
     let artist = rect(x, title.bottom() + 2.0, w, MEDIA_ARTIST_H);
-    let row_y = artist.bottom() + MEDIA_CONTROLS_GAP;
+    let row_y = artist.bottom() + MEDIA_BAR_GAP + MEDIA_PROGRESS_H + MEDIA_CONTROLS_GAP;
     let prev = rect(x, row_y, MEDIA_SIDE_W, MEDIA_PLAY);
     let play = rect(
         prev.right() + MEDIA_BUTTON_GAP,
@@ -1055,6 +1076,20 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
         artist,
         buttons: [prev, play, next],
         lyrics,
+    }
+}
+
+/// The bar under the artist, as wide as the text column, and the times
+/// row under it split in two halves (elapsed left, total right-aligned).
+pub fn media_progress_layout(l: &ExpandedLayout) -> MediaProgress {
+    let (x, w) = (l.artist.x, l.artist.w);
+    let bar = rect(x, l.artist.bottom() + MEDIA_BAR_GAP, w, MEDIA_BAR_H);
+    let times_y = bar.bottom() + MEDIA_TIMES_GAP;
+    let half = w / 2.0;
+    MediaProgress {
+        bar,
+        elapsed: rect(x, times_y, half, MEDIA_TIMES_H),
+        total: rect(x + half, times_y, w - half, MEDIA_TIMES_H),
     }
 }
 
@@ -1981,6 +2016,8 @@ mod tests {
             let (a, b) = (media_panel_layout(s, false), media_panel_layout(s, true));
             assert!(b.art.y > a.art.y && b.art.y >= strip.bottom());
             assert!(b.lyrics.y > a.lyrics.y && b.label.y > a.label.y);
+            let (pa, pb) = (media_progress_layout(&a), media_progress_layout(&b));
+            assert!(pb.bar.y > pa.bar.y && pb.elapsed.y > pa.elapsed.y);
         }
     }
 
@@ -2092,10 +2129,15 @@ mod tests {
         }
         assert!(!r.iter().any(|r| matches!(r.hit, Hit::NoteOpen(_))));
 
-        let r = regions(s, &PageLayout::Media(media_panel_layout(s, false)), false);
+        let media = media_panel_layout(s, false);
+        let r = regions(s, &PageLayout::Media(media), false);
         for hit in [Hit::Prev, Hit::PlayPause, Hit::Next, Hit::LyricsToggle] {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
+        // The progress bar shows the position only: no click lands on it.
+        let bar = media_progress_layout(&media).bar;
+        let mid = (bar.x + bar.w / 2.0, bar.y + bar.h / 2.0);
+        assert!(!r.iter().any(|r| r.rect.contains(mid.0, mid.1)));
 
         let l = cli_layout(s, false);
         let r = regions(s, &PageLayout::Cli(l), false);
@@ -2250,7 +2292,11 @@ mod tests {
                             drawn.push(l.header);
                             drawn.extend(l.groups.iter().map(|(_, r)| *r));
                         }
-                        PageLayout::Media(l) => drawn.extend([l.art, l.label, l.title, l.artist]),
+                        PageLayout::Media(l) => {
+                            drawn.extend([l.art, l.label, l.title, l.artist]);
+                            let p = media_progress_layout(&l);
+                            drawn.extend([p.bar, p.elapsed, p.total]);
+                        }
                         PageLayout::Cli(l) => {
                             drawn.extend([l.header, l.status]);
                             drawn.extend(l.lines);
@@ -2383,6 +2429,42 @@ mod media_tests {
                 let gap_top = l.art.y - content_top(s, strip);
                 let gap_bottom = content_bottom(s) - l.art.bottom();
                 assert!((gap_top - gap_bottom).abs() < 0.01);
+            }
+        }
+    }
+
+    #[test]
+    fn progress_bar_and_times_sit_between_artist_and_buttons() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::Panel);
+            for strip in [false, true] {
+                let l = media_panel_layout(s, strip);
+                let p = media_progress_layout(&l);
+                let [prev, play, _] = l.buttons;
+                let top_of_row = prev.y.min(play.y).min(l.lyrics.y);
+                // As in the design: 4 px bar 18 px under the artist, the
+                // times 6 px under it, the controls 14 px under those.
+                assert_eq!(p.bar.h, 4.0);
+                assert!((p.bar.y - l.artist.bottom() - 18.0).abs() < 0.01);
+                assert!((p.elapsed.y - p.bar.bottom() - 6.0).abs() < 0.01);
+                assert!((play.y - p.elapsed.bottom() - 14.0).abs() < 0.01);
+                assert!(p.elapsed.bottom() <= top_of_row);
+                // The text column's width; elapsed left of the total, one row.
+                assert_eq!((p.bar.x, p.bar.right()), (l.artist.x, l.artist.right()));
+                assert_eq!(p.elapsed.x, p.bar.x);
+                assert!((p.total.right() - p.bar.right()).abs() < 0.01);
+                assert!(p.elapsed.right() <= p.total.x);
+                assert_eq!(p.elapsed.y, p.total.y);
+                // The whole column still fits beside the cover, inside the panel.
+                assert!(l.label.y >= l.art.y - 0.01, "{style:?} strip={strip}");
+                assert!(
+                    play.bottom() <= l.art.bottom() + 0.01,
+                    "{style:?} strip={strip}"
+                );
+                for r in [p.bar, p.elapsed, p.total] {
+                    assert!(r.x >= s.x && r.right() <= s.x + s.w, "{r:?}");
+                    assert!(r.y >= s.y && r.bottom() <= content_bottom(s), "{r:?}");
+                }
             }
         }
     }

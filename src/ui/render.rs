@@ -52,8 +52,8 @@ use crate::calendar::CalendarSnapshot;
 use crate::cli::Shell;
 use crate::config::Style;
 use crate::i18n;
-use crate::lyrics::ShownLine;
-use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
+use crate::lyrics::{self, ShownLine};
+use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, Timeline, View};
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
 use crate::reminders::Reminder;
@@ -111,6 +111,77 @@ pub struct Frame<'a> {
     pub lyrics_on: bool,
     /// The CLI page's card.
     pub cli: CliCard<'a>,
+    /// Where the playing track is: the notch's progress line and the Music
+    /// page's bar. `None` without a timeline or a known length.
+    pub progress: Option<Progress>,
+}
+
+/// The playback position within a track of known length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Progress {
+    pub position_ms: u64,
+    pub end_ms: u64,
+}
+
+impl Progress {
+    /// The position at `now` (frozen while paused, clamped to the end);
+    /// `None` without a timeline or when the player reports no length.
+    pub fn at(timeline: Option<&Timeline>, playing: bool, now: Instant) -> Option<Self> {
+        let t = timeline.filter(|t| t.end_ms > 0)?;
+        Some(Self {
+            position_ms: lyrics::position_at(t, playing, now),
+            end_ms: t.end_ms,
+        })
+    }
+
+    /// How far through the track, 0..=1; `None` when the length is unknown.
+    pub fn fraction(&self) -> Option<f32> {
+        (self.end_ms > 0)
+            .then(|| (self.position_ms as f64 / self.end_ms as f64).clamp(0.0, 1.0) as f32)
+    }
+}
+
+/// The compact media's progress line: its full track and the played part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LineRects {
+    track: Rect,
+    fill: Rect,
+}
+
+/// The notch's progress line is this thick,
+const PROGRESS_LINE_H: f32 = 2.0;
+/// this far above the shape's bottom edge,
+const PROGRESS_LINE_BOTTOM: f32 = 3.0;
+/// and its ends this far inside the rounded corners at that height.
+const PROGRESS_LINE_MARGIN: f32 = 3.0;
+
+/// The progress line along the compact shape's bottom edge, its ends where
+/// the rounded corners leave room at the line's height (so it never leaves
+/// the shape); the fill is `fraction` of the track. `None` when the length
+/// is unknown or the shape too narrow.
+fn compact_progress(style: Style, s: ShapeRect, progress: Progress) -> Option<LineRects> {
+    let fraction = progress.fraction()?;
+    let r = corner_radius(style, s);
+    let bottom = s.y + s.h - PROGRESS_LINE_BOTTOM;
+    // The line's lowest point against the bottom corners' circles.
+    let dy = (bottom - (s.y + s.h - r)).max(0.0);
+    let dx = (r * r - dy * dy).max(0.0).sqrt();
+    let inset = r - dx + PROGRESS_LINE_MARGIN;
+    let w = s.w - 2.0 * inset;
+    if w <= 0.0 {
+        return None;
+    }
+    let track = Rect {
+        x: s.x + inset,
+        y: bottom - PROGRESS_LINE_H,
+        w,
+        h: PROGRESS_LINE_H,
+    };
+    let fill = Rect {
+        w: w * fraction,
+        ..track
+    };
+    Some(LineRects { track, fill })
 }
 
 /// What the CLI page shows.
@@ -176,6 +247,9 @@ struct Fonts {
     /// Hour labels, group headings, weekday names: DM Sans 9.5.
     micro: IDWriteTextFormat,
     micro_center: IDWriteTextFormat,
+    /// The Music page's elapsed and total times: DM Sans 10.
+    track_time: IDWriteTextFormat,
+    track_time_right: IDWriteTextFormat,
     /// Week view chips: title and time.
     chip_title: IDWriteTextFormat,
     chip_time: IDWriteTextFormat,
@@ -501,9 +575,9 @@ impl Renderer {
             );
         }
         let content = match view {
-            View::MediaCompact => frame
-                .media
-                .map_or(Ok(()), |m| self.paint_compact(shape, m, frame.now)),
+            View::MediaCompact => frame.media.map_or(Ok(()), |m| {
+                self.paint_compact(style, shape, m, frame.now, frame.progress)
+            }),
             View::MediaLyric => {
                 self.paint_lyric(shape, frame.lyric.as_ref());
                 Ok(())
@@ -526,8 +600,24 @@ impl Renderer {
         content
     }
 
-    fn paint_compact(&mut self, shape: ShapeRect, media: &MediaInfo, now: Instant) -> Result<()> {
+    fn paint_compact(
+        &mut self,
+        style: Style,
+        shape: ShapeRect,
+        media: &MediaInfo,
+        now: Instant,
+        progress: Option<Progress>,
+    ) -> Result<()> {
         let layout = compact_layout(shape);
+        if let Some(line) = progress.and_then(|p| compact_progress(style, shape, p)) {
+            let radius = PROGRESS_LINE_H / 2.0;
+            self.set_color(self.palette.track, 1.0);
+            self.fill_round(line.track, radius);
+            if line.fill.w > 0.0 {
+                self.set_color(self.palette.accent, 1.0);
+                self.fill_round(line.fill, radius);
+            }
+        }
         self.paint_art(layout.art, radius::ART, media.art.as_deref())?;
         // The song, as in the design; the artist when the player gives no title.
         let label = if media.title.is_empty() {
@@ -929,6 +1019,8 @@ impl Fonts {
             small_center_bold: centered(&text, semi, caption)?,
             micro: line(&text, normal, 9.5)?,
             micro_center: centered(&text, normal, 9.5)?,
+            track_time: line(&text, normal, 10.0)?,
+            track_time_right: aligned(&text, normal, 10.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
             chip_title: line(&text, medium, 9.5)?,
             chip_time: line(&text, normal, 9.0)?,
             cell: centered(&text, normal, 11.5)?,
@@ -1023,6 +1115,72 @@ mod tests {
         assert_eq!(mix(0xE2683C, 0xF4EDE4, 0.5), 0xEBAB90);
         assert_eq!(mix(0x102030, 0x102030, 0.7), 0x102030);
         assert_eq!(mix(0x00FF00, 0xFF0000, 2.0), 0xFF0000, "clamped");
+    }
+
+    fn progress(position_ms: u64, end_ms: u64) -> Progress {
+        Progress {
+            position_ms,
+            end_ms,
+        }
+    }
+
+    #[test]
+    fn progress_follows_the_timeline() {
+        let t0 = Instant::now();
+        let t = Timeline {
+            position_ms: 102_000,
+            end_ms: 238_000,
+            updated: t0,
+        };
+        let later = t0 + std::time::Duration::from_millis(1_500);
+        assert_eq!(
+            Progress::at(Some(&t), true, later),
+            Some(progress(103_500, 238_000))
+        );
+        assert_eq!(
+            Progress::at(Some(&t), false, later),
+            Some(progress(102_000, 238_000)),
+            "frozen while paused"
+        );
+        let unknown = Timeline { end_ms: 0, ..t };
+        assert_eq!(Progress::at(Some(&unknown), true, later), None);
+        assert_eq!(Progress::at(None, true, later), None);
+        assert_eq!(progress(500, 0).fraction(), None);
+        assert_eq!(progress(300_000, 238_000).fraction(), Some(1.0), "clamped");
+    }
+
+    #[test]
+    fn compact_progress_line_stays_inside_the_shape() {
+        use super::super::geometry::{ShapeKind, shape_contains, shape_for};
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::MediaCompact);
+            let line = |pos| compact_progress(style, s, progress(pos, 1_000)).unwrap();
+
+            let empty = line(0);
+            assert_eq!(empty.fill.w, 0.0);
+            let half = line(500);
+            assert!((half.fill.w - half.track.w / 2.0).abs() < 0.01);
+            let full = line(1_000);
+            assert_eq!(full.fill, full.track);
+            assert_eq!(compact_progress(style, s, progress(500, 0)), None);
+
+            let t = full.track;
+            assert_eq!(t.h, PROGRESS_LINE_H);
+            // Along the bottom edge, under the art, centred, most of the width.
+            assert!((t.bottom() - (s.y + s.h - PROGRESS_LINE_BOTTOM)).abs() < 0.01);
+            assert!(t.y >= compact_layout(s).art.bottom(), "{style:?} {t:?}");
+            assert!(((t.x - s.x) - (s.x + s.w - t.right())).abs() < 0.01);
+            assert!(t.w >= s.w * 0.8, "{style:?} {t:?}");
+            // Clear of the rounded corners at both ends.
+            for (x, y) in [
+                (t.x, t.y),
+                (t.x, t.bottom()),
+                (t.right() - 0.01, t.y),
+                (t.right() - 0.01, t.bottom()),
+            ] {
+                assert!(shape_contains(style, s, x, y), "{style:?} ({x}, {y})");
+            }
+        }
     }
 
     fn sizes(cache: &[CachedArt<u32>]) -> Vec<(usize, u32)> {
