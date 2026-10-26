@@ -1,73 +1,87 @@
-//! The note, event and reminder editors: small Win32 windows under the panel,
-//! dark or light per the window mode (`theme::current_window`),
+//! The note, event and reminder editors: small frameless windows under the
+//! panel, dark or light per the window mode (`theme::current_window`),
 //! because the layered island cannot host native text controls. At most one
 //! editor exists at a time; it lives on the island's UI thread and reports to
 //! the island with `WM_APP_EDITOR_RESULT`.
+//!
+//! The frame is a `WS_POPUP` rounded by DWM (`DWMWCP_ROUND`, a 1 px border
+//! in the palette's hairline colour) and drawn with Direct2D: header, close
+//! button, chips, pills, toggle, segments, footer (`editor_paint`, laid out
+//! by `editor_layout`). Text stays in real `EDIT` controls (IME, paste,
+//! undo) without borders, coloured through `WM_CTLCOLOREDIT`; their frames
+//! and placeholders are drawn around and behind them. Dates and times are
+//! picked in popovers (`editor_popover`), never Windows' date controls.
 //!
 //! Every editor's last result is `NoteSaved`, `NoteDeleted`, `ReminderSaved`,
 //! `ReminderDeleted` or `Closed` (`EditorResult::closes_editor`), posted as
 //! the window goes away. `EventSave` is not last: the event editor waits for
 //! `WM_APP_EDITOR_STATUS`.
-//!
-//! Keyboard handling lives in a subclass on each control (Esc, Ctrl+Enter,
-//! Tab), so the editors need no `IsDialogMessage` in the island's loop.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
+use std::rc::Rc;
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
-use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
+use chrono::{NaiveDate, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
-    SYSTEMTIME, WPARAM,
+    WPARAM,
 };
-use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_ROUND, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{
-    ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    CreatePen, CreateSolidBrush, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE,
-    DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FONT_QUALITY, FW_NORMAL, FillRect,
-    FrameRect, GdiFlush, GetMonitorInfoW, GetStockObject, HBRUSH, HDC, HFONT, HGDIOBJ,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints, MonitorFromPoint, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME,
-    RDW_INVALIDATE, RedrawWindow, RoundRect, SRCCOPY, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    ANTIALIASED_QUALITY, BeginPaint, CLIP_DEFAULT_PRECIS, ClientToScreen, CreateFontW,
+    CreateSolidBrush, DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_WORDBREAK,
+    DeleteObject, DrawTextW, EndPaint, FONT_QUALITY, FW_NORMAL, GetDC, GetMonitorInfoW,
+    GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_ERASE,
+    RDW_FRAME, RDW_INVALIDATE, RedrawWindow, ReleaseDC, ScreenToClient, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    BST_CHECKED, DATETIMEPICK_CLASSW, DRAWITEMSTRUCT, DTM_GETMONTHCAL, DTM_GETSYSTEMTIME,
-    DTM_SETFORMATW, DTM_SETMCFONT, DTM_SETSYSTEMTIME, DTN_DATETIMECHANGE, DTN_DROPDOWN,
-    DTS_SHORTDATEFORMAT, DTS_TIMEFORMAT, EM_SETMARGINS, EM_SETSEL, GDT_VALID, ICC_DATE_CLASSES,
-    ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, ODS_FOCUS,
-    ODS_NOFOCUSRECT, ODS_SELECTED, ODT_BUTTON, SetWindowTheme,
+    EM_GETRECT, EM_SETMARGINS, EM_SETSEL, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
+    InitCommonControlsEx, SetWindowTheme, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, SetFocus, VK_A, VK_CONTROL, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_TAB,
+    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_A, VK_CONTROL, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
-    BS_OWNERDRAW, BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN,
-    EC_RIGHTMARGIN, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN,
-    GW_CHILD, GetClientRect, GetDlgCtrlID, GetForegroundWindow, GetNextDlgTabItem, GetParent,
-    GetWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL,
-    IDOK, IsChild, IsWindow, LoadCursorW, MoveWindow, PRF_CLIENT, PRF_ERASEBKGND, PostMessageW,
-    RegisterClassExW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
-    SwitchToThisWindow, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DPICHANGED, WM_DRAWITEM, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY,
-    WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    CS_DROPSHADOW, CreateWindowExW, DefWindowProcW, DestroyWindow, EC_LEFTMARGIN, EC_RIGHTMARGIN,
+    EN_CHANGE, EN_KILLFOCUS, EN_SETFOCUS, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
+    ES_READONLY, ES_WANTRETURN, GW_OWNER, GetClientRect, GetForegroundWindow, GetParent, GetWindow,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, HTCAPTION, HTCLIENT, HideCaret, IDC_ARROW,
+    IsChild, IsWindow, LoadCursorW, MoveWindow, PostMessageW, RegisterClassExW, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, ShowCaret, ShowWindow, SwitchToThisWindow, WA_INACTIVE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
+use super::editor_layout::{
+    CHEVRON, Form, Item, Labels, Layout, ROW_ICON, Shortcut, Spec, Text, layout,
+};
+use super::editor_paint::{Align, Gfx, Painter, Target};
+use super::editor_popover::{
+    self as popover, CLOSED_KEYBOARD, CLOSED_REFOCUS, CLOSED_SAVE, Kind, Pick,
+    WM_APP_POPOVER_CLOSED, WM_APP_POPOVER_PICK, shift_end,
+};
+use super::geometry::Rect;
+use super::icons::Icon;
 use crate::calendar::EventDraft;
-use crate::i18n::{self, Key, Lang, tr};
+use crate::i18n::{self, Key, Lang, text, tr};
 use crate::reminders::{Repeat, local_unix};
-use crate::theme::{self, WindowPalette};
+use crate::theme::{self, Accent, WindowPalette, radius};
 use crate::ui::app_icon;
 
 /// Sent to the event editor after a save (defined by the sync thread, which
@@ -81,6 +95,8 @@ pub const WM_APP_EDITOR_RESULT: u32 = WM_APP + 6;
 /// Posted by the note editor to itself on deactivation: it must not destroy
 /// itself inside `WM_ACTIVATE`. Only editor windows receive it.
 const WM_APP_EDITOR_CLOSE: u32 = WM_APP + 7;
+/// Posted to the editor by its fields' keyboard: `wparam` is an `Act`.
+const WM_APP_EDITOR_ACT: u32 = WM_APP + 22;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorKind {
@@ -88,7 +104,8 @@ pub enum EditorKind {
     Note { id: Option<String>, text: String },
     /// `event_id` is `None` for a new event. `read_only` (calendar not
     /// writable, or the event does not fit a draft) shows the fields
-    /// disabled and only "Tutup".
+    /// disabled and only "Tutup". The footer names the Google account when
+    /// `calendar_id` is one (it contains "@"), else just "Google Calendar".
     Event {
         event_id: Option<String>,
         calendar_id: Option<String>,
@@ -153,12 +170,11 @@ pub unsafe fn take_result(lparam: LPARAM) -> Option<EditorResult> {
     (!ptr.is_null()).then(|| *unsafe { Box::from_raw(ptr) })
 }
 
-/// Logical sizes (the window's outer size, scaled by the monitor's DPI).
-const NOTE_SIZE: (f32, f32) = (400.0, 220.0);
-const EVENT_SIZE: (f32, f32) = (420.0, 260.0);
-const REMINDER_SIZE: (f32, f32) = (420.0, 236.0);
 /// Gap between the anchor (the panel's bottom edge) and the editor, in px.
 const GAP: i32 = 8;
+/// A chip click this soon after its popover closed (the same click closed
+/// it by deactivation) does not open it again.
+const REOPEN_GUARD: Duration = Duration::from_millis(300);
 
 /// `0xRRGGBB` as GDI's `0x00BBGGRR`.
 pub(super) const fn colorref(rgb: u32) -> COLORREF {
@@ -224,39 +240,144 @@ fn from_edit_text(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-fn system_time(date: NaiveDate, time: NaiveTime) -> SYSTEMTIME {
-    SYSTEMTIME {
-        wYear: date.year().clamp(1601, 30827) as u16,
-        wMonth: date.month() as u16,
-        wDayOfWeek: date.weekday().num_days_from_sunday() as u16,
-        wDay: date.day() as u16,
-        wHour: time.hour() as u16,
-        wMinute: time.minute() as u16,
-        wSecond: 0,
-        wMilliseconds: 0,
+/// The footer of the event editor: "Google Calendar · rani@example.com"
+/// when the calendar is a Google account's own (its id is the address),
+/// else just "Google Calendar". Shared, holiday and imported calendars
+/// (`…@group.calendar.google.com` and the like) are not an account. Never
+/// makes an address up.
+pub fn account_label(lang: Lang, calendar_id: Option<&str>) -> String {
+    let name = text(lang, Key::GoogleCalendar);
+    let is_account = |c: &&str| {
+        c.split_once('@').is_some_and(|(user, domain)| {
+            !user.is_empty()
+                && domain.contains('.')
+                && !domain.to_ascii_lowercase().ends_with("calendar.google.com")
+        })
+    };
+    match calendar_id.map(str::trim).filter(is_account) {
+        Some(account) => format!("{name} · {account}"),
+        None => name.to_owned(),
     }
 }
 
-fn date_of(st: &SYSTEMTIME) -> Option<NaiveDate> {
-    NaiveDate::from_ymd_opt(st.wYear.into(), st.wMonth.into(), st.wDay.into())
+/// The event's date and times as the editor holds them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EventState {
+    date: NaiveDate,
+    all_day: bool,
+    start: NaiveTime,
+    end: NaiveTime,
+    /// For the shortcut pills.
+    today: NaiveDate,
 }
 
-/// Minutes only: the pickers show `HH:mm`.
-fn time_of(st: &SYSTEMTIME) -> Option<NaiveTime> {
-    NaiveTime::from_hms_opt(st.wHour.into(), st.wMinute.into(), 0)
+impl EventState {
+    /// A timed event that ends at or before its start.
+    fn times_invalid(&self) -> bool {
+        !self.all_day && self.end <= self.start
+    }
+
+    fn draft(&self, title: &str, notes: &str) -> EventDraft {
+        EventDraft {
+            title: title.trim().to_owned(),
+            date: self.date,
+            all_day: self.all_day,
+            start: self.start,
+            end: self.end,
+            description: from_edit_text(notes),
+        }
+    }
+
+    /// Minutes from start to end, for the time row.
+    fn length(&self) -> i64 {
+        let m = |t: NaiveTime| i64::from(t.hour() * 60 + t.minute());
+        m(self.end) - m(self.start)
+    }
 }
 
-/// The date picker's format for `date`: day and month names as quoted
-/// literals in the app's language ("'Min' d 'Okt' yyyy"), since the picker's
-/// own `ddd`/`MMM` follow the Windows locale. Set again whenever the date
-/// changes. The month is then picked from the drop-down calendar rather
-/// than typed.
-fn date_format(lang: Lang, date: NaiveDate) -> String {
-    format!(
-        "'{}' d '{}' yyyy",
-        i18n::day_short(lang, date),
-        i18n::month_short(lang, date)
-    )
+enum Mode {
+    Note {
+        id: Option<String>,
+    },
+    Event {
+        event_id: Option<String>,
+        calendar_id: Option<String>,
+        ev: EventState,
+        read_only: bool,
+        /// An `EventSave` was posted; Simpan stays off until the status arrives.
+        saving: bool,
+    },
+    Reminder {
+        id: Option<String>,
+        date: NaiveDate,
+        time: NaiveTime,
+        repeat: Repeat,
+    },
+}
+
+impl Mode {
+    fn form(&self) -> Form {
+        match self {
+            Mode::Note { .. } => Form::Note,
+            Mode::Event { .. } => Form::Event,
+            Mode::Reminder { .. } => Form::Reminder,
+        }
+    }
+
+    fn read_only(&self) -> bool {
+        matches!(
+            self,
+            Mode::Event {
+                read_only: true,
+                ..
+            }
+        )
+    }
+
+    /// Simpan is on: the title is filled in, a timed event ends after it
+    /// starts, and nothing is being saved. Notes and reminders always allow
+    /// it (a reminder says what is missing when it is pressed).
+    fn can_save(&self, title: &str) -> bool {
+        match self {
+            Mode::Note { .. } | Mode::Reminder { .. } => true,
+            Mode::Event {
+                ev,
+                read_only,
+                saving,
+                ..
+            } => !read_only && !saving && validate_event(&ev.draft(title, "")).is_ok(),
+        }
+    }
+
+    /// What Simpan posts for an event: `None` when it posts nothing (not an
+    /// event, read-only, or already saving), else the checked `EventSave`.
+    fn event_save(
+        &self,
+        title: &str,
+        notes: &str,
+    ) -> Option<std::result::Result<EditorResult, Key>> {
+        let Mode::Event {
+            event_id,
+            calendar_id,
+            ev,
+            read_only: false,
+            saving: false,
+        } = self
+        else {
+            return None;
+        };
+        let draft = ev.draft(title, notes);
+        Some(validate_event(&draft).map(|()| EditorResult::EventSave {
+            event_id: event_id.clone(),
+            calendar_id: calendar_id.clone(),
+            draft,
+        }))
+    }
+
+    /// The item is usable (read-only events allow only the text and Tutup).
+    fn enabled(&self, item: Item) -> bool {
+        !self.read_only() || matches!(item, Item::Title | Item::Notes | Item::Cancel | Item::Close)
+    }
 }
 
 /// The window title for an editor of this kind.
@@ -273,416 +394,110 @@ fn title_key(mode: &Mode) -> Key {
     }
 }
 
-/// The text a control shows, for relabelling after a language switch.
-fn label_key(id: i32, read_only: bool) -> Option<Key> {
-    Some(match id {
-        ID_DELETE => Key::Delete,
-        ID_LBL_TITLE => Key::FieldTitle,
-        ID_LBL_DATE => Key::FieldDate,
-        ID_LBL_START => Key::FieldStart,
-        ID_LBL_END => Key::FieldEnd,
-        ID_LBL_NOTES => Key::FieldNotes,
-        ID_ALLDAY_LABEL => Key::AllDay,
-        ID_LBL_TEXT => Key::FieldText,
-        ID_LBL_TIME => Key::FieldTime,
-        ID_LBL_REPEAT => Key::FieldRepeat,
-        ID_REPEAT_ONCE => Key::RepeatOnce,
-        ID_REPEAT_DAILY => Key::RepeatDaily,
-        ID_REPEAT_WEEKLY => Key::RepeatWeekly,
-        ID_OK => Key::Save,
-        ID_CANCEL if read_only => Key::Close,
-        ID_CANCEL => Key::Cancel,
-        _ => return None,
-    })
+/// What a field's keyboard asks of the editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Act {
+    Close = 1,
+    /// Ctrl+Enter: save from anywhere.
+    Save = 2,
+    /// Enter in the title: save only when Simpan is on.
+    SaveIfReady = 3,
 }
 
-// Control ids. IDOK / IDCANCEL double as the keyboard commands (Ctrl+Enter, Esc).
-const ID_OK: i32 = IDOK.0;
-const ID_CANCEL: i32 = IDCANCEL.0;
-const ID_TEXT: i32 = 101;
-const ID_DELETE: i32 = 102;
+impl Act {
+    fn from_wparam(v: usize) -> Option<Act> {
+        [Act::Close, Act::Save, Act::SaveIfReady]
+            .into_iter()
+            .find(|a| *a as usize == v)
+    }
+}
+
+// Control ids of the EDITs.
 const ID_TITLE: i32 = 201;
-const ID_DATE: i32 = 202;
-const ID_ALLDAY: i32 = 203;
-const ID_ALLDAY_LABEL: i32 = 204;
-const ID_START: i32 = 205;
-const ID_END: i32 = 206;
 const ID_NOTES: i32 = 207;
-const ID_STATUS: i32 = 208;
-const ID_TIME: i32 = 209;
-const ID_REPEAT_ONCE: i32 = 210;
-const ID_REPEAT_DAILY: i32 = 211;
-const ID_REPEAT_WEEKLY: i32 = 212;
-const ID_LBL_TITLE: i32 = 301;
-const ID_LBL_DATE: i32 = 302;
-const ID_LBL_START: i32 = 303;
-const ID_LBL_END: i32 = 304;
-const ID_LBL_NOTES: i32 = 305;
-const ID_LBL_TEXT: i32 = 306;
-const ID_LBL_TIME: i32 = 307;
-const ID_LBL_REPEAT: i32 = 308;
 
-/// The repeat segments, in order, with what each one picks.
-const REPEAT_SEGMENTS: [(i32, Repeat); 3] = [
-    (ID_REPEAT_ONCE, Repeat::Once),
-    (ID_REPEAT_DAILY, Repeat::Daily),
-    (ID_REPEAT_WEEKLY, Repeat::Weekly),
-];
-
-fn segment_for(repeat: Repeat) -> i32 {
-    REPEAT_SEGMENTS
-        .iter()
-        .find(|(_, r)| *r == repeat)
-        .map_or(ID_REPEAT_ONCE, |(id, _)| *id)
-}
-
-/// Which kind of editor a layout is for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Form {
-    Note,
-    Event,
-    Reminder,
-}
-
-// Static styles (System_SystemServices in `windows`; values fixed by Win32).
-const SS_NOTIFY: u32 = 0x0100;
-const SS_CENTERIMAGE: u32 = 0x0200;
-const SS_ENDELLIPSIS: u32 = 0x4000;
-
-/// What the keyboard subclass does with a control (its `dwRefData`).
+/// What the keyboard subclass does with an EDIT (its `dwRefData`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
-    /// Multi-line EDIT: Enter is a newline, Ctrl+Enter saves.
+    /// Multi-line: Enter is a newline, Ctrl+Enter saves.
     Multi = 1,
-    /// Single-line EDIT: Enter saves.
+    /// Single-line: Enter saves.
     Line = 2,
-    /// Push button or checkbox: Enter clicks it.
-    Button = 3,
-    /// Date/time picker: Enter saves; Esc closes its drop-down first.
-    /// Painted in the window colours by `paint_themed`.
-    Picker = 4,
-    /// A picker's spin buttons or drop-down calendar: only painted by
-    /// `paint_themed`.
-    Paint = 5,
 }
 
-impl Role {
-    fn from_ref(data: usize) -> Option<Role> {
-        [
-            Role::Multi,
-            Role::Line,
-            Role::Button,
-            Role::Picker,
-            Role::Paint,
-        ]
-        .into_iter()
-        .find(|r| *r as usize == data)
-    }
+/// GDI fonts of the EDITs at the editor's DPI, deleted on drop (after the
+/// controls are gone).
+struct EditFonts {
+    title: HFONT,
+    notes: HFONT,
+    /// Line heights in px, for centring a single-line EDIT.
+    title_line: i32,
 }
 
-/// One child control to create.
-struct Spec {
-    id: i32,
-    class: PCWSTR,
-    text: String,
-    style: u32,
-    role: Option<Role>,
-}
-
-fn specs(kind: &EditorKind) -> Vec<Spec> {
-    let spec = |id, class, text: &str, style: u32, role| Spec {
-        id,
-        class,
-        text: text.to_owned(),
-        style,
-        role,
-    };
-    let multi = (ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN) as u32 | WS_VSCROLL.0;
-    let label = |id, text| spec(id, w!("STATIC"), text, SS_CENTERIMAGE, None);
-    match kind {
-        EditorKind::Note { id, text } => {
-            let mut v = vec![spec(
-                ID_TEXT,
-                w!("EDIT"),
-                &to_edit_text(text),
-                multi,
-                Some(Role::Multi),
-            )];
-            if id.is_some() {
-                let style = BS_PUSHBUTTON as u32;
-                v.push(spec(
-                    ID_DELETE,
-                    w!("BUTTON"),
-                    tr(Key::Delete),
-                    style,
-                    Some(Role::Button),
-                ));
-            }
-            v
-        }
-        EditorKind::Event {
-            draft, read_only, ..
-        } => {
-            let ro = if *read_only { ES_READONLY as u32 } else { 0 };
-            let mut v = vec![
-                label(ID_LBL_TITLE, tr(Key::FieldTitle)),
-                spec(
-                    ID_TITLE,
-                    w!("EDIT"),
-                    &draft.title,
-                    ES_AUTOHSCROLL as u32 | ro,
-                    Some(Role::Line),
-                ),
-                label(ID_LBL_DATE, tr(Key::FieldDate)),
-                spec(
-                    ID_DATE,
-                    DATETIMEPICK_CLASSW,
-                    "",
-                    DTS_SHORTDATEFORMAT,
-                    Some(Role::Picker),
-                ),
-                spec(
-                    ID_ALLDAY,
-                    w!("BUTTON"),
-                    "",
-                    BS_AUTOCHECKBOX as u32,
-                    Some(Role::Button),
-                ),
-                spec(
-                    ID_ALLDAY_LABEL,
-                    w!("STATIC"),
-                    tr(Key::AllDay),
-                    SS_CENTERIMAGE | SS_NOTIFY,
-                    None,
-                ),
-                label(ID_LBL_START, tr(Key::FieldStart)),
-                spec(
-                    ID_START,
-                    DATETIMEPICK_CLASSW,
-                    "",
-                    DTS_TIMEFORMAT,
-                    Some(Role::Picker),
-                ),
-                label(ID_LBL_END, tr(Key::FieldEnd)),
-                spec(
-                    ID_END,
-                    DATETIMEPICK_CLASSW,
-                    "",
-                    DTS_TIMEFORMAT,
-                    Some(Role::Picker),
-                ),
-                label(ID_LBL_NOTES, tr(Key::FieldNotes)),
-                spec(
-                    ID_NOTES,
-                    w!("EDIT"),
-                    &to_edit_text(&draft.description),
-                    multi | ro,
-                    Some(Role::Multi),
-                ),
-                spec(
-                    ID_STATUS,
-                    w!("STATIC"),
-                    "",
-                    SS_CENTERIMAGE | SS_ENDELLIPSIS,
-                    None,
-                ),
-            ];
-            if *read_only {
-                let style = BS_DEFPUSHBUTTON as u32;
-                v.push(spec(
-                    ID_CANCEL,
-                    w!("BUTTON"),
-                    tr(Key::Close),
-                    style,
-                    Some(Role::Button),
-                ));
-            } else {
-                let def = BS_DEFPUSHBUTTON as u32;
-                let push = BS_PUSHBUTTON as u32;
-                v.push(spec(
-                    ID_OK,
-                    w!("BUTTON"),
-                    tr(Key::Save),
-                    def,
-                    Some(Role::Button),
-                ));
-                v.push(spec(
-                    ID_CANCEL,
-                    w!("BUTTON"),
-                    tr(Key::Cancel),
-                    push,
-                    Some(Role::Button),
-                ));
-            }
-            v
-        }
-        EditorKind::Reminder { id, text, .. } => {
-            let button = |id, key, style: i32| {
-                spec(id, w!("BUTTON"), tr(key), style as u32, Some(Role::Button))
-            };
-            let mut v = vec![
-                label(ID_LBL_TEXT, tr(Key::FieldText)),
-                spec(
-                    ID_TITLE,
-                    w!("EDIT"),
-                    text,
-                    ES_AUTOHSCROLL as u32,
-                    Some(Role::Line),
-                ),
-                label(ID_LBL_DATE, tr(Key::FieldDate)),
-                spec(
-                    ID_DATE,
-                    DATETIMEPICK_CLASSW,
-                    "",
-                    DTS_SHORTDATEFORMAT,
-                    Some(Role::Picker),
-                ),
-                label(ID_LBL_TIME, tr(Key::FieldTime)),
-                spec(
-                    ID_TIME,
-                    DATETIMEPICK_CLASSW,
-                    "",
-                    DTS_TIMEFORMAT,
-                    Some(Role::Picker),
-                ),
-                label(ID_LBL_REPEAT, tr(Key::FieldRepeat)),
-                button(ID_REPEAT_ONCE, Key::RepeatOnce, BS_OWNERDRAW),
-                button(ID_REPEAT_DAILY, Key::RepeatDaily, BS_OWNERDRAW),
-                button(ID_REPEAT_WEEKLY, Key::RepeatWeekly, BS_OWNERDRAW),
-                spec(
-                    ID_STATUS,
-                    w!("STATIC"),
-                    "",
-                    SS_CENTERIMAGE | SS_ENDELLIPSIS,
-                    None,
-                ),
-            ];
-            if id.is_some() {
-                v.push(button(ID_DELETE, Key::Delete, BS_PUSHBUTTON));
-            }
-            v.push(button(ID_OK, Key::Save, BS_DEFPUSHBUTTON));
-            v.push(button(ID_CANCEL, Key::Cancel, BS_PUSHBUTTON));
-            v
+impl EditFonts {
+    fn new(form: Form, scale: f32) -> Self {
+        let notes_px = if form == Form::Note { 13.0 } else { 12.0 };
+        let title = edit_font(scale, 17.0, 500);
+        EditFonts {
+            title_line: line_height(title),
+            title,
+            notes: edit_font(scale, notes_px, 400),
         }
     }
-}
 
-/// Logical `[x, y, w, h]` of each control for a client area of `cw` × `ch`
-/// logical px.
-fn layout(form: Form, ids: &[i32], cw: f32, ch: f32) -> Vec<(i32, [f32; 4])> {
-    let has = |id| ids.contains(&id);
-    let mut out = Vec::new();
-    if form == Form::Note {
-        let m = 10.0;
-        let row = if has(ID_DELETE) { 28.0 + 8.0 } else { 0.0 };
-        out.push((ID_TEXT, [m, m, cw - 2.0 * m, ch - 2.0 * m - row]));
-        out.push((ID_DELETE, [cw - m - 80.0, ch - m - 28.0, 80.0, 28.0]));
-        return out;
-    }
-    let (m, label_w, row_h) = (12.0, 56.0, 24.0);
-    let fx = m + label_w + 8.0;
-    let field_w = cw - fx - m;
-    let rows = [12.0, 44.0, 76.0, 108.0];
-    if form == Form::Reminder {
-        for (id, y) in [ID_LBL_TEXT, ID_LBL_DATE, ID_LBL_TIME, ID_LBL_REPEAT]
-            .into_iter()
-            .zip(rows)
-        {
-            out.push((id, [m, y, label_w, row_h]));
-        }
-        out.push((ID_TITLE, [fx, rows[0], field_w, row_h]));
-        out.push((ID_DATE, [fx, rows[1], 150.0, row_h]));
-        out.push((ID_TIME, [fx, rows[2], 80.0, row_h]));
-        let (seg_w, seg_h, seg_gap) = (84.0, 26.0, 4.0);
-        for (i, (id, _)) in REPEAT_SEGMENTS.into_iter().enumerate() {
-            let x = fx + i as f32 * (seg_w + seg_gap);
-            out.push((id, [x, rows[3] - 1.0, seg_w, seg_h]));
-        }
-        let (btn_w, btn_h) = (80.0, 28.0);
-        let by = ch - m - btn_h;
-        let cancel = cw - m - btn_w;
-        let ok = cancel - 8.0 - btn_w;
-        out.push((ID_CANCEL, [cancel, by, btn_w, btn_h]));
-        out.push((ID_OK, [ok, by, btn_w, btn_h]));
-        let status_x = if has(ID_DELETE) {
-            out.push((ID_DELETE, [m, by, btn_w, btn_h]));
-            m + btn_w + 8.0
+    fn for_item(&self, item: Item) -> HFONT {
+        if item == Item::Title {
+            self.title
         } else {
-            m
-        };
-        out.push((ID_STATUS, [status_x, by, ok - 8.0 - status_x, btn_h]));
-        return out;
-    }
-    for (id, y) in [ID_LBL_TITLE, ID_LBL_DATE, ID_LBL_START, ID_LBL_NOTES]
-        .into_iter()
-        .zip(rows)
-    {
-        out.push((id, [m, y, label_w, row_h]));
-    }
-    out.push((ID_TITLE, [fx, rows[0], field_w, row_h]));
-    out.push((ID_DATE, [fx, rows[1], 150.0, row_h]));
-    out.push((ID_ALLDAY, [fx + 166.0, rows[1] + 3.0, 18.0, 18.0]));
-    out.push((ID_ALLDAY_LABEL, [fx + 188.0, rows[1], 80.0, row_h]));
-    out.push((ID_START, [fx, rows[2], 80.0, row_h]));
-    out.push((ID_LBL_END, [fx + 96.0, rows[2], 52.0, row_h]));
-    out.push((ID_END, [fx + 150.0, rows[2], 80.0, row_h]));
-    let (btn_w, btn_h) = (80.0, 28.0);
-    let by = ch - m - btn_h;
-    let right = cw - m - btn_w;
-    out.push((ID_CANCEL, [right, by, btn_w, btn_h]));
-    let left_of_buttons = if has(ID_OK) {
-        out.push((ID_OK, [right - 8.0 - btn_w, by, btn_w, btn_h]));
-        right - 8.0 - btn_w
-    } else {
-        right
-    };
-    out.push((ID_STATUS, [m, by, left_of_buttons - 8.0 - m, btn_h]));
-    out.push((
-        ID_NOTES,
-        [fx, rows[3], field_w, (by - 8.0 - rows[3]).max(24.0)],
-    ));
-    out
-}
-
-enum Mode {
-    Note {
-        id: Option<String>,
-    },
-    Event {
-        event_id: Option<String>,
-        calendar_id: Option<String>,
-        /// What the fields started from; fallback if a picker cannot be read.
-        base: EventDraft,
-        read_only: bool,
-        /// An `EventSave` was posted; Simpan stays off until the status arrives.
-        saving: bool,
-    },
-    Reminder {
-        id: Option<String>,
-        /// What the pickers started from; fallback if one cannot be read.
-        date: NaiveDate,
-        time: NaiveTime,
-        /// The selected repeat segment.
-        repeat: Repeat,
-    },
-}
-
-impl Mode {
-    fn form(&self) -> Form {
-        match self {
-            Mode::Note { .. } => Form::Note,
-            Mode::Event { .. } => Form::Event,
-            Mode::Reminder { .. } => Form::Reminder,
+            self.notes
         }
     }
+}
 
-    /// The date the date picker started from.
-    fn base_date(&self) -> Option<NaiveDate> {
-        match self {
-            Mode::Note { .. } => None,
-            Mode::Event { base, .. } => Some(base.date),
-            Mode::Reminder { date, .. } => Some(*date),
+impl Drop for EditFonts {
+    fn drop(&mut self) {
+        for font in [self.title, self.notes] {
+            if !font.is_invalid() {
+                unsafe {
+                    let _ = DeleteObject(HGDIOBJ(font.0));
+                }
+            }
         }
+    }
+}
+
+/// DM Sans (or the GDI fallback) at `px` logical px and a CSS `weight`, with
+/// grayscale antialiasing like the Direct2D text around it.
+pub(super) fn edit_font(scale: f32, px: f32, weight: i32) -> HFONT {
+    unsafe {
+        CreateFontW(
+            -(px * scale).round() as i32,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY,
+            0,
+            super::fonts::gdi_text_face(),
+        )
+    }
+}
+
+fn line_height(font: HFONT) -> i32 {
+    unsafe {
+        let hdc = GetDC(None);
+        let old = SelectObject(hdc, HGDIOBJ(font.0));
+        let mut tm = TEXTMETRICW::default();
+        let _ = GetTextMetricsW(hdc, &mut tm);
+        SelectObject(hdc, old);
+        ReleaseDC(None, hdc);
+        tm.tmHeight.max(1)
     }
 }
 
@@ -693,72 +508,43 @@ struct Editor {
     previous: HWND,
     mode: Mode,
     scale: f32,
-    fonts: Fonts,
-    controls: Vec<(i32, HWND)>,
-    /// Controls drawn with a visual style (buttons, checkbox, fields' scroll
-    /// bars): switched between the dark and light style.
-    themed: Vec<HWND>,
-    /// The date picker's current format; the picker may keep the pointer.
-    date_format: HSTRING,
+    gfx: Rc<Gfx>,
+    target: Option<Target>,
+    fonts: EditFonts,
+    edits: Vec<(Item, HWND)>,
+    layout: Layout,
+    /// The drawn item (or EDIT) with the keyboard.
+    focus: Option<Item>,
+    /// The focus came from the keyboard: draw its ring.
+    focus_visible: bool,
+    hover: Option<Item>,
+    pressed: Option<Item>,
+    tracking: bool,
+    /// The chip whose popover is open.
+    popover: Option<Item>,
+    /// The chip whose popover closed last, and when.
+    dismissed: Option<(Item, Instant)>,
+    /// Footer text instead of the account: "Menyimpan…" or a failure (red).
+    status: Option<(String, bool)>,
+    /// The one-line error under the time / repeat row.
+    error: Option<Key>,
+    /// The title EDIT's text, kept current on `EN_CHANGE`.
+    title: String,
     /// Set once the window was active: only then does deactivation close a note.
     was_active: bool,
     /// The final result was posted.
     finished: bool,
 }
 
-/// Segoe UI at the editor's DPI, deleted on drop (after the controls are gone).
-struct Fonts {
-    /// ClearType, for everything that paints itself in the window colours.
-    text: HFONT,
-    /// Grayscale anti-aliasing for the pickers: `tone` maps gray shades
-    /// cleanly but would leave ClearType's colored fringes as they are.
-    gray: HFONT,
-}
-
-impl Fonts {
-    fn new(scale: f32) -> Self {
-        Fonts {
-            text: create_font(scale, CLEARTYPE_QUALITY),
-            gray: create_font(scale, ANTIALIASED_QUALITY),
-        }
-    }
-
-    fn apply(&self, control: HWND, id: i32) {
-        let font = if matches!(id, ID_DATE | ID_START | ID_END | ID_TIME) {
-            self.gray
-        } else {
-            self.text
-        };
-        send(control, WM_SETFONT, font.0 as usize, 1);
-        if id == ID_DATE {
-            // The drop-down calendar, also painted by `paint_themed`.
-            send(control, DTM_SETMCFONT, self.gray.0 as usize, 1);
-        }
-    }
-}
-
-impl Drop for Fonts {
-    fn drop(&mut self) {
-        for font in [self.text, self.gray] {
-            if !font.is_invalid() {
-                unsafe {
-                    let _ = DeleteObject(HGDIOBJ(font.0));
-                }
-            }
-        }
-    }
-}
-
 thread_local! {
     static EDITOR: RefCell<Option<Editor>> = const { RefCell::new(None) };
-    /// The status label and whether it shows an error, for `WM_CTLCOLORSTATIC`
-    /// (read without borrowing `EDITOR`, which may be held up the stack).
-    static STATUS_LABEL: Cell<(isize, bool)> = const { Cell::new((0, false)) };
-    /// The control that last had the keyboard focus, restored on reactivation.
+    /// The window that last had the keyboard (an EDIT or the editor itself),
+    /// restored on reactivation.
     static LAST_FOCUS: Cell<isize> = const { Cell::new(0) };
-    /// The selected repeat segment's id, for `WM_DRAWITEM` (read without
-    /// borrowing `EDITOR`).
-    static REPEAT_SEL: Cell<i32> = const { Cell::new(ID_REPEAT_ONCE) };
+    /// Placeholder of each EDIT, read by its paint (without borrowing `EDITOR`).
+    static PLACEHOLDERS: RefCell<Vec<(isize, Key)>> = const { RefCell::new(Vec::new()) };
+    /// The EDITs on the window background (not on a field fill).
+    static ON_BG: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
     /// Per window mode (dark, light).
     static BRUSHES: Cell<[Option<(HBRUSH, HBRUSH)>; 2]> = const { Cell::new([None; 2]) };
 }
@@ -785,7 +571,7 @@ pub(super) fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
     })
 }
 
-/// Title bar and control styles of `hwnd` for `p`'s mode.
+/// Title bar and control styles of `hwnd` for `p`'s mode (the CLI window).
 pub(super) fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
     let dark = i32::from(!p.light);
     let style = if p.light {
@@ -806,30 +592,45 @@ pub(super) fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
     }
 }
 
-/// Restyles the open editor (if any) for the window palette now in effect:
-/// title bar, control styles, then a full repaint, which picks the colours
-/// up from `theme::current_window`.
+/// A frameless editor or popover window: Windows 11 rounds its corners and
+/// draws a 1 px border in the palette's hairline (over the window's own
+/// fill, `popover` or `bg`). Older systems ignore both and keep square edges.
+pub(super) fn set_frame(hwnd: HWND, p: &WindowPalette, popover: bool) {
+    let corners = DWMWCP_ROUND;
+    let base = if popover { p.popover } else { p.bg };
+    let alpha = (p.border & 0xFF) as f32 / 255.0;
+    let border = colorref(blend(base, p.border >> 8, alpha)).0;
+    let dark = i32::from(!p.light);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corners as *const _ as *const c_void,
+            size_of_val(&corners) as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const u32 as *const c_void,
+            size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const i32 as *const c_void,
+            size_of::<i32>() as u32,
+        );
+    }
+}
+
+/// Repaints the open editor (if any) and its popover in the window palette
+/// now in effect.
 pub fn restyle_open_editor() {
-    let open = EDITOR.with(|cell| {
-        cell.try_borrow()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|ed| (ed.hwnd, ed.themed.clone())))
-    });
-    let Some((hwnd, themed)) = open else {
+    let Some(hwnd) = open_hwnd() else {
         return;
     };
-    apply_mode(hwnd, &themed, &theme::current_window());
+    set_frame(hwnd, &theme::current_window(), false);
     unsafe {
-        // The caption repaints in the new mode only when the frame changes.
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
         let _ = RedrawWindow(
             Some(hwnd),
             None,
@@ -837,38 +638,34 @@ pub fn restyle_open_editor() {
             RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
         );
     }
+    popover::restyle();
 }
 
-/// Relabels the open editor (if any) in the language now in effect: title,
-/// labels, buttons and the date picker's day and month names. A status
-/// message already shown keeps its language until the next one.
+/// Redraws the open editor (if any) in the language now in effect: title,
+/// labels, the date chip, placeholders and its popover. A status message
+/// already shown keeps its language until the next one.
 pub fn relabel_open_editor() {
-    let open = EDITOR.with(|cell| {
-        cell.try_borrow().ok().and_then(|slot| {
-            slot.as_ref().map(|ed| {
-                let read_only = matches!(
-                    ed.mode,
-                    Mode::Event {
-                        read_only: true,
-                        ..
-                    }
-                );
-                (ed.hwnd, title_key(&ed.mode), ed.controls.clone(), read_only)
-            })
-        })
-    });
-    let Some((hwnd, title, controls, read_only)) = open else {
+    let Some(hwnd) = open_hwnd() else {
         return;
     };
-    unsafe {
-        let _ = SetWindowTextW(hwnd, &HSTRING::from(tr(title)));
-        for (id, control) in controls {
-            if let Some(key) = label_key(id, read_only) {
-                let _ = SetWindowTextW(control, &HSTRING::from(tr(key)));
-            }
+    if let Some(title) = with_editor(hwnd, |ed| title_key(&ed.mode)) {
+        unsafe {
+            let _ = SetWindowTextW(hwnd, &HSTRING::from(tr(title)));
         }
     }
-    with_editor(hwnd, Editor::set_date_format);
+    refresh(hwnd);
+    unsafe {
+        let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    }
+    popover::restyle();
+}
+
+fn open_hwnd() -> Option<HWND> {
+    EDITOR.with(|cell| {
+        cell.try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
+    })
 }
 
 /// Runs `f` on the editor for `hwnd`, or returns `None` when there is none or
@@ -926,7 +723,7 @@ pub(super) fn init_common_controls() {
     INIT.call_once(|| {
         let icc = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_DATE_CLASSES | ICC_STANDARD_CLASSES,
+            dwICC: ICC_STANDARD_CLASSES,
         };
         unsafe {
             let _ = InitCommonControlsEx(&icc);
@@ -941,12 +738,13 @@ fn register_class(instance: HINSTANCE) -> Result<()> {
     unsafe {
         let class = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
+            style: CS_DROPSHADOW,
             lpfnWndProc: Some(wnd_proc),
             hInstance: instance,
             hIcon: icon,
             hIconSm: icon_small,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            // No class brush: WM_ERASEBKGND paints the current mode's colour.
+            // No class brush: Direct2D paints every pixel.
             lpszClassName: CLASS_NAME,
             ..Default::default()
         };
@@ -977,6 +775,7 @@ pub(super) fn monitor_at(pt: POINT) -> (f32, RECT) {
     }
 }
 
+/// The CLI window's 13 px UI font.
 pub(super) fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
     unsafe {
         CreateFontW(
@@ -1002,12 +801,7 @@ pub(super) fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
 /// `anchor_bottom_center` (screen px) and kept on that monitor's work area.
 /// If an editor is already open, focuses it and returns its handle instead.
 pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -> Result<HWND> {
-    let existing = EDITOR.with(|cell| {
-        cell.try_borrow()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
-    });
-    if let Some(hwnd) = existing {
+    if let Some(hwnd) = open_hwnd() {
         if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
             bring_to_front(hwnd);
             return Ok(hwnd);
@@ -1023,37 +817,71 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
     init_common_controls();
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
     register_class(instance)?;
+    let gfx = Rc::new(Gfx::new()?);
 
     let (scale, work) = monitor_at(anchor_bottom_center);
-    let (lw, lh) = match kind {
-        EditorKind::Note { .. } => NOTE_SIZE,
-        EditorKind::Event { .. } => EVENT_SIZE,
-        EditorKind::Reminder { .. } => REMINDER_SIZE,
+    let today = chrono::Local::now().date_naive();
+    let (mode, title, notes) = match kind {
+        EditorKind::Note { id, text } => (Mode::Note { id }, None, Some(text)),
+        EditorKind::Event {
+            event_id,
+            calendar_id,
+            draft,
+            read_only,
+        } => (
+            Mode::Event {
+                event_id,
+                calendar_id,
+                ev: EventState {
+                    date: draft.date,
+                    all_day: draft.all_day,
+                    start: draft.start,
+                    end: draft.end,
+                    today,
+                },
+                read_only,
+                saving: false,
+            },
+            Some(draft.title),
+            Some(draft.description),
+        ),
+        EditorKind::Reminder {
+            id,
+            text,
+            date,
+            time,
+            repeat,
+        } => (
+            Mode::Reminder {
+                id,
+                date,
+                time,
+                repeat,
+            },
+            Some(text),
+            None,
+        ),
     };
+    let form = mode.form();
+    let error = match &mode {
+        Mode::Event { ev, .. } if ev.times_invalid() => Some(Key::EndBeforeStart),
+        _ => None,
+    };
+    let lang = i18n::lang();
+    let ed_layout = compute_layout(&mode, error.is_some(), lang, &gfx);
+    let px = |v: f32| (v * scale).round() as i32;
     let size = SIZE {
-        cx: (lw * scale).round() as i32,
-        cy: (lh * scale).round() as i32,
+        cx: px(ed_layout.size.0),
+        cy: px(ed_layout.size.1),
     };
     let rc = editor_rect(anchor_bottom_center, size, work);
-    let title = tr(match &kind {
-        EditorKind::Note { .. } => Key::EditorNote,
-        EditorKind::Event {
-            read_only: true, ..
-        } => Key::EditorEvent,
-        EditorKind::Event { event_id: None, .. } => Key::EditorAddEvent,
-        EditorKind::Event { .. } => Key::EditorEditEvent,
-        EditorKind::Reminder { id: None, .. } => Key::EditorNewReminder,
-        EditorKind::Reminder { .. } => Key::EditorEditReminder,
-    });
-
     let previous = unsafe { GetForegroundWindow() };
-    let ex_style: WINDOW_EX_STYLE = WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
     let hwnd = unsafe {
         CreateWindowExW(
-            ex_style,
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             CLASS_NAME,
-            &HSTRING::from(title),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
+            &HSTRING::from(tr(title_key(&mode))),
+            WS_POPUP | WS_CLIPCHILDREN,
             rc.left,
             rc.top,
             size.cx,
@@ -1064,66 +892,102 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
             None,
         )?
     };
-    let fonts = Fonts::new(scale);
-    let (controls, themed) = match create_controls(hwnd, instance, &kind, &fonts) {
-        Ok(controls) => controls,
-        Err(error) => {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            return Err(error);
+    set_frame(hwnd, &theme::current_window(), false);
+    let fonts = EditFonts::new(form, scale);
+    let read_only = mode.read_only();
+    let mut edits = Vec::new();
+    let mut make = |item: Item, value: &str| -> Result<()> {
+        let (id, role, mut style) = match item {
+            Item::Title => (ID_TITLE, Role::Line, ES_AUTOHSCROLL as u32),
+            _ => (
+                ID_NOTES,
+                Role::Multi,
+                (ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN) as u32,
+            ),
+        };
+        if read_only {
+            style |= ES_READONLY as u32;
         }
-    };
-    let mode = match kind {
-        EditorKind::Note { id, .. } => Mode::Note { id },
-        EditorKind::Event {
-            event_id,
-            calendar_id,
-            draft,
-            read_only,
-        } => Mode::Event {
-            event_id,
-            calendar_id,
-            base: draft,
-            read_only,
-            saving: false,
-        },
-        EditorKind::Reminder {
-            id,
-            date,
-            time,
-            repeat,
-            ..
-        } => {
-            REPEAT_SEL.set(segment_for(repeat));
-            Mode::Reminder {
-                id,
-                date,
-                time,
-                repeat,
-            }
+        let edit = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("EDIT"),
+                &HSTRING::from(to_edit_text(value)),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(style),
+                0,
+                0,
+                0,
+                0,
+                Some(hwnd),
+                Some(HMENU(id as isize as *mut c_void)),
+                Some(instance),
+                None,
+            )?
+        };
+        send(edit, WM_SETFONT, fonts.for_item(item).0 as usize, 0);
+        send(
+            edit,
+            EM_SETMARGINS,
+            (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+            0,
+        );
+        let placeholder = match (form, item) {
+            (Form::Event, Item::Title) => Key::TitlePlaceholder,
+            (Form::Reminder, Item::Title) => Key::ReminderPlaceholder,
+            (Form::Note, _) => Key::NotePlaceholder,
+            _ => Key::NotesPlaceholder,
+        };
+        PLACEHOLDERS.with(|p| p.borrow_mut().push((edit.0 as isize, placeholder)));
+        if item == Item::Title {
+            ON_BG.with(|b| b.borrow_mut().push(edit.0 as isize));
         }
+        unsafe {
+            let _ = SetWindowSubclass(edit, Some(control_proc), SUBCLASS_ID, role as usize);
+        }
+        edits.push((item, edit));
+        Ok(())
     };
-    let mut editor = Editor {
+    let made = (|| {
+        if let Some(title) = &title {
+            make(Item::Title, title)?;
+        }
+        if let Some(notes) = &notes {
+            make(Item::Notes, notes)?;
+        }
+        Ok::<(), Error>(())
+    })();
+    if let Err(error) = made {
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        return Err(error);
+    }
+    let first = edits.first().map(|(item, h)| (*item, *h));
+    let editor = Editor {
         hwnd,
         owner,
         previous,
         mode,
         scale,
+        gfx,
+        target: None,
         fonts,
-        controls,
-        themed,
-        date_format: HSTRING::new(),
+        edits,
+        layout: ed_layout,
+        focus: first.map(|(item, _)| item),
+        focus_visible: false,
+        hover: None,
+        pressed: None,
+        tracking: false,
+        popover: None,
+        dismissed: None,
+        status: None,
+        error,
+        title: title.unwrap_or_default(),
         was_active: false,
         finished: false,
     };
-    editor.fill_pickers();
-    editor.sync_enabled();
-    editor.layout();
-    STATUS_LABEL.set((editor.control(ID_STATUS).map_or(0, |h| h.0 as isize), false));
-    let first = editor.control(ID_TEXT).or(editor.control(ID_TITLE));
-    LAST_FOCUS.set(first.map_or(0, |h| h.0 as isize));
-    apply_mode(hwnd, &editor.themed, &theme::current_window());
+    LAST_FOCUS.set(first.map_or(hwnd.0 as isize, |(_, h)| h.0 as isize));
     let stored = EDITOR.with(|cell| match cell.try_borrow_mut() {
         Ok(mut slot) => {
             *slot = Some(editor);
@@ -1139,12 +1003,12 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         drop(editor);
         return Err(Error::empty());
     }
-
+    refresh(hwnd);
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
     bring_to_front(hwnd);
-    if let Some(edit) = first {
+    if let Some((_, edit)) = first {
         // Caret at the end of the existing text.
         let end = unsafe { GetWindowTextLengthW(edit) }.max(0) as usize;
         send(edit, EM_SETSEL, end, end as isize);
@@ -1154,12 +1018,7 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
 
 /// Brings the open editor forward. False when none is open.
 pub fn focus_open_editor() -> bool {
-    let open = EDITOR.with(|cell| {
-        cell.try_borrow()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
-    });
-    match open {
+    match open_hwnd() {
         Some(hwnd) if unsafe { IsWindow(Some(hwnd)) }.as_bool() => {
             bring_to_front(hwnd);
             true
@@ -1185,243 +1044,170 @@ fn bring_to_front(hwnd: HWND) {
 fn focus_last(hwnd: HWND) {
     let last = HWND(LAST_FOCUS.get() as *mut c_void);
     unsafe {
-        if !last.is_invalid() && IsChild(hwnd, last).as_bool() {
+        if !last.is_invalid() && (last == hwnd || IsChild(hwnd, last).as_bool()) {
             let _ = SetFocus(Some(last));
         }
     }
 }
 
-/// Each control's id and window.
-type Controls = Vec<(i32, HWND)>;
+/// The labels for the layout, in `lang`.
+struct LabelText {
+    date: String,
+    start: String,
+    end: String,
+    time: String,
+    pills: [String; 4],
+}
 
-/// The controls, and those of them drawn with a visual style.
-fn create_controls(
-    parent: HWND,
-    instance: HINSTANCE,
-    kind: &EditorKind,
-    fonts: &Fonts,
-) -> Result<(Controls, Vec<HWND>)> {
-    let mut controls = Vec::new();
-    let mut themed = Vec::new();
-    for spec in specs(kind) {
-        let mut style = WS_CHILD | WS_VISIBLE | WINDOW_STYLE(spec.style);
-        if spec.role.is_some() {
-            style |= WS_TABSTOP;
-        }
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                spec.class,
-                &HSTRING::from(spec.text.as_str()),
-                style,
-                0,
-                0,
-                0,
-                0,
-                Some(parent),
-                Some(HMENU(spec.id as isize as *mut c_void)),
-                Some(instance),
-                None,
-            )?
-        };
-        fonts.apply(hwnd, spec.id);
-        // Push buttons, checkbox and scroll bars take the mode's visual style
-        // (`apply_mode`). The pickers ignore dark styles and colors, so
-        // `paint_themed` recolors them.
-        if spec.role.is_some() {
-            themed.push(hwnd);
-        }
-        unsafe {
-            if let Some(role) = spec.role {
-                let _ = SetWindowSubclass(hwnd, Some(control_proc), SUBCLASS_ID, role as usize);
-            }
-            if spec.role == Some(Role::Picker) {
-                // The time pickers' spin buttons are a child window.
-                if let Ok(spin) = GetWindow(hwnd, GW_CHILD) {
-                    let _ = SetWindowSubclass(
-                        spin,
-                        Some(control_proc),
-                        SUBCLASS_ID,
-                        Role::Paint as usize,
-                    );
-                }
-            }
-        }
-        controls.push((spec.id, hwnd));
+fn label_text(mode: &Mode, lang: Lang) -> LabelText {
+    let (date, start, end, time, today) = match mode {
+        Mode::Event { ev, .. } => (Some(ev.date), Some(ev.start), Some(ev.end), None, ev.today),
+        Mode::Reminder { date, time, .. } => (
+            Some(*date),
+            None,
+            None,
+            Some(*time),
+            chrono::Local::now().date_naive(),
+        ),
+        Mode::Note { .. } => (None, None, None, None, chrono::Local::now().date_naive()),
+    };
+    let t = |v: Option<NaiveTime>| v.map(|t| i18n::time_label(lang, t)).unwrap_or_default();
+    LabelText {
+        date: date.map(|d| i18n::editor_date(lang, d)).unwrap_or_default(),
+        start: t(start),
+        end: t(end),
+        time: t(time),
+        pills: Shortcut::ALL.map(|s| pill_label(lang, s, today)),
     }
-    Ok((controls, themed))
+}
+
+/// A shortcut pill's text: "Hari ini", "Besok", the weekday after tomorrow
+/// ("Jumat"), "Minggu depan".
+fn pill_label(lang: Lang, s: Shortcut, today: NaiveDate) -> String {
+    match s {
+        Shortcut::Today => text(lang, Key::DayToday).into(),
+        Shortcut::Tomorrow => text(lang, Key::DayTomorrow).into(),
+        Shortcut::DayAfter => i18n::day_long(lang, s.date(today)).into(),
+        Shortcut::NextWeek => text(lang, Key::NextWeek).into(),
+    }
+}
+
+fn compute_layout(mode: &Mode, error: bool, lang: Lang, gfx: &Gfx) -> Layout {
+    let labels = label_text(mode, lang);
+    let (all_day, delete) = match mode {
+        Mode::Event { ev, .. } => (ev.all_day, false),
+        Mode::Note { id } => (false, id.is_some()),
+        Mode::Reminder { id, .. } => (false, id.is_some()),
+    };
+    let cancel = if mode.read_only() {
+        Key::Close
+    } else {
+        Key::Cancel
+    };
+    let spec = Spec {
+        form: mode.form(),
+        read_only: mode.read_only(),
+        all_day,
+        error,
+        delete,
+        labels: Labels {
+            date: &labels.date,
+            start: &labels.start,
+            end: &labels.end,
+            time: &labels.time,
+            pills: [
+                &labels.pills[0],
+                &labels.pills[1],
+                &labels.pills[2],
+                &labels.pills[3],
+            ],
+            all_day: text(lang, Key::AllDay),
+            delete: text(lang, Key::Delete),
+            cancel: text(lang, cancel),
+            save: text(lang, Key::Save),
+        },
+    };
+    layout(&spec, &|s, t| gfx.width(s, t))
+}
+
+/// Where each EDIT goes (client px) and the window's size.
+struct Placement {
+    size: (i32, i32),
+    edits: Vec<(HWND, RECT)>,
 }
 
 impl Editor {
-    fn control(&self, id: i32) -> Option<HWND> {
-        self.controls
-            .iter()
-            .find(|(cid, _)| *cid == id)
-            .map(|(_, h)| *h)
+    fn edit(&self, item: Item) -> Option<HWND> {
+        self.edits.iter().find(|(i, _)| *i == item).map(|(_, h)| *h)
     }
 
     fn is_note(&self) -> bool {
         matches!(self.mode, Mode::Note { .. })
     }
 
-    /// Positions every control for the current client size and scale.
-    fn layout(&self) {
-        let mut rc = RECT::default();
-        if unsafe { GetClientRect(self.hwnd, &mut rc) }.is_err() {
-            return;
-        }
-        let s = self.scale.max(0.5);
-        let (cw, ch) = (
-            (rc.right - rc.left) as f32 / s,
-            (rc.bottom - rc.top) as f32 / s,
-        );
-        let ids: Vec<i32> = self.controls.iter().map(|(id, _)| *id).collect();
-        for (id, [x, y, w, h]) in layout(self.mode.form(), &ids, cw, ch) {
-            if let Some(hwnd) = self.control(id) {
-                let px = |v: f32| (v * s).round() as i32;
-                unsafe {
-                    let _ = MoveWindow(hwnd, px(x), px(y), px(w).max(0), px(h).max(0), true);
-                }
-            }
-        }
+    fn invalidate(&self) {
         unsafe {
-            // The hairlines around the fields follow them.
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.hwnd), None, true);
-        }
-        let margin = (6.0 * s).round() as usize;
-        for id in [ID_TEXT, ID_TITLE, ID_NOTES] {
-            if let Some(edit) = self.control(id) {
-                send(
-                    edit,
-                    EM_SETMARGINS,
-                    (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
-                    (margin | margin << 16) as isize,
-                );
-            }
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
-    /// Formats the pickers and loads the draft's (or reminder's) date and times.
-    fn fill_pickers(&mut self) {
-        let (date, times, all_day) = match &self.mode {
-            Mode::Note { .. } => return,
-            Mode::Event { base, .. } => (
-                base.date,
-                vec![(ID_START, base.start), (ID_END, base.end)],
-                Some(base.all_day),
-            ),
-            Mode::Reminder { date, time, .. } => (*date, vec![(ID_TIME, *time)], None),
-        };
-        let set = |id, format: PCWSTR, time| {
-            if let Some(picker) = self.control(id) {
-                let st = system_time(date, time);
-                send(picker, DTM_SETFORMATW, 0, format.0 as isize);
-                send(
-                    picker,
-                    DTM_SETSYSTEMTIME,
-                    GDT_VALID.0 as usize,
-                    &st as *const SYSTEMTIME as isize,
-                );
-            }
-        };
-        set(ID_DATE, w!("d MMM yyyy"), NaiveTime::MIN);
-        for (id, time) in times {
-            set(id, w!("HH':'mm"), time);
+    fn notes_text(&self) -> String {
+        self.edit(Item::Notes).map(window_text).unwrap_or_default()
+    }
+
+    fn relayout(&mut self) {
+        let error = self.error.is_some();
+        self.layout = compute_layout(&self.mode, error, i18n::lang(), &self.gfx);
+    }
+
+    fn placement(&self) -> Placement {
+        let s = self.scale;
+        let px = |v: f32| (v * s).round() as i32;
+        let edits = self
+            .edits
+            .iter()
+            .filter_map(|(item, hwnd)| {
+                let r = self.layout.edits.iter().find(|(i, _)| i == item)?.1;
+                let rc = if *item == Item::Title {
+                    let mid = px(r.y + r.h / 2.0);
+                    let line = self.fonts.title_line;
+                    RECT {
+                        left: px(r.x),
+                        top: mid - line / 2,
+                        right: px(r.right()),
+                        bottom: mid - line / 2 + line,
+                    }
+                } else {
+                    RECT {
+                        left: px(r.x),
+                        top: px(r.y),
+                        right: px(r.right()),
+                        bottom: px(r.bottom()),
+                    }
+                };
+                Some((*hwnd, rc))
+            })
+            .collect();
+        Placement {
+            size: (px(self.layout.size.0), px(self.layout.size.1)),
+            edits,
         }
-        if let (Some(check), Some(all_day)) = (self.control(ID_ALLDAY), all_day) {
-            let state = if all_day { BST_CHECKED.0 } else { 0 };
-            send(check, BM_SETCHECK, state as usize, 0);
-        }
-        self.set_date_format();
     }
 
-    /// Names the picker's date in the app's language (see `date_format`).
-    fn set_date_format(&mut self) {
-        let Some(picker) = self.control(ID_DATE) else {
-            return;
-        };
-        let Some(base) = self.mode.base_date() else {
-            return;
-        };
-        let date = self
-            .picker_time(ID_DATE)
-            .as_ref()
-            .and_then(date_of)
-            .unwrap_or(base);
-        let format = HSTRING::from(date_format(i18n::lang(), date));
-        send(picker, DTM_SETFORMATW, 0, format.as_ptr() as isize);
-        // Freed only after the picker holds the new one.
-        self.date_format = format;
+    /// The layout item under a client point (px).
+    fn hit_at(&self, lparam: LPARAM) -> Option<Item> {
+        let x = (lparam.0 & 0xFFFF) as i16 as f32 / self.scale;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 / self.scale;
+        self.layout.hit(x, y)
     }
 
-    fn all_day_checked(&self) -> bool {
-        self.control(ID_ALLDAY)
-            .is_some_and(|c| send(c, BM_GETCHECK, 0, 0) == BST_CHECKED.0 as isize)
-    }
-
-    /// Read-only events: everything off but Tutup. Otherwise the time pickers
-    /// follow "Seharian" and Simpan is off while saving.
-    fn sync_enabled(&self) {
-        let Mode::Event {
-            read_only, saving, ..
-        } = self.mode
-        else {
-            return;
-        };
-        let enable = |id, on: bool| {
-            if let Some(c) = self.control(id) {
-                unsafe {
-                    let _ = EnableWindow(c, on);
-                }
-            }
-        };
-        let timed = !self.all_day_checked();
-        for id in [ID_DATE, ID_ALLDAY, ID_ALLDAY_LABEL] {
-            enable(id, !read_only);
-        }
-        enable(ID_START, !read_only && timed);
-        enable(ID_END, !read_only && timed);
-        enable(ID_OK, !read_only && !saving);
-    }
-
-    fn picker_time(&self, id: i32) -> Option<SYSTEMTIME> {
-        let picker = self.control(id)?;
-        let mut st = SYSTEMTIME::default();
-        let got = send(
-            picker,
-            DTM_GETSYSTEMTIME,
-            0,
-            &mut st as *mut SYSTEMTIME as isize,
-        );
-        (got == GDT_VALID.0 as isize).then_some(st)
-    }
-
-    fn read_draft(&self) -> Option<EventDraft> {
-        let Mode::Event { base, .. } = &self.mode else {
-            return None;
-        };
-        let text = |id| self.control(id).map(window_text).unwrap_or_default();
-        let date = self.picker_time(ID_DATE).as_ref().and_then(date_of);
-        let start = self.picker_time(ID_START).as_ref().and_then(time_of);
-        let end = self.picker_time(ID_END).as_ref().and_then(time_of);
-        Some(EventDraft {
-            title: text(ID_TITLE).trim().to_owned(),
-            date: date.unwrap_or(base.date),
-            all_day: self.all_day_checked(),
-            start: start.unwrap_or(base.start),
-            end: end.unwrap_or(base.end),
-            description: from_edit_text(&text(ID_NOTES)),
-        })
-    }
-
-    fn set_status(&self, text: &str, error: bool) {
-        let Some(label) = self.control(ID_STATUS) else {
-            return;
-        };
-        STATUS_LABEL.set((label.0 as isize, error));
-        unsafe {
-            let _ = SetWindowTextW(label, &HSTRING::from(text));
-        }
+    /// Items Tab stops at, in order.
+    fn tab_stops(&self) -> Vec<Item> {
+        self.layout
+            .focus_order()
+            .into_iter()
+            .filter(|i| self.mode.enabled(*i))
+            .collect()
     }
 
     /// The result closing the window would post: the note's text, or `Closed`.
@@ -1429,18 +1215,15 @@ impl Editor {
         match &self.mode {
             Mode::Note { id } => EditorResult::NoteSaved {
                 id: id.clone(),
-                text: self
-                    .control(ID_TEXT)
-                    .map(|c| from_edit_text(&window_text(c)))
-                    .unwrap_or_default(),
+                text: from_edit_text(&self.notes_text()),
             },
             Mode::Event { .. } | Mode::Reminder { .. } => EditorResult::Closed,
         }
     }
 
     /// Reminder "Simpan": the validated result, or `None` with the reason
-    /// shown in the status line.
-    fn save_reminder(&self) -> Option<EditorResult> {
+    /// under the repeat row.
+    fn save_reminder(&mut self) -> Option<EditorResult> {
         let Mode::Reminder {
             id,
             date,
@@ -1450,99 +1233,472 @@ impl Editor {
         else {
             return None;
         };
-        let text = self.control(ID_TITLE).map(window_text).unwrap_or_default();
-        let date = self
-            .picker_time(ID_DATE)
-            .as_ref()
-            .and_then(date_of)
-            .unwrap_or(*date);
-        let time = self
-            .picker_time(ID_TIME)
-            .as_ref()
-            .and_then(time_of)
-            .unwrap_or(*time);
-        let due = local_unix(date, time);
+        let due = local_unix(*date, *time);
         let now = chrono::Local::now().timestamp();
-        if let Err(message) = validate_reminder(&text, due, *repeat, now) {
-            self.set_status(tr(message), true);
+        if let Err(message) = validate_reminder(&self.title, due, *repeat, now) {
+            self.error = Some(message);
             return None;
         }
         Some(EditorResult::ReminderSaved {
             id: id.clone(),
-            text: text.trim().to_owned(),
-            date,
-            time,
+            text: self.title.trim().to_owned(),
+            date: *date,
+            time: *time,
             repeat: *repeat,
         })
     }
 
-    /// Picks a repeat segment and repaints the three.
-    fn select_repeat(&mut self, segment: i32) {
-        let Some((_, picked)) = REPEAT_SEGMENTS.iter().find(|(id, _)| *id == segment) else {
-            return;
-        };
-        if let Mode::Reminder { repeat, .. } = &mut self.mode {
-            *repeat = *picked;
-        }
-        REPEAT_SEL.set(segment);
-        for (id, _) in REPEAT_SEGMENTS {
-            if let Some(button) = self.control(id) {
-                unsafe {
-                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(button), None, true);
-                }
-            }
-        }
-    }
-
     /// Simpan: validates, posts `EventSave` and waits for the status.
     fn save_event(&mut self) {
-        let Some(draft) = self.read_draft() else {
-            return;
-        };
-        let Mode::Event {
-            event_id,
-            calendar_id,
-            read_only: false,
-            saving: false,
-            ..
-        } = &self.mode
-        else {
-            return;
-        };
-        if let Err(message) = validate_event(&draft) {
-            self.set_status(tr(message), true);
-            return;
-        }
-        let result = EditorResult::EventSave {
-            event_id: event_id.clone(),
-            calendar_id: calendar_id.clone(),
-            draft,
-        };
-        if !post_result(self.owner, result) {
-            self.set_status(tr(Key::SaveFailed), true);
-            return;
-        }
-        if let Mode::Event { saving, .. } = &mut self.mode {
-            *saving = true;
-        }
-        // Simpan is about to be disabled; a disabled control would strand the focus.
-        if let Some(title) = self.control(ID_TITLE) {
-            unsafe {
-                let _ = SetFocus(Some(title));
+        let notes = self.notes_text();
+        match self.mode.event_save(&self.title, &notes) {
+            None => {}
+            Some(Err(message)) => self.status = Some((tr(message).into(), true)),
+            Some(Ok(result)) => {
+                if !post_result(self.owner, result) {
+                    self.status = Some((tr(Key::SaveFailed).into(), true));
+                    return;
+                }
+                if let Mode::Event { saving, .. } = &mut self.mode {
+                    *saving = true;
+                }
+                self.status = Some((tr(Key::Saving).into(), false));
             }
         }
-        self.set_status(tr(Key::Saving), false);
-        self.sync_enabled();
+        self.invalidate();
     }
 
-    fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
-        let fonts = Fonts::new(scale);
-        for (id, c) in &self.controls {
-            fonts.apply(*c, *id);
+    /// Applies a popover's pick to the chip it came from.
+    fn apply_pick(&mut self, item: Item, pick: Pick) {
+        match (&mut self.mode, item, pick) {
+            (Mode::Event { ev, .. }, Item::DateChip, Pick::Date(d)) => ev.date = d,
+            (Mode::Event { ev, .. }, Item::StartChip, Pick::Time(t)) => {
+                ev.end = shift_end(ev.start, ev.end, t);
+                ev.start = t;
+            }
+            (Mode::Event { ev, .. }, Item::EndChip, Pick::Time(t)) => ev.end = t,
+            (Mode::Reminder { date, .. }, Item::DateChip, Pick::Date(d)) => *date = d,
+            (Mode::Reminder { time, .. }, Item::TimeChip, Pick::Time(t)) => *time = t,
+            _ => return,
         }
-        // The old fonts are deleted only once no control uses them.
-        self.fonts = fonts;
+        self.after_change();
+    }
+
+    /// The date, times or repeat changed: the error line follows the times.
+    fn after_change(&mut self) {
+        self.error = match &self.mode {
+            Mode::Event { ev, .. } if ev.times_invalid() => Some(Key::EndBeforeStart),
+            _ => None,
+        };
+        if !matches!(self.mode, Mode::Event { saving: true, .. }) {
+            self.status = None;
+        }
+        self.relayout();
+        self.invalidate();
+    }
+
+    /// What a popover for `item` opens with.
+    fn popover_kind(&self, item: Item) -> Option<Kind> {
+        match (&self.mode, item) {
+            (Mode::Event { ev, .. }, Item::DateChip) => Some(Kind::Date {
+                selected: ev.date,
+                today: ev.today,
+            }),
+            (Mode::Reminder { date, .. }, Item::DateChip) => Some(Kind::Date {
+                selected: *date,
+                today: chrono::Local::now().date_naive(),
+            }),
+            (Mode::Event { ev, .. }, Item::StartChip) => Some(Kind::Time {
+                value: ev.start,
+                start: None,
+            }),
+            (Mode::Event { ev, .. }, Item::EndChip) => Some(Kind::Time {
+                value: ev.end,
+                start: Some(ev.start),
+            }),
+            (Mode::Reminder { time, .. }, Item::TimeChip) => Some(Kind::Time {
+                value: *time,
+                start: None,
+            }),
+            _ => None,
+        }
+    }
+
+    /// `item`'s rect on screen.
+    fn screen_rect(&self, item: Item) -> Option<RECT> {
+        let r = self.layout.item(item)?;
+        let s = self.scale;
+        let mut a = POINT {
+            x: (r.x * s).round() as i32,
+            y: (r.y * s).round() as i32,
+        };
+        let mut b = POINT {
+            x: (r.right() * s).round() as i32,
+            y: (r.bottom() * s).round() as i32,
+        };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut a);
+            let _ = ClientToScreen(self.hwnd, &mut b);
+        }
+        Some(RECT {
+            left: a.x,
+            top: a.y,
+            right: b.x,
+            bottom: b.y,
+        })
+    }
+
+    fn render(&mut self) {
+        let mut rc = RECT::default();
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
+        let size = (
+            (rc.right - rc.left).max(1) as u32,
+            (rc.bottom - rc.top).max(1) as u32,
+        );
+        let p = theme::current_window();
+        let has_focus = unsafe { GetFocus() } == self.hwnd;
+        let gfx = Rc::clone(&self.gfx);
+        let mut target = self.target.take();
+        let result = gfx.paint(
+            &mut target,
+            self.hwnd,
+            size,
+            self.scale * 96.0,
+            p,
+            p.bg,
+            |pt| self.draw(pt, has_focus),
+        );
+        self.target = target;
+        if let Err(error) = result {
+            eprintln!("dynamic-island: editor draw failed: {error}");
+        }
+    }
+
+    /// The whole frame. `has_focus`: the editor itself (not an EDIT) has the
+    /// keyboard, so a drawn item may show its focus ring.
+    fn draw(&self, pt: &Painter, has_focus: bool) {
+        let p = pt.p;
+        let l = &self.layout;
+        let lang = i18n::lang();
+        let ring_on = |item: Item| has_focus && self.focus_visible && self.focus == Some(item);
+        let hovered = |item: Item| self.hover == Some(item) && self.mode.enabled(item);
+
+        // Header.
+        pt.text(
+            tr(title_key(&self.mode)),
+            Text::Heading,
+            Align::Left,
+            l.heading,
+            p.text,
+            1.0,
+        );
+        if let Some(close) = l.item(Item::Close) {
+            let fill = if hovered(Item::Close) {
+                p.button_hover
+            } else {
+                p.hover
+            };
+            pt.fill_round(close, close.w / 2.0, fill, 1.0);
+            let ink = if hovered(Item::Close) {
+                p.text
+            } else {
+                p.secondary
+            };
+            pt.icon(Icon::X, close, 12.0, ink, 1.0, false);
+        }
+
+        // The title line and its rule (accent while the EDIT has the keyboard).
+        if let Some(rule) = l.title_rule {
+            let title_edit = self.edit(Item::Title);
+            let focused =
+                title_edit.is_some() && unsafe { GetFocus() } == title_edit.unwrap_or_default();
+            if focused {
+                pt.fill_round(rule, 0.0, p.accent, 1.0);
+            } else {
+                pt.rule(rule, p.border);
+            }
+        }
+
+        for (icon, r) in &l.icons {
+            pt.icon(*icon, *r, ROW_ICON, p.secondary, 1.0, false);
+        }
+
+        let labels = label_text(&self.mode, lang);
+        let (enabled_a, chips_on) = if self.mode.read_only() {
+            (0.5, false)
+        } else {
+            (1.0, true)
+        };
+        let chip = |item: Item, label: &str, chevron: bool, bad: bool| {
+            let Some(r) = l.item(item) else {
+                return;
+            };
+            let open = self.popover == Some(item);
+            let a = enabled_a;
+            if chips_on && (open || ring_on(item)) {
+                let glow = outset(r, 3.0);
+                pt.fill_rgba(glow, radius::CONTROL + 3.0, p.selection, 1.0);
+            }
+            let fill = if hovered(item) && chips_on && !open {
+                p.hover
+            } else {
+                p.field
+            };
+            pt.fill_round(r, radius::CONTROL, fill, a);
+            if chips_on && (open || ring_on(item)) {
+                pt.stroke(r, radius::CONTROL, 1.0, p.accent, 1.0);
+            } else if bad {
+                pt.stroke(r, radius::CONTROL, 1.0, p.error, a);
+            } else {
+                pt.hairline(r, radius::CONTROL, p.border, a);
+            }
+            let inner = Rect {
+                x: r.x + 12.0,
+                w: r.w - 24.0,
+                ..r
+            };
+            pt.text(label, Text::Body, Align::Left, inner, p.text, a);
+            if chevron {
+                let c = Rect {
+                    x: r.right() - 12.0 - CHEVRON,
+                    w: CHEVRON,
+                    ..r
+                };
+                pt.icon(Icon::ChevD, c, CHEVRON, p.secondary, a, false);
+            }
+        };
+
+        match &self.mode {
+            Mode::Event { ev, .. } => {
+                chip(Item::DateChip, &labels.date, true, false);
+                let active = Shortcut::matching(ev.today, ev.date);
+                for (s, label) in Shortcut::ALL.into_iter().zip(&labels.pills) {
+                    let item = Item::Pill(s);
+                    let Some(r) = l.item(item) else {
+                        continue;
+                    };
+                    let a = enabled_a;
+                    let full = r.h / 2.0;
+                    let ink = if active == Some(s) {
+                        pt.fill_rgba(r, full, p.selection, a);
+                        p.accent
+                    } else {
+                        if hovered(item) {
+                            pt.fill_round(r, full, p.hover, a);
+                        }
+                        pt.hairline(r, full, p.border, a);
+                        p.secondary
+                    };
+                    pt.text(label, Text::Mini, Align::Center, r, ink, a);
+                    if ring_on(item) {
+                        focus_ring(pt, r, full);
+                    }
+                }
+                if let (Some(label), Some(toggle)) = (l.all_day_label, l.toggle) {
+                    let all_day = tr(Key::AllDay);
+                    pt.text(
+                        all_day,
+                        Text::Small,
+                        Align::Right,
+                        label,
+                        p.secondary,
+                        enabled_a,
+                    );
+                    pt.toggle(toggle, ev.all_day, hovered(Item::AllDay), enabled_a);
+                    if ring_on(Item::AllDay) {
+                        focus_ring(pt, toggle, toggle.h / 2.0);
+                    }
+                }
+                if !ev.all_day {
+                    let bad = ev.times_invalid();
+                    chip(Item::StartChip, &labels.start, false, false);
+                    chip(Item::EndChip, &labels.end, false, bad);
+                    if let Some(arrow) = l.arrow {
+                        pt.text("→", Text::Small, Align::Center, arrow, p.secondary, 1.0);
+                    }
+                    if let Some(d) = l.duration
+                        && !bad
+                    {
+                        let length = i18n::duration_label(lang, ev.length());
+                        pt.text(&length, Text::Small, Align::Left, d, p.secondary, 1.0);
+                    }
+                }
+            }
+            Mode::Reminder { repeat, .. } => {
+                chip(Item::DateChip, &labels.date, true, false);
+                chip(Item::TimeChip, &labels.time, false, false);
+                if let Some(track) = l.repeat_track {
+                    pt.segment_track(track, 1.0);
+                    for (r, key) in [
+                        (Repeat::Once, Key::RepeatOnce),
+                        (Repeat::Daily, Key::RepeatDaily),
+                        (Repeat::Weekly, Key::RepeatWeekly),
+                    ] {
+                        let item = Item::Repeat(r);
+                        let Some(seg) = l.item(item) else {
+                            continue;
+                        };
+                        let on = *repeat == r;
+                        if on {
+                            pt.fill_round(seg, radius::SEGMENT, p.accent, 1.0);
+                        } else if hovered(item) {
+                            pt.fill_round(seg, radius::SEGMENT, p.text, 0.07);
+                        }
+                        let ink = if on { p.on_accent } else { p.text };
+                        pt.text(tr(key), Text::Body, Align::Center, seg, ink, 1.0);
+                        if ring_on(item) {
+                            focus_ring(pt, seg, radius::SEGMENT);
+                        }
+                    }
+                }
+            }
+            Mode::Note { .. } => {}
+        }
+
+        if let (Some(err), Some(key)) = (l.error, self.error) {
+            pt.text(tr(key), Text::Mini, Align::Left, err, p.error, 1.0);
+        }
+
+        if let Some(b) = l.notes_box {
+            let notes_edit = self.edit(Item::Notes);
+            let focused =
+                notes_edit.is_some() && unsafe { GetFocus() } == notes_edit.unwrap_or_default();
+            pt.fill_round(b, 12.0, p.field, 1.0);
+            if focused && !self.mode.read_only() {
+                pt.stroke(b, 12.0, 1.0, p.accent, 1.0);
+            } else {
+                pt.hairline(b, 12.0, p.border, 1.0);
+            }
+        }
+
+        // Footer.
+        pt.rule(l.footer_rule, p.border);
+        if let Some(dot) = l.dot {
+            let sage = if p.light {
+                Accent::Sage.light_rgb()
+            } else {
+                Accent::Sage.rgb()
+            };
+            pt.circle(
+                dot.x + dot.w / 2.0,
+                dot.y + dot.h / 2.0,
+                dot.w / 2.0,
+                sage,
+                1.0,
+            );
+        }
+        let footer = match (&self.status, &self.mode) {
+            (Some((s, error)), _) => Some((s.clone(), *error)),
+            (None, Mode::Event { calendar_id, .. }) => {
+                Some((account_label(lang, calendar_id.as_deref()), false))
+            }
+            _ => None,
+        };
+        if let Some((s, error)) = footer {
+            let ink = if error { p.error } else { p.secondary };
+            pt.text(&s, Text::Mini, Align::Left, l.status, ink, 1.0);
+        }
+        let can_save = self.mode.can_save(&self.title);
+        for (item, r) in &l.items {
+            let full = r.h / 2.0;
+            let (label, primary) = match item {
+                Item::Save => (tr(Key::Save), true),
+                Item::Cancel if self.mode.read_only() => (tr(Key::Close), false),
+                Item::Cancel => (tr(Key::Cancel), false),
+                Item::Delete => (tr(Key::Delete), false),
+                _ => continue,
+            };
+            let h = hovered(*item) && (!primary || can_save);
+            let pressed = h && self.pressed == Some(*item);
+            if primary {
+                let a = if can_save { 1.0 } else { 0.4 };
+                let fill = if pressed {
+                    mix(p.accent, p.text, 0.2)
+                } else if h {
+                    mix(p.accent, p.text, 0.1)
+                } else {
+                    p.accent
+                };
+                pt.fill_round(*r, full, fill, a);
+                pt.text(label, Text::ButtonStrong, Align::Center, *r, p.on_accent, a);
+            } else {
+                let fill = if pressed {
+                    mix(p.button_hover, p.text, 0.06)
+                } else if h {
+                    p.button_hover
+                } else {
+                    p.hover
+                };
+                pt.fill_round(*r, full, fill, 1.0);
+                let ink = if *item == Item::Delete {
+                    p.error
+                } else {
+                    p.text
+                };
+                pt.text(label, Text::Button, Align::Center, *r, ink, 1.0);
+            }
+            if ring_on(*item) {
+                focus_ring(pt, *r, full);
+            }
+        }
+    }
+}
+
+/// `a` blended toward `b` by `t` (`0xRRGGBB`).
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    super::settings_controls::mix(a, b, t)
+}
+
+fn outset(r: Rect, by: f32) -> Rect {
+    Rect {
+        x: r.x - by,
+        y: r.y - by,
+        w: r.w + 2.0 * by,
+        h: r.h + 2.0 * by,
+    }
+}
+
+/// The keyboard focus on a drawn item: a 1.5 px accent ring 2 px outside.
+fn focus_ring(pt: &Painter, r: Rect, radius: f32) {
+    pt.stroke(outset(r, 2.5), radius + 2.5, 1.5, pt.p.accent, 1.0);
+}
+
+/// Lays the editor out again and moves the window size and EDITs to match.
+/// Call with no editor borrow held: resizing sends `WM_SIZE`.
+fn refresh(hwnd: HWND) {
+    let Some(plan) = with_editor(hwnd, |ed| {
+        ed.relayout();
+        ed.placement()
+    }) else {
+        return;
+    };
+    unsafe {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        if (rc.right - rc.left, rc.bottom - rc.top) != plan.size {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                plan.size.0,
+                plan.size.1,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        for (edit, rc) in plan.edits {
+            let _ = MoveWindow(
+                edit,
+                rc.left,
+                rc.top,
+                (rc.right - rc.left).max(0),
+                (rc.bottom - rc.top).max(0),
+                true,
+            );
+        }
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
@@ -1559,11 +1715,7 @@ fn finish(hwnd: HWND, result: impl FnOnce(&Editor) -> EditorResult) {
 /// posting it, for an owner that is about to be destroyed (a posted result
 /// would never be read). `None` when no editor is open or it already finished.
 pub fn close_open_editor() -> Option<EditorResult> {
-    let hwnd = EDITOR.with(|cell| {
-        cell.try_borrow()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
-    })?;
+    let hwnd = open_hwnd()?;
     close(hwnd, Editor::closing_result).map(|(_, result)| result)
 }
 
@@ -1578,72 +1730,275 @@ fn close(hwnd: HWND, result: impl FnOnce(&Editor) -> EditorResult) -> Option<(HW
     unsafe {
         // Only when closed from the keyboard or a button: a click elsewhere
         // already chose the next foreground window.
-        if GetForegroundWindow() == hwnd
-            && !editor.previous.is_invalid()
-            && IsWindow(Some(editor.previous)).as_bool()
-        {
+        // The editor or its popover is in front.
+        let active = GetForegroundWindow();
+        let ours = active == hwnd || GetWindow(active, GW_OWNER).ok() == Some(hwnd);
+        if ours && !editor.previous.is_invalid() && IsWindow(Some(editor.previous)).as_bool() {
             let _ = SetForegroundWindow(editor.previous);
         }
+        // Owned popovers go with the window.
         let _ = DestroyWindow(hwnd);
     }
-    STATUS_LABEL.set((0, false));
     LAST_FOCUS.set(0);
+    let gone: Vec<isize> = editor.edits.iter().map(|(_, h)| h.0 as isize).collect();
+    PLACEHOLDERS.with(|p| p.borrow_mut().retain(|(h, _)| !gone.contains(h)));
+    ON_BG.with(|b| b.borrow_mut().retain(|h| !gone.contains(h)));
     // Dropped after the controls are gone: deletes the fonts they used.
     drop(editor);
     last
 }
 
-fn on_command(hwnd: HWND, id: i32, code: u32) {
-    enum Next {
-        Nothing,
-        Close,
-        Finish(EditorResult),
-    }
-    let next = with_editor(hwnd, |ed| match (id, code) {
-        (ID_OK, BN_CLICKED) if ed.is_note() => Next::Close,
-        (ID_OK, BN_CLICKED) if ed.mode.form() == Form::Reminder => {
-            ed.save_reminder().map_or(Next::Nothing, Next::Finish)
+/// What happens after a handler released the editor.
+enum Next {
+    Nothing,
+    Refresh,
+    Close,
+    Finish(EditorResult),
+    Popover(Item, RECT, Rc<Gfx>, Kind),
+    Focus(HWND),
+}
+
+fn run(hwnd: HWND, next: Option<Next>) {
+    match next {
+        Some(Next::Refresh) => refresh(hwnd),
+        Some(Next::Close) => finish(hwnd, Editor::closing_result),
+        Some(Next::Finish(result)) => finish(hwnd, move |_| result),
+        Some(Next::Popover(item, chip, gfx, kind)) => {
+            match popover::open(hwnd, chip, gfx, item, kind) {
+                Ok(_) => {
+                    with_editor(hwnd, |ed| {
+                        ed.popover = Some(item);
+                        ed.invalidate();
+                    });
+                }
+                Err(error) => eprintln!("dynamic-island: cannot open the popover: {error}"),
+            }
         }
-        (ID_OK, BN_CLICKED) => {
+        Some(Next::Focus(target)) => unsafe {
+            let _ = SetFocus(Some(target));
+        },
+        Some(Next::Nothing) | None => {}
+    }
+}
+
+/// Activates `item` (a click, or Enter/Space on the focused item).
+fn activate(hwnd: HWND, item: Item, keyboard: bool) {
+    // The same click that closed this chip's popover must not reopen it.
+    let closing_same = popover::current().is_some_and(|(open, _)| open == item);
+    let next = with_editor(hwnd, |ed| {
+        if !ed.mode.enabled(item) {
+            return Next::Nothing;
+        }
+        match item {
+            Item::Close | Item::Cancel => Next::Close,
+            Item::Save => save_next(ed),
+            Item::Delete => match &ed.mode {
+                Mode::Note { id: Some(id) } => {
+                    Next::Finish(EditorResult::NoteDeleted { id: id.clone() })
+                }
+                Mode::Reminder { id: Some(id), .. } => {
+                    Next::Finish(EditorResult::ReminderDeleted { id: id.clone() })
+                }
+                _ => Next::Nothing,
+            },
+            Item::Title | Item::Notes => ed.edit(item).map_or(Next::Nothing, Next::Focus),
+            Item::Pill(s) => {
+                if let Mode::Event { ev, .. } = &mut ed.mode {
+                    ev.date = s.date(ev.today);
+                }
+                ed.after_change();
+                Next::Refresh
+            }
+            Item::AllDay => {
+                if let Mode::Event { ev, .. } = &mut ed.mode {
+                    ev.all_day = !ev.all_day;
+                }
+                ed.after_change();
+                Next::Refresh
+            }
+            Item::Repeat(r) => {
+                if let Mode::Reminder { repeat, .. } = &mut ed.mode {
+                    *repeat = r;
+                }
+                ed.after_change();
+                Next::Refresh
+            }
+            Item::DateChip | Item::StartChip | Item::EndChip | Item::TimeChip => {
+                let recently = ed
+                    .dismissed
+                    .is_some_and(|(i, at)| i == item && at.elapsed() < REOPEN_GUARD);
+                if closing_same || (!keyboard && recently) {
+                    return Next::Nothing;
+                }
+                ed.focus = Some(item);
+                match (ed.popover_kind(item), ed.screen_rect(item)) {
+                    (Some(kind), Some(chip)) => Next::Popover(item, chip, Rc::clone(&ed.gfx), kind),
+                    _ => Next::Nothing,
+                }
+            }
+        }
+    });
+    if closing_same {
+        popover::close();
+    }
+    run(hwnd, next);
+}
+
+/// Simpan, from a button or the keyboard.
+fn save_next(ed: &mut Editor) -> Next {
+    match ed.mode.form() {
+        Form::Note => Next::Close,
+        Form::Reminder => match ed.save_reminder() {
+            Some(result) => Next::Finish(result),
+            None => Next::Refresh,
+        },
+        Form::Event => {
             ed.save_event();
             Next::Nothing
         }
-        (ID_CANCEL, BN_CLICKED) => Next::Close,
-        (ID_DELETE, BN_CLICKED) => match &ed.mode {
-            Mode::Note { id: Some(id) } => {
-                Next::Finish(EditorResult::NoteDeleted { id: id.clone() })
-            }
-            Mode::Reminder { id: Some(id), .. } => {
-                Next::Finish(EditorResult::ReminderDeleted { id: id.clone() })
-            }
-            _ => Next::Nothing,
-        },
-        (ID_REPEAT_ONCE | ID_REPEAT_DAILY | ID_REPEAT_WEEKLY, BN_CLICKED) => {
-            ed.select_repeat(id);
-            Next::Nothing
-        }
-        (ID_ALLDAY, BN_CLICKED) => {
-            ed.sync_enabled();
-            Next::Nothing
-        }
-        // STN_CLICKED == BN_CLICKED == 0: the "Seharian" label toggles the box.
-        (ID_ALLDAY_LABEL, BN_CLICKED) => {
-            if let Some(check) = ed.control(ID_ALLDAY) {
-                let state = if ed.all_day_checked() {
-                    0
-                } else {
-                    BST_CHECKED.0
-                };
-                send(check, BM_SETCHECK, state as usize, 0);
-            }
-            ed.sync_enabled();
-            Next::Nothing
-        }
-        _ => Next::Nothing,
+    }
+}
+
+fn on_act(hwnd: HWND, act: Act) {
+    let next = with_editor(hwnd, |ed| match act {
+        Act::Close => Next::Close,
+        Act::Save => save_next(ed),
+        Act::SaveIfReady if ed.mode.can_save(&ed.title) => save_next(ed),
+        Act::SaveIfReady => Next::Nothing,
     });
-    match next {
-        Some(Next::Close) => finish(hwnd, Editor::closing_result),
-        Some(Next::Finish(result)) => finish(hwnd, move |_| result),
+    run(hwnd, next);
+}
+
+/// Moves the keyboard to the next (or previous) Tab stop.
+fn tab(hwnd: HWND, back: bool) {
+    let target = with_editor(hwnd, |ed| {
+        let stops = ed.tab_stops();
+        if stops.is_empty() {
+            return None;
+        }
+        let n = stops.len();
+        let at = ed.focus.and_then(|f| stops.iter().position(|s| *s == f));
+        let i = match (at, back) {
+            (None, false) => 0,
+            (None, true) => n - 1,
+            (Some(i), false) => (i + 1) % n,
+            (Some(i), true) => (i + n - 1) % n,
+        };
+        let item = stops[i];
+        ed.focus = Some(item);
+        ed.focus_visible = true;
+        ed.invalidate();
+        Some(ed.edit(item).unwrap_or(ed.hwnd))
+    })
+    .flatten();
+    if let Some(target) = target {
+        unsafe {
+            let _ = SetFocus(Some(target));
+        }
+        if target == hwnd {
+            LAST_FOCUS.set(hwnd.0 as isize);
+        } else {
+            send(target, EM_SETSEL, 0, -1);
+        }
+    }
+}
+
+/// Keys while the editor itself (a drawn item) has the keyboard.
+fn on_key(hwnd: HWND, key: u16) -> bool {
+    let ctrl = key_down(VK_CONTROL.0);
+    if key == VK_TAB.0 {
+        tab(hwnd, key_down(VK_SHIFT.0));
+        return true;
+    }
+    if key == VK_ESCAPE.0 {
+        on_act(hwnd, Act::Close);
+        return true;
+    }
+    if key == VK_RETURN.0 && ctrl {
+        on_act(hwnd, Act::Save);
+        return true;
+    }
+    if key == VK_RETURN.0 || key == VK_SPACE.0 {
+        if let Some(Some(item)) = with_editor(hwnd, |ed| ed.focus) {
+            activate(hwnd, item, true);
+        }
+        return true;
+    }
+    false
+}
+
+fn on_pick(hwnd: HWND, lparam: LPARAM) {
+    let ptr = lparam.0 as *mut (Item, Pick);
+    if ptr.is_null() {
+        return;
+    }
+    let (item, pick) = *unsafe { Box::from_raw(ptr) };
+    with_editor(hwnd, |ed| ed.apply_pick(item, pick));
+    refresh(hwnd);
+}
+
+fn on_popover_closed(hwnd: HWND, flags: usize) {
+    let back = with_editor(hwnd, |ed| {
+        let item = ed.popover.take();
+        if let Some(item) = item {
+            ed.dismissed = Some((item, Instant::now()));
+            if flags & CLOSED_REFOCUS != 0 {
+                ed.focus = Some(item);
+                ed.focus_visible = flags & CLOSED_KEYBOARD != 0;
+            }
+        }
+        ed.invalidate();
+        flags & CLOSED_REFOCUS != 0
+    });
+    if back == Some(true) {
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
+        }
+        LAST_FOCUS.set(hwnd.0 as isize);
+    }
+    if flags & CLOSED_SAVE != 0 {
+        on_act(hwnd, Act::Save);
+    }
+}
+
+fn on_command(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    let id = (wparam.0 & 0xFFFF) as i32;
+    let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+    let item = match id {
+        ID_TITLE => Item::Title,
+        ID_NOTES => Item::Notes,
+        _ => return,
+    };
+    let edit = HWND(lparam.0 as *mut c_void);
+    match code {
+        EN_CHANGE if item == Item::Title => {
+            let value = window_text(edit);
+            let next = with_editor(hwnd, |ed| {
+                ed.title = value;
+                if !matches!(ed.mode, Mode::Event { saving: true, .. }) {
+                    ed.status = None;
+                }
+                ed.invalidate();
+                // A reminder's "Teks wajib diisi" goes once there is text.
+                if ed.mode.form() == Form::Reminder && ed.error.take().is_some() {
+                    Next::Refresh
+                } else {
+                    Next::Nothing
+                }
+            });
+            run(hwnd, next);
+        }
+        EN_SETFOCUS => {
+            LAST_FOCUS.set(edit.0 as isize);
+            with_editor(hwnd, |ed| {
+                ed.focus = Some(item);
+                ed.invalidate();
+            });
+        }
+        EN_KILLFOCUS => {
+            with_editor(hwnd, |ed| ed.invalidate());
+        }
         _ => {}
     }
 }
@@ -1662,8 +2017,9 @@ fn on_status(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         }
         if !saved {
             *saving = false;
-            ed.set_status(message.as_deref().unwrap_or(tr(Key::SaveFailed)), true);
-            ed.sync_enabled();
+            let text = message.as_deref().unwrap_or(tr(Key::SaveFailed));
+            ed.status = Some((text.to_owned(), true));
+            ed.invalidate();
         }
         true
     });
@@ -1674,7 +2030,10 @@ fn on_status(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
 
 fn on_activate(hwnd: HWND, state: u32) {
     if state == WA_INACTIVE {
-        let close = with_editor(hwnd, |ed| ed.is_note() && ed.was_active && !ed.finished);
+        let close = with_editor(hwnd, |ed| {
+            ed.invalidate();
+            ed.is_note() && ed.was_active && !ed.finished
+        });
         if close == Some(true) {
             // Never destroy inside WM_ACTIVATE.
             unsafe {
@@ -1682,18 +2041,34 @@ fn on_activate(hwnd: HWND, state: u32) {
             }
         }
     } else {
-        with_editor(hwnd, |ed| ed.was_active = true);
-        focus_last(hwnd);
+        with_editor(hwnd, |ed| {
+            ed.was_active = true;
+            ed.invalidate();
+        });
+        // A popover that is open keeps the keyboard.
+        if popover::current().is_none() {
+            focus_last(hwnd);
+        }
     }
 }
 
 fn on_dpi_changed(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    popover::close();
     let dpi = (wparam.0 & 0xFFFF) as f32;
     let scale = if dpi > 0.0 { dpi / 96.0 } else { 1.0 };
-    with_editor(hwnd, |ed| ed.set_scale(scale));
+    let old = with_editor(hwnd, |ed| {
+        ed.scale = scale;
+        ed.target = None;
+        let fonts = EditFonts::new(ed.mode.form(), scale);
+        for (item, edit) in &ed.edits {
+            send(*edit, WM_SETFONT, fonts.for_item(*item).0 as usize, 1);
+        }
+        // The old fonts are deleted only once no control uses them.
+        std::mem::replace(&mut ed.fonts, fonts)
+    });
+    drop(old);
     let suggested = lparam.0 as *const RECT;
     if let Some(rc) = unsafe { suggested.as_ref() } {
-        // WM_SIZE (sent from here, borrow released) lays the controls out again.
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
@@ -1706,7 +2081,8 @@ fn on_dpi_changed(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
             );
         }
     }
-    with_editor(hwnd, |ed| ed.layout());
+    // The size follows the layout, not the suggestion.
+    refresh(hwnd);
 }
 
 /// The window went away without `finish` (e.g. its owner was destroyed):
@@ -1720,87 +2096,113 @@ fn on_destroy(hwnd: HWND) {
     });
 }
 
-fn color_control(wparam: WPARAM, lparam: LPARAM, msg: u32) -> LRESULT {
-    let hdc = HDC(wparam.0 as *mut c_void);
-    let control = HWND(lparam.0 as *mut c_void);
-    let p = theme::current_window();
-    let (window, field) = brushes(&p);
-    let id = unsafe { GetDlgCtrlID(control) };
-    // Read-only edits ask with WM_CTLCOLORSTATIC.
-    let is_field = msg == WM_CTLCOLOREDIT || matches!(id, ID_TEXT | ID_TITLE | ID_NOTES);
-    let (status, error) = STATUS_LABEL.get();
-    let text = if error && status != 0 && status == lparam.0 {
-        p.error
-    } else {
-        p.text
+fn on_mouse_move(hwnd: HWND, lparam: LPARAM) {
+    let arm = with_editor(hwnd, |ed| {
+        let hit = ed.hit_at(lparam).filter(|i| !i.is_edit());
+        if hit != ed.hover {
+            ed.hover = hit;
+            ed.invalidate();
+        }
+        !std::mem::replace(&mut ed.tracking, true)
+    });
+    if arm == Some(true) {
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        unsafe {
+            let _ = TrackMouseEvent(&mut track);
+        }
+    }
+}
+
+fn on_button_down(hwnd: HWND, lparam: LPARAM) {
+    let hit = with_editor(hwnd, |ed| {
+        let hit = ed.hit_at(lparam);
+        ed.pressed = hit;
+        ed.invalidate();
+        // A click on a drawn item (or nowhere) takes the keyboard from the
+        // fields; a click on a field's padding gives it to that field.
+        match hit {
+            Some(item) if item.is_edit() => (hit, ed.edit(item)),
+            Some(item) => {
+                if ed.mode.enabled(item) && item != Item::Close {
+                    ed.focus = Some(item);
+                    ed.focus_visible = false;
+                }
+                (hit, Some(ed.hwnd))
+            }
+            None => (hit, Some(ed.hwnd)),
+        }
+    });
+    let Some((hit, target)) = hit else {
+        return;
     };
     unsafe {
-        SetTextColor(hdc, colorref(text));
-        SetBkColor(hdc, colorref(if is_field { p.field } else { p.bg }));
-    }
-    let brush = if is_field { field } else { window };
-    LRESULT(brush.0 as isize)
-}
-
-/// The window background in the current mode's colour.
-fn erase_background(hwnd: HWND, wparam: WPARAM) -> LRESULT {
-    let hdc = HDC(wparam.0 as *mut c_void);
-    let mut rc = RECT::default();
-    unsafe {
-        if GetClientRect(hwnd, &mut rc).is_ok() {
-            FillRect(hdc, &rc, brushes(&theme::current_window()).0);
-        }
-    }
-    LRESULT(1)
-}
-
-/// Text fields of an editor, framed with a hairline in light mode, where a
-/// white field on the light window would have no edge.
-const FRAMED: [i32; 3] = [ID_TEXT, ID_TITLE, ID_NOTES];
-
-/// The window's own paint: a 1 px `border` hairline just outside each text
-/// field in light mode (the background comes from `WM_ERASEBKGND`).
-fn paint_field_borders(hwnd: HWND) {
-    let p = theme::current_window();
-    let fields: Vec<HWND> = with_editor(hwnd, |ed| {
-        FRAMED.iter().filter_map(|id| ed.control(*id)).collect()
-    })
-    .unwrap_or_default();
-    unsafe {
-        let mut ps = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut ps);
-        if p.light && !hdc.is_invalid() {
-            // The border colour (`0xRRGGBBAA`) over the window background.
-            let alpha = (p.border & 0xFF) as f32 / 255.0;
-            let rgb = blend(p.bg, p.border >> 8, alpha);
-            let brush = CreateSolidBrush(colorref(rgb));
-            for field in fields {
-                let mut rc = RECT::default();
-                if GetWindowRect(field, &mut rc).is_ok() {
-                    let mut pts = [
-                        POINT {
-                            x: rc.left,
-                            y: rc.top,
-                        },
-                        POINT {
-                            x: rc.right,
-                            y: rc.bottom,
-                        },
-                    ];
-                    MapWindowPoints(None, Some(hwnd), &mut pts);
-                    let frame = RECT {
-                        left: pts[0].x - 1,
-                        top: pts[0].y - 1,
-                        right: pts[1].x + 1,
-                        bottom: pts[1].y + 1,
-                    };
-                    FrameRect(hdc, &frame, brush);
-                }
+        if let Some(target) = target {
+            let _ = SetFocus(Some(target));
+            if target == hwnd {
+                LAST_FOCUS.set(hwnd.0 as isize);
             }
-            let _ = DeleteObject(HGDIOBJ(brush.0));
         }
-        let _ = EndPaint(hwnd, &ps);
+        if hit.is_some_and(|i| !i.is_edit()) {
+            SetCapture(hwnd);
+        }
     }
+}
+
+fn on_button_up(hwnd: HWND, lparam: LPARAM) {
+    let clicked = with_editor(hwnd, |ed| {
+        let hit = ed.hit_at(lparam);
+        let pressed = ed.pressed.take();
+        ed.invalidate();
+        hit.filter(|h| Some(*h) == pressed && !h.is_edit())
+    })
+    .flatten();
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+    if let Some(item) = clicked {
+        activate(hwnd, item, false);
+    }
+}
+
+fn on_hit_test(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let hit = unsafe { DefWindowProcW(hwnd, WM_NCHITTEST, wparam, lparam) };
+    if hit.0 != HTCLIENT as isize {
+        return hit;
+    }
+    let mut pt = POINT {
+        x: (lparam.0 & 0xFFFF) as i16 as i32,
+        y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    };
+    unsafe {
+        let _ = ScreenToClient(hwnd, &mut pt);
+    }
+    let caption = with_editor(hwnd, |ed| {
+        ed.layout
+            .is_caption(pt.x as f32 / ed.scale, pt.y as f32 / ed.scale)
+    });
+    if caption == Some(true) {
+        LRESULT(HTCAPTION as isize)
+    } else {
+        hit
+    }
+}
+
+fn color_edit(wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let hdc = HDC(wparam.0 as *mut c_void);
+    let control = lparam.0;
+    let p = theme::current_window();
+    let (window, field) = brushes(&p);
+    let on_bg = ON_BG.with(|b| b.borrow().contains(&control));
+    unsafe {
+        SetTextColor(hdc, colorref(p.text));
+        SetBkColor(hdc, colorref(if on_bg { p.bg } else { p.field }));
+    }
+    LRESULT(if on_bg { window.0 } else { field.0 } as isize)
 }
 
 /// `over` at `alpha` on `base` (`0xRRGGBB`).
@@ -1815,83 +2217,6 @@ pub(super) fn blend(base: u32, over: u32, alpha: f32) -> u32 {
     ch(16) | ch(8) | ch(0)
 }
 
-/// Fill and ink of a repeat segment: the picked one in the accent, the others
-/// like a button (a shade darker while pressed).
-fn segment_colors(p: &WindowPalette, picked: bool, pressed: bool) -> (u32, u32) {
-    match (picked, pressed) {
-        (true, _) => (p.accent, p.on_accent),
-        (false, true) => (p.button_hover, p.text),
-        (false, false) => (p.button, p.text),
-    }
-}
-
-/// Paints one repeat segment (an owner-drawn button): a rounded fill, a
-/// hairline in light mode, the centred label, and the focus rectangle.
-fn draw_segment(item: &DRAWITEMSTRUCT) {
-    let p = theme::current_window();
-    let picked = REPEAT_SEL.get() == item.CtlID as i32;
-    let pressed = item.itemState.0 & ODS_SELECTED.0 != 0;
-    let (fill, ink) = segment_colors(&p, picked, pressed);
-    let edge = if p.light && !picked {
-        blend(p.bg, p.border >> 8, (p.border & 0xFF) as f32 / 255.0)
-    } else {
-        fill
-    };
-    let hdc = item.hDC;
-    let mut rc = item.rcItem;
-    unsafe {
-        // The window colour behind the rounded corners.
-        FillRect(hdc, &rc, brushes(&p).0);
-        let brush = CreateSolidBrush(colorref(fill));
-        let pen = CreatePen(PS_SOLID, 1, colorref(edge));
-        let old_brush = SelectObject(hdc, HGDIOBJ(brush.0));
-        let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
-        let radius = ((rc.bottom - rc.top) / 4).max(2) * 2;
-        let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
-        SelectObject(hdc, old_pen);
-        SelectObject(hdc, old_brush);
-        let _ = DeleteObject(HGDIOBJ(pen.0));
-        let _ = DeleteObject(HGDIOBJ(brush.0));
-
-        let font = send(item.hwndItem, WM_GETFONT, 0, 0);
-        let old_font = (font != 0).then(|| SelectObject(hdc, HGDIOBJ(font as *mut c_void)));
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, colorref(ink));
-        let mut label: Vec<u16> = window_text(item.hwndItem).encode_utf16().collect();
-        DrawTextW(
-            hdc,
-            &mut label,
-            &mut rc,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
-        );
-        if let Some(old) = old_font {
-            SelectObject(hdc, old);
-        }
-        // Keyboard focus (hidden until the keyboard is used, like other
-        // buttons): a thin ring in the label's colour.
-        let focus = item.itemState.0 & ODS_FOCUS.0 != 0;
-        let cues_hidden = item.itemState.0 & ODS_NOFOCUSRECT.0 != 0;
-        if focus && !cues_hidden {
-            let pen = CreatePen(PS_SOLID, 1, colorref(ink));
-            let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
-            let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            let inner = radius - 4;
-            let _ = RoundRect(
-                hdc,
-                rc.left + 2,
-                rc.top + 2,
-                rc.right - 2,
-                rc.bottom - 2,
-                inner,
-                inner,
-            );
-            SelectObject(hdc, old_brush);
-            SelectObject(hdc, old_pen);
-            let _ = DeleteObject(HGDIOBJ(pen.0));
-        }
-    }
-}
-
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -1899,26 +2224,64 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => color_control(wparam, lparam, msg),
-        WM_DRAWITEM => {
-            let item = lparam.0 as *const DRAWITEMSTRUCT;
-            match unsafe { item.as_ref() } {
-                Some(item) if item.CtlType == ODT_BUTTON => {
-                    draw_segment(item);
-                    LRESULT(1)
-                }
-                _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-            }
-        }
-        WM_ERASEBKGND => erase_background(hwnd, wparam),
         WM_PAINT => {
-            paint_field_borders(hwnd);
+            let mut ps = PAINTSTRUCT::default();
+            unsafe { BeginPaint(hwnd, &mut ps) };
+            with_editor(hwnd, Editor::render);
+            unsafe {
+                let _ = EndPaint(hwnd, &ps);
+            }
             LRESULT(0)
         }
+        // Direct2D paints every pixel.
+        WM_ERASEBKGND => LRESULT(1),
+        WM_SIZE => {
+            let (w, h) = (
+                (lparam.0 & 0xFFFF) as u32,
+                ((lparam.0 >> 16) & 0xFFFF) as u32,
+            );
+            with_editor(hwnd, |ed| {
+                if let Some(t) = &ed.target {
+                    t.resize(w, h);
+                }
+                ed.invalidate();
+            });
+            LRESULT(0)
+        }
+        WM_NCHITTEST => on_hit_test(hwnd, wparam, lparam),
+        // No maximizing from the drawn caption.
+        WM_NCLBUTTONDBLCLK if wparam.0 == HTCAPTION as usize => LRESULT(0),
+        WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC => color_edit(wparam, lparam),
         WM_COMMAND => {
-            let id = (wparam.0 & 0xFFFF) as i32;
-            let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-            on_command(hwnd, id, code);
+            on_command(hwnd, wparam, lparam);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            on_mouse_move(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_editor(hwnd, |ed| {
+                ed.tracking = false;
+                if ed.hover.take().is_some() {
+                    ed.invalidate();
+                }
+            });
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            on_button_down(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            on_button_up(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_KEYDOWN if on_key(hwnd, (wparam.0 & 0xFFFF) as u16) => LRESULT(0),
+        // Not recorded in LAST_FOCUS: activation focuses the frame itself
+        // before `focus_last` hands the keyboard to the remembered control.
+        WM_SETFOCUS | WM_KILLFOCUS => {
+            with_editor(hwnd, |ed| ed.invalidate());
             LRESULT(0)
         }
         WM_ACTIVATE => {
@@ -1930,38 +2293,22 @@ unsafe extern "system" fn wnd_proc(
             finish(hwnd, Editor::closing_result);
             LRESULT(0)
         }
+        WM_APP_EDITOR_ACT => {
+            if let Some(act) = Act::from_wparam(wparam.0) {
+                on_act(hwnd, act);
+            }
+            LRESULT(0)
+        }
         WM_APP_EDITOR_STATUS => {
             on_status(hwnd, wparam, lparam);
             LRESULT(0)
         }
-        WM_NOTIFY => {
-            let header = lparam.0 as *const NMHDR;
-            if let Some(header) = unsafe { header.as_ref() }
-                && header.code == DTN_DATETIMECHANGE
-                && header.idFrom == ID_DATE as usize
-            {
-                with_editor(hwnd, Editor::set_date_format);
-            }
-            if let Some(header) = unsafe { header.as_ref() }
-                && header.code == DTN_DROPDOWN
-            {
-                // The drop-down calendar exists only while open.
-                let calendar = HWND(send(header.hwndFrom, DTM_GETMONTHCAL, 0, 0) as *mut c_void);
-                if !calendar.is_invalid() {
-                    unsafe {
-                        let _ = SetWindowSubclass(
-                            calendar,
-                            Some(control_proc),
-                            SUBCLASS_ID,
-                            Role::Paint as usize,
-                        );
-                    }
-                }
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        WM_APP_POPOVER_PICK => {
+            on_pick(hwnd, lparam);
+            LRESULT(0)
         }
-        WM_SIZE => {
-            with_editor(hwnd, |ed| ed.layout());
+        WM_APP_POPOVER_CLOSED => {
+            on_popover_closed(hwnd, wparam.0);
             LRESULT(0)
         }
         WM_DPICHANGED => {
@@ -1983,78 +2330,15 @@ unsafe extern "system" fn wnd_proc(
 
 const SUBCLASS_ID: usize = 1;
 
-/// Maps a light-theme pixel (`0x00RRGGBB`) onto the window palette: white
-/// becomes `field`, black becomes `text`, grays fall in between (in dark mode
-/// this inverts them; in light mode it is nearly the identity). Colored
-/// pixels (the blue selection, the today marker) keep their color.
-fn tone(px: u32, field: u32, text: u32) -> u32 {
-    let channel = |v: u32, shift: u32| (v >> shift) & 0xFF;
-    let (r, g, b) = (channel(px, 16), channel(px, 8), channel(px, 0));
-    if r.max(g).max(b) - r.min(g).min(b) > 48 {
-        return px;
-    }
-    let ink = 255 - (r * 299 + g * 587 + b * 114) / 1000;
-    let mix = |shift: u32| {
-        let (from, to) = (channel(field, shift), channel(text, shift));
-        (from * (255 - ink) + to * ink) / 255
-    };
-    (mix(16) << 16) | (mix(8) << 8) | mix(0)
-}
-
-/// Paints a control that ignores dark colors (the date/time pickers, their
-/// spin buttons and the drop-down calendar): it draws itself into an
-/// off-screen bitmap via `WM_PRINTCLIENT`, then `tone` recolors it for the
-/// current window mode.
-fn paint_themed(hwnd: HWND) {
-    let p = theme::current_window();
-    unsafe {
-        let mut ps = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut ps);
-        let mut rc = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rc);
-        let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
-        if !hdc.is_invalid() && w > 0 && h > 0 {
-            let mem = CreateCompatibleDC(Some(hdc));
-            let info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: w,
-                    biHeight: -h,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut bits: *mut c_void = std::ptr::null_mut();
-            if let Ok(dib) = CreateDIBSection(Some(hdc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
-            {
-                let old = SelectObject(mem, HGDIOBJ(dib.0));
-                let flags = (PRF_CLIENT | PRF_ERASEBKGND) as isize;
-                DefSubclassProc(hwnd, WM_PRINTCLIENT, WPARAM(mem.0 as usize), LPARAM(flags));
-                let _ = GdiFlush();
-                if !bits.is_null() {
-                    let len = (w as usize).saturating_mul(h as usize);
-                    let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, len);
-                    for px in pixels {
-                        *px = tone(*px, p.field, p.text);
-                    }
-                }
-                let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
-                SelectObject(mem, old);
-                let _ = DeleteObject(HGDIOBJ(dib.0));
-            }
-            let _ = DeleteDC(mem);
-        }
-        let _ = EndPaint(hwnd, &ps);
-    }
-}
-
-fn post_command(control: HWND, id: i32) {
+fn post_act(control: HWND, act: Act) {
     unsafe {
         if let Ok(parent) = GetParent(control) {
-            let _ = PostMessageW(Some(parent), WM_COMMAND, WPARAM(id as usize), LPARAM(0));
+            let _ = PostMessageW(
+                Some(parent),
+                WM_APP_EDITOR_ACT,
+                WPARAM(act as usize),
+                LPARAM(0),
+            );
         }
     }
 }
@@ -2063,9 +2347,41 @@ pub(super) fn key_down(key: u16) -> bool {
     unsafe { GetKeyState(i32::from(key)) < 0 }
 }
 
-/// Keyboard for every input control: Esc closes, Ctrl+Enter (or Enter outside
-/// a multi-line field) saves, Tab / Shift+Tab move the focus, Ctrl+A selects
-/// all in a text field.
+/// An empty EDIT's placeholder, in the tertiary text colour over what the
+/// control just painted. The caret is hidden meanwhile so its blink cannot
+/// invert the letters.
+fn paint_placeholder(hwnd: HWND, key: Key, multi: bool) {
+    if unsafe { GetWindowTextLengthW(hwnd) } > 0 {
+        return;
+    }
+    let p = theme::current_window();
+    let mut rc = RECT::default();
+    send(hwnd, EM_GETRECT, 0, &mut rc as *mut RECT as isize);
+    let font = send(hwnd, WM_GETFONT, 0, 0);
+    let mut label: Vec<u16> = tr(key).encode_utf16().collect();
+    unsafe {
+        let _ = HideCaret(Some(hwnd));
+        let hdc = GetDC(Some(hwnd));
+        let old = (font != 0).then(|| SelectObject(hdc, HGDIOBJ(font as *mut c_void)));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, colorref(p.tertiary));
+        let flags = if multi {
+            DT_WORDBREAK | DT_NOPREFIX
+        } else {
+            DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
+        };
+        DrawTextW(hdc, &mut label, &mut rc, flags);
+        if let Some(old) = old {
+            SelectObject(hdc, old);
+        }
+        ReleaseDC(Some(hwnd), hdc);
+        let _ = ShowCaret(Some(hwnd));
+    }
+}
+
+/// Keyboard and placeholder for the EDITs: Esc closes, Ctrl+Enter (or Enter
+/// in the title) saves, Tab / Shift+Tab move through the editor's stops,
+/// Ctrl+A selects all.
 unsafe extern "system" fn control_proc(
     hwnd: HWND,
     msg: u32,
@@ -2074,62 +2390,40 @@ unsafe extern "system" fn control_proc(
     _id: usize,
     data: usize,
 ) -> LRESULT {
-    let role = Role::from_ref(data);
-    if matches!(role, Some(Role::Picker | Role::Paint)) {
-        match msg {
-            WM_PAINT => {
-                paint_themed(hwnd);
-                return LRESULT(0);
-            }
-            // `paint_themed` paints the background too.
-            WM_ERASEBKGND => return LRESULT(1),
-            _ => {}
-        }
-    }
-    if role == Some(Role::Paint) {
-        if msg == WM_NCDESTROY {
-            unsafe {
-                let _ = RemoveWindowSubclass(hwnd, Some(control_proc), SUBCLASS_ID);
-            }
-        }
-        return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-    }
-    let dropdown_open = || role == Some(Role::Picker) && send(hwnd, DTM_GETMONTHCAL, 0, 0) != 0;
+    let multi = data == Role::Multi as usize;
     match msg {
+        WM_PAINT => {
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            let key = PLACEHOLDERS.with(|p| {
+                p.try_borrow()
+                    .ok()?
+                    .iter()
+                    .find(|(h, _)| *h == hwnd.0 as isize)
+                    .map(|(_, k)| *k)
+            });
+            if let Some(key) = key {
+                paint_placeholder(hwnd, key, multi);
+            }
+            return result;
+        }
         WM_KEYDOWN => {
             let key = (wparam.0 & 0xFFFF) as u16;
             let ctrl = key_down(VK_CONTROL.0);
-            if key == VK_ESCAPE.0 && !dropdown_open() {
-                post_command(hwnd, ID_CANCEL);
+            if key == VK_ESCAPE.0 {
+                post_act(hwnd, Act::Close);
                 return LRESULT(0);
             }
-            if key == VK_RETURN.0 && !dropdown_open() {
-                match role {
-                    Some(Role::Multi) if !ctrl => {}
-                    Some(Role::Button) if !ctrl => {
-                        unsafe {
-                            let _ = PostMessageW(Some(hwnd), BM_CLICK, WPARAM(0), LPARAM(0));
-                        }
-                        return LRESULT(0);
-                    }
-                    _ => {
-                        post_command(hwnd, ID_OK);
-                        return LRESULT(0);
-                    }
-                }
+            if key == VK_RETURN.0 && (ctrl || !multi) {
+                post_act(hwnd, if ctrl { Act::Save } else { Act::SaveIfReady });
+                return LRESULT(0);
             }
             if key == VK_TAB.0 && !ctrl {
-                unsafe {
-                    if let Ok(parent) = GetParent(hwnd)
-                        && let Ok(next) =
-                            GetNextDlgTabItem(parent, Some(hwnd), key_down(VK_SHIFT.0))
-                    {
-                        let _ = SetFocus(Some(next));
-                    }
+                if let Ok(parent) = unsafe { GetParent(hwnd) } {
+                    tab(parent, key_down(VK_SHIFT.0));
                 }
                 return LRESULT(0);
             }
-            if key == VK_A.0 && ctrl && matches!(role, Some(Role::Multi | Role::Line)) {
+            if key == VK_A.0 && ctrl {
                 send(hwnd, EM_SETSEL, 0, -1);
                 return LRESULT(0);
             }
@@ -2137,11 +2431,8 @@ unsafe extern "system" fn control_proc(
         WM_CHAR => {
             // Swallow the characters of the keys handled above, so fields
             // neither beep nor insert them.
-            let ch = wparam.0;
-            let multi = role == Some(Role::Multi);
-            let swallowed = match ch {
-                0x01 | 0x09 | 0x0A => true,
-                0x1B => !dropdown_open(),
+            let swallowed = match wparam.0 {
+                0x01 | 0x09 | 0x0A | 0x1B => true,
                 0x0D => !multi,
                 _ => false,
             };
@@ -2158,15 +2449,40 @@ unsafe extern "system" fn control_proc(
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
-/// `--demo-editor note|note-new|event|event-new|event-ro|reminder|reminder-new`
-/// (debug builds only):
-/// opens one editor under where the panel would be, with a hidden owner that
-/// prints each result. `EventSave` gets a failure after 1.5 s, then success on
-/// the next try. Ends when the editor closes.
+/// Opens the open editor's popover for a chip (demo screenshots).
+#[cfg(debug_assertions)]
+fn demo_popover(which: &str) {
+    let Some(hwnd) = open_hwnd() else {
+        return;
+    };
+    let item = match which {
+        "calendar" | "date" => Item::DateChip,
+        "start" => Item::StartChip,
+        "time" | "end" => {
+            let reminder = with_editor(hwnd, |ed| ed.mode.form() == Form::Reminder);
+            if reminder == Some(true) {
+                Item::TimeChip
+            } else {
+                Item::EndChip
+            }
+        }
+        other => {
+            eprintln!("demo-editor: unknown DI_POPOVER `{other}` (calendar|time|start)");
+            return;
+        }
+    };
+    activate(hwnd, item, true);
+}
+
+/// `--demo-editor note|note-new|event|event-new|event-ro|event-allday|event-bad|reminder|reminder-new`
+/// (debug builds only): opens one editor under where the panel would be,
+/// with a hidden owner that prints each result. `EventSave` gets a failure
+/// after 1.5 s, then success on the next try. Ends when the editor closes.
 ///
-/// `DI_WINDOW=system|dark|light` picks the window mode (default: system), and
+/// `DI_WINDOW=system|dark|light` picks the window mode (default: system),
 /// `DI_WINDOW_FLIP=ms` swaps dark and light after that long, to check the
-/// live restyle.
+/// live restyle, and `DI_POPOVER=calendar|time|start` opens that popover
+/// half a second after the editor (for screenshots).
 #[cfg(debug_assertions)]
 pub fn run_demo(which: Option<&str>) {
     use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY;
@@ -2180,6 +2496,10 @@ pub fn run_demo(which: Option<&str>) {
         static SAVES: Cell<u32> = const { Cell::new(0) };
     }
 
+    const SAVE_TIMER: usize = 1;
+    const FLIP_TIMER: usize = 2;
+    const POPOVER_TIMER: usize = 3;
+
     unsafe extern "system" fn owner_proc(
         hwnd: HWND,
         msg: u32,
@@ -2191,10 +2511,19 @@ pub fn run_demo(which: Option<&str>) {
                 if let Some(result) = unsafe { take_result(lparam) } {
                     println!("demo-editor: {result:?}");
                     if matches!(result, EditorResult::EventSave { .. }) {
-                        unsafe { SetTimer(Some(hwnd), 1, 1500, None) };
+                        unsafe { SetTimer(Some(hwnd), SAVE_TIMER, 1500, None) };
                     } else if result.closes_editor() {
                         unsafe { PostQuitMessage(0) };
                     }
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == POPOVER_TIMER => {
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), POPOVER_TIMER);
+                }
+                if let Ok(which) = std::env::var("DI_POPOVER") {
+                    demo_popover(&which);
                 }
                 LRESULT(0)
             }
@@ -2215,7 +2544,7 @@ pub fn run_demo(which: Option<&str>) {
             }
             WM_TIMER => {
                 unsafe {
-                    let _ = KillTimer(Some(hwnd), 1);
+                    let _ = KillTimer(Some(hwnd), SAVE_TIMER);
                 }
                 let editor = HWND(DEMO_EDITOR.get() as *mut c_void);
                 let n = SAVES.get();
@@ -2245,7 +2574,6 @@ pub fn run_demo(which: Option<&str>) {
         }
     }
 
-    const FLIP_TIMER: usize = 2;
     use crate::theme::{Theme, WindowTheme};
     let mode = std::env::var("DI_WINDOW").unwrap_or_default();
     theme::set_system_light(theme::read_system_light());
@@ -2255,20 +2583,24 @@ pub fn run_demo(which: Option<&str>) {
     });
 
     let date = chrono::Local::now().date_naive();
-    let draft = |title: &str| EventDraft {
+    let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap_or(NaiveTime::MIN);
+    let draft = |title: &str, all_day, start, end| EventDraft {
         title: title.into(),
-        date,
-        all_day: false,
-        start: NaiveTime::from_hms_opt(13, 30, 0).unwrap_or(NaiveTime::MIN),
-        end: NaiveTime::from_hms_opt(14, 15, 0).unwrap_or(NaiveTime::MIN),
-        description: "Bahas layout panel\nBawa laptop".into(),
+        date: date + chrono::Days::new(2),
+        all_day,
+        start,
+        end,
+        description: "Bawa maket skala 1:100".into(),
     };
-    let event = |event_id: Option<&str>, title: &str, read_only| EditorKind::Event {
-        event_id: event_id.map(Into::into),
-        calendar_id: Some("primary".into()),
-        draft: draft(title),
-        read_only,
-    };
+    let event =
+        |event_id: Option<&str>, calendar: &str, draft: EventDraft, read_only| EditorKind::Event {
+            event_id: event_id.map(Into::into),
+            calendar_id: Some(calendar.into()),
+            draft,
+            read_only,
+        };
+    let account = "kamu@example.com";
+    let review = "Review desain klien";
     let kind = match which.unwrap_or("note") {
         "note" => EditorKind::Note {
             id: Some("demo".into()),
@@ -2278,27 +2610,59 @@ pub fn run_demo(which: Option<&str>) {
             id: None,
             text: String::new(),
         },
-        "event" => event(Some("demo-event"), "Rapat desain", false),
-        "event-new" => event(None, "", false),
-        "event-ro" => event(Some("demo-event"), "Libur nasional", true),
+        "event" => event(
+            Some("demo-event"),
+            account,
+            draft(review, false, hm(10, 0), hm(11, 30)),
+            false,
+        ),
+        "event-new" => EditorKind::Event {
+            event_id: None,
+            calendar_id: None,
+            draft: EventDraft {
+                title: String::new(),
+                date,
+                description: String::new(),
+                ..draft("", false, hm(9, 0), hm(10, 0))
+            },
+            read_only: false,
+        },
+        "event-ro" => event(
+            Some("demo-event"),
+            "id.indonesian#holiday@group.v.calendar.google.com",
+            draft("Libur nasional", true, hm(0, 0), hm(0, 0)),
+            true,
+        ),
+        "event-allday" => event(
+            Some("demo-event"),
+            account,
+            draft("Workshop arsitektur", true, hm(9, 0), hm(10, 0)),
+            false,
+        ),
+        "event-bad" => event(
+            Some("demo-event"),
+            account,
+            draft(review, false, hm(10, 0), hm(9, 30)),
+            false,
+        ),
         "reminder" => EditorKind::Reminder {
             id: Some("demo-reminder".into()),
             text: "Minum obat setelah makan".into(),
             date: date + chrono::Days::new(1),
-            time: NaiveTime::from_hms_opt(8, 0, 0).unwrap_or(NaiveTime::MIN),
+            time: hm(8, 0),
             repeat: Repeat::Daily,
         },
         "reminder-new" => EditorKind::Reminder {
             id: None,
             text: String::new(),
             date,
-            time: NaiveTime::from_hms_opt(17, 0, 0).unwrap_or(NaiveTime::MIN),
+            time: hm(17, 0),
             repeat: Repeat::Once,
         },
         other => {
             eprintln!(
-                "demo-editor: unknown kind `{other}` \
-                 (note|note-new|event|event-new|event-ro|reminder|reminder-new)"
+                "demo-editor: unknown kind `{other}` (note|note-new|event|event-new|event-ro|\
+                 event-allday|event-bad|reminder|reminder-new)"
             );
             return;
         }
@@ -2358,6 +2722,9 @@ pub fn run_demo(which: Option<&str>) {
                 if let Some(ms) = flip.and_then(|v| v.parse::<u32>().ok()) {
                     SetTimer(Some(owner), FLIP_TIMER, ms, None);
                 }
+                if std::env::var("DI_POPOVER").is_ok() {
+                    SetTimer(Some(owner), POPOVER_TIMER, 500, None);
+                }
             }
             Err(error) => {
                 eprintln!("demo-editor: open failed: {error}");
@@ -2386,14 +2753,42 @@ mod tests {
         }
     }
 
+    fn t(h: u32, m: u32) -> NaiveTime {
+        NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    }
+
+    fn date(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
+    }
+
     fn draft(title: &str, all_day: bool, start: (u32, u32), end: (u32, u32)) -> EventDraft {
         EventDraft {
             title: title.into(),
-            date: NaiveDate::from_ymd_opt(2026, 10, 26).unwrap(),
+            date: date(26),
             all_day,
-            start: NaiveTime::from_hms_opt(start.0, start.1, 0).unwrap(),
-            end: NaiveTime::from_hms_opt(end.0, end.1, 0).unwrap(),
+            start: t(start.0, start.1),
+            end: t(end.0, end.1),
             description: String::new(),
+        }
+    }
+
+    fn event_mode(read_only: bool, saving: bool, ev: EventState) -> Mode {
+        Mode::Event {
+            event_id: Some("e1".into()),
+            calendar_id: Some("rani@example.com".into()),
+            ev,
+            read_only,
+            saving,
+        }
+    }
+
+    fn ev(all_day: bool, start: NaiveTime, end: NaiveTime) -> EventState {
+        EventState {
+            date: date(28),
+            all_day,
+            start,
+            end,
+            today: date(26),
         }
     }
 
@@ -2446,6 +2841,40 @@ mod tests {
                 PM_REMOVE,
             );
             assert!(!posted.as_bool(), "the result was returned, not posted");
+            let _ = DestroyWindow(owner);
+        }
+    }
+
+    /// The reminder editor opens in the new frame (no date control) and
+    /// closes with `Closed`.
+    #[test]
+    fn reminder_editor_opens_without_windows_date_controls() {
+        unsafe {
+            let owner = CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("owner window");
+            let editor = open_editor(owner, POINT { x: 400, y: 300 }, reminder_kind(Some("r1")))
+                .expect("editor");
+            let kids = with_editor(editor, |ed| ed.edits.len()).expect("editor state");
+            assert_eq!(kids, 1, "only the text is an EDIT");
+            let size = with_editor(editor, |ed| ed.layout.size).unwrap();
+            let mut rc = RECT::default();
+            let _ = GetClientRect(editor, &mut rc);
+            let scale = with_editor(editor, |ed| ed.scale).unwrap();
+            assert_eq!(rc.right - rc.left, (size.0 * scale).round() as i32);
+            assert_eq!(close_open_editor(), Some(EditorResult::Closed));
             let _ = DestroyWindow(owner);
         }
     }
@@ -2515,28 +2944,131 @@ mod tests {
     }
 
     #[test]
+    fn all_day_ignores_times() {
+        assert_eq!(
+            validate_event(&draft("Libur", true, (10, 0), (9, 0))),
+            Ok(())
+        );
+        assert_eq!(
+            validate_event(&draft("Libur", true, (10, 0), (10, 0))),
+            Ok(())
+        );
+        assert!(!ev(true, t(10, 0), t(9, 0)).times_invalid());
+        assert!(ev(false, t(10, 0), t(9, 0)).times_invalid());
+        assert!(ev(false, t(10, 0), t(10, 0)).times_invalid());
+    }
+
+    #[test]
+    fn save_is_enabled_by_the_title_and_the_times() {
+        let good = event_mode(false, false, ev(false, t(10, 0), t(11, 30)));
+        assert!(good.can_save("Review"));
+        assert!(!good.can_save(""));
+        assert!(!good.can_save("   "));
+        let bad = event_mode(false, false, ev(false, t(10, 0), t(9, 30)));
+        assert!(!bad.can_save("Review"));
+        // All day: the times do not matter.
+        let all_day = event_mode(false, false, ev(true, t(10, 0), t(9, 30)));
+        assert!(all_day.can_save("Libur"));
+        assert!(!event_mode(true, false, ev(false, t(10, 0), t(11, 0))).can_save("Rapat"));
+        assert!(!event_mode(false, true, ev(false, t(10, 0), t(11, 0))).can_save("Rapat"));
+    }
+
+    #[test]
+    fn save_builds_the_draft_from_the_editor_state() {
+        let mode = event_mode(false, false, ev(false, t(10, 0), t(11, 30)));
+        let result = mode.event_save("  Review desain klien ", "Bawa maket\r\nskala 1:100");
+        assert_eq!(
+            result,
+            Some(Ok(EditorResult::EventSave {
+                event_id: Some("e1".into()),
+                calendar_id: Some("rani@example.com".into()),
+                draft: EventDraft {
+                    title: "Review desain klien".into(),
+                    date: date(28),
+                    all_day: false,
+                    start: t(10, 0),
+                    end: t(11, 30),
+                    description: "Bawa maket\nskala 1:100".into(),
+                },
+            }))
+        );
+        // Still checked on save.
+        let bad = event_mode(false, false, ev(false, t(10, 0), t(10, 0)));
+        assert_eq!(bad.event_save("Rapat", ""), Some(Err(Key::EndBeforeStart)));
+        assert_eq!(
+            event_mode(false, false, ev(false, t(10, 0), t(11, 0))).event_save("", ""),
+            Some(Err(Key::TitleRequired))
+        );
+    }
+
+    #[test]
+    fn read_only_or_saving_events_post_no_save() {
+        let ro = event_mode(true, false, ev(false, t(10, 0), t(11, 0)));
+        assert_eq!(ro.event_save("Libur", ""), None);
+        let saving = event_mode(false, true, ev(false, t(10, 0), t(11, 0)));
+        assert_eq!(saving.event_save("Rapat", ""), None);
+        assert_eq!(Mode::Note { id: None }.event_save("x", ""), None);
+        // Read-only allows only the text and Tutup.
+        assert!(!ro.enabled(Item::DateChip));
+        assert!(!ro.enabled(Item::Pill(Shortcut::Today)));
+        assert!(!ro.enabled(Item::AllDay));
+        assert!(!ro.enabled(Item::Save));
+        assert!(ro.enabled(Item::Cancel) && ro.enabled(Item::Notes));
+        assert_eq!(title_key(&ro), Key::EditorEvent);
+    }
+
+    #[test]
+    fn picking_a_start_moves_the_end_with_it() {
+        let mut state = ev(false, t(10, 0), t(11, 30));
+        state.end = shift_end(state.start, state.end, t(13, 0));
+        state.start = t(13, 0);
+        assert_eq!((state.start, state.end), (t(13, 0), t(14, 30)));
+        assert_eq!(state.length(), 90);
+    }
+
+    #[test]
+    fn the_footer_names_the_account_only_when_known() {
+        assert_eq!(
+            account_label(Lang::Id, Some("rani@studio.id")),
+            "Google Calendar · rani@studio.id"
+        );
+        assert_eq!(account_label(Lang::En, Some("primary")), "Google Calendar");
+        assert_eq!(account_label(Lang::En, None), "Google Calendar");
+        assert_eq!(account_label(Lang::Id, Some("  ")), "Google Calendar");
+        for shared in [
+            "id.indonesian#holiday@group.v.calendar.google.com",
+            "abc123@group.calendar.google.com",
+            "xyz@import.calendar.google.com",
+            "@example.com",
+        ] {
+            assert_eq!(
+                account_label(Lang::Id, Some(shared)),
+                "Google Calendar",
+                "{shared}"
+            );
+        }
+    }
+
+    #[test]
+    fn pills_name_today_tomorrow_the_weekday_and_next_week() {
+        let mon = date(26);
+        let labels: Vec<String> = Shortcut::ALL
+            .iter()
+            .map(|s| pill_label(Lang::Id, *s, mon))
+            .collect();
+        assert_eq!(labels, ["Hari ini", "Besok", "Rabu", "Minggu depan"]);
+        let wed = date(28);
+        assert_eq!(pill_label(Lang::Id, Shortcut::DayAfter, wed), "Jumat");
+        assert_eq!(pill_label(Lang::En, Shortcut::DayAfter, wed), "Friday");
+        assert_eq!(pill_label(Lang::En, Shortcut::NextWeek, wed), "Next week");
+    }
+
+    #[test]
     fn edit_text_line_breaks_round_trip() {
         assert_eq!(to_edit_text("a\nb\r\nc"), "a\r\nb\r\nc");
         assert_eq!(from_edit_text("a\r\nb\r\n"), "a\nb\n");
         let text = "Beli kopi\n\nTelepon ibu";
         assert_eq!(from_edit_text(&to_edit_text(text)), text);
-    }
-
-    #[test]
-    fn picker_values_round_trip() {
-        let date = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
-        let time = NaiveTime::from_hms_opt(13, 30, 0).unwrap();
-        let st = system_time(date, time);
-        assert_eq!(st.wDayOfWeek, 0, "Sunday");
-        assert_eq!(date_of(&st), Some(date));
-        assert_eq!(time_of(&st), Some(time));
-        let bad = SYSTEMTIME {
-            wYear: 2026,
-            wMonth: 2,
-            wDay: 30,
-            ..Default::default()
-        };
-        assert_eq!(date_of(&bad), None);
     }
 
     #[test]
@@ -2560,100 +3092,10 @@ mod tests {
     }
 
     #[test]
-    fn tone_maps_light_grays_and_keeps_colors() {
-        use crate::theme::{Accent, WindowTheme};
-        let dark = theme::window(Accent::Terracotta, WindowTheme::Dark, false);
-        let darken = |px| tone(px, dark.field, dark.text);
-        assert_eq!(darken(0xFFFFFF), dark.field);
-        assert_eq!(darken(0x000000), dark.text);
-        // Blue selection highlight stays.
-        assert_eq!(darken(0x0078D7), 0x0078D7);
-        // A mid gray lands between the two.
-        let mid = darken(0x808080);
-        assert!(mid & 0xFF > dark.field & 0xFF && mid & 0xFF < dark.text & 0xFF);
-        // Light mode leaves the native look nearly as it is.
-        let light = theme::window(Accent::Terracotta, WindowTheme::Light, false);
-        let lighten = |px| tone(px, light.field, light.text);
-        assert_eq!(lighten(0xFFFFFF), 0xFFFFFF);
-        assert_eq!(lighten(0x000000), light.text);
-        assert_eq!(lighten(0x0078D7), 0x0078D7);
-    }
-
-    #[test]
-    fn date_format_names_the_date_in_the_app_language() {
-        let sunday = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
-        assert_eq!(date_format(Lang::Id, sunday), "'Min' d 'Okt' yyyy");
-        assert_eq!(date_format(Lang::En, sunday), "'Sun' d 'Oct' yyyy");
-    }
-
-    #[test]
-    fn every_label_has_a_key_for_relabelling() {
-        let kind = EditorKind::Event {
-            event_id: None,
-            calendar_id: None,
-            draft: draft("", false, (9, 0), (10, 0)),
-            read_only: false,
-        };
-        for spec in specs(&kind) {
-            if !spec.text.is_empty() {
-                assert!(label_key(spec.id, false).is_some(), "{}", spec.id);
-                assert_eq!(tr(label_key(spec.id, false).unwrap()), spec.text);
-            }
-        }
-        assert_eq!(label_key(ID_CANCEL, true), Some(Key::Close));
-        assert_eq!(blend(0xF3F3F5, 0x000000, 0.0), 0xF3F3F5);
-        assert_eq!(blend(0xFFFFFF, 0x000000, 1.0), 0x000000);
-    }
-
-    #[test]
     fn colorref_swaps_red_and_blue() {
         assert_eq!(colorref(0x1B2B3C), COLORREF(0x3C2B1B));
-    }
-
-    #[test]
-    fn layouts_stay_inside_the_client_area() {
-        let note_ids = [ID_TEXT, ID_DELETE];
-        let event_ids: Vec<i32> = specs(&EditorKind::Event {
-            event_id: None,
-            calendar_id: None,
-            draft: draft("", false, (9, 0), (10, 0)),
-            read_only: false,
-        })
-        .iter()
-        .map(|s| s.id)
-        .collect();
-        let reminder_ids: Vec<i32> = specs(&reminder_kind(Some("r1")))
-            .iter()
-            .map(|s| s.id)
-            .collect();
-        // Roughly the client areas of the windows (caption and borders off).
-        for (form, ids, cw, ch) in [
-            (Form::Note, &note_ids[..], 398.0, 190.0),
-            (Form::Event, &event_ids[..], 418.0, 230.0),
-            (Form::Reminder, &reminder_ids[..], 418.0, 200.0),
-        ] {
-            let rects = layout(form, ids, cw, ch);
-            for (id, [x, y, w, h]) in &rects {
-                assert!(*x >= 0.0 && *y >= 0.0 && *w > 0.0 && *h > 0.0, "{id}");
-                assert!(x + w <= cw && y + h <= ch, "{id} outside {cw}x{ch}");
-            }
-            // Every control has a place, and none overlap.
-            for id in ids {
-                assert!(
-                    rects.iter().any(|(r, _)| r == id),
-                    "{form:?}: {id} unplaced"
-                );
-            }
-            for (i, (a, ra)) in rects.iter().enumerate() {
-                for (b, rb) in &rects[i + 1..] {
-                    let apart = ra[0] + ra[2] <= rb[0]
-                        || rb[0] + rb[2] <= ra[0]
-                        || ra[1] + ra[3] <= rb[1]
-                        || rb[1] + rb[3] <= ra[1];
-                    assert!(apart, "{form:?}: {a} overlaps {b}");
-                }
-            }
-        }
+        assert_eq!(blend(0xF3F3F5, 0x000000, 0.0), 0xF3F3F5);
+        assert_eq!(blend(0xFFFFFF, 0x000000, 1.0), 0x000000);
     }
 
     fn reminder_kind(id: Option<&str>) -> EditorKind {
@@ -2714,53 +3156,16 @@ mod tests {
     }
 
     #[test]
-    fn reminder_form_has_delete_only_when_editing() {
-        let ids = |id| {
-            specs(&reminder_kind(id))
-                .iter()
-                .map(|s| s.id)
-                .collect::<Vec<_>>()
+    fn reminder_picks_land_on_its_chips() {
+        let mode = Mode::Reminder {
+            id: Some("r1".into()),
+            date: date(27),
+            time: t(8, 0),
+            repeat: Repeat::Once,
         };
-        assert!(ids(Some("r1")).contains(&ID_DELETE));
-        assert!(!ids(None).contains(&ID_DELETE));
-        for id in [ID_TITLE, ID_DATE, ID_TIME, ID_OK, ID_CANCEL, ID_STATUS] {
-            assert!(ids(None).contains(&id), "{id}");
-        }
-        for (segment, _) in REPEAT_SEGMENTS {
-            assert!(ids(None).contains(&segment));
-        }
-        assert_eq!(segment_for(Repeat::Weekly), ID_REPEAT_WEEKLY);
-        assert_eq!(segment_for(Repeat::Once), ID_REPEAT_ONCE);
-        // Every label relabels after a language switch.
-        for spec in specs(&reminder_kind(Some("r1"))) {
-            if !spec.text.is_empty() && spec.id != ID_TITLE {
-                let key = label_key(spec.id, false);
-                assert_eq!(key.map(tr), Some(spec.text.as_str()), "{}", spec.id);
-            }
-        }
-    }
-
-    #[test]
-    fn picked_segment_is_in_the_accent() {
-        use crate::theme::{Accent, WindowTheme};
-        for mode in [WindowTheme::Dark, WindowTheme::Light] {
-            let p = theme::window(Accent::Sage, mode, false);
-            assert_eq!(segment_colors(&p, true, false), (p.accent, p.on_accent));
-            assert_eq!(segment_colors(&p, true, true), (p.accent, p.on_accent));
-            assert_eq!(segment_colors(&p, false, false), (p.button, p.text));
-            assert_eq!(segment_colors(&p, false, true), (p.button_hover, p.text));
-        }
-    }
-
-    #[test]
-    fn all_day_ignores_times() {
-        assert_eq!(
-            validate_event(&draft("Libur", true, (10, 0), (9, 0))),
-            Ok(())
-        );
-        assert_eq!(
-            validate_event(&draft("Libur", true, (10, 0), (10, 0))),
-            Ok(())
-        );
+        assert_eq!(mode.form(), Form::Reminder);
+        assert!(mode.can_save(""), "a reminder says what is missing on save");
+        assert_eq!(title_key(&mode), Key::EditorEditReminder);
+        assert!(mode.enabled(Item::Delete));
     }
 }

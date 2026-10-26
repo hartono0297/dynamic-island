@@ -610,8 +610,7 @@ impl Painter<'_> {
     /// The track (window background, hairline, radius 10) with the selected
     /// segment (accent, radius 8) sliding inside it.
     fn segmented(&self, track: Rect, items: &[Segment], pos: f32, s: &Scene) {
-        self.fill_round(track, CONTROL_RADIUS, self.p.bg, 1.0);
-        self.stroke_round(track, CONTROL_RADIUS, self.p.border);
+        draw_segment_track(self.rt, self.brush, &self.p, track, self.alpha);
         let rects: Vec<Rect> = items.iter().map(|i| i.rect).collect();
         for item in items {
             let current = (pos - index_of(items, item) as f32).abs() < 0.5;
@@ -634,28 +633,7 @@ impl Painter<'_> {
     /// On: an accent track with an `on_accent` knob. Off: a 1.5 px outline
     /// and a smaller knob, both in the secondary text colour. Cross-faded by `v`.
     fn toggle(&self, r: Rect, v: f32, hover: bool) {
-        let radius = r.h / 2.0;
-        if v < 1.0 {
-            if hover {
-                self.fill_round(r, radius, self.p.text, 0.06 * (1.0 - v));
-            }
-            self.set(self.p.secondary, 1.0 - v);
-            self.outline(r, radius, 1.5);
-        }
-        if v > 0.0 {
-            let fill = if hover {
-                self.tint(self.p.accent, 0.12)
-            } else {
-                self.p.accent
-            };
-            self.fill_round(r, radius, fill, v);
-        }
-        let t = ease(v);
-        let cx = r.x + radius + (r.w - r.h) * t;
-        let rgb = mix(self.p.secondary, self.p.on_accent, v);
-        let (off, on) = (r.h * 0.28, r.h / 2.0 - 3.0);
-        let knob = off + (on - off) * t + if hover { 0.5 } else { 0.0 };
-        self.circle(cx, r.y + radius, knob, rgb, 1.0);
+        draw_toggle(self.rt, self.brush, &self.p, r, v, hover, self.alpha);
     }
 
     /// A round `−` / `+` button: card fill and hairline, darker on hover.
@@ -893,6 +871,110 @@ impl Painter<'_> {
     }
 }
 
+/// Window-palette primitives on any render target, shared with the editors
+/// (`editor_paint`): every colour's alpha is multiplied by `alpha`.
+#[derive(Clone, Copy)]
+pub(super) struct Pen<'a> {
+    pub rt: &'a ID2D1RenderTarget,
+    pub brush: &'a ID2D1SolidColorBrush,
+    pub alpha: f32,
+}
+
+impl Pen<'_> {
+    pub fn set(&self, rgb: u32, a: f32) {
+        unsafe { self.brush.SetColor(&color(rgb, a * self.alpha)) };
+    }
+
+    pub fn fill_round(&self, r: Rect, radius: f32, rgb: u32, a: f32) {
+        self.set(rgb, a);
+        unsafe {
+            self.rt
+                .FillRoundedRectangle(&rounded(r, radius), self.brush)
+        };
+    }
+
+    /// A line of `width` just inside `r`, in the current brush colour.
+    pub fn outline(&self, r: Rect, radius: f32, width: f32) {
+        let half = width / 2.0;
+        let inner = Rect {
+            x: r.x + half,
+            y: r.y + half,
+            w: r.w - width,
+            h: r.h - width,
+        };
+        unsafe {
+            self.rt
+                .DrawRoundedRectangle(&rounded(inner, radius - half), self.brush, width, None);
+        }
+    }
+
+    pub fn circle(&self, cx: f32, cy: f32, radius: f32, rgb: u32, a: f32) {
+        self.set(rgb, a);
+        unsafe {
+            self.rt.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: Vector2::new(cx, cy),
+                    radiusX: radius,
+                    radiusY: radius,
+                },
+                self.brush,
+            );
+        }
+    }
+}
+
+/// The settings toggle. On: an accent track with an `on_accent` knob. Off:
+/// a 1.5 px outline and a smaller knob, both in the secondary text colour.
+/// Cross-faded by `v` (0 off, 1 on).
+pub(super) fn draw_toggle(
+    rt: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    p: &WindowPalette,
+    r: Rect,
+    v: f32,
+    hover: bool,
+    alpha: f32,
+) {
+    let pen = Pen { rt, brush, alpha };
+    let radius = r.h / 2.0;
+    if v < 1.0 {
+        if hover {
+            pen.fill_round(r, radius, p.text, 0.06 * (1.0 - v));
+        }
+        pen.set(p.secondary, 1.0 - v);
+        pen.outline(r, radius, 1.5);
+    }
+    if v > 0.0 {
+        let fill = if hover {
+            mix(p.accent, p.text, 0.12)
+        } else {
+            p.accent
+        };
+        pen.fill_round(r, radius, fill, v);
+    }
+    let t = ease(v);
+    let cx = r.x + radius + (r.w - r.h) * t;
+    let rgb = mix(p.secondary, p.on_accent, v);
+    let (off, on) = (r.h * 0.28, r.h / 2.0 - 3.0);
+    let knob = off + (on - off) * t + if hover { 0.5 } else { 0.0 };
+    pen.circle(cx, r.y + radius, knob, rgb, 1.0);
+}
+
+/// A segmented control's track: window background, hairline, radius 10.
+/// The selected segment goes on top in the accent at `SEGMENT_RADIUS`.
+pub(super) fn draw_segment_track(
+    rt: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    p: &WindowPalette,
+    track: Rect,
+    alpha: f32,
+) {
+    let pen = Pen { rt, brush, alpha };
+    pen.fill_round(track, CONTROL_RADIUS, p.bg, 1.0);
+    pen.set(p.border >> 8, (p.border & 0xFF) as f32 / 255.0);
+    pen.outline(track, CONTROL_RADIUS, 1.0);
+}
+
 /// `(start, length)` of each run of ASCII digits in UTF-16 `text`.
 fn digit_runs(text: &[u16]) -> Vec<(u32, u32)> {
     let mut runs = Vec::new();
@@ -961,7 +1043,7 @@ pub fn mix(a: u32, b: u32, t: f32) -> u32 {
     ch(16) | ch(8) | ch(0)
 }
 
-fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
+pub(super) fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     let channel = |shift: u32| ((rgb >> shift) & 0xFF) as f32 / 255.0;
     D2D1_COLOR_F {
         r: channel(16),
@@ -971,7 +1053,7 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     }
 }
 
-fn d2d_rect(r: Rect) -> D2D_RECT_F {
+pub(super) fn d2d_rect(r: Rect) -> D2D_RECT_F {
     D2D_RECT_F {
         left: r.x,
         top: r.y,
@@ -980,7 +1062,7 @@ fn d2d_rect(r: Rect) -> D2D_RECT_F {
     }
 }
 
-fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
+pub(super) fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
     let radius = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
     D2D1_ROUNDED_RECT {
         rect: d2d_rect(r),
@@ -1051,7 +1133,7 @@ fn notch_path(d2d: &ID2D1Factory, s: super::geometry::ShapeRect) -> Result<ID2D1
 }
 
 /// One line, vertically centered, trimmed with "…".
-fn line_format(
+pub(super) fn line_format(
     dwrite: &IDWriteFactory,
     face: &Face,
     weight: DWRITE_FONT_WEIGHT,

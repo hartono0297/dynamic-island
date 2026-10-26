@@ -308,6 +308,15 @@ pub struct WindowPalette {
     pub button_hover: u32,
     /// Error messages.
     pub error: u32,
+    /// Popover fill (the editors' calendar and time list).
+    pub popover: u32,
+    /// Hover fill of rows, days and quiet buttons (the design's `--hov`).
+    pub hover: u32,
+    /// `0xRRGGBBAA`: the accent at low alpha, for the picked row, the active
+    /// shortcut pill and the glow around a focused chip (the design's `--sel`).
+    pub selection: u32,
+    /// Placeholders and days outside the shown month (the design's `--tx3`).
+    pub tertiary: u32,
 }
 
 pub fn window(accent: Accent, mode: WindowTheme, system_light: bool) -> WindowPalette {
@@ -331,6 +340,11 @@ pub fn window(accent: Accent, mode: WindowTheme, system_light: bool) -> WindowPa
             button: 0xEFE6DA,
             button_hover: 0xEADFD1,
             error: 0xC42B1C,
+            popover: 0xFFFBF5,
+            hover: 0xEFE6DA,
+            // 12 % of the accent.
+            selection: accent.light_rgb() << 8 | 0x1F,
+            tertiary: 0xA89A8B,
         }
     } else {
         WindowPalette {
@@ -346,6 +360,11 @@ pub fn window(accent: Accent, mode: WindowTheme, system_light: bool) -> WindowPa
             button: 0x33291F,
             button_hover: 0x3D3227,
             error: 0xEF7A6E,
+            popover: 0x2A221C,
+            hover: 0x33291F,
+            // 16 % of the accent.
+            selection: accent.rgb() << 8 | 0x29,
+            tertiary: 0x6E6155,
         }
     }
 }
@@ -573,6 +592,53 @@ mod tests {
             assert!(contrast(p.text, p.field) >= 7.0);
             assert!(contrast(p.secondary, p.bg) >= 4.5);
             assert!(contrast(p.error, p.bg) >= 4.5);
+        }
+    }
+
+    /// `rgba` (`0xRRGGBBAA`) laid over the opaque `base`.
+    fn over(base: u32, rgba: u32) -> u32 {
+        let a = (rgba & 0xFF) as f64 / 255.0;
+        let rgb = rgba >> 8;
+        let ch = |shift: u32| {
+            let (b, o) = (
+                ((base >> shift) & 0xFF) as f64,
+                ((rgb >> shift) & 0xFF) as f64,
+            );
+            ((b + (o - b) * a).round() as u32) << shift
+        };
+        ch(16) | ch(8) | ch(0)
+    }
+
+    #[test]
+    fn editor_tokens_match_the_design_and_read() {
+        let dark = window(Accent::Terracotta, WindowTheme::Dark, false);
+        assert_eq!(
+            (dark.popover, dark.hover, dark.selection, dark.tertiary),
+            (0x2A221C, 0x33291F, 0xE2683C29, 0x6E6155)
+        );
+        let light = window(Accent::Terracotta, WindowTheme::Light, false);
+        assert_eq!(
+            (light.popover, light.hover, light.selection, light.tertiary),
+            (0xFFFBF5, 0xEFE6DA, 0xC9542B1F, 0xA89A8B)
+        );
+        for a in Accent::ALL {
+            for mode in [WindowTheme::Dark, WindowTheme::Light] {
+                let p = window(*a, mode, false);
+                assert_eq!(p.selection >> 8, p.accent, "{a:?} {mode:?}");
+                for surface in [p.popover, p.field, p.bg] {
+                    assert!(contrast(p.text, surface) >= 7.0, "{a:?} {mode:?}");
+                    assert!(contrast(p.secondary, surface) >= 4.5, "{a:?} {mode:?}");
+                    // Placeholders and other-month days: quieter, still visible.
+                    let c = contrast(p.tertiary, surface);
+                    assert!((2.3..4.5).contains(&c), "{a:?} {mode:?}: {c:.2}");
+                }
+                // The picked time reads in the accent on its tint.
+                let picked = over(p.popover, p.selection);
+                let c = contrast(p.accent, picked);
+                assert!(c >= 3.0, "{a:?} {mode:?}: {c:.2}");
+                // Hover is a visible step off the popover.
+                assert_ne!(p.hover, p.popover);
+            }
         }
     }
 

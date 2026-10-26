@@ -31,6 +31,7 @@ use crate::shortcuts;
 use crate::theme::{self, Palette, radius};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::icons::Icon;
+use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
     CalendarLayout, CliLayout, HOUR_GUTTER, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
     SEG_PAD, ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout,
@@ -403,8 +404,9 @@ impl Renderer {
         }
     }
 
-    /// A month grid day: today in an accent circle, the selected day ringed,
-    /// days of other months dim, a sage dot under other days with events.
+    /// A month grid day (`month_grid::paint_day`): today in an accent
+    /// circle, the selected day ringed, days of other months dim, a sage dot
+    /// under other days with events.
     fn paint_day_cell(
         &self,
         d: NaiveDate,
@@ -415,42 +417,22 @@ impl Renderer {
         events: &[CalEvent],
     ) {
         let p = self.palette;
-        let number = d.day().to_string();
-        let digits = Rect { h: r.h - 3.0, ..r };
-        let side = (r.h - 4.0).min(26.0);
-        let circle = Rect {
-            x: r.x + (r.w - side) / 2.0,
-            y: digits.y + (digits.h - side) / 2.0,
-            w: side,
-            h: side,
+        let look = CellLook {
+            filled: Filled::Today,
+            ring_w: 1.0,
+            ring_ink_accent: false,
+            accent: p.accent,
+            on_accent: p.on_accent,
+            text: p.text,
+            dim: p.dot_off,
+            dot: p.sage,
+            hover: None,
         };
-        let is_today = d == today;
-        if is_today {
-            self.set_color(p.accent, 1.0);
-            self.fill_round(circle, side / 2.0);
-            self.text_colored(&number, &self.fonts.cell_bold, digits, p.on_accent, 1.0);
-        } else {
-            if d == selected {
-                self.stroke_round(inset(circle, 0.5, 0.5), side / 2.0, p.accent);
-            }
-            let in_month = d.month() == anchor.month() && d.year() == anchor.year();
-            let ink = if in_month { p.text } else { p.dot_off };
-            self.text_colored(&number, &self.fonts.cell, digits, ink, 1.0);
-        }
-        // Today's circle fills the cell: its dot would only clip it.
-        if !is_today && !events_on(events, d).is_empty() {
-            self.set_color(p.sage, 1.0);
-            let dot = 3.5;
-            self.fill_round(
-                Rect {
-                    x: r.x + (r.w - dot) / 2.0,
-                    y: r.bottom() - dot - 1.5,
-                    w: dot,
-                    h: dot,
-                },
-                dot / 2.0,
-            );
-        }
+        let state = DayState {
+            events: !events_on(events, d).is_empty(),
+            ..DayState::of(d, today, selected, anchor)
+        };
+        paint_day(self, d, day_geometry(r, 3.0, 26.0), state, &look);
     }
 
     /// Seven columns: the day's name and number (today in the accent), then
@@ -1165,6 +1147,27 @@ impl Renderer {
                 None,
             );
         }
+    }
+}
+
+impl CellCanvas for Renderer {
+    fn disc(&self, circle: Rect, rgb: u32) {
+        self.set_color(rgb, 1.0);
+        self.fill_round(circle, circle.w / 2.0);
+    }
+
+    fn ring(&self, circle: Rect, width: f32, rgb: u32) {
+        let half = width / 2.0;
+        self.stroke_round_width(inset(circle, half, half), circle.w / 2.0, rgb, width);
+    }
+
+    fn number(&self, text: &str, area: Rect, rgb: u32, bold: bool) {
+        let format = if bold {
+            &self.fonts.cell_bold
+        } else {
+            &self.fonts.cell
+        };
+        self.text_colored(text, format, area, rgb, 1.0);
     }
 }
 

@@ -539,14 +539,8 @@ pub fn calendar_layout(
             let pitch = ((bottom - cells_y + CELL_GAP_Y) / 6.0)
                 .floor()
                 .min(CELL_PITCH_MAX);
-            let (first, _) = range_for(CalView::Month, anchor);
-            layout.month_cells = (0..42usize)
-                .filter_map(|i| {
-                    let d = first.checked_add_days(Days::new(i as u64))?;
-                    let y = cells_y + (i / 7) as f32 * pitch;
-                    Some((d, rect(col_x(i % 7), y, CELL_W, pitch - CELL_GAP_Y)))
-                })
-                .collect();
+            layout.month_cells =
+                super::month_grid::month_cells(anchor, l, cells_y, CELL_W, pitch, CELL_GAP_Y);
             let list_x = col_x(7) + 2.0 * LIST_GAP;
             let list = rect(list_x, body, r - list_x, bottom - body);
             let caption = rect(list.x, list.y, list.w, CAPTION_H);

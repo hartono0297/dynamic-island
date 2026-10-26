@@ -7,7 +7,7 @@
 //! or a notice is made, so a change shows on the next redraw; notices already
 //! made keep their text. Hook and CLI output stays Indonesian.
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -250,7 +250,7 @@ keys! {
     ShortcutLock => "Kunci layar", "Lock screen";
 
     // Editors.
-    EditorNote => "Note", "Note";
+    EditorNote => "Catatan", "Note";
     EditorEvent => "Acara", "Event";
     EditorAddEvent => "Tambah acara", "Add event";
     EditorEditEvent => "Edit acara", "Edit event";
@@ -273,6 +273,12 @@ keys! {
     FieldRepeat => "Ulangi", "Repeat";
     TextRequired => "Teks wajib diisi", "Text is required";
     TimePassed => "Waktunya sudah lewat", "That time has passed";
+    NextWeek => "Minggu depan", "Next week";
+    TitlePlaceholder => "Judul acara", "Event title";
+    NotesPlaceholder => "Tambah catatan", "Add notes";
+    NotePlaceholder => "Tulis catatan…", "Write a note…";
+    ReminderPlaceholder => "Ingatkan saya untuk…", "Remind me to…";
+    TypeTime => "Ketik jam", "Type a time";
 
     // Tray menu.
     MenuStylePill => "Gaya: Pill", "Style: Pill";
@@ -579,11 +585,6 @@ pub fn day_short(lang: Lang, d: NaiveDate) -> &'static str {
     pick(lang, DAYS_SHORT_ID, DAYS_SHORT_EN)[weekday(d)]
 }
 
-/// "Okt", "Oct".
-pub fn month_short(lang: Lang, d: NaiveDate) -> &'static str {
-    pick(lang, MONTHS_SHORT_ID, MONTHS_SHORT_EN)[d.month0() as usize]
-}
-
 /// "25 Okt", "25 Oct".
 pub fn short_date(lang: Lang, d: NaiveDate) -> String {
     let months = pick(lang, MONTHS_SHORT_ID, MONTHS_SHORT_EN);
@@ -628,10 +629,122 @@ pub fn time_hm(lang: Lang, t: NaiveDateTime) -> String {
     t.format(pick(lang, "%H.%M", "%H:%M")).to_string()
 }
 
+/// A time of day as `time_hm` writes it: "09.30", "09:30".
+pub fn time_label(lang: Lang, t: NaiveTime) -> String {
+    time_hm(lang, NaiveDate::MIN.and_time(t))
+}
+
+/// "Senin", "Monday".
+pub fn day_long(lang: Lang, d: NaiveDate) -> &'static str {
+    pick(lang, DAYS_ID, DAYS_EN)[weekday(d)]
+}
+
+/// The editors' date chip: "Sen, 26 Okt 2026", "Mon, 26 Oct 2026". Built
+/// from the app's own names, never from the Windows locale.
+pub fn editor_date(lang: Lang, d: NaiveDate) -> String {
+    format!(
+        "{}, {} {}",
+        day_short(lang, d),
+        short_date(lang, d),
+        d.year()
+    )
+}
+
+/// The calendar popover's footer: "Rab, 28 Okt", "Wed, 28 Oct".
+pub fn day_date_short(lang: Lang, d: NaiveDate) -> String {
+    format!("{}, {}", day_short(lang, d), short_date(lang, d))
+}
+
+/// A length of time: "30 mnt", "1 j", "1 j 30 mnt" / "30 min", "1 hr",
+/// "1 hr 30 min". Negative lengths read as zero.
+pub fn duration_label(lang: Lang, minutes: i64) -> String {
+    let minutes = minutes.max(0);
+    let (h, m) = (minutes / 60, minutes % 60);
+    let (hour, min) = pick(lang, ("j", "mnt"), ("hr", "min"));
+    match (h, m) {
+        (0, m) => format!("{m} {min}"),
+        (h, 0) => format!("{h} {hour}"),
+        (h, m) => format!("{h} {hour} {m} {min}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveTime;
+
+    /// True when `s` holds a run like "10/26/2026": digits, slash, digits,
+    /// slash, digits (the Windows short date the old picker showed).
+    fn has_slashed_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        let digits = |mut i: usize| {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            (i > start).then_some(i)
+        };
+        (0..b.len()).any(|i| {
+            let slash = |j: Option<usize>| j.filter(|&j| b.get(j) == Some(&b'/')).map(|j| j + 1);
+            slash(digits(i))
+                .and_then(|j| slash(digits(j)))
+                .and_then(digits)
+                .is_some()
+        })
+    }
+
+    #[test]
+    fn slashed_date_detector_works() {
+        assert!(has_slashed_date("Today: 10/26/2026"));
+        assert!(has_slashed_date("1/2/3"));
+        assert!(!has_slashed_date("Sen, 26 Okt 2026"));
+        assert!(!has_slashed_date("10/26"));
+    }
+
+    #[test]
+    fn editor_date_names_weekday_day_month_and_year() {
+        let d = date(2026, 10, 26);
+        assert_eq!(editor_date(Lang::Id, d), "Sen, 26 Okt 2026");
+        assert_eq!(editor_date(Lang::En, d), "Mon, 26 Oct 2026");
+        assert_eq!(
+            editor_date(Lang::Id, date(2026, 10, 28)),
+            "Rab, 28 Okt 2026"
+        );
+        assert_eq!(editor_date(Lang::En, date(2027, 1, 3)), "Sun, 3 Jan 2027");
+        assert_eq!(day_date_short(Lang::Id, date(2026, 10, 28)), "Rab, 28 Okt");
+        assert_eq!(day_date_short(Lang::En, date(2026, 10, 28)), "Wed, 28 Oct");
+        assert_eq!(day_long(Lang::Id, date(2026, 10, 30)), "Jumat");
+        assert_eq!(day_long(Lang::En, date(2026, 10, 30)), "Friday");
+        // A whole year of dates, both languages: never the Windows short date.
+        let mut d = date(2026, 1, 1);
+        while d.year() == 2026 {
+            for lang in [Lang::Id, Lang::En] {
+                for s in [editor_date(lang, d), day_date_short(lang, d)] {
+                    assert!(!has_slashed_date(&s), "{s}");
+                    assert!(s.contains(&d.day().to_string()), "{s}");
+                }
+                assert!(editor_date(lang, d).ends_with(" 2026"));
+            }
+            d = d.succ_opt().unwrap();
+        }
+    }
+
+    #[test]
+    fn durations_and_times_in_both_languages() {
+        assert_eq!(duration_label(Lang::Id, 15), "15 mnt");
+        assert_eq!(duration_label(Lang::Id, 30), "30 mnt");
+        assert_eq!(duration_label(Lang::Id, 60), "1 j");
+        assert_eq!(duration_label(Lang::Id, 90), "1 j 30 mnt");
+        assert_eq!(duration_label(Lang::Id, 150), "2 j 30 mnt");
+        assert_eq!(duration_label(Lang::En, 30), "30 min");
+        assert_eq!(duration_label(Lang::En, 60), "1 hr");
+        assert_eq!(duration_label(Lang::En, 90), "1 hr 30 min");
+        assert_eq!(duration_label(Lang::En, -5), "0 min");
+        let t = NaiveTime::from_hms_opt(9, 30, 0).unwrap();
+        assert_eq!(time_label(Lang::Id, t), "09.30");
+        assert_eq!(time_label(Lang::En, t), "09:30");
+        let late = NaiveTime::from_hms_opt(21, 15, 0).unwrap();
+        assert_eq!(time_label(Lang::Id, late), "21.15");
+    }
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()

@@ -75,11 +75,13 @@ pub enum Icon {
     Min,
     Max,
     Clock,
+    /// The editors' date chip: a down chevron (`down` in editor-acara.html).
+    ChevD,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 40] = [
+    pub const ALL: [Icon; 41] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -120,6 +122,7 @@ impl Icon {
         Icon::Min,
         Icon::Max,
         Icon::Clock,
+        Icon::ChevD,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -297,6 +300,7 @@ impl Icon {
                 Part::Circle(12.0, 12.0, 9.0),
                 Part::Path("M12 7.5V12l3 2"),
             ],
+            Icon::ChevD => &[Part::Path("M6 9l6 6 6-6")],
         }
     }
 }
