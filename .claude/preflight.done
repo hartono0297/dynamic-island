@@ -1,5 +1,8 @@
 2026-10-26
-Preflight marked done by the user. Already in place globally: RTK 1.1.0
-(Bash PreToolUse hook), Context7 MCP (user scope), Obsidian app.
-Created docs/memory/index.md.
-Note: the Rust toolchain (cargo/rustup) is not installed on this PC.
+Preflight re-run on a new PC (user asked to ignore the old marker).
+Installed: RTK 1.1.0 (winget rtk-ai.rtk, `rtk init -g --auto-patch` added the
+Bash PreToolUse hook `rtk hook claude`), Context7 MCP (user scope, HTTP).
+Already in place: Obsidian 1.14.4, docs/memory/index.md, Rust stable 1.99.1
+(MSVC) and Visual Studio Build Tools 2022 (C++).
+Removed on request: the superpowers plugin from the global user scope.
+Context7 and the RTK hook only load in a new Claude Code session.
