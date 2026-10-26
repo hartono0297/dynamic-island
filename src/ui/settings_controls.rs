@@ -12,21 +12,21 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
-    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
-    D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE,
+    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
+    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+    D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION,
+    D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
     ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_TRIMMING,
     DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
-    IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
+    IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::Result;
@@ -36,8 +36,9 @@ use super::fonts::{self, Face, Role};
 use super::geometry::{BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
 use super::icons::{Icon, IconSet};
 use super::settings_layout::{
-    Align, Button, ButtonKind, CARD_RADIUS, Control, Field, Font, Group, Hit, LINK_GLYPH_W, Layout,
-    Measure, Rect, Section, Segment, Text, Tone, accent_key,
+    Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
+    FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect, SEGMENT_RADIUS,
+    SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone, accent_key,
 };
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
@@ -78,8 +79,12 @@ pub struct Gfx {
     d2d: ID2D1Factory,
     dwrite: IDWriteFactory,
     formats: HashMap<(Font, Align), IDWriteTextFormat>,
-    /// Tabular figures, applied to every line drawn or measured.
+    /// Tabular figures, set on the digits of the fonts that line numbers up
+    /// (`Font::tabular`). Only on the digits: DM Sans's `tnum` also widens
+    /// the space, which would open up the gaps between words.
     tabular: IDWriteTypography,
+    /// No features: every other run.
+    plain: IDWriteTypography,
     /// Studio icon geometries, built on `d2d`.
     icons: IconSet,
     /// The preview island's line of text.
@@ -127,6 +132,7 @@ impl Gfx {
                 )?,
                 tile: tile_geometry(&d2d)?,
                 tabular: fonts::tabular_figures(&dwrite)?,
+                plain: dwrite.CreateTypography()?,
                 d2d,
                 dwrite,
                 formats,
@@ -134,6 +140,29 @@ impl Gfx {
                 target: None,
             })
         }
+    }
+
+    /// One line of `text` in a `w` × `h` box; with `tabular`, its digits
+    /// take tabular figures.
+    fn line(
+        &self,
+        text: &[u16],
+        format: &IDWriteTextFormat,
+        w: f32,
+        h: f32,
+        tabular: bool,
+    ) -> Result<IDWriteTextLayout> {
+        let layout = fonts::text_layout(&self.dwrite, text, format, w, h, &self.plain)?;
+        if tabular {
+            for (start, len) in digit_runs(text) {
+                let range = DWRITE_TEXT_RANGE {
+                    startPosition: start,
+                    length: len,
+                };
+                unsafe { layout.SetTypography(&self.tabular, range)? };
+            }
+        }
+        Ok(layout)
     }
 
     /// The window was resized (physical pixels).
@@ -226,9 +255,9 @@ impl Measure for Gfx {
             .formats
             .get(&(font, Align::Left))
             .and_then(|format| unsafe {
-                let layout =
-                    fonts::text_layout(&self.dwrite, &wide, format, 4096.0, 64.0, &self.tabular)
-                        .ok()?;
+                let layout = self
+                    .line(&wide, format, 4096.0, 64.0, font.tabular())
+                    .ok()?;
                 let mut m = DWRITE_TEXT_METRICS::default();
                 layout.GetMetrics(&mut m).ok()?;
                 Some(m.widthIncludingTrailingWhitespace.ceil())
@@ -249,6 +278,13 @@ struct Painter<'a> {
     alpha: f32,
 }
 
+/// A text format with the OpenType features its lines carry.
+#[derive(Clone, Copy)]
+struct TextStyle<'a> {
+    format: &'a IDWriteTextFormat,
+    tabular: bool,
+}
+
 impl Painter<'_> {
     fn set(&self, rgb: u32, a: f32) {
         unsafe { self.brush.SetColor(&color(rgb, a * self.alpha)) };
@@ -267,19 +303,25 @@ impl Painter<'_> {
         }
     }
 
-    /// A hairline just inside `r`.
-    fn stroke_round(&self, r: Rect, radius: f32, rgba: u32) {
-        self.set_rgba(rgba);
+    /// A line of `width` just inside `r`, in the current brush colour.
+    fn outline(&self, r: Rect, radius: f32, width: f32) {
+        let half = width / 2.0;
         let inner = Rect {
-            x: r.x + 0.5,
-            y: r.y + 0.5,
-            w: r.w - 1.0,
-            h: r.h - 1.0,
+            x: r.x + half,
+            y: r.y + half,
+            w: r.w - width,
+            h: r.h - width,
         };
         unsafe {
             self.rt
-                .DrawRoundedRectangle(&rounded(inner, radius - 0.5), self.brush, 1.0, None);
+                .DrawRoundedRectangle(&rounded(inner, radius - half), self.brush, width, None);
         }
+    }
+
+    /// A hairline just inside `r`.
+    fn stroke_round(&self, r: Rect, radius: f32, rgba: u32) {
+        self.set_rgba(rgba);
+        self.outline(r, radius, 1.0);
     }
 
     fn circle(&self, cx: f32, cy: f32, radius: f32, rgb: u32, a: f32) {
@@ -312,16 +354,14 @@ impl Painter<'_> {
         }
     }
 
-    fn draw_str(&self, s: &str, format: &IDWriteTextFormat, r: Rect, rgb: u32, a: f32) {
+    fn draw_str(&self, s: &str, style: TextStyle, r: Rect, rgb: u32, a: f32) {
         if s.is_empty() || r.w <= 0.0 {
             return;
         }
         let wide: Vec<u16> = s.encode_utf16().collect();
-        // A layout rather than `DrawText`, to carry tabular figures; same box,
-        // trimming and clip.
-        let gfx = self.gfx;
-        let Ok(layout) = fonts::text_layout(&gfx.dwrite, &wide, format, r.w, r.h, &gfx.tabular)
-        else {
+        // A layout rather than `DrawText`, to carry OpenType features; same
+        // box, trimming and clip.
+        let Ok(layout) = self.gfx.line(&wide, style.format, r.w, r.h, style.tabular) else {
             return;
         };
         self.set(rgb, a);
@@ -346,45 +386,51 @@ impl Painter<'_> {
             .draw(self.rt, self.brush, icon, r, size, rgb, alpha, accent);
     }
 
-    fn format(&self, font: Font, align: Align) -> &IDWriteTextFormat {
-        &self.gfx.formats[&(font, align)]
+    fn style(&self, font: Font, align: Align) -> TextStyle<'_> {
+        TextStyle {
+            format: &self.gfx.formats[&(font, align)],
+            tabular: font.tabular(),
+        }
     }
 
     fn text(&self, t: &Text) {
         let rgb = self.tone(t.tone);
-        self.draw_str(&t.text, self.format(t.font, t.align), t.rect, rgb, 1.0);
+        self.draw_str(&t.text, self.style(t.font, t.align), t.rect, rgb, 1.0);
     }
 
+    /// Status colours from the Studio palette: sage, ochre and the window's
+    /// error red. Light windows take the darker accent shade, pulled a little
+    /// further toward the text so small type stays readable on the cards.
     fn tone(&self, tone: Tone) -> u32 {
         let p = &self.p;
+        let status = |a: Accent| {
+            if p.light {
+                mix(a.light_rgb(), p.text, 0.25)
+            } else {
+                a.rgb()
+            }
+        };
         match tone {
             Tone::Primary => p.text,
             Tone::Secondary => p.secondary,
-            Tone::Good => {
-                if p.light {
-                    0x1A7F37
-                } else {
-                    0x30D158
-                }
-            }
-            Tone::Warn => {
-                if p.light {
-                    0x9A6700
-                } else {
-                    0xFFB340
-                }
-            }
+            Tone::Good => status(Accent::Sage),
+            Tone::Warn => status(Accent::Ochre),
             Tone::Bad => p.error,
         }
     }
 
-    /// Accent text on the window: darkened in light mode, where the lighter
-    /// accents would not read on white.
+    /// Accent text on the window (light windows already use the darker shade).
     fn link(&self) -> u32 {
+        self.p.accent
+    }
+
+    /// The selected sidebar item's fill (the design's "Pilih" token): the
+    /// hover fill of a light window's buttons, the button fill of a dark one.
+    fn selection(&self) -> u32 {
         if self.p.light {
-            mix(self.p.accent, 0x000000, 0.3)
+            self.p.button_hover
         } else {
-            self.p.accent
+            self.p.button
         }
     }
 
@@ -404,38 +450,21 @@ impl Painter<'_> {
         if l.nav.is_empty() {
             return;
         }
-        // The selection pill slides between rows.
-        let pill = rect_at(&l.nav.iter().map(|n| n.pill).collect::<Vec<_>>(), s.nav_pos);
-        let tint = if self.p.light { 0.12 } else { 0.18 };
+        let sel = self.selection();
         for n in &l.nav {
             let selected = n.section == s.section;
             if !selected && s.hover == Some(Hit::Nav(n.section)) {
-                let a = if s.pressed == s.hover { 0.09 } else { 0.06 };
-                self.fill_round(n.pill, 8.0, self.p.text, a);
+                let a = if s.pressed == s.hover { 0.8 } else { 0.5 };
+                self.fill_round(n.pill, CONTROL_RADIUS, sel, a);
             }
         }
-        self.fill_round(pill, 8.0, self.p.accent, tint);
-        // The indicator: a short accent bar at the pill's left edge.
-        let bar = Rect {
-            x: pill.x + 3.0,
-            y: pill.y + (pill.h - 16.0) / 2.0,
-            w: 3.0,
-            h: 16.0,
-        };
-        self.fill_round(bar, 1.5, self.p.accent, 1.0);
-        for (i, n) in l.nav.iter().enumerate() {
-            // How much the pill covers this row: colours follow it.
-            let on = (1.0 - (s.nav_pos - i as f32).abs()).clamp(0.0, 1.0);
-            let ink = mix(self.p.secondary, self.link(), on);
-            self.icon(n.section.icon(), n.glyph, 16.0, ink, 1.0, true);
-            let label = mix(mix(self.p.text, self.p.secondary, 0.25), self.p.text, on);
-            self.draw_str(
-                &n.label.text,
-                self.format(Font::Nav, Align::Left),
-                n.label.rect,
-                label,
-                1.0,
-            );
+        // The selection slides between rows.
+        let pill = rect_at(&l.nav.iter().map(|n| n.pill).collect::<Vec<_>>(), s.nav_pos);
+        self.fill_round(pill, CONTROL_RADIUS, sel, 1.0);
+        let style = self.style(Font::Nav, Align::Left);
+        for n in &l.nav {
+            self.icon(n.section.icon(), n.glyph, 16.0, self.p.text, 1.0, true);
+            self.draw_str(&n.label.text, style, n.label.rect, self.p.text, 1.0);
         }
     }
 
@@ -505,15 +534,14 @@ impl Painter<'_> {
                 // The accent row names the swatch under the pointer.
                 Some(Hit::Accent(a)) if l.accent_desc == Some(i) => {
                     let name = text(s.lang, accent_key(a));
-                    let format = self.format(t.font, t.align);
-                    self.draw_str(name, format, t.rect, self.p.text, 1.0);
+                    let style = self.style(t.font, t.align);
+                    self.draw_str(name, style, t.rect, self.p.text, 1.0);
                 }
                 _ => self.text(t),
             }
         }
-        for (r, tone) in &l.dots {
-            let rgb = self.tone(*tone);
-            self.circle(r.x + r.w / 2.0, r.y + r.h / 2.0, r.w / 2.0, rgb, 1.0);
+        for chip in &l.chips {
+            self.chip(chip);
         }
         for (field, r) in &l.fields {
             self.field(*r, s.focused == Some(*field));
@@ -550,8 +578,8 @@ impl Painter<'_> {
                     self.step_button(minus.0, Icon::Min, minus.1, s);
                     self.step_button(plus.0, Icon::Plus, plus.1, s);
                     let a = if *enabled { 1.0 } else { 0.45 };
-                    let format = self.format(value.font, value.align);
-                    self.draw_str(&value.text, format, value.rect, self.p.text, a);
+                    let style = self.style(value.font, value.align);
+                    self.draw_str(&value.text, style, value.rect, self.p.text, a);
                 }
                 Control::Swatches { items, selected } => {
                     for (accent, r) in items {
@@ -568,158 +596,172 @@ impl Painter<'_> {
         }
     }
 
+    /// A fully rounded status chip on a faint wash of its tone.
+    fn chip(&self, chip: &Chip) {
+        let rgb = self.tone(chip.label.tone);
+        let wash = if self.p.light { 0.12 } else { 0.16 };
+        self.fill_round(chip.rect, FULL_RADIUS, rgb, wash);
+        let d = chip.dot;
+        self.circle(d.x + d.w / 2.0, d.y + d.h / 2.0, d.w / 2.0, rgb, 1.0);
+        self.text(&chip.label);
+    }
+
+    /// The track (window background, hairline, radius 10) with the selected
+    /// segment (accent, radius 8) sliding inside it.
     fn segmented(&self, track: Rect, items: &[Segment], pos: f32, s: &Scene) {
-        let track_fill = if self.p.light { 0xEEEEF1 } else { self.p.bg };
-        self.fill_round(track, 8.0, track_fill, 1.0);
-        self.stroke_round(track, 8.0, self.p.border);
+        self.fill_round(track, CONTROL_RADIUS, self.p.bg, 1.0);
+        self.stroke_round(track, CONTROL_RADIUS, self.p.border);
         let rects: Vec<Rect> = items.iter().map(|i| i.rect).collect();
         for item in items {
             let current = (pos - index_of(items, item) as f32).abs() < 0.5;
             if !current && s.hover == Some(item.hit) {
-                let a = if s.pressed == s.hover { 0.12 } else { 0.08 };
-                self.fill_round(item.rect, 6.0, self.p.text, a);
+                let a = if s.pressed == s.hover { 0.12 } else { 0.07 };
+                self.fill_round(item.rect, SEGMENT_RADIUS, self.p.text, a);
             }
         }
         let sel = rect_at(&rects, pos);
-        self.fill_round(sel, 6.0, self.p.accent, 1.0);
+        self.fill_round(sel, SEGMENT_RADIUS, self.p.accent, 1.0);
+        let style = self.style(Font::Control, Align::Center);
         for item in items {
             // Text turns to ink as the selection slides under it.
             let covered = overlap(sel, item.rect) / item.rect.w.max(1.0);
             let rgb = mix(self.p.text, self.p.on_accent, covered.clamp(0.0, 1.0));
-            let format = self.format(Font::Control, Align::Center);
-            self.draw_str(&item.label, format, item.rect, rgb, 1.0);
+            self.draw_str(&item.label, style, item.rect, rgb, 1.0);
         }
     }
 
+    /// On: an accent track with an `on_accent` knob. Off: a 1.5 px outline
+    /// and a smaller knob, both in the secondary text colour. Cross-faded by `v`.
     fn toggle(&self, r: Rect, v: f32, hover: bool) {
         let radius = r.h / 2.0;
-        // Off: an outlined track; on: an accent fill. Cross-faded by `v`.
-        let off_line = if self.p.light { 0x8A8A90 } else { 0x9A9AA0 };
         if v < 1.0 {
-            let fill = if hover { 0.06 } else { 0.0 };
-            if fill > 0.0 {
-                self.fill_round(r, radius, self.p.text, fill * (1.0 - v));
+            if hover {
+                self.fill_round(r, radius, self.p.text, 0.06 * (1.0 - v));
             }
-            self.set(off_line, 1.0 - v);
-            let inner = Rect {
-                x: r.x + 0.5,
-                y: r.y + 0.5,
-                w: r.w - 1.0,
-                h: r.h - 1.0,
-            };
-            unsafe {
-                self.rt
-                    .DrawRoundedRectangle(&rounded(inner, radius - 0.5), self.brush, 1.0, None);
-            }
+            self.set(self.p.secondary, 1.0 - v);
+            self.outline(r, radius, 1.5);
         }
         if v > 0.0 {
             let fill = if hover {
-                mix(self.p.accent, self.p.text, 0.12)
+                self.tint(self.p.accent, 0.12)
             } else {
                 self.p.accent
             };
             self.fill_round(r, radius, fill, v);
         }
-        let knob = 16.0;
-        let travel = r.w - knob - 6.0;
-        let cx = r.x + 3.0 + knob / 2.0 + travel * ease(v);
-        let rgb = mix(off_line, self.p.on_accent, v);
-        let grow = if hover { 1.0 } else { 0.0 };
-        // The off knob is a little smaller, as in Windows 11.
-        let radius = knob / 2.0 - 2.0 * (1.0 - v) + grow * 0.5;
-        self.circle(cx, r.y + r.h / 2.0, radius, rgb, 1.0);
+        let t = ease(v);
+        let cx = r.x + radius + (r.w - r.h) * t;
+        let rgb = mix(self.p.secondary, self.p.on_accent, v);
+        let (off, on) = (r.h * 0.28, r.h / 2.0 - 3.0);
+        let knob = off + (on - off) * t + if hover { 0.5 } else { 0.0 };
+        self.circle(cx, r.y + radius, knob, rgb, 1.0);
     }
 
+    /// A round `−` / `+` button: card fill and hairline, darker on hover.
     fn step_button(&self, r: Rect, icon: Icon, hit: Option<Hit>, s: &Scene) {
         let hovered = hit.is_some() && s.hover == hit;
         let pressed = hovered && s.pressed == hit;
         let fill = if pressed {
-            self.tint(self.p.button_hover, 0.06)
-        } else if hovered {
             self.p.button_hover
-        } else {
+        } else if hovered {
             self.p.button
+        } else {
+            self.p.card
         };
         let a = if hit.is_some() { 1.0 } else { 0.45 };
-        self.fill_round(r, 6.0, fill, a);
-        if self.p.light {
-            self.stroke_round(r, 6.0, self.p.border);
-        }
+        self.fill_round(r, FULL_RADIUS, fill, a);
+        self.stroke_round(r, FULL_RADIUS, self.p.border);
         self.icon(icon, r, 12.0, self.p.text, a, true);
     }
 
+    /// An accent dot; the chosen one gets a text-coloured ring with a
+    /// card-coloured gap, the one under the pointer a fainter ring.
     fn swatch(&self, r: Rect, accent: Accent, selected: bool, hover: bool) {
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
-        let rgb = accent.rgb();
+        let ring = r.w / 2.0 + SWATCH_RING_GAP + SWATCH_RING_W / 2.0;
         if selected {
-            self.ring(cx, cy, r.w / 2.0 + 3.0, 2.0, rgb, 1.0);
-            self.circle(cx, cy, r.w / 2.0 - 1.0, rgb, 1.0);
-        } else {
-            if hover {
-                self.ring(cx, cy, r.w / 2.0 + 3.0, 2.0, rgb, 0.45);
-            }
-            self.circle(cx, cy, r.w / 2.0, rgb, 1.0);
+            self.ring(cx, cy, ring, SWATCH_RING_W, self.p.text, 1.0);
+        } else if hover {
+            self.ring(cx, cy, ring, SWATCH_RING_W, self.p.secondary, 0.7);
         }
+        self.circle(cx, cy, r.w / 2.0, accent.rgb(), 1.0);
     }
 
     fn button(&self, b: &Button, s: &Scene) {
         let hovered = b.enabled && s.hover == Some(b.hit);
         let pressed = hovered && s.pressed == Some(b.hit);
         let a = if b.enabled { 1.0 } else { 0.4 };
-        let format = self.format(Font::Control, Align::Center);
+        let style = self.style(Font::Control, Align::Center);
+        // Secondary fill: the button token, one step on hover and press.
+        let quiet = if pressed {
+            self.tint(self.p.button_hover, 0.06)
+        } else if hovered {
+            self.p.button_hover
+        } else {
+            self.p.button
+        };
         match b.kind {
-            ButtonKind::Primary | ButtonKind::Confirm => {
-                let (base, ink) = if b.kind == ButtonKind::Confirm {
-                    (if self.p.light { 0xC42B1C } else { 0xE5484D }, 0xFFFFFF)
-                } else {
-                    (self.p.accent, self.p.on_accent)
-                };
-                let shift = if self.p.light { 0x000000 } else { 0xFFFFFF };
+            ButtonKind::Primary => {
+                let base = self.p.accent;
                 let fill = if pressed {
-                    mix(base, 0x000000, 0.12)
+                    self.tint(base, 0.2)
                 } else if hovered {
-                    mix(base, shift, 0.1)
+                    self.tint(base, 0.1)
                 } else {
                     base
                 };
-                self.fill_round(b.rect, 8.0, fill, a);
-                self.draw_str(&b.label, format, b.rect, ink, a);
+                self.fill_round(b.rect, FULL_RADIUS, fill, a);
+                self.draw_str(&b.label, style, b.rect, self.p.on_accent, a);
             }
-            ButtonKind::Secondary => {
-                let fill = if pressed {
-                    self.tint(self.p.button_hover, 0.06)
-                } else if hovered {
-                    self.p.button_hover
+            ButtonKind::Secondary | ButtonKind::Confirm => {
+                // The confirming "Yakin?" keeps the quiet fill in error red.
+                let ink = if b.kind == ButtonKind::Confirm {
+                    self.p.error
                 } else {
-                    self.p.button
+                    self.p.text
                 };
-                self.fill_round(b.rect, 8.0, fill, a);
-                self.stroke_round(b.rect, 8.0, self.p.border);
-                self.draw_str(&b.label, format, b.rect, self.p.text, a);
+                self.fill_round(b.rect, FULL_RADIUS, quiet, a);
+                self.draw_str(&b.label, style, b.rect, ink, a);
             }
             ButtonKind::Link => {
                 if hovered {
                     let fa = if pressed { 0.1 } else { 0.06 };
-                    self.fill_round(b.rect, 6.0, self.p.text, fa);
+                    self.fill_round(b.rect, FULL_RADIUS, self.p.text, fa);
                 }
                 let rgb = self.link();
                 let label = Rect {
                     w: b.rect.w - LINK_GLYPH_W,
                     ..b.rect
                 };
-                let left = self.format(Font::Control, Align::Left);
                 let inset = Rect {
                     x: label.x + 8.0,
                     w: label.w - 8.0,
                     ..label
                 };
-                self.draw_str(&b.label, left, inset, rgb, a);
+                self.draw_str(
+                    &b.label,
+                    self.style(Font::Control, Align::Left),
+                    inset,
+                    rgb,
+                    a,
+                );
                 let glyph = Rect {
                     x: b.rect.right() - LINK_GLYPH_W - 6.0,
                     w: LINK_GLYPH_W,
                     ..b.rect
                 };
                 self.icon(Icon::Ext, glyph, 12.0, rgb, a, true);
+            }
+            ButtonKind::External => {
+                if hovered {
+                    self.fill_round(b.rect, FULL_RADIUS, quiet, a);
+                }
+                let ink = if hovered {
+                    self.p.text
+                } else {
+                    self.p.secondary
+                };
+                self.icon(Icon::Ext, b.rect, EXTERNAL_GLYPH, ink, a, false);
             }
         }
     }
@@ -758,38 +800,15 @@ impl Painter<'_> {
         }
     }
 
-    /// The rounded box a native edit sits in; an accent underline while focused.
+    /// The rounded box a native edit sits in (field fill, hairline, radius
+    /// 10); an accent outline while focused.
     fn field(&self, r: Rect, focused: bool) {
-        self.fill_round(r, 6.0, self.p.field, 1.0);
-        self.stroke_round(r, 6.0, self.p.border);
+        self.fill_round(r, CONTROL_RADIUS, self.p.field, 1.0);
         if focused {
-            // Clipped to the box's bottom edge, so the line follows its corners.
-            unsafe {
-                self.rt.PushAxisAlignedClip(
-                    &d2d_rect(Rect {
-                        y: r.bottom() - 2.0,
-                        h: 2.0,
-                        ..r
-                    }),
-                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                );
-            }
-            self.fill_round(r, 6.0, self.p.accent, 1.0);
-            unsafe { self.rt.PopAxisAlignedClip() };
-        } else if self.p.light {
-            // A slightly darker bottom edge, as Windows 11 text boxes have.
-            unsafe {
-                self.rt.PushAxisAlignedClip(
-                    &d2d_rect(Rect {
-                        y: r.bottom() - 1.0,
-                        h: 1.0,
-                        ..r
-                    }),
-                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                );
-            }
-            self.fill_round(r, 6.0, 0x8A8A90, 0.6);
-            unsafe { self.rt.PopAxisAlignedClip() };
+            self.set(self.p.accent, 1.0);
+            self.outline(r, CONTROL_RADIUS, 1.5);
+        } else {
+            self.stroke_round(r, CONTROL_RADIUS, self.p.border);
         }
     }
 
@@ -802,14 +821,12 @@ impl Painter<'_> {
             w: card.w - 24.0,
             h: card.h - 24.0,
         };
-        // A wallpaper-like wash that picks up the accent toward the bottom.
-        let (top, bottom) = if self.p.light {
-            (0xDDE1E8, mix(0xEEF0F4, s.island.accent, 0.16))
-        } else {
-            (0x2A2C31, mix(0x1E1F23, s.island.accent, 0.14))
-        };
-        self.gradient_round(screen, 8.0, top, bottom);
-        self.stroke_round(screen, 8.0, self.p.border);
+        // A wallpaper-like wash from the window's tones that picks up the
+        // accent toward the bottom.
+        let wash = if self.p.light { 0.18 } else { 0.14 };
+        let (top, bottom) = (self.p.button, mix(self.p.bg, s.island.accent, wash));
+        self.gradient_round(screen, CONTROL_RADIUS, top, bottom);
+        self.stroke_round(screen, CONTROL_RADIUS, self.p.border);
 
         // The island, at its real size, centered at the top of the "screen".
         let base = shape_for(s.style, ShapeKind::MediaCompact);
@@ -844,9 +861,9 @@ impl Painter<'_> {
             }
         }
         let l = compact_layout(shape);
-        // Album art: an accent gradient tile with a note.
+        // Album art: an accent tile, darker toward the bottom, with a note.
         let art = l.art;
-        self.fill_round(art, 5.0, mix(pal.accent, 0x000000, 0.35), 1.0);
+        self.fill_round(art, 5.0, mix(pal.accent, pal.surface, 0.35), 1.0);
         self.fill_round(
             Rect {
                 h: art.h * 0.55,
@@ -856,9 +873,13 @@ impl Painter<'_> {
             pal.accent,
             0.9,
         );
-        self.icon(Icon::Music, art, 12.0, 0xFFFFFF, 0.95, false);
+        self.icon(Icon::Music, art, 12.0, pal.on_accent, 0.95, false);
         let label = text(s.lang, Key::PreviewTrack);
-        self.draw_str(label, &self.gfx.island_text, l.text, pal.text, 0.7);
+        let style = TextStyle {
+            format: &self.gfx.island_text,
+            tabular: false,
+        };
+        self.draw_str(label, style, l.text, pal.text, 0.7);
         for (i, h) in PREVIEW_BARS.into_iter().enumerate() {
             let bar = Rect {
                 x: l.bars.x + i as f32 * (BAR_W + BAR_GAP),
@@ -869,6 +890,27 @@ impl Painter<'_> {
             self.fill_round(bar, 1.0, pal.accent, 1.0);
         }
     }
+}
+
+/// `(start, length)` of each run of ASCII digits in UTF-16 `text`.
+fn digit_runs(text: &[u16]) -> Vec<(u32, u32)> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, c) in text.iter().enumerate() {
+        let digit = (u16::from(b'0')..=u16::from(b'9')).contains(c);
+        match (digit, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                runs.push((s as u32, (i - s) as u32));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        runs.push((s as u32, (text.len() - s) as u32));
+    }
+    runs
 }
 
 fn index_of(items: &[Segment], item: &Segment) -> usize {
@@ -1054,6 +1096,15 @@ mod tests {
     }
 
     #[test]
+    fn digit_runs_cover_only_the_digits() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(digit_runs(&w("25 mnt")), [(0, 2)]);
+        assert_eq!(digit_runs(&w("20%")), [(0, 2)]);
+        assert_eq!(digit_runs(&w("a1b23")), [(1, 1), (3, 2)]);
+        assert!(digit_runs(&w("mnt")).is_empty());
+    }
+
+    #[test]
     fn mix_and_ease_ends() {
         assert_eq!(mix(0x000000, 0xFFFFFF, 0.0), 0x000000);
         assert_eq!(mix(0x000000, 0xFFFFFF, 1.0), 0xFFFFFF);
@@ -1064,10 +1115,11 @@ mod tests {
     }
 
     #[test]
-    fn link_text_reads_on_white_for_every_accent() {
-        // Light mode darkens the accent for text; check the worst case.
+    fn link_text_reads_on_light_cards_for_every_accent() {
+        // Links use the light window's accent shade as is.
         for a in Accent::ALL {
-            let ink = mix(a.rgb(), 0x000000, 0.3);
+            let p = crate::theme::window(*a, crate::theme::WindowTheme::Light, true);
+            let ink = p.accent;
             let lum = |rgb: u32| {
                 let c = |s: u32| {
                     let v = ((rgb >> s) & 0xFF) as f64 / 255.0;
@@ -1079,8 +1131,14 @@ mod tests {
                 };
                 0.2126 * c(16) + 0.7152 * c(8) + 0.0722 * c(0)
             };
-            let contrast = 1.05 / (lum(ink) + 0.05);
+            let contrast = (lum(p.card) + 0.05) / (lum(ink) + 0.05);
             assert!(contrast >= 3.0, "{a:?}: {contrast:.2}");
+            // Status text (sage, ochre) on the cards, as `Painter::tone` mixes it.
+            for status in [Accent::Sage, Accent::Ochre] {
+                let ink = mix(status.light_rgb(), p.text, 0.25);
+                let contrast = (lum(p.card) + 0.05) / (lum(ink) + 0.05);
+                assert!(contrast >= 4.5, "{status:?}: {contrast:.2}");
+            }
         }
     }
 }
