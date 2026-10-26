@@ -210,6 +210,7 @@ keys! {
     RemindersEmpty => "Belum ada pengingat. Klik + Baru untuk menambah.",
         "No reminders yet. Click + New to add one.";
     DayToday => "Hari ini", "Today";
+    PastDatesDimmed => "Tanggal lewat diredupkan", "Past dates are dimmed";
     DayTomorrow => "Besok", "Tomorrow";
     RepeatOnce => "Sekali", "Once";
     RepeatDaily => "Harian", "Daily";

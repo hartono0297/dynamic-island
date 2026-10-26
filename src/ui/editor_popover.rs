@@ -906,8 +906,18 @@ fn paint_calendar(
         CAL_W - CAL_PAD - 4.0 - link.right(),
         link.h,
     );
-    let label = i18n::day_date_short(lang, cursor);
+    let label = calendar_foot_note(lang, cursor, dim_past);
     pt.text(&label, Text::Small, Align::Right, picked, p.secondary, 1.0);
+}
+
+/// The calendar footer's right side. The event picker names the picked day; the
+/// reminder's calendar dims past days, so it says why instead.
+fn calendar_foot_note(lang: i18n::Lang, cursor: NaiveDate, dim_past: bool) -> String {
+    if dim_past {
+        i18n::text(lang, Key::PastDatesDimmed).to_owned()
+    } else {
+        i18n::day_date_short(lang, cursor)
+    }
 }
 
 /// What the time list writes right of each row.
@@ -1356,6 +1366,27 @@ mod tests {
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn the_calendar_footer_explains_dimmed_days_only_when_they_are_dimmed() {
+        let day = date(2026, 10, 26);
+        assert_eq!(
+            calendar_foot_note(Lang::Id, day, true),
+            "Tanggal lewat diredupkan"
+        );
+        assert_eq!(
+            calendar_foot_note(Lang::En, day, true),
+            "Past dates are dimmed"
+        );
+        assert_eq!(
+            calendar_foot_note(Lang::Id, day, false),
+            i18n::day_date_short(Lang::Id, day)
+        );
+        assert_eq!(
+            calendar_foot_note(Lang::En, day, false),
+            i18n::day_date_short(Lang::En, day)
+        );
     }
 
     #[test]
