@@ -38,7 +38,6 @@ use crate::ui::panel_layout::{
     shortcuts_layout, tile_parts, waiting_strip,
 };
 
-const OFFLINE_W: f32 = 52.0;
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
 /// A heading's line (Fraunces 20) is taller than the 22 px header row: its
@@ -283,18 +282,10 @@ impl Renderer {
         self.heading(&title, l.header);
         self.icon_colored(Icon::ChevL, l.prev, 18.0, p.secondary, 1.0, None);
         self.icon_colored(Icon::ChevR, l.next, 18.0, p.secondary, 1.0, None);
-        if snap.status == CalStatus::Offline {
-            let tag = Rect {
-                x: l.next.right() + 8.0,
-                y: l.header.y + 3.0,
-                w: OFFLINE_W,
-                h: l.header.h - 6.0,
-            };
-            if tag.right() + 8.0 <= l.view_buttons[0].1.x - SEG_PAD {
-                self.set_color(p.track, 1.0);
-                self.fill_round(tag, tag.h / 2.0);
-                self.text2(text(lang, Key::Offline), &self.fonts.micro_center, tag);
-            }
+        if let Some(tag) = l.offline {
+            self.set_color(p.track, 1.0);
+            self.fill_round(tag, tag.h / 2.0);
+            self.text2(text(lang, Key::Offline), &self.fonts.micro_center, tag);
         }
 
         // View selector: one raised track, the active segment lit.

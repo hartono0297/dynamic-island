@@ -4,8 +4,9 @@
 use super::icons::Icon;
 use super::panel_layout::Region;
 use crate::config::Style;
+use crate::i18n::Key;
 use crate::model::{Hit, Notice, NoticeKind};
-use crate::pomodoro::Phase;
+use crate::pomodoro::{Phase, PomoStatus};
 use crate::theme::{Palette, radius};
 
 pub const WINDOW_W: f32 = 620.0;
@@ -356,6 +357,18 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
     }
 }
 
+/// The chip naming what a click on the notice does, only where the click
+/// does it: a reminder is marked done, a pomodoro notice starts the next
+/// phase while that phase still waits (`Ready`). Claude's notices get none:
+/// a click only dismisses them, nothing opens.
+pub fn notice_action(kind: &NoticeKind, pomo: PomoStatus) -> Option<Key> {
+    match kind {
+        NoticeKind::Reminder { .. } => Some(Key::MarkDone),
+        NoticeKind::Pomodoro if pomo == PomoStatus::Ready => Some(Key::Start),
+        _ => None,
+    }
+}
+
 /// First character of the source, uppercased (empty when the source is).
 pub fn badge_letter(source: &str) -> String {
     source
@@ -561,6 +574,45 @@ mod tests {
         let r = style(&notice("Pengingat", reminder));
         assert_eq!((r.fill, r.alpha), (0xB07A9A, 1.0));
         assert_eq!((r.ink, r.icon), (p.on_accent, Some(Icon::Bell)));
+    }
+
+    #[test]
+    fn notice_chip_only_where_a_click_acts() {
+        let reminder = NoticeKind::Reminder { id: "r".into() };
+        assert_eq!(
+            notice_action(&reminder, PomoStatus::Idle),
+            Some(Key::MarkDone)
+        );
+        assert_eq!(
+            notice_action(&NoticeKind::Pomodoro, PomoStatus::Ready),
+            Some(Key::Start)
+        );
+        // The next phase was already started elsewhere: a click starts nothing.
+        let started = [
+            PomoStatus::Idle,
+            PomoStatus::Running {
+                ends_at: std::time::Instant::now(),
+            },
+            PomoStatus::Paused {
+                remaining: std::time::Duration::from_secs(60),
+            },
+        ];
+        for status in started {
+            assert_eq!(notice_action(&NoticeKind::Pomodoro, status), None);
+        }
+        // A click on a Claude notice only dismisses it.
+        let done = NoticeKind::ClaudeDone {
+            session_id: "s".into(),
+        };
+        let waiting = NoticeKind::ClaudeWaiting {
+            session_id: "s".into(),
+        };
+        assert_eq!(notice_action(&done, PomoStatus::Ready), None);
+        assert_eq!(notice_action(&waiting, PomoStatus::Ready), None);
+        assert_eq!(
+            notice_action(&NoticeKind::BatteryLow, PomoStatus::Ready),
+            None
+        );
     }
 
     #[test]

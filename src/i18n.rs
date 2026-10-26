@@ -140,8 +140,6 @@ keys! {
         "Will be saved as notes.json.bak on the next save";
     Missed => "Terlewat", "Missed";
     MarkDone => "Selesai", "Done";
-    // The Claude notice's chip.
-    Open => "Buka", "Open";
     RemindersSaveFailed => "Gagal simpan pengingat", "Couldn't save reminders";
     RemindersUnreadable => "reminders.json tidak terbaca", "Can't read reminders.json";
     RemindersUnreadableBody => "Disimpan sebagai reminders.json.bak saat menyimpan berikutnya",
@@ -187,7 +185,6 @@ keys! {
     ViewWeek => "Minggu", "Week";
     ViewMonth => "Bulan", "Month";
     BackToTop => "Kembali ke atas", "Back to top";
-    AddEventRow => "+ Tambah acara", "+ Add event";
     AddEvent => "Tambah acara", "Add event";
     ConnectGoogle => "Hubungkan Google", "Connect Google";
     ReconnectGoogle => "Hubungkan ulang Google", "Reconnect Google";
@@ -201,10 +198,6 @@ keys! {
     Sessions => "Jumlah sesi", "Sessions";
     MinutesShort => "mnt", "min";
     Start => "Mulai", "Start";
-    Pause => "Jeda", "Pause";
-    Resume => "Lanjut", "Resume";
-    Reset => "Reset", "Reset";
-    Skip => "Lewati", "Skip";
     Paused => "dijeda", "paused";
     Ready => "siap", "ready";
     ReadyClick => "Siap · klik", "Ready · click";
@@ -222,7 +215,6 @@ keys! {
 
     // Notes page.
     Notes => "Notes", "Notes";
-    NewNote => "+ Baru", "+ New";
     New => "Baru", "New";
     NotesEmpty => "Belum ada catatan. Klik + Baru untuk menulis.",
         "No notes yet. Click + New to write one.";
@@ -660,8 +652,8 @@ mod tests {
     #[test]
     fn indonesian_strings_are_unchanged() {
         assert_eq!(text(Lang::Id, Key::ClaudeWaiting), "Claude butuh respon");
-        assert_eq!(text(Lang::Id, Key::AddEventRow), "+ Tambah acara");
-        assert_eq!(text(Lang::En, Key::AddEventRow), "+ Add event");
+        assert_eq!(text(Lang::Id, Key::AddEvent), "Tambah acara");
+        assert_eq!(text(Lang::En, Key::AddEvent), "Add event");
         assert_eq!(text(Lang::En, Key::ReconnectGoogle), "Reconnect Google");
     }
 

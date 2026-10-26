@@ -58,6 +58,9 @@ pub struct CalendarLayout {
     pub add: Rect,
     /// "Hubungkan Google" / "Hubungkan ulang Google".
     pub connect: Option<Rect>,
+    /// The "Offline" tag after the arrows, while the calendar is offline; the
+    /// title is cut shorter so it always fits.
+    pub offline: Option<Rect>,
 }
 
 /// The timer and its controls only; durations are set in Settings → Pomodoro.
@@ -165,6 +168,9 @@ const NAV_SEG_GAP: f32 = 12.0;
 const VIEW_BUTTON_W: f32 = 50.0;
 /// The view selector's track reaches this far around its buttons.
 pub const SEG_PAD: f32 = 2.0;
+/// The "Offline" tag and its gap after the arrows.
+const OFFLINE_W: f32 = 52.0;
+const OFFLINE_GAP: f32 = 8.0;
 
 const CELL_W: f32 = 36.0;
 /// Month rows are at most this far apart; less when the strip takes room.
@@ -459,10 +465,25 @@ pub fn calendar_layout(
         (views[i], rect(x, top, VIEW_BUTTON_W, HEADER_H))
     });
     let nav_w = 2.0 * NAV_W + NAV_GAP;
-    let title_max = seg_x - SEG_PAD - NAV_SEG_GAP - nav_w - TITLE_NAV_GAP - l;
+    let offline_on = *status == CalStatus::Offline;
+    // Offline, the title gives up room for the tag rather than the tag hiding.
+    let tag_w = if offline_on {
+        OFFLINE_GAP + OFFLINE_W
+    } else {
+        0.0
+    };
+    let title_max = seg_x - SEG_PAD - NAV_SEG_GAP - tag_w - nav_w - TITLE_NAV_GAP - l;
     let header = rect(l, top, title_w.clamp(0.0, title_max.max(0.0)), HEADER_H);
     let prev = rect(header.right() + TITLE_NAV_GAP, top, NAV_W, HEADER_H);
     let next = rect(prev.right() + NAV_GAP, top, NAV_W, HEADER_H);
+    let offline = offline_on.then(|| {
+        rect(
+            next.right() + OFFLINE_GAP,
+            top + 3.0,
+            OFFLINE_W,
+            HEADER_H - 6.0,
+        )
+    });
     let body = header.bottom() + HEADER_GAP;
 
     let ids_on = |d: NaiveDate| -> Vec<String> {
@@ -496,6 +517,7 @@ pub fn calendar_layout(
         now_y: None,
         add: Rect::default(),
         connect: None,
+        offline,
     };
 
     match view {
@@ -755,10 +777,17 @@ fn day_timeline(
             stop += 1;
         }
         let cluster = &by_top[start..stop];
-        let n = cluster.iter().map(|b| b.3 + 1).max().unwrap_or(1) as f32;
+        // The run's lanes renumbered 0, 1, 2…, so a lane no block of the run
+        // uses never takes width (blocks are placed unseen-first, not in time
+        // order).
+        let mut used: Vec<usize> = cluster.iter().map(|b| b.3).collect();
+        used.sort_unstable();
+        used.dedup();
+        let n = used.len().max(1) as f32;
         let lane_w = ((area_w - (n - 1.0) * LANE_GAP) / n).max(0.0);
         for (i, top, h, lane) in cluster {
-            let x = area_x + *lane as f32 * (lane_w + LANE_GAP);
+            let rank = used.binary_search(lane).unwrap_or(0);
+            let x = area_x + rank as f32 * (lane_w + LANE_GAP);
             layout
                 .rows
                 .push((timed[*i].id.clone(), rect(x, *top, lane_w, *h)));
@@ -1462,6 +1491,24 @@ mod tests {
             None,
         );
         assert!(wide.next.right() + 12.0 <= wide.view_buttons[0].1.x - SEG_PAD + 0.01);
+        assert_eq!(wide.offline, None);
+        // Offline, a long title is cut shorter still: the tag always shows.
+        let offline = super::calendar_layout(
+            s,
+            CalView::Month,
+            date(2026, 10, 1),
+            date(2026, 10, 25),
+            &[],
+            &CalStatus::Offline,
+            0,
+            false,
+            900.0,
+            None,
+        );
+        let tag = offline.offline.expect("offline tag");
+        assert!(offline.header.w < wide.header.w);
+        assert!(tag.x >= offline.next.right());
+        assert!(tag.right() + 12.0 <= offline.view_buttons[0].1.x - SEG_PAD + 0.01);
         assert_eq!(l.list.right(), s.x + s.w - 20.0);
         assert!(l.week_columns.is_empty());
     }
@@ -1754,6 +1801,16 @@ mod tests {
         let first = day(&crowd, 0);
         let per_page = first.rows.len();
         assert!(per_page > 1 && per_page < 100);
+        let span = |l: &CalendarLayout| {
+            let x0 = l.rows.iter().map(|(_, r)| r.x).fold(f32::MAX, f32::min);
+            let x1 = l
+                .rows
+                .iter()
+                .map(|(_, r)| r.right())
+                .fold(f32::MIN, f32::max);
+            (x0, x1)
+        };
+        let full = span(&first);
         let mut ids = std::collections::BTreeSet::new();
         let mut page = 0;
         loop {
@@ -1762,6 +1819,9 @@ mod tests {
                 assert!(r.w >= MIN_LANE_W, "{id}: {r:?}");
                 ids.insert(id.clone());
             }
+            // Every page's run fills the width: no blank lane.
+            let (x0, x1) = span(&l);
+            assert!((x0 - full.0).abs() < 0.01 && (x1 - full.1).abs() < 0.01);
             let (count, _) = l.more.expect("paged");
             if count == 0 {
                 break;

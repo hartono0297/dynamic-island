@@ -44,18 +44,18 @@ use chrono::NaiveDate;
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
-    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_layout,
+    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_action, notice_layout,
 };
 use super::icons::{Icon, IconSet};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::cli::Shell;
 use crate::config::Style;
-use crate::i18n::{self, Key};
+use crate::i18n;
 use crate::lyrics::ShownLine;
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
-use crate::pomodoro::{Phase, Pomodoro};
+use crate::pomodoro::Pomodoro;
 use crate::reminders::Reminder;
 use crate::theme::{self, Accent, Palette, radius};
 
@@ -510,7 +510,7 @@ impl Renderer {
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             // A pomodoro notice shows while the next phase waits (Ready).
-            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro.phase()),
+            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro),
             View::Idle => {
                 // Without the clock, idle is the empty shape.
                 if let Some(time) = &frame.clock {
@@ -583,19 +583,19 @@ impl Renderer {
         line(lyric.text, rising, t);
     }
 
-    /// Badge, title over body, and the chip naming what a click does: a
-    /// reminder is then done, a finished pomodoro phase starts the next (in
-    /// that phase's colour); Claude's is a ghost chip on `raised`.
-    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice, next: Phase) -> Result<()> {
+    /// Badge, title over body, and the chip naming what a click does
+    /// (`notice_action`): a reminder is then done, a pomodoro phase waiting
+    /// to start starts (in that phase's colour).
+    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice, pomo: &Pomodoro) -> Result<()> {
         let p = self.palette;
-        let action = match notice.kind {
-            NoticeKind::Reminder { .. } => Some((Key::MarkDone, p.accent, p.on_accent)),
-            NoticeKind::Pomodoro => Some((Key::Start, p.phase(next), p.on_accent)),
-            NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => {
-                Some((Key::Open, p.raised, p.text))
-            }
-            _ => None,
-        };
+        let next = pomo.phase();
+        let action = notice_action(&notice.kind, pomo.status()).map(|key| {
+            let fill = match notice.kind {
+                NoticeKind::Pomodoro => p.phase(next),
+                _ => p.accent,
+            };
+            (key, fill, p.on_accent)
+        });
         let layout = notice_layout(shape, action.is_some());
         let badge = badge_style(notice, &p, next);
         self.set_color(badge.fill, badge.alpha);
