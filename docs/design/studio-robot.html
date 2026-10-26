@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Asisten Notch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441;
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6;
+    --disp: 'Fraunces', serif; --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 30px; letter-spacing: -.01em; margin: 2px 0 16px; }
+  .lbl { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  .dark .lbl { color: var(--tx2); }
+  p { font-size: 12.5px; line-height: 1.55; }
+  .ux li { list-style: none; position: relative; padding-left: 14px; font-size: 11.5px; line-height: 1.5; margin-bottom: 5px; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .ux h3 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 18px; margin-bottom: 8px; }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; height: 560px; }
+  .hero .name { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 72px; letter-spacing: -.02em; line-height: 1; }
+  .build { display: flex; align-items: center; gap: 14px; margin-top: 26px; }
+  .build .stp { text-align: center; font-size: 10.5px; color: var(--tx2); }
+  .build .stp svg { margin: 0 auto 8px; }
+  .arrow { color: var(--tx2); font-size: 18px; margin-bottom: 22px; }
+  .anat { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 26px; }
+  .anat div { border-top: 1px solid var(--t); padding-top: 8px; font-size: 11px; color: var(--tx2); line-height: 1.45; }
+  .anat b { display: block; color: var(--tx); font-weight: 500; font-size: 12px; }
+
+  /* expressions */
+  .xgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .xcard { background: var(--r); border-radius: 18px; padding: 14px 14px 12px; }
+  .xcard .stage { height: 120px; display: flex; align-items: center; justify-content: center; }
+  .xcard b { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 17px; display: block; margin-top: 6px; }
+  .xcard small { font-size: 10.5px; color: var(--tx2); line-height: 1.4; display: block; margin-top: 2px; min-height: 30px; }
+  .sizes { display: flex; align-items: flex-end; gap: 22px; margin-top: 20px; }
+  .sizes div { text-align: center; font-size: 10px; color: var(--tx2); }
+  .sizes svg { margin: 0 auto 6px; }
+
+  /* notch states */
+  .scr { height: 84px; border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx); border-radius: 999px;
+        display: flex; align-items: center; gap: 8px; padding: 0 14px 0 6px; height: 36px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; }
+  .nt .clk { font-family: var(--disp); font-style: italic; font-size: 16px; }
+  .nt.big { height: 60px; border-radius: 26px; padding: 0 12px 0 10px; gap: 10px; top: 12px; }
+  .nt .t1 { font-size: 12.5px; font-weight: 500; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .act { margin-left: 8px; font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 500; }
+  .act.ghost { background: var(--r); color: var(--tx); }
+  .eq { display: flex; gap: 2px; align-items: flex-end; height: 13px; }
+  .eq i { width: 2.5px; border-radius: 2px; background: var(--a); display: block; }
+  .states { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 22px; }
+  .st .lbl { margin: 0 0 5px; }
+  .st .d2 { font-size: 10.5px; color: var(--ink2); margin-top: 4px; }
+
+  /* behaviour */
+  .beh { display: grid; grid-template-columns: 1.15fr 1fr; gap: 30px; }
+  .anim { background: var(--s); color: var(--tx); border-radius: 18px; padding: 16px 18px; margin-bottom: 12px; }
+  .anim .row { display: flex; align-items: center; gap: 10px; }
+  .anim .row .ar { color: var(--tx2); font-size: 13px; }
+  .anim h4 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 16px; }
+  .anim small { font-size: 10.5px; color: var(--tx2); }
+  .anim .hd { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .win { background: #F4EEE6; border: 1px solid rgba(34,26,20,.10); border-radius: 14px; overflow: hidden; box-shadow: 0 12px 30px rgba(34,26,20,.14); }
+  .win .tb { height: 28px; display: flex; align-items: center; gap: 7px; padding: 0 11px; font-size: 10.5px; color: var(--ink2); }
+  .card { background: #FFFBF5; border-radius: 14px; border: 1px solid rgba(34,26,20,.10); margin: 0 12px 12px; }
+  .crow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid rgba(34,26,20,.10); min-height: 44px; font-size: 11.5px; }
+  .crow:first-child { border-top: 0; }
+  .crow b { font-weight: 500; display: block; }
+  .crow small { font-size: 9.5px; color: var(--ink2); }
+  .tog { width: 32px; height: 18px; border-radius: 99px; background: #C9542B; position: relative; flex: none; }
+  .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: #FFFBF5; }
+  .wseg { display: flex; border: 1px solid rgba(34,26,20,.10); border-radius: 10px; padding: 2px; font-size: 10px; background: #F4EEE6; }
+  .wseg span { padding: 3px 9px; border-radius: 8px; }
+  .wseg span.on { background: #C9542B; color: #FFFBF5; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+  .step i { width: 22px; height: 22px; border: 1px solid rgba(34,26,20,.10); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; background: #FFFBF5; }
+  .mini { width: 100%; background: var(--s); color: var(--tx); border-radius: 0 0 26px 26px; padding: 14px 18px; display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .mini .g { font-family: var(--disp); font-style: italic; font-size: 18px; }
+  .mini small { font-size: 11px; color: var(--tx2); }
+  .rule { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+  .rule div { border: 1px solid var(--rule); border-radius: 12px; padding: 10px 12px; font-size: 11px; line-height: 1.45; background: #F8F4EE; }
+  .rule b { display: block; font-size: 11.5px; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+// ===== Bata, the notch assistant (64 grid) =====
+// Built from the Bata logo: terracotta tile = head, espresso island = visor, cream dot = eyes.
+const T = '#E2683C', TD = '#C9542B', D = '#17120F', C = '#F4EDE4';
+function robot(expr = 'idle', size = 64, o = {}) {
+  const L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  let eyes = '', extra = '', bob = 0, tilt = 0;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const note = (x, y) => `<path d="M${x} ${y}v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${x - 1.6}" cy="${y}" r="1.9" fill="${C}"/><circle cx="${x + 3.4}" cy="${y - 1.5}" r="1.9" fill="${C}"/>`;
+  switch (expr) {
+    case 'idle': eyes = eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3); break;
+    case 'blink': eyes = eye(L, Y + 1, 7, 2.4, 1.2) + eye(R, Y + 1, 7, 2.4, 1.2); break;
+    case 'happy': eyes = happy; break;
+    case 'focus': eyes = eye(L, Y + 1, 7, 3.4, 1.7) + eye(R, Y + 1, 7, 3.4, 1.7) + line(`M${L - 4} ${Y - 4.5}l7 1.6M${R + 4} ${Y - 4.5}l-7 1.6`, 1.8); break;
+    case 'music': eyes = happy; extra = note(57, 9); break;
+    case 'sing': eyes = happy + `<ellipse cx="32" cy="${Y + 6.5}" rx="2.6" ry="2" fill="${C}"/>`; extra = note(57, 9); break;
+    case 'alert': eyes = `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`; bob = -1.5; break;
+    case 'think': eyes = eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75);
+      extra = `<circle cx="54" cy="6" r="1.4" fill="${C}"/><circle cx="58.5" cy="3" r="1.8" fill="${C}"/><circle cx="63.5" cy="0" r="2.2" fill="${C}"/>`; break;
+    case 'sleep': eyes = line(`M${L - 4} ${Y}q4 3.5 8 0M${R - 4} ${Y}q4 3.5 8 0`, 2.2); bob = 1.5;
+      extra = `<path d="M52 4h5l-5 5.5h5M59-3h3.6l-3.6 4h3.6" fill="none" stroke="${C}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`; break;
+    case 'sad': eyes = eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8); bob = 1.5; break;
+    case 'wave': eyes = happy; tilt = -9; break;
+  }
+  // Just the Bata tile with a visor and eyes: no ears, no antenna.
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><g transform="translate(0 ${bob}) rotate(${tilt} 32 32)">
+    <rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/>
+    <rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>
+    ${eyes}${extra}</g></svg>`;
+}
+
+// Bata logo (same as studio-ui.html)
+const SQ = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
+const logo = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 256 256"><path d="${SQ}" fill="#E2683C"/><rect x="58" y="104" width="140" height="48" rx="24" fill="#17120F"/><circle cx="174" cy="128" r="9.5" fill="#F4EDE4"/></svg>`;
+const logoEyes = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 256 256"><path d="${SQ}" fill="#E2683C"/><rect x="58" y="104" width="140" height="48" rx="24" fill="#17120F"/><rect x="92" y="113" width="20" height="30" rx="10" fill="#F4EDE4"/><rect x="144" y="113" width="20" height="30" rx="10" fill="#F4EDE4"/></svg>`;
+
+const ring = (p, size = 20, sw = 3) => { const rr = (size - sw) / 2 - 1, c = 2 * Math.PI * rr;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${rr}" fill="none" stroke="var(--t)" stroke-width="${sw}"/><circle cx="${size / 2}" cy="${size / 2}" r="${rr}" fill="none" stroke="var(--a)" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`; };
+const eq = () => `<div class="eq">${[5, 11, 8, 13, 6].map(h => `<i style="height:${h}px"></i>`).join('')}</div>`;
+const mailIcon = `<span style="width:40px;height:40px;border-radius:13px;background:#2C3A4A;color:#9CC3F0;display:flex;align-items:center;justify-content:center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M3.5 7l8.5 6 8.5-6"/></svg></span>`;
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Studio · Asisten notch</span><span>${r}</span></div>`;
+
+// ===== pages =====
+const hero = `<section class="page dark">
+  <div class="eyebrow">Asisten di notch · usulan</div>
+  <div class="hero"><div>
+      <div class="name">Bata</div>
+      <p style="color:var(--tx2);font-size:15px;max-width:440px;margin-top:14px">Robot kecil yang tinggal di notch. Ia lahir dari logo: tile terakota jadi kepala, island espresso jadi visor, titik krem jadi mata. Ekspresinya menunjukkan apa yang sedang terjadi, tanpa menambah teks.</p>
+      <div class="build">
+        <div class="stp">${logo(76)}Logo</div><span class="arrow">→</span>
+        <div class="stp">${logoEyes(76)}Titik jadi mata</div><span class="arrow">→</span>
+        <div class="stp">${robot('idle', 82)}Bata</div></div>
+      <div class="anat" style="grid-template-columns:repeat(3,1fr)">
+        <div><b>Kepala</b>Tile terakota, tanpa telinga dan antena.</div>
+        <div><b>Visor</b>Bentuk island espresso.</div>
+        <div><b>Mata</b>Dua pill krem; semua ekspresi ada di sini.</div></div>
+    </div>
+    <div style="display:flex;justify-content:center">${robot('happy', 300)}</div></div>
+  ${folio('Bata').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`;
+
+const X = [
+  ['idle', 'Diam', 'Default. Berkedip tiap 4–7 detik.'],
+  ['happy', 'Senang', 'Sapaan, tugas selesai, hover.'],
+  ['focus', 'Fokus', 'Pomodoro fase fokus berjalan.'],
+  ['music', 'Mendengar', 'Ada musik diputar; not musik di pojok.'],
+  ['sing', 'Bernyanyi', 'Mode lirik di notch.'],
+  ['alert', 'Waspada', 'Pengingat jatuh tempo, Claude butuh kamu.'],
+  ['think', 'Berpikir', 'Claude sedang bekerja, sinkron kalender.'],
+  ['sleep', 'Tidur', 'Tidak ada aktivitas 10 menit / malam.'],
+  ['sad', 'Lesu', 'Baterai lemah, gagal sinkron.'],
+  ['wave', 'Menyapa', 'Pertama kali hari ini, setelah update.'],
+];
+const expr = `<section class="page dark">
+  <div class="eyebrow">Ekspresi</div><h1 style="color:var(--tx)">Sepuluh ekspresi, satu wajah</h1>
+  <div class="xgrid">${X.map(([k, n, d]) => `<div class="xcard"><div class="stage">${robot(k, 104)}</div><b>${n}</b><small>${d}</small></div>`).join('')}</div>
+  <div class="sizes"><div style="text-align:left;color:var(--tx);font-size:11px;align-self:center;width:150px">Tetap terbaca di ukuran notch:</div>
+    ${[48, 32, 26, 20].map(s => `<div>${robot('idle', s)}${s} px</div>`).join('')}
+    ${[26].map(s => `<div>${robot('happy', s)}senang</div><div>${robot('alert', s)}waspada</div><div>${robot('sleep', s)}tidur</div>`).join('')}</div>
+  ${folio('Ekspresi').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`;
+
+const S = (label, desc, inner, alt) => `<div class="st"><div class="lbl">${label}</div><div class="scr${alt ? ' alt' : ''}">${inner}</div><div class="d2">${desc}</div></div>`;
+const notch = `<section class="page"><div class="eyebrow">Bata di notch · semua status</div>
+  <div class="states" style="margin-top:12px">
+    ${S('Kosong', 'Bata diam di kiri jam, sesekali berkedip.', `<div class="nt">${robot('idle', 26)}<span class="clk">14:32</span></div>`)}
+    ${S('Tidur', 'Setelah 10 menit tanpa aktivitas atau lewat jam 22:00.', `<div class="nt">${robot('sleep', 26)}<span class="clk" style="opacity:.6">23:48</span></div>`, true)}
+    ${S('Sapaan pagi', 'Sekali sehari, saat pertama kali layar aktif. Hilang sendiri setelah 4 detik.', `<div class="nt big">${robot('wave', 40)}<div><div class="t1">Selamat pagi</div><div class="t2">3 acara dan 2 pengingat hari ini</div></div></div>`)}
+    ${S('Pomodoro berjalan', 'Wajah fokus, cincin progres di sebelah kanan.', `<div class="nt">${robot('focus', 26)}${ring(0.25)}<span style="font-weight:500">18:42</span></div>`, true)}
+    ${S('Musik', 'Mata senang dengan not musik kecil.', `<div class="nt">${robot('music', 26)}<span>Senja di Kemang</span>${eq()}</div>`)}
+    ${S('Lirik', 'Bata ikut bernyanyi.', `<div class="nt">${robot('sing', 26)}<span style="font-family:var(--disp);font-style:italic;font-size:13.5px">di antara gedung dan cahaya sore</span></div>`, true)}
+    ${S('Pengingat jatuh tempo', 'Waspada, mata membulat sampai ditandai selesai.', `<div class="nt big">${robot('alert', 40)}<div><div class="t1">Kirim revisi denah ke klien</div><div class="t2">Pengingat · 16:30</div></div><span class="act">Selesai</span></div>`)}
+    ${S('Fase Pomodoro selesai', 'Senang; fase berikutnya mulai setelah diklik.', `<div class="nt big">${robot('happy', 40)}<div><div class="t1">Fokus selesai</div><div class="t2">Istirahat 5 menit</div></div><span class="act" style="background:var(--sage)">Mulai</span></div>`, true)}
+    ${S('Claude Code', 'Berpikir saat Claude bekerja, waspada saat Claude butuh kamu.', `<div class="nt big">${robot('think', 40)}<div><div class="t1">Claude sedang bekerja</div><div class="t2">dynamic-island · 3 file diubah</div></div></div>`)}
+    ${S('Notifikasi Windows', 'Notifikasi dari aplikasi lain tetap pakai ikon aplikasinya. Bata tidak ikut.', `<div class="nt big">${mailIcon}<div><div class="t1">Rani · Mail</div><div class="t2">Denah lantai 2 sudah saya kirim, cek ya</div></div></div>`, true)}
+  </div>${folio('Notch')}</section>`;
+
+const strip = (frames) => `<div class="row">${frames.map((f, i) => (i ? '<span class="ar">→</span>' : '') + robot(f, 44)).join('')}</div>`;
+const beh = `<section class="page"><div class="eyebrow">Perilaku · animasi · pengaturan</div><h1>Hidup, tapi tidak mengganggu</h1>
+  <div class="beh"><div>
+    <div class="anim"><div class="hd"><h4>Kedip</h4><small>tiap 4–7 dtk acak · 120 ms</small></div>${strip(['idle', 'blink', 'idle'])}</div>
+    <div class="anim"><div class="hd"><h4>Hover</h4><small>mata senang, naik 2 px, lalu panel terbuka</small></div>${strip(['idle', 'happy', 'happy'])}</div>
+    <div class="anim"><div class="hd"><h4>Penting</h4><small>mata membulat, kepala memantul 2× lalu diam</small></div>${strip(['idle', 'alert', 'alert'])}</div>
+    <div class="anim"><div class="hd"><h4>Tertidur</h4><small>10 mnt tanpa aktivitas · bangun saat mouse mendekat</small></div>${strip(['idle', 'blink', 'sleep'])}</div>
+  </div><div>
+    <div class="lbl">Pengaturan → Tampilan</div>
+    <div class="win"><div class="tb">${logo(14)}Pengaturan Dynamic Island</div><div class="card">
+      <div class="crow"><div><b>Asisten di notch</b><small>Tampilkan Bata di samping jam dan notice</small></div><div class="tog"></div></div>
+      <div class="crow"><div><b>Animasi</b><small>Hemat: tanpa kedip dan gerak, ekspresi tetap</small></div><div class="wseg"><span class="on">Penuh</span><span>Hemat</span><span>Mati</span></div></div>
+      <div class="crow"><div><b>Tidur setelah</b><small>Tanpa aktivitas</small></div><div class="step"><i>−</i>10 mnt<i>+</i></div></div>
+      <div class="crow"><div><b>Sapaan pagi</b><small>Ringkasan acara dan pengingat hari ini</small></div><div class="tog"></div></div></div></div>
+    <div class="lbl" style="margin-top:16px">Aturan</div>
+    <div class="rule">
+      <div><b>Hanya di notch kecil</b>Panel tetap bersih; Bata tidak muncul di halaman panel.</div>
+      <div><b>Notice sendiri saja</b>Notifikasi aplikasi lain tetap memakai ikon aplikasinya.</div>
+      <div><b>Tanpa gambar</b>Digambar dengan Direct2D dari bentuk dasar, jadi tajam di semua DPI dan ringan.</div>
+      <div><b>Hemat daya</b>Saat diam hanya kedip singkat; mode Hemat mematikan semua gerak.</div></div>
+  </div></div>${folio('Perilaku')}</section>`;
+
+document.getElementById('doc').innerHTML = hero + expr + notch + beh;
+
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

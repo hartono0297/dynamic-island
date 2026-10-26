@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redesign Dynamic Island</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #EEEDE9;
+    --ink: #161616;
+    --ink2: #5E5E5A;
+    --rule: #D6D4CE;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a9a96; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--ink);
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px;
+          padding: 34px 44px; background: var(--paper); break-after: page; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  .page.dark { background: var(--s); color: var(--tx); }
+  .folio { position: absolute; left: 44px; right: 44px; bottom: 18px; display: flex; justify-content: space-between;
+           font-size: 10px; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }
+  .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; opacity: .6; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -.01em; }
+  h2 { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+  p, li { font-size: 12.5px; line-height: 1.5; }
+  .muted { color: var(--ink2); }
+
+  /* ---------- cover ---------- */
+  .cover { background: #0A0A0B; color: #F2F2F2; display: flex; flex-direction: column; justify-content: space-between; }
+  .cover h1 { font-size: 54px; line-height: 1.02; letter-spacing: -.02em; font-weight: 600; }
+  .cover .sub { font-size: 16px; opacity: .7; margin-top: 14px; max-width: 560px; line-height: 1.5; }
+  .cover-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .cover-card { border-radius: 18px; padding: 22px; height: 210px; display: flex; flex-direction: column; justify-content: space-between; }
+  .cover-card .n { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; opacity: .6; }
+  .cover-card .nm { font-size: 26px; }
+
+  /* ---------- notch ---------- */
+  .desk { position: relative; height: 112px; border-radius: 12px; overflow: hidden; }
+  .notch { position: absolute; left: 50%; transform: translateX(-50%); background: var(--s);
+           display: flex; align-items: center; justify-content: center; color: var(--tx); box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+  .notch.idle { top: 10px; width: 150px; height: 32px; border-radius: var(--pillr); font-family: var(--fc); font-style: var(--fci); font-size: 14px; font-weight: 500; gap: 8px; }
+  .notch.live { top: 52px; width: 330px; height: 50px; border-radius: calc(var(--pillr) * 1.2); justify-content: flex-start; padding: 0 9px; gap: 10px; }
+  .art { width: 34px; height: 34px; border-radius: var(--tiler); background: var(--art); flex: none; }
+  .live .tt { font-family: var(--fb); font-size: 12px; font-weight: 600; line-height: 1.2; }
+  .live .st { font-family: var(--fb); font-size: 10.5px; color: var(--tx2); }
+  .eq { margin-left: auto; display: flex; gap: 2.5px; align-items: flex-end; height: 16px; margin-right: 6px; }
+  .eq i { width: 3px; background: var(--a); border-radius: var(--eqr); display: block; }
+  .dotlive { width: 7px; height: 7px; border-radius: var(--dotr); background: var(--a); }
+
+  /* ---------- panel ---------- */
+  .panel { background: var(--s); color: var(--tx); border-radius: 0 0 var(--panelr) var(--panelr); position: relative;
+           font-family: var(--fb); box-shadow: 0 10px 28px rgba(0,0,0,.28); }
+  .dots { position: absolute; bottom: 9px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: var(--dotr); background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); width: var(--dotw); }
+  .cal { width: 520px; height: 248px; display: grid; grid-template-columns: 250px 1fr; padding: 16px 18px 26px; gap: 14px; }
+  .cal-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .cal-h b { white-space: nowrap; font-family: var(--fd); font-size: var(--fdsize); font-weight: var(--fdw); font-style: var(--fdi); letter-spacing: var(--fdls); }
+  .seg { display: flex; background: var(--r); border-radius: var(--ctlr); padding: 2px; font-size: 10px; }
+  .seg span { padding: 2px 6px; border-radius: var(--ctlr); color: var(--tx2); }
+  .seg span.on { background: var(--rh); color: var(--tx); }
+  .grid7 { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; row-gap: 3px; }
+  .grid7 .wd { font-size: 9px; color: var(--tx2); padding-bottom: 3px; letter-spacing: .04em; }
+  .grid7 .d { font-family: var(--fn); font-size: 11px; height: 25px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+  .grid7 .d.out { color: var(--dot); }
+  .grid7 .d.today span { background: var(--a); color: var(--ai); width: 24px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: var(--ctlr); font-weight: 600; }
+  .grid7 .d em { position: absolute; bottom: 0; width: 3px; height: 3px; border-radius: var(--dotr); background: var(--a2); }
+  .evs { border-left: 1px solid var(--t); padding-left: 14px; }
+  .evs .day { font-size: 10.5px; color: var(--tx2); margin-bottom: 8px; }
+  .ev { display: flex; gap: 8px; margin-bottom: 8px; }
+  .ev i { width: 3px; border-radius: 2px; flex: none; }
+  .ev b { font-size: 11.5px; font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 205px; }
+  .ev small { font-size: 10px; color: var(--tx2); font-family: var(--fn); }
+  .add { font-size: 11px; color: var(--a); margin-top: 4px; }
+
+  .sc { width: 520px; height: 226px; padding: 16px 18px 26px; }
+  .sc-h { font-family: var(--fd); font-size: var(--fdsize); font-weight: var(--fdw); font-style: var(--fdi); letter-spacing: var(--fdls); margin-bottom: 12px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .tile { background: var(--r); border-radius: var(--tiler); height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 10.5px; color: var(--tx); border: var(--tileb); }
+  .tile svg { width: 22px; height: 22px; color: var(--tx); }
+
+  /* ---------- settings window (light) ---------- */
+  .win { width: 470px; height: 330px; background: var(--wbg); border-radius: 10px; overflow: hidden; box-shadow: 0 12px 30px rgba(0,0,0,.18);
+         font-family: var(--fb); color: var(--wtx); display: grid; grid-template-columns: 140px 1fr; grid-template-rows: 26px 1fr; border: 1px solid rgba(0,0,0,.08); }
+  .win .bar { grid-column: 1 / 3; font-size: 10px; display: flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--wtx2); }
+  .win .bar svg { width: 14px; height: 14px; }
+  .side { padding: 6px 8px; }
+  .side .brand { display: flex; align-items: center; gap: 7px; font-family: var(--fd); font-weight: var(--fdw); font-style: var(--fdi); font-size: 12px; margin: 4px 4px 12px; }
+  .side .brand svg { width: 22px; height: 22px; }
+  .nav { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 6px 8px; border-radius: var(--ctlr); margin-bottom: 2px; color: var(--wtx); }
+  .nav svg { width: 14px; height: 14px; }
+  .nav.on { background: var(--wsel); }
+  .main { padding: 6px 16px 0 6px; }
+  .main h3 { font-family: var(--fd); font-weight: var(--fdw); font-style: var(--fdi); font-size: 17px; margin: 4px 0 10px; letter-spacing: var(--fdls); }
+  .card { background: var(--wcard); border-radius: calc(var(--tiler) * .8); border: 1px solid var(--wborder); }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 11px; border-top: 1px solid var(--wborder); }
+  .row:first-child { border-top: 0; }
+  .row b { font-size: 11px; font-weight: 500; display: block; }
+  .row small { font-size: 9.5px; color: var(--wtx2); }
+  .tog { width: 30px; height: 17px; border-radius: var(--togr); background: var(--wa); position: relative; }
+  .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: var(--togr); background: var(--wai); }
+  .tog.off { background: transparent; border: 1.5px solid var(--wtx2); }
+  .tog.off::after { left: 2px; right: auto; top: 1.5px; width: 11px; height: 11px; background: var(--wtx2); }
+  .wseg { display: flex; border: 1px solid var(--wborder); border-radius: var(--ctlr); padding: 2px; font-size: 10px; background: var(--wbg); }
+  .wseg span { padding: 2px 9px; border-radius: var(--ctlr); }
+  .wseg span.on { background: var(--wa); color: var(--wai); }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-family: var(--fn); }
+  .step i { width: 20px; height: 20px; border: 1px solid var(--wborder); border-radius: var(--ctlr); display: flex; align-items: center; justify-content: center; font-style: normal; background: var(--wcard); }
+
+  /* ---------- identity page ---------- */
+  .id-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 22px; }
+  .id-name { font-family: var(--fd); font-weight: var(--fdw); font-style: var(--fdi); font-size: 52px; line-height: 1; letter-spacing: var(--fdls); }
+  .id-tag { font-family: var(--fb); font-size: 14px; color: var(--tx2); margin-top: 8px; max-width: 520px; line-height: 1.45; }
+  .chips { display: flex; gap: 6px; }
+  .chip { font-family: var(--fb); font-size: 11px; padding: 5px 11px; border: 1px solid var(--t); border-radius: var(--chipr); color: var(--tx2); }
+  .id-grid { display: grid; grid-template-columns: 250px 1fr 300px; gap: 22px; }
+  .box { background: var(--r); border-radius: var(--tiler); padding: 16px; }
+  .box h4 { font-family: var(--fb); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); font-weight: 500; margin-bottom: 12px; }
+  .logo-big svg { width: 150px; height: 150px; display: block; margin: 2px auto 12px; }
+  .logo-sizes { display: flex; justify-content: center; align-items: flex-end; gap: 14px; margin-bottom: 12px; }
+  .wordmark { text-align: center; font-family: var(--fd); font-weight: var(--fdw); font-style: var(--fdi); font-size: 19px; letter-spacing: var(--fdls); }
+  .sw-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
+  .sw { font-family: var(--fn); font-size: 9.5px; color: var(--tx2); }
+  .sw i { display: block; height: 46px; border-radius: calc(var(--tiler) * .6); margin-bottom: 5px; border: 1px solid rgba(255,255,255,.08); }
+  .sw b { display: block; font-family: var(--fb); color: var(--tx); font-weight: 500; font-size: 10.5px; }
+  .acc-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .acc-row .sw i { height: 34px; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 11px; font-weight: 600; }
+  .type-num { font-family: var(--fc); font-style: var(--fci); font-size: 64px; line-height: 1; font-weight: var(--fnw); letter-spacing: -.02em; }
+  .type-disp { font-family: var(--fd); font-weight: var(--fdw); font-style: var(--fdi); font-size: 26px; letter-spacing: var(--fdls); margin: 10px 0 4px; }
+  .type-body { font-family: var(--fb); font-size: 13px; color: var(--tx); }
+  .type-meta { font-family: var(--fb); font-size: 10.5px; color: var(--tx2); margin-top: 10px; line-height: 1.6; }
+  .type-meta b { color: var(--tx); font-weight: 500; }
+  .icons { display: grid; grid-template-columns: repeat(15, 1fr); gap: 6px; margin-top: 18px; }
+  .ic { display: flex; flex-direction: column; align-items: center; gap: 6px; font-family: var(--fb); font-size: 9px; color: var(--tx2); }
+  .ic span { width: 46px; height: 46px; background: var(--r); border-radius: var(--tiler); display: flex; align-items: center; justify-content: center; }
+  .ic svg { width: 22px; height: 22px; color: var(--tx); }
+
+  /* ---------- UI page ---------- */
+  .ui-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
+  .ui-grid { display: grid; grid-template-columns: 520px 1fr; gap: 28px; }
+  .stack > * + * { margin-top: 14px; }
+  .notes { margin-top: 16px; }
+  .notes li { list-style: none; padding-left: 14px; position: relative; margin-bottom: 5px; font-size: 12px; }
+  .notes li::before { content: ""; position: absolute; left: 0; top: 7px; width: 6px; height: 6px; background: var(--a); border-radius: var(--dotr); }
+
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  th { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  td:first-child { font-weight: 600; width: 120px; }
+  .pill { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 99px; background: #DEDCD6; }
+  .audit { display: grid; grid-template-columns: 1.15fr 1fr; gap: 28px; }
+  .shots img { width: 100%; display: block; border-radius: 10px; margin-bottom: 10px; }
+  .shots .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tok { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 14px; }
+  .tok i { width: 34px; height: 34px; border-radius: 8px; display: block; border: 1px solid rgba(0,0,0,.08); }
+  .issue { padding: 9px 0; border-bottom: 1px solid var(--rule); }
+  .issue b { font-size: 12.5px; }
+  .plan { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
+  .step-card { background: #F8F7F4; border-radius: 12px; padding: 14px; border: 1px solid var(--rule); }
+  .step-card .k { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .step-card h5 { font-size: 14px; margin: 4px 0 6px; }
+  .step-card p { font-size: 11.5px; }
+  .step-card code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 10.5px; background: #E8E6E0; padding: 0 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+
+<script>
+// ---------- design directions ----------
+const DIRS = [
+  {
+    id: 'nocturne', no: '01', name: 'Nocturne',
+    tag: 'Evolusi yang halus: hitam kebiruan yang dalam, aksen indigo ke teal, dan sans-serif geometris yang rapi. Paling dekat dengan karakter sekarang, tapi terasa milik sendiri.',
+    mood: ['tenang', 'premium', 'modern'],
+    v: { s: '#0B0D12', r: '#161A22', rh: '#262C3A', t: '#222834', tx: '#EEF1F6', tx2: '#8A93A6', dot: '#3A4152',
+         a: '#7C8CFF', ai: '#0B0D12', a2: '#5EE6D0', art: 'linear-gradient(135deg,#7C8CFF,#5EE6D0)',
+         fd: "'Geist', sans-serif", fdw: 600, fdi: 'normal', fdls: '-.02em', fdsize: '17px',
+         fb: "'Geist', sans-serif", fn: "'Geist Mono', monospace", fnw: 500, fc: "'Geist Mono', monospace", fci: 'normal',
+         pillr: '999px', panelr: '26px', tiler: '14px', ctlr: '8px', dotr: '50%', dotw: '14px', eqr: '2px', chipr: '99px', togr: '99px', tileb: '0',
+         wbg: '#F2F4F8', wcard: '#FFFFFF', wtx: '#0F1320', wtx2: '#5C6478', wa: '#5868F0', wai: '#FFFFFF', wborder: 'rgba(15,19,32,.09)', wsel: '#E3E7F6' },
+    accents: [['Indigo','#7C8CFF'],['Teal','#4FD1C5'],['Violet','#B69CFF'],['Mint','#6EE7A8'],['Amber','#FFB547'],['Rose','#FF7A9A']],
+    swatches: [['Surface','#0B0D12'],['Raised','#161A22'],['Track','#222834'],['Text','#EEF1F6'],['Secondary','#8A93A6']],
+    icon: { w: 1.75, cap: 'round', join: 'round', r: 2.5, duo: false },
+    fonts: [['Geist', 'judul & teks'], ['Geist Mono', 'jam & angka']],
+    deskBg: 'linear-gradient(120deg,#2B3550 0%,#5A6B9A 55%,#9DB2D8 100%)',
+    changes: ['Hitam murni diganti hitam kebiruan, jadi panel terasa lebih dalam.', 'Aksen dua warna: indigo untuk aksi, teal untuk penanda event.', 'Angka (jam, tanggal) pakai Geist Mono, lebar tetap, tidak "goyang" saat berubah.', 'Ikon garis 1,75 px dengan ujung bulat, menggantikan Segoe Fluent.'],
+  },
+  {
+    id: 'studio', no: '02', name: 'Studio',
+    tag: 'Hangat dan editorial, terinspirasi studio arsitektur: espresso, krem, terakota. Judul serif yang berkarakter dipadu sans-serif yang bersih.',
+    mood: ['hangat', 'editorial', 'berkarakter'],
+    v: { s: '#17120F', r: '#241D18', rh: '#3A2F27', t: '#332A23', tx: '#F4EDE4', tx2: '#A89A8B', dot: '#4A3E35',
+         a: '#E2683C', ai: '#17120F', a2: '#9DB59A', art: 'linear-gradient(135deg,#E2683C,#D9A441)',
+         fd: "'Fraunces', serif", fdw: 500, fdi: 'italic', fdls: '-.01em', fdsize: '19px',
+         fb: "'DM Sans', sans-serif", fn: "'DM Sans', sans-serif", fnw: 400, fc: "'Fraunces', serif", fci: 'italic',
+         pillr: '999px', panelr: '30px', tiler: '18px', ctlr: '10px', dotr: '50%', dotw: '5px', eqr: '3px', chipr: '99px', togr: '99px', tileb: '0',
+         wbg: '#F4EEE6', wcard: '#FFFBF5', wtx: '#221A14', wtx2: '#7A6B5D', wa: '#C9542B', wai: '#FFFBF5', wborder: 'rgba(34,26,20,.10)', wsel: '#EADFD1' },
+    accents: [['Terakota','#E2683C'],['Sage','#9DB59A'],['Oker','#D9A441'],['Tanah liat','#C9826B'],['Zaitun','#A3A55A'],['Plum','#B07A9A']],
+    swatches: [['Surface','#17120F'],['Raised','#241D18'],['Track','#332A23'],['Text','#F4EDE4'],['Secondary','#A89A8B']],
+    icon: { w: 1.5, cap: 'round', join: 'round', r: 3, duo: true },
+    fonts: [['Fraunces Italic', 'judul & jam'], ['DM Sans', 'teks & angka']],
+    deskBg: 'linear-gradient(120deg,#6B4A36 0%,#B98A62 55%,#E6CBA8 100%)',
+    changes: ['Island berwarna espresso, bukan hitam; teks krem yang lembut di mata.', 'Judul bulan dan jam pakai Fraunces Italic, jadi app punya "suara" sendiri.', 'Ikon duotone: garis tipis plus isian terakota transparan.', 'Sudut lebih bulat dan lebih lega, terasa seperti benda fisik.'],
+  },
+  {
+    id: 'signal', no: '03', name: 'Signal',
+    tag: 'Teknis dan tegas: hitam pekat, aksen lime menyala, grotesk dengan angka monospace. Sudut lebih tajam, terasa seperti instrumen.',
+    mood: ['berani', 'teknis', 'kontras tinggi'],
+    v: { s: '#000000', r: '#111111', rh: '#262626', t: '#1E1E1E', tx: '#FFFFFF', tx2: '#7A7A7A', dot: '#333333',
+         a: '#D4FF3A', ai: '#000000', a2: '#FF5A1F', art: 'repeating-linear-gradient(45deg,#D4FF3A 0 6px,#111 6px 12px)',
+         fd: "'Space Grotesk', sans-serif", fdw: 700, fdi: 'normal', fdls: '-.02em', fdsize: '17px',
+         fb: "'Space Grotesk', sans-serif", fn: "'JetBrains Mono', monospace", fnw: 500, fc: "'JetBrains Mono', monospace", fci: 'normal',
+         pillr: '12px', panelr: '14px', tiler: '6px', ctlr: '4px', dotr: '1px', dotw: '14px', eqr: '0', chipr: '4px', togr: '4px', tileb: '1px solid #1E1E1E',
+         wbg: '#F0F0EC', wcard: '#FFFFFF', wtx: '#0A0A0A', wtx2: '#666660', wa: '#0A0A0A', wai: '#D4FF3A', wborder: 'rgba(10,10,10,.12)', wsel: '#E2E2DC' },
+    accents: [['Lime','#D4FF3A'],['Oranye','#FF5A1F'],['Cyan','#3AE1FF'],['Putih','#F5F5F5'],['Magenta','#FF3AC8'],['Kuning','#FFE03A']],
+    swatches: [['Surface','#000000'],['Raised','#111111'],['Track','#1E1E1E'],['Text','#FFFFFF'],['Secondary','#7A7A7A']],
+    icon: { w: 2, cap: 'square', join: 'miter', r: 0, duo: false },
+    fonts: [['Space Grotesk', 'judul & teks'], ['JetBrains Mono', 'jam & angka']],
+    deskBg: 'linear-gradient(120deg,#1C1C1C 0%,#3A3A3A 60%,#5C5C5C 100%)',
+    changes: ['Kontras paling tinggi: hitam pekat dan lime, terbaca jelas di wallpaper apa pun.', 'Sudut kecil (4–14 px) dan titik halaman kotak, terasa presisi.', 'Semua angka pakai JetBrains Mono, cocok dengan halaman CLI.', 'Mode terang memakai tombol hitam dengan isi lime, bukan lime di atas putih.'],
+  },
+];
+
+// ---------- icons (24 grid, own geometry) ----------
+function icon(name, st) {
+  const r = st.r;
+  const closed = (d) => st.duo ? `<path d="${d}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const rect = (x, y, w, h, rr = r) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rr}"/>`;
+  const rectFill = (x, y, w, h, rr = r) => st.duo ? `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rr}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const circ = (cx, cy, rr) => `<circle cx="${cx}" cy="${cy}" r="${rr}"/>`;
+  const circFill = (cx, cy, rr) => st.duo ? `<circle cx="${cx}" cy="${cy}" r="${rr}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const dot = (x, y) => st.cap === 'square' ? `<rect x="${x - 1}" y="${y - 1}" width="2" height="2" fill="currentColor" stroke="none"/>` : `<circle cx="${x}" cy="${y}" r="1.1" fill="currentColor" stroke="none"/>`;
+  const p = (d) => `<path d="${d}"/>`;
+  const shapes = {
+    camera: closed('M3 9h4l1.6-2.5h6.8L17 9h4v10H3z') + p(st.r ? 'M4 8.5h3l1.5-2.2h7L17 8.5h3a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1z' : 'M3 8.5h4l1.5-2.2h7L17 8.5h4v10.5H3z') + circ(12, 13.5, 3.3),
+    clipboard: rectFill(5, 5, 14, 16) + rect(5, 5, 14, 16) + rect(9, 3, 6, 4, Math.min(r, 1.5)) + p('M9 12h6M9 16h4'),
+    emoji: circFill(12, 12, 9) + circ(12, 12, 9) + p('M8.5 14.5c1.8 2 5.2 2 7 0') + dot(9, 10) + dot(15, 10),
+    folder: closed('M3 7h6l2 2h10v10H3z') + p(st.r ? 'M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z' : 'M3 6h6l2 2h10v11H3z') + p('M3 11h18'),
+    calc: rectFill(5, 3, 14, 18) + rect(5, 3, 14, 18) + rect(8, 6, 8, 4, Math.min(r, 1)) + dot(8.5, 14) + dot(12, 14) + dot(15.5, 14) + dot(8.5, 17.5) + dot(12, 17.5) + dot(15.5, 17.5),
+    activity: rectFill(3, 4, 18, 16) + rect(3, 4, 18, 16) + p('M6 13h3l2-4 2 7 2-3h3'),
+    gear: circFill(12, 12, 6.5) + circ(12, 12, 6.5) + circ(12, 12, 2.6) + p('M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1'),
+    lock: rectFill(5, 11, 14, 10) + rect(5, 11, 14, 10) + p('M8 11V8a4 4 0 0 1 8 0v3') + dot(12, 16),
+    calendar: rectFill(3, 5, 18, 16) + rect(3, 5, 18, 16) + p('M3 10h18M8 3v4M16 3v4') + dot(8, 14) + dot(12, 14) + dot(16, 14),
+    timer: circFill(12, 13, 8) + circ(12, 13, 8) + p('M12 13V9M10 2.5h4M18.5 6l1.2-1.2'),
+    bell: closed('M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z') + p('M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z') + p('M10 21h4'),
+    note: closed('M5 3.5h10l4 4V20.5H5z') + p('M5 3.5h10l4 4V20.5H5z') + p('M15 3.5v4h4M8 12h8M8 16h5'),
+    music: circFill(6.5, 18, 2.5) + p('M9 18V6l11-2v12') + circ(6.5, 18, 2.5) + circ(17.5, 16, 2.5) + p('M9 9.5l11-2'),
+    terminal: rectFill(3, 5, 18, 14) + rect(3, 5, 18, 14) + p('M7 10l3 2.5L7 15M12.5 15H17'),
+    grid: rectFill(4, 4, 7, 7, Math.min(r, 2)) + rect(4, 4, 7, 7, Math.min(r, 2)) + rect(13, 4, 7, 7, Math.min(r, 2)) + rect(4, 13, 7, 7, Math.min(r, 2)) + rect(13, 13, 7, 7, Math.min(r, 2)),
+    palette: circFill(12, 12, 9) + p('M12 3a9 9 0 0 0 0 18c1.3 0 1.8-1 1.4-2-.5-1.2.3-2.4 1.6-2.4H17a4 4 0 0 0 4-4c0-5.2-4-9.6-9-9.6z') + dot(7.5, 11) + dot(10, 7.5) + dot(14.5, 7.5),
+    link: p('M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2'),
+    info: circFill(12, 12, 9) + circ(12, 12, 9) + p('M12 11v6') + dot(12, 7.8),
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${st.w}" stroke-linecap="${st.cap}" stroke-linejoin="${st.join}">${shapes[name]}</svg>`;
+}
+
+// ---------- logos ----------
+function logo(id, size = 150) {
+  const squircle = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
+  if (id === 'nocturne') return `<svg width="${size}" height="${size}" viewBox="0 0 256 256">
+    <defs>
+      <linearGradient id="nb" x1="0" y1="12" x2="0" y2="244" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1C2333"/><stop offset="1" stop-color="#07090D"/></linearGradient>
+      <linearGradient id="na" x1="60" y1="0" x2="196" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7C8CFF"/><stop offset="1" stop-color="#5EE6D0"/></linearGradient>
+      <radialGradient id="ng" cx="128" cy="96" r="96" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7C8CFF" stop-opacity=".45"/><stop offset="1" stop-color="#7C8CFF" stop-opacity="0"/></radialGradient>
+    </defs>
+    <path d="${squircle}" fill="url(#nb)"/>
+    <path d="${squircle}" fill="url(#ng)"/>
+    <rect x="58" y="74" width="140" height="46" rx="23" fill="#0B0D12" stroke="url(#na)" stroke-width="4"/>
+    <circle cx="175" cy="97" r="9" fill="url(#na)"/>
+    <rect x="76" y="92" width="58" height="10" rx="5" fill="#EEF1F6" opacity=".9"/>
+    <path d="M88 164h80" stroke="#EEF1F6" stroke-opacity=".18" stroke-width="6" stroke-linecap="round"/>
+    <path d="M104 184h48" stroke="#EEF1F6" stroke-opacity=".1" stroke-width="6" stroke-linecap="round"/>
+  </svg>`;
+  if (id === 'studio') return `<svg width="${size}" height="${size}" viewBox="0 0 256 256">
+    <defs><linearGradient id="sb" x1="0" y1="12" x2="0" y2="244" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2E241D"/><stop offset="1" stop-color="#140F0C"/></linearGradient></defs>
+    <path d="${squircle}" fill="url(#sb)"/>
+    <path d="M70 208V128a58 58 0 0 1 116 0v80z" fill="#E2683C"/>
+    <path d="M96 208v-74a32 32 0 0 1 64 0v74z" fill="#17120F"/>
+    <rect x="98" y="54" width="60" height="22" rx="11" fill="#F4EDE4"/>
+    <circle cx="146" cy="65" r="5" fill="#9DB59A"/>
+    <path d="M58 208h140" stroke="#F4EDE4" stroke-width="5" stroke-linecap="round"/>
+  </svg>`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 256 256">
+    <rect x="12" y="12" width="232" height="232" rx="36" fill="#000"/>
+    <rect x="14" y="14" width="228" height="228" rx="34" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width="2"/>
+    <path d="M40 64V40h24M216 64V40h-24M40 192v24h24M216 192v24h-24" fill="none" stroke="#7A7A7A" stroke-width="5"/>
+    <rect x="56" y="104" width="144" height="48" rx="10" fill="#D4FF3A"/>
+    <rect x="166" y="120" width="16" height="16" fill="#000"/>
+    <rect x="74" y="122" width="56" height="12" fill="#000"/>
+  </svg>`;
+}
+
+// ---------- building blocks ----------
+const svgOf = (name, d) => icon(name, d.icon);
+
+function notches(d) {
+  const clock = d.id === 'signal' ? '<span class="dotlive"></span>14:32' : '14:32';
+  const heights = [6, 13, 9, 15, 7];
+  return `<div class="desk" style="background:${d.deskBg}">
+    <div class="notch idle">${clock}</div>
+    <div class="notch live"><div class="art"></div>
+      <div><div class="tt">Senja di Kemang</div><div class="st">Studio Ruang · 1:42 / 3:58</div></div>
+      <div class="eq">${heights.map(h => `<i style="height:${h}px"></i>`).join('')}</div>
+    </div></div>`;
+}
+
+function pageDots(active) {
+  return `<div class="dots">${[0,1,2,3,4,5,6].map(i => `<i class="${i === active ? 'on' : ''}"></i>`).join('')}</div>`;
+}
+
+function calendar(d) {
+  const wd = ['Sen','Sel','Rab','Kam','Jum','Sab','Min'];
+  const cells = [];
+  for (const n of [28, 29, 30]) cells.push({ n, out: true });
+  for (let n = 1; n <= 31; n++) cells.push({ n });
+  cells.push({ n: 1, out: true });
+  const marks = new Set([25, 26, 27, 28]);
+  const grid = wd.map(w => `<div class="wd">${w}</div>`).join('') + cells.map(c =>
+    `<div class="d${c.out ? ' out' : ''}${!c.out && c.n === 26 ? ' today' : ''}"><span>${c.n}</span>${!c.out && marks.has(c.n) && c.n !== 26 ? '<em></em>' : ''}</div>`).join('');
+  const evs = [
+    [d.v.a2, 'Pameran arsitektur Jakarta', 'Sepanjang hari · 25–28 Okt'],
+    [d.v.a, 'Review desain klien', '10:00 – 11:30'],
+    [d.accents[4][1], 'Rapat koordinasi MEP', '14:00 – 15:00'],
+  ];
+  return `<div class="panel cal"><div>
+      <div class="cal-h"><b>Oktober 2026</b><div class="seg"><span>Hari</span><span>Minggu</span><span class="on">Bulan</span></div></div>
+      <div class="grid7">${grid}</div></div>
+    <div class="evs" style="padding-top:30px"><div class="day">Senin, 26 Oktober</div>
+      ${evs.map(([c, t, s]) => `<div class="ev"><i style="background:${c}"></i><div><b>${t}</b><small>${s}</small></div></div>`).join('')}
+      <div class="add">+ Tambah event</div></div>
+    ${pageDots(0)}</div>`;
+}
+
+function shortcuts(d) {
+  const t = [['camera','Screenshot'],['clipboard','Clipboard'],['emoji','Emoji'],['folder','Explorer'],['calc','Kalkulator'],['activity','Task Manager'],['gear','Pengaturan'],['lock','Kunci layar']];
+  return `<div class="panel sc"><div class="sc-h">Shortcuts</div>
+    <div class="tiles">${t.map(([i, l]) => `<div class="tile">${svgOf(i, d)}<span>${l}</span></div>`).join('')}</div>
+    ${pageDots(6)}</div>`;
+}
+
+function settingsWin(d) {
+  const nav = [['palette','Tampilan'],['gear','Umum'],['timer','Pomodoro'],['link','Integrasi'],['info','Tentang']];
+  return `<div class="win">
+    <div class="bar">${logo(d.id, 14)} Pengaturan Dynamic Island</div>
+    <div class="side"><div class="brand">${logo(d.id, 22)}Dynamic Island</div>
+      ${nav.map(([i, l], k) => `<div class="nav${k === 1 ? ' on' : ''}">${svgOf(i, d)}${l}</div>`).join('')}</div>
+    <div class="main"><h3>Umum</h3><div class="card">
+      <div class="row"><div><b>Bahasa</b><small>Island dan semua jendela</small></div><div class="wseg"><span class="on">Indonesia</span><span>English</span></div></div>
+      <div class="row"><div><b>Mulai bersama Windows</b><small>Buka island saat masuk</small></div><div class="tog"></div></div>
+      <div class="row"><div><b>Peringatan baterai</b><small>Saat baterai di bawah</small></div><div class="step"><i>−</i>20%<i>+</i></div></div>
+      <div class="row"><div><b>Lirik di notch</b><small>Judul dikirim ke lrclib.net</small></div><div class="tog off"></div></div>
+      <div class="row"><div><b>Shell CLI</b><small>Menjalankan perintah halaman CLI</small></div><div class="wseg"><span class="on">PowerShell</span><span>cmd</span></div></div>
+    </div></div></div>`;
+}
+
+function varsOf(d) {
+  return Object.entries(d.v).map(([k, v]) => `--${k}:${v}`).join(';');
+}
+
+function identityPage(d) {
+  const iconList = [['calendar','Kalender'],['timer','Pomodoro'],['bell','Pengingat'],['note','Catatan'],['music','Musik'],['terminal','CLI'],['grid','Shortcuts'],['camera','Screenshot'],['clipboard','Clipboard'],['emoji','Emoji'],['folder','Explorer'],['calc','Kalkulator'],['activity','Task Mgr'],['gear','Pengaturan'],['lock','Kunci']];
+  return `<section class="page dark" style="${varsOf(d)}">
+    <div class="id-head"><div>
+      <div class="eyebrow" style="font-family:var(--fb)">Arah ${d.no} · Identitas</div>
+      <div class="id-name">${d.name}</div>
+      <div class="id-tag">${d.tag}</div></div>
+      <div class="chips">${d.mood.map(m => `<span class="chip">${m}</span>`).join('')}</div></div>
+    <div class="id-grid">
+      <div class="box logo-big"><h4>Logo & ikon app</h4>${logo(d.id)}
+        <div class="logo-sizes">${logo(d.id, 48)}${logo(d.id, 32)}${logo(d.id, 20)}</div>
+        <div class="wordmark">Dynamic Island</div></div>
+      <div class="box"><h4>Warna island</h4>
+        <div class="sw-row">${d.swatches.map(([n, h]) => `<div class="sw"><i style="background:${h}"></i><b>${n}</b>${h}</div>`).join('')}</div>
+        <h4>6 pilihan aksen</h4>
+        <div class="acc-row">${d.accents.map(([n, h]) => `<div class="sw"><i style="background:${h};color:${d.v.s}">Aa</i><b>${n}</b>${h}</div>`).join('')}</div></div>
+      <div class="box"><h4>Tipografi</h4>
+        <div class="type-num">14:32</div>
+        <div class="type-disp">Oktober 2026</div>
+        <div class="type-body">Review desain klien · 10:00 – 11:30</div>
+        <div class="type-meta">${d.fonts.map(([f, u]) => `<b>${f}</b> — ${u}`).join('<br>')}<br>Lisensi SIL OFL, boleh ditanam di exe.</div></div>
+    </div>
+    <div class="icons">${iconList.map(([i, l]) => `<div class="ic"><span>${svgOf(i, d)}</span>${l}</div>`).join('')}</div>
+    <div class="folio"><span>Dynamic Island · Redesign 3.0</span><span>${d.name}</span></div>
+  </section>`;
+}
+
+function uiPage(d) {
+  return `<section class="page" style="${varsOf(d)}">
+    <div class="ui-head"><div><div class="eyebrow">Arah ${d.no} · Di dalam app</div><h1>${d.name}</h1></div>
+      <div class="muted" style="font-size:12px">Ukuran mockup mendekati ukuran asli panel (± 520 × 250 px)</div></div>
+    <div class="ui-grid">
+      <div class="stack">${notches(d)}${calendar(d)}${shortcuts(d)}</div>
+      <div>${settingsWin(d)}
+        <div class="notes"><h2>Yang berubah</h2><ul>${d.changes.map(c => `<li>${c}</li>`).join('')}</ul></div></div>
+    </div>
+    <div class="folio"><span>Dynamic Island · Redesign 3.0</span><span>${d.name}</span></div>
+  </section>`;
+}
+
+// ---------- fixed pages ----------
+const cover = `<section class="page cover">
+  <div><div class="eyebrow">Dynamic Island for Windows · Rencana visual</div></div>
+  <div><h1>Redesign 3.0<br>warna, font, logo & ikon</h1>
+    <div class="sub">Tiga arah visual untuk mengganti tampilan app secara total. Pilih satu (atau gabungkan bagiannya), lalu kita detailkan jadi rencana implementasi.</div></div>
+  <div class="cover-row">${DIRS.map(d => `<div class="cover-card" style="${varsOf(d)};background:${d.v.s};border:1px solid ${d.v.t}">
+      <div class="n" style="font-family:var(--fb)">Arah ${d.no}</div>
+      <div style="display:flex;align-items:center;gap:14px">${logo(d.id, 64)}<div class="nm" style="font-family:var(--fd);font-weight:var(--fdw);font-style:var(--fdi);letter-spacing:var(--fdls)">${d.name}</div></div>
+      <div style="display:flex;gap:6px">${[d.v.s, d.v.r, d.v.tx, ...d.accents.slice(0, 3).map(a => a[1])].map(c => `<i style="width:26px;height:26px;border-radius:var(--ctlr);background:${c};display:block;border:1px solid rgba(255,255,255,.12)"></i>`).join('')}</div>
+    </div>`).join('')}</div>
+  <div class="folio" style="opacity:.45"><span>26 Oktober 2026</span><span>v2.2.0 → 3.0</span></div>
+</section>`;
+
+const audit = `<section class="page">
+  <div class="eyebrow">Titik awal</div><h1 style="margin-bottom:16px">Tampilan sekarang (v2.2)</h1>
+  <div class="audit">
+    <div class="shots"><img src="../../assets/screenshots/calendar.png" alt="Halaman kalender sekarang">
+      <div class="two"><img src="../../assets/screenshots/shortcuts.png" alt="Halaman shortcuts sekarang"><img src="../../assets/screenshots/settings.png" alt="Jendela pengaturan sekarang"></div></div>
+    <div>
+      <h2>Yang dipakai sekarang</h2>
+      <p class="muted">Warna island (hitam) dan 6 aksen ala iOS</p>
+      <div class="tok">${['#000000','#1C1C1E','#3A3A3C','#F2F2F2','#4F8CFF','#A78BFA','#30D158','#FF9F0A','#FF6482','#FF453A'].map(c => `<i style="background:${c}" title="${c}"></i>`).join('')}</div>
+      <p><b>Font:</b> Segoe UI Variable (bawaan Windows), Cascadia Mono di CLI<br><b>Ikon:</b> Segoe Fluent Icons (font ikon bawaan Windows)<br><b>Logo:</b> tile gelap dengan pill putih dan titik biru</p>
+      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 16px"><img src="../../assets/logo.svg" width="56" height="56" alt="Logo sekarang"><span class="muted" style="font-size:12px">assets/logo.svg</span></div>
+      <h2>Kenapa perlu diganti</h2>
+      <div class="issue"><b>Terasa seperti tiruan macOS.</b><p class="muted">Abu-abu dan aksen diambil langsung dari palet iOS, jadi tidak punya identitas sendiri.</p></div>
+      <div class="issue"><b>Font dan ikon generik.</b><p class="muted">Segoe UI dan Segoe Fluent dipakai hampir semua app Windows; island tidak terlihat beda.</p></div>
+      <div class="issue"><b>Logo kurang terbaca di ukuran kecil.</b><p class="muted">Tile gelap di atas taskbar gelap; di 16 px pill dan titik biru nyaris hilang.</p></div>
+      <div class="issue" style="border:0"><b>Hirarki panel datar.</b><p class="muted">Judul, angka dan teks pakai satu font dan bobot yang mirip.</p></div>
+    </div>
+  </div>
+  <div class="folio"><span>Dynamic Island · Redesign 3.0</span><span>Titik awal</span></div>
+</section>`;
+
+const compare = `<section class="page">
+  <div class="eyebrow">Perbandingan & langkah berikutnya</div><h1 style="margin-bottom:14px">Mana yang dipilih?</h1>
+  <table>
+    <tr><th></th><th>01 · Nocturne</th><th>02 · Studio</th><th>03 · Signal</th></tr>
+    <tr><td>Karakter</td><td>Tenang, premium, paling aman</td><td>Hangat, editorial, paling unik</td><td>Berani, teknis, kontras tertinggi</td></tr>
+    <tr><td>Warna</td><td>Hitam kebiruan + indigo/teal</td><td>Espresso + krem + terakota</td><td>Hitam pekat + lime</td></tr>
+    <tr><td>Font</td><td>Geist + Geist Mono</td><td>Fraunces Italic + DM Sans</td><td>Space Grotesk + JetBrains Mono</td></tr>
+    <tr><td>Ikon</td><td>Garis 1,75 px, ujung bulat</td><td>Duotone 1,5 px</td><td>Garis 2 px, sudut tajam</td></tr>
+    <tr><td>Logo</td><td>Pill bercahaya indigo→teal</td><td>Lengkung arsitektur + pill</td><td>Pill lime dalam bingkai sudut</td></tr>
+    <tr><td>Risiko</td><td>Bisa terasa "aman" / mirip app lain</td><td>Serif italic perlu diuji di ukuran kecil (10–11 px)</td><td>Lime mencolok; tidak semua orang suka</td></tr>
+    <tr><td>Kerja tambahan</td><td><span class="pill">sedang</span></td><td><span class="pill">sedang–tinggi</span> (duotone)</td><td><span class="pill">sedang</span></td></tr>
+  </table>
+  <h2 style="margin-top:20px">Rencana implementasi (berlaku untuk arah mana pun)</h2>
+  <div class="plan">
+    <div class="step-card"><div class="k">Langkah 1</div><h5>Warna</h5><p>Ganti hex di <code>src/theme.rs</code> (Palette, Accent, WindowPalette) dan update test yang mengunci nilai hex. Paling ringan.</p></div>
+    <div class="step-card"><div class="k">Langkah 2</div><h5>Font</h5><p>Tanam file font (subset) di exe, muat lewat DirectWrite in-memory loader di <code>render.rs</code> / <code>settings_controls.rs</code>, dan <code>AddFontMemResourceEx</code> untuk jendela GDI (CLI, editor). Exe naik ± 150–400 KB.</p></div>
+    <div class="step-card"><div class="k">Langkah 3</div><h5>Ikon</h5><p>Ganti glyph Segoe Fluent dengan path SVG sendiri yang digambar sebagai Direct2D path geometry. Satu modul ikon dipakai island, shortcuts dan settings.</p></div>
+    <div class="step-card"><div class="k">Langkah 4</div><h5>Logo</h5><p>Perbarui <code>assets/logo.svg</code>, <code>scripts/make-icon.ps1</code>, <code>icon.ico</code>, <code>logo-256.png</code> dan ikon tray, lalu screenshot README.</p></div>
+  </div>
+  <p class="muted" style="margin-top:16px">Setelah arah dipilih: detailkan token lengkap (light + dark), uji kontras, lalu kerjakan lewat workflow <b>build</b> sesuai AGENTS.md. Catatan: Rust toolchain belum terpasang di PC ini, jadi build dan test perlu dipasang dulu.</p>
+  <div class="folio"><span>Dynamic Island · Redesign 3.0</span><span>Perbandingan</span></div>
+</section>`;
+
+document.getElementById('doc').innerHTML =
+  cover + audit + DIRS.map(d => identityPage(d) + uiPage(d)).join('') + compare;
+
+// #p3 shows only page 3 (used to export page previews)
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

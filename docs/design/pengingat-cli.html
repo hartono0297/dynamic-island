@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pengingat dan CLI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6;
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713; --term: #0F0C0A;
+    --itx: #F4EDE4; --itx2: #A89A8B; --idot: #4A3E35;
+    --a: #E2683C; --sage: #9DB59A; --ochre: #D9A441; --red: #FF8A73;
+    --disp: 'Fraunces', serif; --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+  }
+  .wd { --bg: #1E1814; --pop: #2A221C; --tx: #F4EDE4; --tx2: #A89A8B; --tx3: #6E6155; --ac: #E2683C; --ai: #17120F;
+        --b: rgba(244,237,228,.09); --field: #2C241D; --hov: #33291F; --sel: rgba(226,104,60,.16); }
+  .wl { --bg: #F4EEE6; --pop: #FFFBF5; --tx: #221A14; --tx2: #7A6B5D; --tx3: #A89A8B; --ac: #C9542B; --ai: #FFFBF5;
+        --b: rgba(34,26,20,.10); --field: #FFFFFF; --hov: #EFE6DA; --sel: rgba(201,84,43,.12); }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  h1 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 30px; letter-spacing: -.01em; margin: 2px 0 14px; }
+  .lbl { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 8px; }
+  .ux h3 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 18px; margin-bottom: 8px; }
+  .ux li { list-style: none; position: relative; padding-left: 14px; font-size: 11.5px; line-height: 1.5; margin-bottom: 5px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  kbd { font-family: var(--mono); font-size: 10px; background: #E6DCCF; border-radius: 4px; padding: 0 4px; }
+
+  /* ---------- editor ---------- */
+  .ed { width: 400px; background: var(--bg); color: var(--tx); border-radius: 16px; border: 1px solid var(--b); box-shadow: 0 18px 40px rgba(34,26,20,.28); position: relative; font-size: 12px; }
+  .ed .hd { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 6px; }
+  .ed .hd b { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 21px; }
+  .xbtn { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--tx2); background: var(--hov); }
+  .xbtn svg { width: 12px; height: 12px; }
+  .bd { padding: 6px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .title { font-size: 17px; font-weight: 500; padding: 8px 0 10px; border-bottom: 1.5px solid var(--b); }
+  .title.ph { color: var(--tx3); font-weight: 400; }
+  .title.focus { border-color: var(--ac); }
+  .r { display: flex; align-items: center; gap: 8px; }
+  .ic { width: 18px; color: var(--tx2); flex: none; }
+  .ic svg { width: 17px; height: 17px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--field); border: 1px solid var(--b); border-radius: 10px; padding: 7px 11px; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .chip.on { border-color: var(--ac); box-shadow: 0 0 0 3px var(--sel); }
+  .chip svg { width: 11px; height: 11px; color: var(--tx2); }
+  .muted { color: var(--tx2); font-size: 11px; }
+  .quick { display: flex; gap: 6px; margin-left: 26px; flex-wrap: wrap; }
+  .quick span { font-size: 10.5px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--b); color: var(--tx2); white-space: nowrap; }
+  .quick span.on { background: var(--sel); color: var(--ac); border-color: transparent; }
+  .seg { display: flex; border: 1px solid var(--b); border-radius: 10px; padding: 2px; font-size: 11px; background: var(--field); }
+  .seg span { padding: 4px 11px; border-radius: 8px; color: var(--tx2); }
+  .seg span.on { background: var(--ac); color: var(--ai); font-weight: 500; }
+  .days { display: flex; gap: 5px; margin-left: 26px; }
+  .days span { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10.5px; border: 1px solid var(--b); color: var(--tx2); }
+  .days span.on { background: var(--ac); color: var(--ai); border-color: var(--ac); font-weight: 600; }
+  .summary { margin-left: 26px; font-size: 11px; color: var(--tx2); }
+  .summary b { color: var(--tx); font-weight: 500; }
+  .ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--b); }
+  .ft .who { font-size: 10.5px; color: var(--tx2); flex: 1; }
+  .btn { font-size: 11.5px; padding: 7px 14px; border-radius: 99px; background: var(--hov); color: var(--tx); white-space: nowrap; }
+  .btn.pri { background: var(--ac); color: var(--ai); font-weight: 500; }
+  .btn.dis { opacity: .4; }
+  .btn.dng { background: transparent; color: #FF8A73; padding-left: 4px; }
+  .wl .btn.dng { color: #C42B1C; }
+  .pop { position: absolute; background: var(--pop); border: 1px solid var(--b); border-radius: 16px; box-shadow: 0 16px 36px rgba(0,0,0,.35); z-index: 3; color: var(--tx); }
+  .cal { width: 268px; padding: 12px 12px 10px; }
+  .cal .ch { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 8px; }
+  .cal .ch b { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 16px; }
+  .cal .ch span { display: flex; gap: 2px; color: var(--tx2); }
+  .cal .ch svg { width: 16px; height: 16px; }
+  .g7 { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; row-gap: 2px; }
+  .g7 .w { font-size: 9.5px; color: var(--tx2); padding-bottom: 4px; }
+  .g7 .d { height: 32px; display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .g7 .d span { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .g7 .d.o { color: var(--tx3); }
+  .g7 .d.past { color: var(--tx3); }
+  .g7 .d.today span { box-shadow: inset 0 0 0 1.5px var(--ac); color: var(--ac); font-weight: 600; }
+  .g7 .d.sel span { background: var(--ac); color: var(--ai); font-weight: 600; }
+  .cal .cf { display: flex; justify-content: space-between; border-top: 1px solid var(--b); margin-top: 6px; padding: 8px 4px 0; font-size: 11px; }
+  .times { width: 170px; padding: 6px; }
+  .times div { display: flex; justify-content: space-between; padding: 7px 10px; border-radius: 9px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .times div small { color: var(--tx2); font-size: 10.5px; }
+  .times div.on { background: var(--sel); color: var(--ac); font-weight: 500; }
+  .times div.hov { background: var(--hov); }
+
+  /* ---------- panel + cli ---------- */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--itx); border-radius: 0 0 30px 30px; position: relative; padding: 16px 20px 28px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .panel.tall { height: 440px; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 8px; gap: 8px; }
+  .ttl { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 20px; }
+  .hchips { display: flex; align-items: center; gap: 6px; }
+  .hchip { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--itx2); font-family: var(--mono); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .hchip.run { background: rgba(226,104,60,.15); color: var(--a); font-family: var(--body); }
+  .hchip.ok { background: rgba(157,181,154,.15); color: var(--sage); font-family: var(--body); }
+  .hchip.err { background: rgba(255,138,115,.14); color: var(--red); font-family: var(--body); }
+  .hbtn { width: 26px; height: 26px; border-radius: 50%; background: var(--r); color: var(--itx2); display: flex; align-items: center; justify-content: center; }
+  .hbtn svg { width: 13px; height: 13px; }
+  .stop { font-size: 10.5px; padding: 4px 10px; border-radius: 99px; background: var(--a); color: #17120F; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+  .stop i { width: 7px; height: 7px; background: #17120F; border-radius: 1.5px; display: block; }
+  .term { background: var(--term); border-radius: 16px; height: 214px; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.62; color: #E6DED3; overflow: hidden; }
+  .tall .term { height: 364px; }
+  .out { padding: 10px 14px 0; height: calc(100% - 44px); overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+  .out .p { color: var(--a); }
+  .out .m { color: var(--itx2); }
+  .out .g { color: var(--sage); }
+  .out .e { color: var(--red); }
+  .out .sep { border-top: 1px dashed #2A221C; margin: 5px 0; }
+  .inp { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid #221B16; }
+  .inp.focus { box-shadow: inset 0 0 0 1.5px rgba(226,104,60,.55); border-radius: 0 0 16px 16px; }
+  .inp .pr { color: var(--a); }
+  .inp .cmd { flex: 1; }
+  .inp .ghost { color: #5E5248; }
+  .inp .hint { font-family: var(--body); font-size: 9.5px; color: #6E6155; white-space: nowrap; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--a); vertical-align: -3px; }
+  .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(226,104,60,.25); border-top-color: var(--a); display: inline-block; }
+  .sugg { position: absolute; left: 10px; right: 10px; bottom: 50px; background: #241D18; border: 1px solid #332A23; border-radius: 12px; padding: 5px; font-family: var(--mono); font-size: 11px; box-shadow: 0 10px 24px rgba(0,0,0,.4); }
+  .sugg div { padding: 6px 9px; border-radius: 8px; display: flex; justify-content: space-between; }
+  .sugg div.on { background: rgba(226,104,60,.16); }
+  .sugg small { font-family: var(--body); font-size: 9.5px; color: var(--itx2); }
+  .sugg b { color: var(--a); font-weight: 500; }
+  .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--idot); display: block; }
+  .dots i.on { background: var(--a); }
+  .lockb { position: absolute; top: 0; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--itx2); background: var(--r); padding: 2px 10px; border-radius: 0 0 8px 8px; display: flex; gap: 5px; align-items: center; }
+  .lockb i { width: 6px; height: 6px; border-radius: 50%; background: var(--a); display: block; }
+
+  .two { display: grid; grid-template-columns: 560px 1fr; gap: 26px; }
+  .pr2 + .pr2 { margin-top: 14px; }
+
+  /* notch */
+  .scr { height: 84px; border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--itx); border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 14px 0 6px; height: 36px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; }
+  .nt.big { height: 60px; border-radius: 26px; padding: 0 12px 0 10px; gap: 10px; top: 12px; }
+  .nt .t1 { font-size: 12.5px; font-weight: 500; }
+  .nt .t2 { font-size: 10.5px; color: var(--itx2); }
+  .act { margin-left: 8px; font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--itx); }
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; }
+  .cmp div { padding: 8px 12px; font-size: 11px; border-bottom: 1px solid var(--rule); line-height: 1.4; }
+  .cmp div:nth-child(odd) { background: #F8F4EE; color: #6B5D51; }
+  .cmp div:nth-child(even) { background: #FFFBF5; }
+  .cmp .h { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+const I = {
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/></svg>',
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>',
+  repeat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3.5l3 3-3 3M4 11.5V10a3.5 3.5 0 0 1 3.5-3.5H20M7 20.5l-3-3 3-3M20 12.5V14a3.5 3.5 0 0 1-3.5 3.5H4"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  l: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6l-6 6 6 6"/></svg>',
+  r: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"/></svg>',
+  shrink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h4V4M20 8h-4V4M4 16h4v4M20 16h-4v4"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13z"/></svg>',
+};
+
+// Bata robot (no ears, no antenna) — same as studio-robot.html
+function robot(expr = 'idle', size = 26) {
+  const T = '#E2683C', D = '#17120F', C = '#F4EDE4', L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const E = {
+    idle: eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3),
+    happy,
+    alert: `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`,
+    think: eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + `<circle cx="54" cy="6" r="1.4" fill="${C}"/><circle cx="58.5" cy="3" r="1.8" fill="${C}"/><circle cx="63.5" cy="0" r="2.2" fill="${C}"/>`,
+    sad: eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8),
+  }[expr];
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/><rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>${E}</svg>`;
+}
+
+// ---------- reminder editor ----------
+function calPop(top, left) {
+  const cells = [[28,1],[29,1],[30,1]];
+  for (let n = 1; n <= 31; n++) cells.push([n, 0]);
+  cells.push([1, 1]);
+  return `<div class="pop cal" style="top:${top}px;left:${left}px">
+    <div class="ch"><b>Oktober 2026</b><span>${I.l}${I.r}</span></div>
+    <div class="g7">${['Sen','Sel','Rab','Kam','Jum','Sab','Min'].map(w => `<div class="w">${w}</div>`).join('')}
+    ${cells.map(([n, o]) => `<div class="d${o ? ' o' : ''}${!o && n < 26 ? ' past' : ''}${!o && n === 26 ? ' today' : ''}${!o && n === 27 ? ' sel' : ''}"><span>${n}</span></div>`).join('')}</div>
+    <div class="cf"><span style="color:var(--ac);font-weight:500">Hari ini</span><span style="color:var(--tx2)">Tanggal lewat diredupkan</span></div></div>`;
+}
+function timePop(top, left) {
+  const t = [['08:00','pagi'],['09:00',''],['09:30',''],['12:00','siang'],['16:30',''],['17:00','sore'],['20:00','malam']];
+  return `<div class="pop times" style="top:${top}px;left:${left}px">${t.map(([h, d]) => `<div class="${h === '09:00' ? 'on' : h === '09:30' ? 'hov' : ''}"><span>${h}</span><small>${d}</small></div>`).join('')}
+    <div style="border-top:1px solid var(--b);margin-top:4px;padding-top:9px;color:var(--tx2);font-size:10.5px">Ketik jam, mis. 0915</div></div>`;
+}
+
+function remEditor(theme, o = {}) {
+  const rep = o.rep ?? 0;
+  return `<div class="ed ${theme}" style="${o.style || ''}">
+    <div class="hd"><b>${o.edit ? 'Edit pengingat' : 'Pengingat baru'}</b><span class="xbtn">${I.x}</span></div>
+    <div class="bd">
+      <div class="title${o.empty ? ' ph focus' : ''}">${o.empty ? 'Ingatkan saya untuk…' : (o.text || 'Kirim revisi denah ke klien')}</div>
+      <div class="r"><span class="ic">${I.cal}</span><span class="chip${o.pop === 'date' ? ' on' : ''}">${o.date || 'Hari ini, 26 Okt'} ${I.down}</span>
+        <span class="ic" style="margin-left:6px">${I.clock}</span><span class="chip${o.pop === 'time' ? ' on' : ''}">${o.time || '16:30'} ${I.down}</span></div>
+      <div class="quick">${(o.quick || ['30 mnt lagi', '1 jam lagi', 'Nanti malam', 'Besok pagi']).map((q, i) => `<span class="${i === o.quickOn ? 'on' : ''}">${q}</span>`).join('')}</div>
+      <div class="r"><span class="ic">${I.repeat}</span><div class="seg">${['Sekali', 'Harian', 'Mingguan'].map((s, i) => `<span class="${i === rep ? 'on' : ''}">${s}</span>`).join('')}</div></div>
+      ${rep === 2 ? `<div class="days">${['S','S','R','K','J','S','M'].map((d, i) => `<span class="${[0, 2, 4].includes(i) ? 'on' : ''}">${d}</span>`).join('')}</div>` : ''}
+      <div class="summary">${o.summary || 'Sekali, <b>hari ini jam 16:30</b> · 4 jam lagi'}</div>
+    </div>
+    <div class="ft">${o.edit ? `<span class="btn dng">Hapus</span>` : ''}<span class="who">${o.edit ? '' : 'Disimpan di komputer ini'}</span><span class="btn">Batal</span><span class="btn pri${o.empty ? ' dis' : ''}">Simpan</span></div>
+    ${o.pop === 'date' ? calPop(122, 44) : ''}${o.pop === 'time' ? timePop(122, 196) : ''}</div>`;
+}
+
+// ---------- CLI in the panel ----------
+const dots = `<div class="dots">${[0,1,2,3,4,5,6].map(i => `<i class="${i === 5 ? 'on' : ''}"></i>`).join('')}</div>`;
+function cli(o = {}) {
+  const head = o.head || `<span class="hchip">D:\\Proyek\\rumah-kemang</span><span class="hchip">PowerShell</span>`;
+  return `<div class="panel${o.tall ? ' tall' : ''}">${o.lock ? '<div class="lockb"><i></i>Panel tetap terbuka saat mengetik · Esc untuk keluar</div>' : ''}
+    <div class="ph"><span class="ttl">CLI</span><div class="hchips">${head}<span class="hbtn">${o.tall ? I.shrink : I.expand}</span></div></div>
+    <div class="term"><div class="out">${o.out}</div>
+      ${o.sugg || ''}
+      <div class="inp${o.focus ? ' focus' : ''}"><span class="pr">›</span><span class="cmd">${o.cmd ?? '<span class="caret"></span>'}</span><span class="hint">${o.hint ?? 'Enter jalankan · ↑ riwayat · Esc keluar'}</span></div></div>
+    ${dots}</div>`;
+}
+const OUT_READY = `<div><span class="p">›</span> git status</div><div class="m">On branch main · nothing to commit, working tree clean</div>
+  <div class="sep"></div><div><span class="p">›</span> ls *.dwg</div><div class="m">denah-lt1.dwg &nbsp; denah-lt2.dwg &nbsp; tampak-depan.dwg</div>`;
+const OUT_RUN = `<div><span class="p">›</span> npm run build</div><div class="m">&gt; rumah-kemang@1.4.0 build</div><div class="m">&gt; vite build</div>
+  <div>vite v6.0.7 building for production...</div><div class="m">✓ 1284 modules transformed.</div><div>rendering chunks (12/18)...</div>`;
+const OUT_ERR = `<div><span class="p">›</span> npm test</div><div class="m">PASS src/denah.test.ts</div><div class="e">FAIL src/rab.test.ts</div>
+  <div class="e">&nbsp; ● hitungRAB › total termasuk PPN</div><div class="m">&nbsp;&nbsp;&nbsp; Expected: 12.210.000 · Received: 11.000.000</div><div class="m">Tests: 1 failed, 23 passed, 24 total</div>`;
+const OUT_TALL = `<div><span class="p">›</span> git log --oneline -12</div>` + [
+  ['b83979b', 'fix: shortcut programs by full path'], ['bc85b93', 'fix: shortcuts keep the panel closed'], ['118800e', 'docs: english readme for v2.2'],
+  ['77d3f16', 'feat: shortcuts page and cli'], ['4106ddd', 'fix: lyrics wait for the new track'], ['9c1e2aa', 'feat: synced lyrics in the notch'],
+  ['5d0b7f1', 'feat: reminders'], ['a2e44c9', 'feat: idle clock'], ['e81f3b0', 'feat: settings window'], ['0b9d2c6', 'feat: pomodoro ring'],
+  ['7f3a510', 'feat: google calendar'], ['3c6e9d1', 'init'],
+].map(([h, m]) => `<div><span style="color:var(--ochre)">${h}</span> <span class="m">${m}</span></div>`).join('');
+
+// ---------- pages ----------
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Studio · Pengingat & CLI</span><span>${r}</span></div>`;
+const ux = (t, items) => `<div class="ux">${t ? `<h3>${t}</h3>` : ''}<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+
+const p1 = `<section class="page"><div class="eyebrow">Editor pengingat · mode gelap</div><h1>Pengingat baru, gaya yang sama dengan acara</h1>
+  <div style="display:flex;gap:30px;align-items:flex-start">
+    <div><div class="lbl">1 · Baru dibuka</div>${remEditor('wd', { empty: true, quickOn: -1, summary: 'Pilih tanggal dan jam, atau pakai pintasan.' })}</div>
+    <div><div class="lbl">2 · Memilih tanggal</div>${remEditor('wd', { pop: 'date', date: 'Besok, 27 Okt', summary: 'Sekali, <b>besok jam 16:30</b>' })}</div>
+  </div>
+  <div style="position:absolute;left:910px;top:92px;width:180px">${ux('Yang berubah', [
+    'Teks pengingat jadi baris besar di atas, kursor langsung di sana.',
+    'Tanggal dan jam berupa chip dengan popover, sama seperti editor acara.',
+    'Pintasan waktu: 30 mnt lagi, 1 jam lagi, nanti malam, besok pagi.',
+    'Ulangi pakai segmen; ringkasan satu kalimat di bawahnya.',
+    'Tanggal yang sudah lewat diredupkan di kalender.',
+    'Simpan redup sampai teks diisi.'])}</div>
+  ${folio('Pengingat')}</section>`;
+
+const p2 = `<section class="page"><div class="eyebrow">Editor pengingat · status lain</div><h1>Mingguan, jam, dan mode terang</h1>
+  <div style="display:flex;gap:30px;align-items:flex-start">
+    <div><div class="lbl">3 · Mingguan + pilih jam</div>${remEditor('wd', { edit: true, text: 'Backup file proyek', date: 'Mulai Sen, 26 Okt', time: '09:00', rep: 2, pop: 'time',
+      summary: 'Tiap <b>Sen, Rab, Jum jam 09:00</b> · berikutnya Rab, 28 Okt' })}</div>
+    <div><div class="lbl">4 · Mode terang, harian</div>${remEditor('wl', { edit: true, text: 'Minum vitamin', date: 'Mulai hari ini', time: '08:00', rep: 1,
+      summary: 'Tiap hari jam <b>08:00</b> · berikutnya besok' })}</div>
+  </div>
+  <div style="position:absolute;left:910px;top:92px;width:180px">${ux('Detail', [
+    'Mingguan memunculkan pilihan hari (S S R K J S M), boleh lebih dari satu.',
+    'Daftar jam memberi saran pagi, siang, sore, malam; bisa juga diketik.',
+    'Ringkasan menyebut kapan berikutnya berbunyi.',
+    'Hapus hanya muncul saat mengedit, di kiri, warna merah lembut.'])}</div>
+  ${folio('Pengingat')}</section>`;
+
+const p3 = `<section class="page"><div class="eyebrow">CLI · langsung di panel</div>
+  <div class="two pr2" style="margin-top:10px"><div><div class="lbl">Siap mengetik</div>${cli({ out: OUT_READY, focus: true, lock: true })}</div>
+    <div style="padding-top:22px">${ux('Tanpa jendela baru', [
+      'Halaman CLI di panel adalah terminalnya; tidak ada jendela di bawah panel lagi.',
+      'Klik halaman CLI atau mulai mengetik → input aktif, garis terakota.',
+      'Selama input aktif, panel tetap terbuka walau mouse keluar. Esc atau klik di luar untuk keluar.',
+      'Folder dan shell tampil sebagai chip di kanan atas.'])}</div></div>
+  <div class="two pr2"><div><div class="lbl">Perintah berjalan</div>${cli({ out: OUT_RUN, focus: true,
+      head: `<span class="hchip run"><span class="spin"></span>Berjalan · 0:42</span><span class="stop"><i></i>Stop</span>`,
+      cmd: '<span class="ghost">tunggu perintah selesai…</span>', hint: 'Ctrl+C berhenti' })}</div>
+    <div style="padding-top:22px">${ux('Saat berjalan', [
+      'Chip "Berjalan" dengan waktu; tombol Stop sama dengan Ctrl+C.',
+      'Output mengalir dari bawah; gulir mouse di area output menggulir output, bukan pindah halaman.',
+      'Panel boleh ditutup; perintah tetap jalan dan notch menunjukkan statusnya.'])}</div></div>
+  ${folio('CLI')}</section>`;
+
+const p4 = `<section class="page"><div class="eyebrow">CLI · hasil dan riwayat</div>
+  <div class="two pr2" style="margin-top:10px"><div><div class="lbl">Selesai dengan error</div>${cli({ out: OUT_ERR, focus: true,
+      head: `<span class="hchip err">exit 1 · 3,8 dtk</span><span class="hchip">PowerShell</span>` })}</div>
+    <div style="padding-top:22px">${ux('Hasil', [
+      'Chip hasil: hijau sage "selesai · 2,1 dtk" atau merah lembut "exit 1".',
+      'Baris error diwarnai, sisanya tetap redup supaya mudah dipindai.',
+      'Input langsung siap untuk perintah berikutnya.'])}</div></div>
+  <div class="two pr2"><div><div class="lbl">Riwayat & saran</div>${cli({ out: OUT_READY, focus: true,
+      cmd: 'git <span class="ghost">status</span>', hint: 'Tab terima · ↑↓ pilih',
+      sugg: `<div class="sugg"><div class="on"><span><b>git</b> status</span><small>2 mnt lalu</small></div><div><span><b>git</b> pull</span><small>kemarin</small></div><div><span><b>git</b> log --oneline -12</span><small>kemarin</small></div></div>` })}</div>
+    <div style="padding-top:22px">${ux('Riwayat', [
+      'Saat mengetik, perintah lama yang cocok muncul di atas input.',
+      'Tab menerima saran, ↑↓ memilih, ↑ di input kosong = perintah terakhir.',
+      '<kbd>cd</kbd> dan <kbd>cls</kbd> tetap jalan seperti sekarang.'])}</div></div>
+  ${folio('CLI')}</section>`;
+
+const p5 = `<section class="page"><div class="eyebrow">CLI · panel besar & status di notch</div>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:26px;margin-top:10px">
+    <div><div class="lbl">Panel diperbesar (output panjang)</div>${cli({ tall: true, out: OUT_TALL, focus: true })}</div>
+    <div>
+      <div class="lbl">Notch saat panel ditutup</div>
+      <div class="scr" style="margin-bottom:6px"><div class="nt">${robot('think', 26)}<span style="font-family:var(--mono);font-size:11.5px">npm run build</span><span style="color:var(--itx2);font-size:11px">0:42</span></div></div>
+      <div style="font-size:10.5px;color:var(--ink2);margin-bottom:12px">Perintah masih jalan: Bata berpikir, nama perintah dan waktunya.</div>
+      <div class="scr alt" style="margin-bottom:6px"><div class="nt big">${robot('happy', 40)}<div><div class="t1">npm run build selesai</div><div class="t2">exit 0 · 1 mnt 12 dtk</div></div><span class="act">Lihat</span></div></div>
+      <div style="font-size:10.5px;color:var(--ink2);margin-bottom:12px">Selesai: notice 5 detik, klik untuk membuka halaman CLI.</div>
+      <div class="scr" style="margin-bottom:6px"><div class="nt big">${robot('sad', 40)}<div><div class="t1">npm test gagal</div><div class="t2">exit 1 · 1 test gagal</div></div><span class="act">Lihat</span></div></div>
+      <div style="font-size:10.5px;color:var(--ink2);margin-bottom:14px">Gagal: notice tetap sampai diklik.</div>
+      ${ux('', ['Tombol perbesar di kanan atas: panel 560 × 440 untuk output panjang, kembali kecil saat panel ditutup.'])}
+    </div></div>
+  ${folio('CLI')}</section>`;
+
+const p6 = `<section class="page"><div class="eyebrow">Ringkasan perubahan</div><h1>Sekarang vs usulan</h1>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px">
+    <div><div class="lbl">Editor pengingat</div><div class="cmp">
+      <div class="h">Sekarang</div><div class="h">Usulan</div>
+      <div>Kontrol tanggal & jam Windows, warna dibalik</div><div>Chip + popover kalender dan jam, digambar sendiri</div>
+      <div>Hanya isi tanggal & jam manual</div><div>Pintasan: 30 mnt lagi, 1 jam lagi, nanti malam, besok pagi</div>
+      <div>Mingguan = hari yang sama dengan tanggal</div><div>Pilih hari: Sen, Rab, Jum, dst.</div>
+      <div style="border:0">Tanpa ringkasan</div><div style="border:0">"Tiap Sen, Rab, Jum jam 09:00 · berikutnya Rab"</div></div></div>
+    <div><div class="lbl">CLI</div><div class="cmp">
+      <div class="h">Sekarang</div><div class="h">Usulan</div>
+      <div>Jendela terpisah di bawah panel</div><div>Langsung di halaman CLI panel</div>
+      <div>Kontrol <code>EDIT</code> Windows di jendela itu</div><div>Input digambar di panel; tetap memakai satu <code>EDIT</code> tersembunyi untuk IME & paste</div>
+      <div>Panel menutup saat mouse keluar</div><div>Panel terkunci terbuka selama input aktif</div>
+      <div>Status hanya di jendela CLI</div><div>Status di notch: berjalan, selesai, gagal</div>
+      <div style="border:0">Ukuran tetap</div><div style="border:0">Tombol perbesar 560 × 440</div></div></div>
+  </div>
+  <div class="ux" style="margin-top:18px"><h3>Catatan teknis</h3><ul>
+    <li>Island sekarang tidak menerima fokus keyboard; halaman CLI butuh island bisa aktif selama input dipakai, lalu melepasnya lagi saat Esc.</li>
+    <li>Pengingat Mingguan dengan beberapa hari perlu perubahan data di <code>reminders.json</code> (daftar hari), tetap terbaca untuk pengingat lama.</li>
+    <li>Fitur "Mingguan pilih hari" dan "pintasan waktu" adalah tambahan baru; bisa dipisah kalau mau perbaikan tampilan dulu.</li></ul></div>
+  ${folio('Ringkasan')}</section>`;
+
+document.getElementById('doc').innerHTML = p1 + p2 + p3 + p4 + p5 + p6;
+
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

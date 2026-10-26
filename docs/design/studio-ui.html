@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio UI Lengkap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* island (always dark) */
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A;
+    --term: #0F0C0A;
+    /* document */
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6;
+    --disp: 'Fraunces', serif; --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+  }
+  .wl { --wbg: #F4EEE6; --wcard: #FFFBF5; --wtx: #221A14; --wtx2: #7A6B5D; --wa: #C9542B; --wai: #FFFBF5;
+        --wb: rgba(34,26,20,.10); --wsel: #EADFD1; --wfield: #FFFFFF; --wbtn: #EFE6DA; }
+  .wd { --wbg: #1E1814; --wcard: #272019; --wtx: #F4EDE4; --wtx2: #A89A8B; --wa: #E2683C; --wai: #17120F;
+        --wb: rgba(244,237,228,.08); --wsel: #33291F; --wfield: #2C241D; --wbtn: #33291F; }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 30px; letter-spacing: -.01em; margin: 2px 0 16px; }
+  .lbl { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 7px; }
+  .ux h3 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 19px; margin-bottom: 8px; }
+  .ux li { list-style: none; position: relative; padding-left: 14px; font-size: 11.5px; line-height: 1.5; margin-bottom: 5px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  svg { display: block; }
+
+  /* ---------- panel ---------- */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--tx); border-radius: 0 0 30px 30px; position: relative;
+           padding: 18px 22px 30px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 10px; }
+  .ttl { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 20px; letter-spacing: -.01em; white-space: nowrap; }
+  .hl { display: flex; align-items: center; gap: 10px; }
+  .chev { display: flex; gap: 2px; color: var(--tx2); }
+  .chev svg { width: 18px; height: 18px; }
+  .seg { display: flex; background: var(--r); border-radius: 10px; padding: 2px; font-size: 10.5px; }
+  .seg span { padding: 3px 9px; border-radius: 8px; color: var(--tx2); }
+  .seg span.on { background: var(--rh); color: var(--tx); }
+  .btn { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--tx); }
+  .btn svg { width: 13px; height: 13px; }
+  .dots { position: absolute; bottom: 11px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); }
+  .mut { color: var(--tx2); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* month */
+  .month { display: grid; grid-template-columns: 252px 1fr; gap: 16px; height: 212px; }
+  .g7 { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; row-gap: 2px; }
+  .g7 .w { font-size: 9.5px; color: var(--tx2); padding-bottom: 4px; }
+  .g7 .d { font-size: 11.5px; height: 30px; display: flex; align-items: center; justify-content: center; position: relative; font-variant-numeric: tabular-nums; }
+  .g7 .d.o { color: var(--dot); }
+  .g7 .d.t span { background: var(--a); color: var(--ai); width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; }
+  .g7 .d em { position: absolute; bottom: 2px; width: 3.5px; height: 3.5px; border-radius: 50%; background: var(--sage); }
+  .evs { border-left: 1px solid var(--t); padding-left: 16px; }
+  .ev { display: flex; gap: 9px; margin-bottom: 10px; }
+  .ev i { width: 3px; border-radius: 2px; flex: none; }
+  .ev b { font-size: 12px; font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+  .ev small { font-size: 10.5px; color: var(--tx2); }
+  .add { font-size: 11.5px; color: var(--a); display: flex; align-items: center; gap: 5px; }
+  .add svg { width: 13px; height: 13px; }
+
+  /* week */
+  .week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; height: 212px; }
+  .wcol { background: var(--col); border-radius: 12px; padding: 7px 5px; }
+  .wcol .wh { text-align: center; font-size: 9.5px; color: var(--tx2); margin-bottom: 6px; }
+  .wcol .wh b { display: block; font-size: 15px; color: var(--tx); font-weight: 500; margin-top: 1px; }
+  .wcol.t .wh b { color: var(--a); }
+  .chip { border-radius: 7px; padding: 4px 5px; font-size: 9px; line-height: 1.25; margin-bottom: 4px; background: var(--r); border-left: 2.5px solid var(--a); }
+  .chip small { display: block; color: var(--tx2); font-size: 8.5px; }
+
+  /* day */
+  .allday { font-size: 10.5px; background: rgba(157,181,154,.16); color: var(--sage); border-radius: 8px; padding: 4px 9px; display: inline-block; margin-bottom: 6px; }
+  .tl { position: relative; height: 180px; margin-left: 40px; }
+  .tl .hr { position: absolute; left: -40px; right: 0; height: 0; border-top: 1px solid var(--t); }
+  .tl .hr span { position: absolute; left: 0; top: -7px; font-size: 9.5px; color: var(--tx2); background: var(--s); padding-right: 6px; }
+  .blk { position: absolute; left: 8px; right: 140px; border-radius: 9px; padding: 5px 9px; font-size: 11px; font-weight: 500; }
+  .blk small { display: block; font-weight: 400; font-size: 9.5px; opacity: .8; }
+  .now { position: absolute; left: -6px; right: 0; border-top: 1.5px solid var(--a); }
+  .now::before { content: ""; position: absolute; left: -4px; top: -4.5px; width: 7px; height: 7px; border-radius: 50%; background: var(--a); }
+
+  /* pomodoro */
+  .pomo { display: grid; grid-template-columns: 220px 1fr; align-items: center; height: 236px; margin-top: -6px; }
+  .ring { position: relative; width: 200px; height: 200px; }
+  .ring .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ring .tm { font-family: var(--disp); font-style: italic; font-size: 48px; font-weight: 400; letter-spacing: -.02em; line-height: 1; }
+  .ring .ph2 { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--a); margin-top: 8px; font-weight: 600; }
+  .sess { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--tx2); margin-bottom: 18px; }
+  .sess i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--dot); display: block; }
+  .sess i.f { background: var(--a); border-color: var(--a); }
+  .ctl { display: flex; align-items: center; gap: 14px; }
+  .cb { width: 44px; height: 44px; border-radius: 50%; background: var(--r); display: flex; align-items: center; justify-content: center; color: var(--tx); }
+  .cb svg { width: 18px; height: 18px; }
+  .cb.big { width: 62px; height: 62px; background: var(--a); color: var(--ai); }
+  .cb.big svg { width: 24px; height: 24px; }
+  .nextup { margin-top: 18px; font-size: 11.5px; color: var(--tx2); }
+  .nextup b { color: var(--sage); font-weight: 500; }
+
+  /* list rows (reminders) */
+  .grp { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); margin: 4px 0 3px; }
+  .rrow { display: flex; align-items: center; gap: 10px; height: 29px; border-bottom: 1px solid var(--col); font-size: 12px; }
+  .rrow svg { width: 17px; height: 17px; color: var(--tx2); flex: none; }
+  .rrow .tm { width: 38px; color: var(--tx2); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+  .rrow .x { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag { font-size: 9.5px; padding: 2px 7px; border-radius: 99px; background: rgba(217,164,65,.16); color: var(--ochre); }
+
+  /* notes */
+  .ngrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .ncard { background: var(--r); border-radius: 16px; padding: 11px 13px; height: 92px; display: flex; flex-direction: column; }
+  .ncard b { font-size: 12px; font-weight: 500; margin-bottom: 3px; }
+  .ncard p { font-size: 10.5px; color: var(--tx2); line-height: 1.45; overflow: hidden; flex: 1; }
+  .ncard small { font-size: 9.5px; color: var(--tx2); opacity: .75; margin-top: 4px; }
+
+  /* music */
+  .music { display: grid; grid-template-columns: 196px 1fr; gap: 24px; height: 230px; align-items: center; margin-top: -4px; }
+  .cover { width: 196px; height: 196px; border-radius: 22px; background:
+           radial-gradient(circle at 70% 30%, #F2C27A 0 18%, transparent 19%),
+           linear-gradient(165deg, #E2683C 0%, #B4452A 55%, #5A2A1C 100%); position: relative; overflow: hidden; }
+  .cover::after { content: ""; position: absolute; left: -10%; right: -10%; bottom: 22%; height: 2px; background: rgba(244,237,228,.45); }
+  .src { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--tx2); }
+  .song { font-family: var(--disp); font-style: italic; font-size: 28px; font-weight: 500; letter-spacing: -.01em; margin: 6px 0 2px; }
+  .bar { height: 4px; border-radius: 4px; background: var(--t); margin: 18px 0 6px; position: relative; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 43%; background: var(--tx); border-radius: 4px; }
+  .bar i::after { content: ""; position: absolute; right: -5px; top: -3px; width: 10px; height: 10px; border-radius: 50%; background: var(--tx); }
+  .times { display: flex; justify-content: space-between; font-size: 10px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+  .mctl { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
+  .mctl .ic { color: var(--tx); width: 20px; height: 20px; }
+  .lyr { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; padding: 5px 10px; border-radius: 99px; border: 1px solid var(--a); color: var(--a); }
+  .lyr svg { width: 12px; height: 12px; }
+
+  /* cli */
+  .term { background: var(--term); border-radius: 16px; padding: 12px 14px; height: 200px; font-family: var(--mono); font-size: 11px; line-height: 1.6; color: #E6DED3; position: relative; }
+  .term .p { color: var(--a); }
+  .term .m { color: var(--tx2); }
+  .term .in { position: absolute; left: 14px; right: 14px; bottom: 12px; border-top: 1px solid #241D18; padding-top: 8px; }
+  .caret { display: inline-block; width: 7px; height: 13px; background: var(--a); vertical-align: -2px; }
+  .shell { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--tx2); font-family: var(--mono); }
+
+  /* shortcuts */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+  .tile { background: var(--r); border-radius: 18px; height: 98px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; font-size: 11px; }
+  .tile svg { width: 24px; height: 24px; }
+
+  /* ---------- notch states ---------- */
+  .scr { height: 84px; border-radius: 14px; position: relative; overflow: hidden;
+         background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx);
+        border-radius: 999px; display: flex; align-items: center; gap: 9px; padding: 0 14px; height: 36px; white-space: nowrap;
+        box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; }
+  .nt.notchshape { top: 0; border-radius: 0 0 18px 18px; }
+  .nt .clk { font-family: var(--disp); font-style: italic; font-size: 16px; }
+  .nt .art { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #E2683C, #D9A441); }
+  .eq { display: flex; gap: 2px; align-items: flex-end; height: 13px; }
+  .eq i { width: 2.5px; border-radius: 2px; background: var(--a); display: block; }
+  .nt.big { height: 60px; border-radius: 26px; top: 12px; padding: 0 12px 0 12px; gap: 11px; }
+  .badge { width: 40px; height: 40px; border-radius: 13px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .badge svg { width: 20px; height: 20px; }
+  .nt .t1 { font-size: 12.5px; font-weight: 500; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .act { margin-left: 10px; font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 500; }
+  .act.ghost { background: var(--r); color: var(--tx); }
+  .states { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 22px; }
+  .st .lbl { margin: 0 0 5px; }
+  .st .d2 { font-size: 10.5px; color: var(--ink2); margin-top: 4px; }
+
+  /* ---------- windows ---------- */
+  .win { background: var(--wbg); color: var(--wtx); border-radius: 12px; overflow: hidden; border: 1px solid var(--wb);
+         box-shadow: 0 14px 34px rgba(34,26,20,.18); display: flex; flex-direction: column; font-size: 11.5px; }
+  .tb { height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 0 0 11px; font-size: 10.5px; color: var(--wtx2); flex: none; }
+  .tb .ctrls { margin-left: auto; display: flex; height: 100%; }
+  .tb .ctrls span { width: 38px; display: flex; align-items: center; justify-content: center; }
+  .tb .ctrls svg { width: 11px; height: 11px; }
+  .wbody { flex: 1; display: grid; grid-template-columns: 150px 1fr; min-height: 0; }
+  .side { padding: 4px 9px; }
+  .brand { white-space: nowrap; display: flex; align-items: center; gap: 8px; font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 12.5px; margin: 6px 2px 14px; }
+  .nav { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 10px; margin-bottom: 2px; }
+  .nav svg { width: 15px; height: 15px; }
+  .nav.on { background: var(--wsel); }
+  .main { padding: 2px 18px 14px 8px; }
+  .main h2 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 21px; margin: 4px 0 11px; }
+  .sub { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--wtx2); margin: 10px 0 6px; font-weight: 600; }
+  .card { background: var(--wcard); border-radius: 14px; border: 1px solid var(--wb); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--wb); min-height: 42px; }
+  .row:first-child { border-top: 0; }
+  .row b { font-weight: 500; display: block; font-size: 11.5px; }
+  .row small { font-size: 9.5px; color: var(--wtx2); }
+  .tog { width: 32px; height: 18px; border-radius: 99px; background: var(--wa); position: relative; flex: none; }
+  .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--wai); }
+  .tog.off { background: transparent; border: 1.5px solid var(--wtx2); }
+  .tog.off::after { left: 2px; right: auto; top: 1.5px; width: 12px; height: 12px; background: var(--wtx2); }
+  .wseg { display: flex; border: 1px solid var(--wb); border-radius: 10px; padding: 2px; font-size: 10px; background: var(--wbg); flex: none; }
+  .wseg span { padding: 3px 9px; border-radius: 8px; white-space: nowrap; }
+  .wseg span.on { background: var(--wa); color: var(--wai); }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+  .step i { width: 22px; height: 22px; border: 1px solid var(--wb); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; background: var(--wcard); }
+  .step u { text-decoration: none; min-width: 48px; text-align: center; }
+  .wbtn { font-size: 10.5px; padding: 5px 12px; border-radius: 99px; background: var(--wbtn); white-space: nowrap; flex: none; }
+  .wbtn.pri { background: var(--wa); color: var(--wai); }
+  .wbtn.dng { color: #C42B1C; }
+  .wd .wbtn.dng { color: #FF8A73; }
+  .field { background: var(--wfield); border: 1px solid var(--wb); border-radius: 10px; padding: 7px 10px; font-size: 11px; color: var(--wtx); }
+  .field.ph { color: var(--wtx2); }
+  .sw6 { display: flex; gap: 6px; flex: none; }
+  .sw6 i { width: 18px; height: 18px; border-radius: 50%; display: block; }
+  .sw6 i.on { box-shadow: 0 0 0 2px var(--wcard), 0 0 0 3.5px var(--wtx); }
+  .status { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: #4E7A4A; }
+  .wd .status { color: var(--sage); }
+  .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* editors */
+  .ed { width: 320px; }
+  .ed .eb { padding: 6px 14px 14px; display: flex; flex-direction: column; gap: 9px; }
+  .ed .fl { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--wtx2); font-weight: 600; margin-bottom: -4px; }
+  .ed .foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .ed .foot .sp { flex: 1; }
+
+  /* tray menu */
+  .menu { width: 210px; background: var(--wcard); border: 1px solid var(--wb); border-radius: 12px; padding: 5px; box-shadow: 0 12px 30px rgba(0,0,0,.3); color: var(--wtx); font-size: 11.5px; }
+  .menu div { padding: 7px 10px; border-radius: 8px; display: flex; justify-content: space-between; }
+  .menu div.on { background: var(--wsel); }
+  .menu hr { border: 0; border-top: 1px solid var(--wb); margin: 4px 6px; }
+  .menu small { color: var(--wtx2); }
+
+  /* logo page */
+  .lgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .lcard { background: #FBF7F1; border: 1px solid var(--rule); border-radius: 18px; padding: 16px; position: relative; }
+  .lcard.rec { border: 2px solid var(--a); }
+  .lcard .rtag { position: absolute; top: 12px; right: 12px; font-size: 9.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 3px 8px; border-radius: 99px; }
+  .lcard h4 { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 20px; margin: 12px 0 3px; }
+  .lcard p { font-size: 11px; line-height: 1.45; color: var(--ink2); min-height: 48px; }
+  .lmain { display: flex; justify-content: center; padding: 6px 0 2px; }
+  .lsizes { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin-top: 12px; }
+  .bars { margin-top: 12px; display: grid; gap: 6px; }
+  .taskbar { height: 34px; border-radius: 8px; display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+  .taskbar.dk { background: #202020; }
+  .taskbar.lt { background: #F3F3F3; border: 1px solid #E0E0E0; }
+  .taskbar span { font-size: 10px; margin-left: auto; font-family: 'Segoe UI', sans-serif; }
+  .taskbar.dk span { color: #ddd; }
+  .taskbar .ghost { width: 16px; height: 16px; border-radius: 4px; background: #888; opacity: .35; }
+  .lock { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .lockup { border-radius: 18px; padding: 26px 30px; display: flex; align-items: center; gap: 18px; }
+  .lockup .wm { font-family: var(--disp); font-style: italic; font-weight: 500; font-size: 34px; letter-spacing: -.01em; }
+
+  /* tokens page */
+  .tk { display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; }
+  .swr { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 12px; }
+  .sw { font-size: 9.5px; color: var(--ink2); font-family: var(--mono); }
+  .sw i { display: block; height: 40px; border-radius: 10px; border: 1px solid rgba(0,0,0,.08); margin-bottom: 4px; }
+  .sw b { display: block; font-family: var(--body); color: var(--ink); font-weight: 500; font-size: 10.5px; }
+  .ts { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--rule); padding: 7px 0; }
+  .ts span:first-child { width: 92px; font-size: 10px; color: var(--ink2); flex: none; }
+  .ts small { margin-left: auto; font-size: 10px; color: var(--ink2); font-family: var(--mono); }
+  .rad { display: flex; gap: 12px; align-items: flex-end; margin-top: 6px; }
+  .rad div { background: #E6DCCF; display: flex; align-items: flex-end; justify-content: center; font-size: 9.5px; color: var(--ink2); padding-bottom: 4px; }
+  .icrow { display: grid; grid-template-columns: repeat(10, 1fr); gap: 7px; margin-top: 6px; }
+  .icrow span { height: 40px; border-radius: 12px; background: var(--s); color: var(--tx); display: flex; align-items: center; justify-content: center; }
+  .icrow svg { width: 20px; height: 20px; }
+
+  .two { display: grid; grid-template-columns: 560px 1fr; gap: 26px; }
+  .pr + .pr { margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+// ===== icons: Studio style, 24 grid, 1.5 stroke, round, duotone =====
+const ST = { w: 1.5, r: 3 };
+function icon(name, opts = {}) {
+  const r = ST.r, duo = opts.duo !== false;
+  const F = (d) => duo ? `<path d="${d}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const RF = (x, y, w, h, rr = r) => duo ? `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rr}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const CF = (cx, cy, rr) => duo ? `<circle cx="${cx}" cy="${cy}" r="${rr}" fill="var(--a)" fill-opacity=".38" stroke="none"/>` : '';
+  const R = (x, y, w, h, rr = r) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rr}"/>`;
+  const C = (cx, cy, rr) => `<circle cx="${cx}" cy="${cy}" r="${rr}"/>`;
+  const D = (x, y) => `<circle cx="${x}" cy="${y}" r="1.1" fill="currentColor" stroke="none"/>`;
+  const P = (d) => `<path d="${d}"/>`;
+  const S = {
+    camera: F('M3 9h4l1.6-2.5h6.8L17 9h4v10H3z') + P('M4 8.5h3l1.5-2.2h7L17 8.5h3a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1z') + C(12, 13.5, 3.3),
+    clipboard: RF(5, 5, 14, 16) + R(5, 5, 14, 16) + R(9, 3, 6, 4, 1.5) + P('M9 12h6M9 16h4'),
+    emoji: CF(12, 12, 9) + C(12, 12, 9) + P('M8.5 14.5c1.8 2 5.2 2 7 0') + D(9, 10) + D(15, 10),
+    folder: F('M3 7h6l2 2h10v10H3z') + P('M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z') + P('M3 11h18'),
+    calc: RF(5, 3, 14, 18) + R(5, 3, 14, 18) + R(8, 6, 8, 4, 1) + D(8.5, 14) + D(12, 14) + D(15.5, 14) + D(8.5, 17.5) + D(12, 17.5) + D(15.5, 17.5),
+    activity: RF(3, 4, 18, 16) + R(3, 4, 18, 16) + P('M6 13h3l2-4 2 7 2-3h3'),
+    gear: CF(12, 12, 6.5) + C(12, 12, 6.5) + C(12, 12, 2.6) + P('M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1'),
+    lock: RF(5, 11, 14, 10) + R(5, 11, 14, 10) + P('M8 11V8a4 4 0 0 1 8 0v3') + D(12, 16),
+    calendar: RF(3, 5, 18, 16) + R(3, 5, 18, 16) + P('M3 10h18M8 3v4M16 3v4') + D(8, 14) + D(12, 14) + D(16, 14),
+    timer: CF(12, 13, 8) + C(12, 13, 8) + P('M12 13V9M10 2.5h4M18.5 6l1.2-1.2'),
+    bell: F('M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z') + P('M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z') + P('M10 21h4'),
+    note: F('M5 3.5h10l4 4V20.5H5z') + P('M5 3.5h10l4 4V20.5H5z') + P('M15 3.5v4h4M8 12h8M8 16h5'),
+    music: CF(6.5, 18, 2.5) + P('M9 18V6l11-2v12') + C(6.5, 18, 2.5) + C(17.5, 16, 2.5) + P('M9 9.5l11-2'),
+    terminal: RF(3, 5, 18, 14) + R(3, 5, 18, 14) + P('M7 10l3 2.5L7 15M12.5 15H17'),
+    grid: RF(4, 4, 7, 7, 2) + R(4, 4, 7, 7, 2) + R(13, 4, 7, 7, 2) + R(4, 13, 7, 7, 2) + R(13, 13, 7, 7, 2),
+    palette: CF(12, 12, 9) + P('M12 3a9 9 0 0 0 0 18c1.3 0 1.8-1 1.4-2-.5-1.2.3-2.4 1.6-2.4H17a4 4 0 0 0 4-4c0-5.2-4-9.6-9-9.6z') + D(7.5, 11) + D(10, 7.5) + D(14.5, 7.5),
+    link: P('M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2'),
+    info: CF(12, 12, 9) + C(12, 12, 9) + P('M12 11v6') + D(12, 7.8),
+    play: P('M8 5.5v13l10.5-6.5z'),
+    pause: R(6.5, 5, 4, 14, 1.2) + R(13.5, 5, 4, 14, 1.2),
+    reset: P('M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v3.7h3.7'),
+    skip: P('M5.5 6v12l9-6z') + P('M18.5 6v12'),
+    prev: P('M5.5 6v12') + P('M18.5 6v12l-9-6z'),
+    next: P('M18.5 6v12') + P('M5.5 6v12l9-6z'),
+    plus: P('M12 5v14M5 12h14'),
+    chevL: P('M14.5 6l-6 6 6 6'), chevR: P('M9.5 6l6 6-6 6'),
+    check: CF(12, 12, 8.5) + C(12, 12, 8.5) + P('M8.3 12.3l2.6 2.6L15.8 10'),
+    ring: C(12, 12, 8.5),
+    repeat: P('M17 3.5l3 3-3 3M4 11.5V10a3.5 3.5 0 0 1 3.5-3.5H20M7 20.5l-3-3 3-3M20 12.5V14a3.5 3.5 0 0 1-3.5 3.5H4'),
+    trash: F('M6.5 7l1 13h9l1-13z') + P('M4.5 7h15M9.5 7V4.5h5V7') + P('M6.5 7l1 13h9l1-13z'),
+    quote: P('M5 18c3-1 4.5-3.5 4.5-7V7H5v5h4.5') + P('M14.5 18c3-1 4.5-3.5 4.5-7V7h-4.5v5H19'),
+    battery: RF(3, 7.5, 16, 9, 2.5) + R(3, 7.5, 16, 9, 2.5) + P('M21.5 10.5v3M6.5 10.5v3'),
+    sparkle: F('M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z') + P('M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z'),
+    mail: RF(3, 5.5, 18, 13) + R(3, 5.5, 18, 13) + P('M3.5 7l8.5 6 8.5-6'),
+    ext: P('M14 4.5h5.5V10M19.5 4.5L11 13M17 14v4.5a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H10'),
+    x: P('M6 6l12 12M18 6L6 18'),
+    min: P('M5 12h14'), max: R(5.5, 5.5, 13, 13, 1),
+    clock: CF(12, 12, 9) + C(12, 12, 9) + P('M12 7.5V12l3 2'),
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${opts.w || ST.w}" stroke-linecap="round" stroke-linejoin="round">${S[name]}</svg>`;
+}
+const I = (n, o) => icon(n, o);
+
+// ===== logos (minimal) =====
+const SQ = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
+let uid = 0;
+function logo(kind, size) {
+  const g = 'g' + (uid++);
+  const tile = (fill) => `<path d="${SQ}" fill="${fill}"/>`;
+  const esp = `<defs><linearGradient id="${g}" x1="0" y1="12" x2="0" y2="244" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2B221C"/><stop offset="1" stop-color="#15100D"/></linearGradient></defs>`;
+  const body = {
+    // A: the island itself, hanging from the top edge
+    notch: esp + tile(`url(#${g})`) + `<rect x="64" y="58" width="128" height="44" rx="22" fill="#F4EDE4"/><circle cx="170" cy="80" r="9" fill="#E2683C"/>`,
+    // B: sunset behind the island
+    senja: esp + tile(`url(#${g})`) + `<circle cx="128" cy="136" r="52" fill="#E2683C"/><rect x="50" y="130" width="156" height="46" rx="23" fill="#F4EDE4"/>`,
+    // C: inverse — terracotta tile, espresso island
+    bata: tile('#E2683C') + `<rect x="58" y="104" width="140" height="48" rx="24" fill="#17120F"/><circle cx="174" cy="128" r="9.5" fill="#F4EDE4"/>`,
+    // D: single stroke — an island outline with a dot
+    garis: esp + tile(`url(#${g})`) + `<rect x="54" y="103" width="148" height="50" rx="25" fill="none" stroke="#F4EDE4" stroke-width="12"/><circle cx="172" cy="128" r="10" fill="#E2683C"/>`,
+  }[kind];
+  return `<svg width="${size}" height="${size}" viewBox="0 0 256 256">${body}</svg>`;
+}
+const LOGO = 'bata';
+
+// ===== shared bits =====
+const dots = (on) => `<div class="dots">${[0,1,2,3,4,5,6].map(i => `<i class="${i === on ? 'on' : ''}"></i>`).join('')}</div>`;
+const eq = (hs = [5, 11, 8, 13, 6]) => `<div class="eq">${hs.map(h => `<i style="height:${h}px"></i>`).join('')}</div>`;
+
+// ===== panels =====
+function pMonth() {
+  const wd = ['Sen','Sel','Rab','Kam','Jum','Sab','Min'];
+  const cells = [[28,1],[29,1],[30,1]];
+  for (let n = 1; n <= 31; n++) cells.push([n, 0]);
+  cells.push([1, 1]);
+  const mk = new Set([2, 9, 14, 21, 25, 27, 28]);
+  return `<div class="panel">
+    <div class="ph"><div class="hl"><span class="ttl">Oktober 2026</span><span class="chev">${I('chevL')}${I('chevR')}</span></div>
+      <div class="seg"><span>Hari</span><span>Minggu</span><span class="on">Bulan</span></div></div>
+    <div class="month"><div class="g7">${wd.map(w => `<div class="w">${w}</div>`).join('')}${cells.map(([n, o]) =>
+      `<div class="d${o ? ' o' : ''}${!o && n === 26 ? ' t' : ''}"><span>${n}</span>${!o && mk.has(n) ? '<em></em>' : ''}</div>`).join('')}</div>
+    <div class="evs"><div class="mut" style="font-size:11px;margin-bottom:10px">Senin, 26 Oktober</div>
+      <div class="ev"><i style="background:var(--sage)"></i><div><b>Pameran arsitektur Jakarta</b><small>Sepanjang hari · 25–28 Okt</small></div></div>
+      <div class="ev"><i style="background:var(--a)"></i><div><b>Review desain klien</b><small class="num">10:00 – 11:30</small></div></div>
+      <div class="ev"><i style="background:var(--ochre)"></i><div><b>Rapat koordinasi MEP</b><small class="num">14:00 – 15:00</small></div></div>
+      <div class="add">${I('plus')}Tambah acara</div></div></div>${dots(0)}</div>`;
+}
+
+function pWeek() {
+  const days = [['Sen',26,[['Review desain','10:00','var(--a)'],['Rapat MEP','14:00','var(--ochre)']]],['Sel',27,[['Survey lokasi','08:30','var(--sage)']]],['Rab',28,[['Presentasi','13:00','var(--a)']]],['Kam',29,[]],['Jum',30,[['Gym','07:00','var(--plum)'],['Kirim RAB','16:00','var(--ochre)']]],['Sab',31,[]],['Min',1,[['Keluarga','11:00','var(--sage)']]]];
+  return `<div class="panel">
+    <div class="ph"><div class="hl"><span class="ttl">26 Okt – 1 Nov</span><span class="chev">${I('chevL')}${I('chevR')}</span></div>
+      <div class="seg"><span>Hari</span><span class="on">Minggu</span><span>Bulan</span></div></div>
+    <div class="week">${days.map(([w, n, evs], k) => `<div class="wcol${k === 0 ? ' t' : ''}"><div class="wh">${w}<b>${n}</b></div>
+      ${k < 3 ? '<div class="chip" style="border-color:var(--sage);background:rgba(157,181,154,.14)">Pameran</div>' : ''}
+      ${evs.map(([t, h, c]) => `<div class="chip" style="border-color:${c}">${t}<small class="num">${h}</small></div>`).join('')}</div>`).join('')}</div>${dots(0)}</div>`;
+}
+
+function pDay() {
+  const hours = [9, 10, 11, 12, 13, 14, 15, 16];
+  const y = (h) => (h - 9) * 24;
+  return `<div class="panel">
+    <div class="ph"><div class="hl"><span class="ttl">Senin, 26 Oktober</span><span class="chev">${I('chevL')}${I('chevR')}</span></div>
+      <div class="seg"><span class="on">Hari</span><span>Minggu</span><span>Bulan</span></div></div>
+    <div class="allday">Sepanjang hari · Pameran arsitektur Jakarta</div>
+    <div class="tl" style="margin-top:6px">${hours.map(h => `<div class="hr" style="top:${y(h)}px"><span class="num">${String(h).padStart(2, '0')}:00</span></div>`).join('')}
+      <div class="blk" style="top:${y(10) + 2}px;height:${36 - 4}px;background:rgba(226,104,60,.2);color:#F6B79E">Review desain klien<small class="num">10:00 – 11:30</small></div>
+      <div class="blk" style="top:${y(14) + 2}px;height:${24 - 4}px;background:rgba(217,164,65,.18);color:#E8C47E;padding-top:3px">Rapat koordinasi MEP <span style="font-weight:400;opacity:.8" class="num">· 14:00</span></div>
+      <div class="now" style="top:${y(13) + 4}px"></div></div>
+    ${dots(0)}</div>`;
+}
+
+function ringSvg(p, size = 200, sw = 9, color = 'var(--a)') {
+  const rr = (size - sw) / 2 - 2, c = 2 * Math.PI * rr;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${rr}" fill="none" stroke="var(--t)" stroke-width="${sw}"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${rr}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`;
+}
+
+function pPomo() {
+  return `<div class="panel">
+    <div class="ph"><span class="ttl">Pomodoro</span><span class="mut" style="font-size:11px">25 · 5 · 15 menit</span></div>
+    <div class="pomo"><div class="ring">${ringSvg(0.25)}<div class="c"><span class="tm num">18:42</span><span class="ph2">Fokus</span></div></div>
+      <div style="padding-left:30px"><div class="sess">Sesi 2 dari 4 <i class="f"></i><i class="f"></i><i></i><i></i></div>
+        <div class="ctl"><span class="cb">${I('reset', { duo: false })}</span><span class="cb big">${I('pause', { duo: false, w: 2 })}</span><span class="cb">${I('skip', { duo: false })}</span></div>
+        <div class="nextup">Berikutnya: <b>Istirahat 5 menit</b></div></div></div>${dots(1)}</div>`;
+}
+
+function pRem() {
+  const row = (ic, tm, x, extra = '') => `<div class="rrow">${I(ic, { duo: false })}<span class="tm">${tm}</span><span class="x">${x}</span>${extra}</div>`;
+  return `<div class="panel">
+    <div class="ph"><span class="ttl">Pengingat</span><span class="btn">${I('plus', { duo: false })}Baru</span></div>
+    <div class="grp">Hari ini</div>
+    ${row('ring', '08:00', 'Minum vitamin', `<span class="tag">Terlewat</span>`)}
+    ${row('ring', '16:30', 'Kirim revisi denah lantai 2 ke klien')}
+    ${row('ring', '21:00', 'Backup file proyek', `<span style="color:var(--tx2);width:15px">${I('repeat', { duo: false })}</span>`)}
+    <div class="grp" style="margin-top:8px">Besok</div>
+    ${row('ring', '09:30', 'Survey lokasi Kemang')}
+    ${row('ring', '13:00', 'Telepon vendor kaca')}
+    ${dots(2)}</div>`;
+}
+
+function pNotes() {
+  const n = [['Ide fasad', 'Kisi-kisi kayu vertikal, jarak 8 cm, bayangan sore jatuh ke ruang tamu.', '10 mnt lalu'],
+             ['Daftar material', 'Bata ekspos, terakota lantai 30×30, kaca low-e, baja ringan.', '1 jam lalu'],
+             ['Catatan rapat', 'Klien minta skylight di tangga. Cek ulang beban atap.', 'Kemarin'],
+             ['Belanja', 'Kopi, kertas kalkir A2, pensil 2B, cutter.', 'Kam']];
+  return `<div class="panel">
+    <div class="ph"><span class="ttl">Catatan</span><span class="btn">${I('plus', { duo: false })}Baru</span></div>
+    <div class="ngrid">${n.map(([t, p, w]) => `<div class="ncard"><b>${t}</b><p>${p}</p><small>${w}</small></div>`).join('')}</div>
+    ${dots(3)}</div>`;
+}
+
+function pMusic() {
+  return `<div class="panel">
+    <div class="music"><div class="cover"></div>
+      <div><div class="src">Spotify · sedang diputar</div>
+        <div class="song">Senja di Kemang</div><div class="mut" style="font-size:12.5px">Studio Ruang</div>
+        <div class="bar"><i></i></div><div class="times num"><span>1:42</span><span>3:58</span></div>
+        <div class="mctl"><span class="ic">${I('prev', { duo: false })}</span><span class="cb big" style="width:48px;height:48px">${I('pause', { duo: false, w: 2 })}</span><span class="ic">${I('next', { duo: false })}</span>
+          <span class="lyr">${I('quote', { duo: false })}Lirik</span></div></div></div>${dots(4)}</div>`;
+}
+
+function pCli() {
+  return `<div class="panel">
+    <div class="ph"><span class="ttl">CLI</span><div class="hl"><span class="mut" style="font-family:var(--mono);font-size:10.5px">D:\\Proyek\\rumah-kemang</span><span class="shell">PowerShell</span></div></div>
+    <div class="term"><div><span class="p">›</span> Get-Date</div><div>Senin, 26 Oktober 2026 16:52:10</div>
+      <div style="margin-top:4px"><span class="p">›</span> ls *.dwg</div><div class="m">denah-lt1.dwg &nbsp; denah-lt2.dwg &nbsp; tampak-depan.dwg</div>
+      <div style="margin-top:4px"><span class="p">›</span> git status</div><div class="m">On branch main · nothing to commit</div>
+      <div class="in"><span class="p">›</span> <span class="caret"></span> <span class="m" style="float:right;font-family:var(--body);font-size:9.5px">↑ riwayat · Enter jalankan · Esc tutup</span></div></div>
+    ${dots(5)}</div>`;
+}
+
+function pShort() {
+  const t = [['camera','Screenshot'],['clipboard','Clipboard'],['emoji','Emoji'],['folder','Explorer'],['calc','Kalkulator'],['activity','Task Manager'],['gear','Pengaturan'],['lock','Kunci layar']];
+  return `<div class="panel"><div class="ph"><span class="ttl">Shortcuts</span></div>
+    <div class="tiles">${t.map(([i, l]) => `<div class="tile">${I(i)}<span>${l}</span></div>`).join('')}</div>${dots(6)}</div>`;
+}
+
+// Pill floats with a gap and full rounding; Notch hangs from the top edge.
+function shapeCompare() {
+  const k = 0.46, mini = (pill) => `<div style="position:absolute;left:50%;top:${pill ? 12 : 0}px;width:${560 * k}px;height:${290 * k}px;transform:translateX(-50%)">
+    <div style="transform:scale(${k});transform-origin:0 0">${pPomo().replace('class="panel"', `class="panel" style="border-radius:${pill ? '30px' : '0 0 30px 30px'}"`)}</div></div>`;
+  const col = (pill, name, desc, alt) => `<div><div class="scr${alt ? ' alt' : ''}" style="height:200px">${mini(pill)}</div>
+    <div style="font-family:var(--disp);font-style:italic;font-size:15px;margin-top:7px">${name}</div><div style="font-size:10.5px;color:var(--ink2)">${desc}</div></div>`;
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${col(true, 'Pill', 'Melayang 12 px dari tepi atas, semua sudut bulat.')}${col(false, 'Notch', 'Menempel ke tepi atas, hanya sudut bawah bulat.', true)}</div>`;
+}
+
+// ===== notch states =====
+function nState(label, desc, inner, cls = '', alt = false) {
+  return `<div class="st"><div class="lbl">${label}</div><div class="scr${alt ? ' alt' : ''}">${inner(cls)}</div><div class="d2">${desc}</div></div>`;
+}
+const N = {
+  idle: () => `<div class="nt"><span class="clk num">14:32</span></div>`,
+  notchIdle: () => `<div class="nt notchshape" style="height:34px"><span class="clk num">14:32</span></div>`,
+  pomo: () => `<div class="nt">${ringSvg(0.25, 20, 3)}<span class="num" style="font-weight:500">18:42</span><span class="mut" style="font-size:11px">Fokus</span></div>`,
+  music: () => `<div class="nt"><span class="art"></span><span>Senja di Kemang</span>${eq()}</div>`,
+  lyric: () => `<div class="nt" style="width:320px;justify-content:center"><span style="font-family:var(--disp);font-style:italic;font-size:13.5px">di antara gedung dan cahaya sore</span></div>`,
+  notif: () => `<div class="nt big"><span class="badge" style="background:#2C3A4A;color:#9CC3F0">${I('mail', { duo: false })}</span><div><div class="t1">Rani · Mail</div><div class="t2">Denah lantai 2 sudah saya kirim, cek ya</div></div></div>`,
+  rem: () => `<div class="nt big"><span class="badge" style="background:var(--a);color:var(--ai)">${I('bell', { duo: false })}</span><div><div class="t1">Kirim revisi denah ke klien</div><div class="t2 num">Pengingat · 16:30</div></div><span class="act">Selesai</span></div>`,
+  pomoDone: () => `<div class="nt big"><span class="badge" style="background:rgba(157,181,154,.2);color:var(--sage)">${I('timer', { duo: false })}</span><div><div class="t1">Fokus selesai</div><div class="t2">Istirahat 5 menit</div></div><span class="act" style="background:var(--sage)">Mulai</span></div>`,
+  claude: () => `<div class="nt big"><span class="badge" style="background:rgba(226,104,60,.18);color:var(--a)">${I('sparkle', { duo: false })}</span><div><div class="t1">Claude butuh kamu</div><div class="t2">dynamic-island · izin menjalankan perintah</div></div><span class="act ghost">Buka</span></div>`,
+  battery: () => `<div class="nt big"><span class="badge" style="background:rgba(217,164,65,.18);color:var(--ochre)">${I('battery', { duo: false })}</span><div><div class="t1">Baterai 20%</div><div class="t2">Colokkan charger</div></div></div>`,
+};
+
+// ===== windows =====
+const tb = (title) => `<div class="tb">${logo(LOGO, 15)}<span>${title}</span><div class="ctrls"><span>${I('min', { duo: false })}</span><span>${I('max', { duo: false })}</span><span>${I('x', { duo: false })}</span></div></div>`;
+const NAV = [['palette','Tampilan'],['gear','Umum'],['timer','Pomodoro'],['link','Integrasi'],['info','Tentang']];
+function settings(theme, active, mainHtml, w = 492, h = 380) {
+  return `<div class="win ${theme}" style="width:${w}px;height:${h}px">${tb('Pengaturan Dynamic Island')}
+    <div class="wbody"><div class="side"><div class="brand">${logo(LOGO, 26)}Dynamic Island</div>
+      ${NAV.map(([i, l]) => `<div class="nav${l === active ? ' on' : ''}">${I(i)}${l}</div>`).join('')}</div>
+    <div class="main"><h2>${active}</h2>${mainHtml}</div></div></div>`;
+}
+const row = (t, s, ctl) => `<div class="row"><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div>${ctl}</div>`;
+const seg = (opts, on) => `<div class="wseg">${opts.map((o, i) => `<span class="${i === on ? 'on' : ''}">${o}</span>`).join('')}</div>`;
+const tog = (on = true) => `<div class="tog${on ? '' : ' off'}"></div>`;
+const stepper = (v) => `<div class="step"><i>−</i><u>${v}</u><i>+</i></div>`;
+
+const sAppearance = `<div class="card">
+  ${row('Bentuk island', 'Pill melayang atau Notch menempel', seg(['Pill', 'Notch'], 0))}
+  ${row('Warna aksen', 'Tombol, hari ini, progres', `<div class="sw6">${['#E2683C','#9DB59A','#D9A441','#C9826B','#A3A55A','#B07A9A'].map((c, i) => `<i class="${i === 0 ? 'on' : ''}" style="background:${c}"></i>`).join('')}</div>`)}
+  ${row('Warna island', '', seg(['Espresso', 'Graphite'], 0))}
+  ${row('Mode jendela', 'Pengaturan dan editor', seg(['Ikuti Windows', 'Gelap', 'Terang'], 0))}
+  ${row('Jam saat kosong', 'Tampilkan jam di notch', tog())}</div>`;
+const sGeneral = `<div class="card">
+  ${row('Bahasa', 'Island dan semua jendela', seg(['Indonesia', 'English'], 0))}
+  ${row('Mulai bersama Windows', 'Buka island saat masuk', tog())}
+  ${row('Peringatan baterai', 'Saat baterai di bawah', stepper('20%'))}
+  ${row('Matikan pop-up Windows', 'Supaya notifikasi tidak muncul dua kali', `<span class="wbtn">Lihat caranya</span>`)}
+  ${row('Lirik di notch', 'Artis & judul dikirim ke lrclib.net', tog(false))}
+  ${row('Shell CLI', 'Untuk halaman CLI', seg(['PowerShell', 'cmd'], 0))}</div>`;
+const sPomo = `<div class="card">
+  ${row('Fokus', '', stepper('25 mnt'))}
+  ${row('Istirahat', '', stepper('5 mnt'))}
+  ${row('Istirahat panjang', '', stepper('15 mnt'))}
+  ${row('Sesi sebelum istirahat panjang', '', stepper('4'))}</div>
+  <p style="font-size:10px;color:var(--wtx2);margin:10px 2px">Fase berikutnya baru mulai setelah kamu klik notice di island.</p>`;
+const sInteg = `<div class="sub" style="margin-top:0">Google Calendar</div><div class="card" style="padding:10px 12px;display:grid;gap:7px">
+  <div class="field">1083…apps.googleusercontent.com</div><div class="field">••••••••••••••••••</div>
+  <div style="display:flex;align-items:center;gap:8px"><span class="status">Terhubung</span><span style="font-size:10px;color:var(--wtx2)">rani@studio.id</span><span style="flex:1"></span><span class="wbtn">Putuskan</span></div></div>
+  <div class="sub">Claude Code</div><div class="card">${row('Hooks Claude Code', 'Notice "selesai" dan "butuh kamu"', `<span class="status" style="margin-right:6px">Terpasang</span><span class="wbtn">Hapus</span>`)}</div>`;
+const sAbout = `<div style="display:flex;align-items:center;gap:14px;margin:4px 0 14px">${logo(LOGO, 56)}<div><div style="font-family:var(--disp);font-style:italic;font-size:19px">Dynamic Island</div><div style="font-size:10.5px;color:var(--wtx2)">Versi 3.0.0 · Windows 11</div></div></div>
+  <div class="card">${row('Kode sumber', 'github.com/hartono0297/dynamic-island', `<span style="width:15px;color:var(--wtx2)">${I('ext', { duo: false })}</span>`)}
+  ${row('Rilis', 'Cek versi terbaru', `<span style="width:15px;color:var(--wtx2)">${I('ext', { duo: false })}</span>`)}
+  ${row('Folder data', '%APPDATA%\\DynamicIsland', `<span class="wbtn">Buka</span>`)}</div>`;
+
+function editor(theme, title, body, foot) {
+  return `<div class="win ed ${theme}">${tb(title)}<div class="eb">${body}<div class="foot">${foot}</div></div></div>`;
+}
+const edNote = editor('wd', 'Catatan', `<div class="field" style="height:168px;line-height:1.55;font-size:11.5px"><b style="font-weight:500">Ide fasad</b><br>Kisi-kisi kayu vertikal, jarak 8 cm. Bayangan sore jatuh ke ruang tamu.<br><br>Cek: arah matahari jam 16:00, tinggi kisi 2,8 m.<span class="caret" style="height:12px;width:1.5px;background:var(--wa)"></span></div>`,
+  `<span style="width:16px;color:var(--wtx2)">${I('trash', { duo: false })}</span><span class="sp"></span><span style="font-size:10px;color:var(--wtx2)">Tersimpan otomatis saat ditutup</span>`);
+const edRem = editor('wd', 'Pengingat', `<div class="fl">Pengingat</div><div class="field">Kirim revisi denah lantai 2 ke klien</div>
+  <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:8px"><div><div class="fl" style="margin-bottom:5px">Tanggal</div><div class="field">Sen, 26 Okt 2026</div></div><div><div class="fl" style="margin-bottom:5px">Jam</div><div class="field num">16:30</div></div></div>
+  <div class="fl">Ulangi</div>${seg(['Sekali', 'Harian', 'Mingguan'], 0).replace('class="wseg"', 'class="wseg" style="align-self:flex-start"')}`,
+  `<span class="wbtn dng">Hapus</span><span class="sp"></span><span class="wbtn">Batal</span><span class="wbtn pri">Simpan</span>`);
+const edEvent = editor('wl', 'Acara baru', `<div class="fl">Judul</div><div class="field">Review desain klien</div>
+  <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:7px"><div class="field">Sen, 26 Okt</div><div class="field num">10:00</div><div class="field num">11:30</div></div>
+  <div style="display:flex;align-items:center;justify-content:space-between"><span>Sepanjang hari</span>${tog(false)}</div>
+  <div class="fl">Catatan</div><div class="field ph" style="height:46px">Bawa maket skala 1:100</div>`,
+  `<span style="font-size:10px;color:var(--wtx2)">Disimpan ke Google Calendar</span><span class="sp"></span><span class="wbtn">Batal</span><span class="wbtn pri">Simpan</span>`);
+
+// ===== pages =====
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Studio · UI lengkap</span><span>${r}</span></div>`;
+const ux = (title, items) => `<div class="ux"><h3>${title}</h3><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+function panelPage(eyebrow, a, b, f) {
+  const rowOf = ([lbl, panel, notes]) => `<div class="pr two"><div><div class="lbl">${lbl}</div>${panel}</div><div style="padding-top:22px">${notes}</div></div>`;
+  return `<section class="page"><div class="eyebrow" style="margin-bottom:12px">${eyebrow}</div>${rowOf(a)}${b ? rowOf(b) : ''}${folio(f)}</section>`;
+}
+
+const cover = `<section class="page dark" style="display:flex;flex-direction:column;justify-content:space-between">
+  <div class="eyebrow">Dynamic Island for Windows · Redesign 3.0</div>
+  <div style="display:flex;align-items:center;gap:34px">${logo(LOGO, 150)}
+    <div><div style="font-family:var(--disp);font-style:italic;font-weight:500;font-size:64px;letter-spacing:-.02em;line-height:1">Studio</div>
+      <div style="font-size:15px;color:var(--tx2);margin-top:12px;max-width:520px;line-height:1.5">Seluruh UI dan UX dalam satu gaya: logo baru, semua status notch, tujuh halaman panel, editor, dan pengaturan.</div></div></div>
+  <div style="display:flex;gap:10px;font-size:11px;color:var(--tx2)">${['Logo','Notch','Kalender','Pomodoro','Pengingat','Catatan','Musik','CLI','Shortcuts','Editor','Pengaturan','Token'].map(s => `<span style="border:1px solid var(--t);border-radius:99px;padding:4px 11px">${s}</span>`).join('')}</div>
+  ${folio('26 Oktober 2026').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`;
+
+const logoKinds = [
+  ['notch', 'Notch', 'Island apa adanya: pill krem dengan titik terakota. Paling literal dan paling sederhana.'],
+  ['senja', 'Senja', 'Matahari terakota tenggelam di balik island. Hangat, tetap satu bentuk utama.'],
+  ['bata', 'Bata', 'Tile terakota penuh dengan island espresso. Paling menonjol di taskbar gelap maupun terang.'],
+  ['garis', 'Garis', 'Island sebagai satu garis krem dengan titik. Paling ringan dan modern.'],
+];
+const logoPage = `<section class="page"><div class="eyebrow">Logo · 4 opsi minimalis</div><h1>Satu bentuk, satu titik</h1>
+  <div class="lgrid">${logoKinds.map(([k, n, d]) => `<div class="lcard${k === LOGO ? ' rec' : ''}">${k === LOGO ? '<span class="rtag">Saran</span>' : ''}
+    <div class="lmain">${logo(k, 132)}</div><h4>${n}</h4><p>${d}</p>
+    <div class="lsizes">${logo(k, 48)}${logo(k, 32)}${logo(k, 24)}${logo(k, 16)}</div>
+    <div class="bars"><div class="taskbar dk"><i class="ghost"></i>${logo(k, 16)}<i class="ghost"></i><span>14:32</span></div>
+      <div class="taskbar lt"><i class="ghost"></i>${logo(k, 16)}<i class="ghost"></i><span>14:32</span></div></div></div>`).join('')}</div>
+  <div class="lock"><div class="lockup" style="background:var(--s);color:var(--tx)">${logo(LOGO, 64)}<span class="wm">Dynamic Island</span></div>
+    <div class="lockup" style="background:#FBF7F1;border:1px solid var(--rule)">${logo(LOGO, 64)}<span class="wm">Dynamic Island</span></div></div>
+  ${folio('Logo')}</section>`;
+
+const notchPage = `<section class="page"><div class="eyebrow">Notch · semua status di ukuran kecil</div>
+  <div class="states" style="margin-top:12px">
+    ${nState('Kosong · Pill', 'Jam saat tidak ada apa-apa (bisa dimatikan).', N.idle)}
+    ${nState('Kosong · Notch', 'Gaya Notch menempel di tepi atas layar.', N.notchIdle, '', true)}
+    ${nState('Pomodoro berjalan', 'Cincin progres kecil + sisa waktu.', N.pomo)}
+    ${nState('Musik', 'Sampul, judul, equalizer bergerak.', N.music, '', true)}
+    ${nState('Lirik', 'Satu baris lirik, berganti dengan crossfade.', N.lyric)}
+    ${nState('Notifikasi Windows', 'Klik untuk membuka aplikasinya.', N.notif, '', true)}
+    ${nState('Pengingat jatuh tempo', 'Tetap tampil sampai ditandai selesai.', N.rem)}
+    ${nState('Fase Pomodoro selesai', 'Fase berikutnya mulai setelah diklik.', N.pomoDone, '', true)}
+    ${nState('Claude Code', '"Selesai" atau "butuh kamu" dari hooks.', N.claude)}
+    ${nState('Baterai lemah', 'Muncul sekali saat melewati batas.', N.battery, '', true)}
+  </div>${folio('Notch')}</section>`;
+
+const pages = [
+  cover, logoPage, notchPage,
+  panelPage('Panel · 1 Kalender', ['Bulan', pMonth(), ux('Bulan', ['Hover island → panel terbuka di halaman terakhir.', 'Klik tanggal → acaranya tampil di kanan; titik sage = ada acara.', 'Panah di judul pindah bulan; segmen kanan atas ganti tampilan.', 'Klik acara untuk edit, "+ Tambah acara" membuka editor.'])],
+    ['Minggu', pWeek(), ux('Minggu', ['Tujuh kolom, hari ini ditandai angka terakota.', 'Acara multi-hari jadi pita sage di atas.', 'Acara panjang dipotong; klik untuk detail.'])], 'Kalender'),
+  panelPage('Panel · 1 Kalender & 2 Pomodoro', ['Hari', pDay(), ux('Hari', ['Garis waktu 09:00–16:00, bisa digulir.', 'Garis terakota = sekarang.', 'Acara berulang dan multi-hari hanya bisa dibaca (seperti v2.2).'])],
+    ['Pomodoro', pPomo(), ux('Pomodoro', ['Cincin besar dengan sisa waktu dalam Fraunces.', 'Satu tombol utama (Mulai/Jeda), Reset dan Lewati di sampingnya.', 'Terakota = fokus, sage = istirahat.', 'Durasi diatur di Pengaturan, bukan di sini.'])], 'Kalender · Pomodoro'),
+  panelPage('Panel · 3 Pengingat & 4 Catatan', ['Pengingat', pRem(), ux('Pengingat', ['Dikelompokkan: Hari ini, Besok, lalu tanggal.', 'Klik lingkaran = selesai; klik teks = edit.', 'Tag oker "Terlewat" untuk yang jatuh tempo saat island mati.', 'Ikon ulang untuk Harian/Mingguan.'])],
+    ['Catatan', pNotes(), ux('Catatan', ['Kartu 2 kolom: judul (baris pertama), cuplikan, waktu.', 'Terbaru di kiri atas; gulir di dalam halaman untuk yang lain.', '"+ Baru" atau klik kartu membuka editor.'])], 'Pengingat · Catatan'),
+  panelPage('Panel · 5 Musik & 6 CLI', ['Musik', pMusic(), ux('Musik', ['Sampul besar, judul dalam Fraunces Italic.', 'Kontrol: sebelumnya, putar/jeda, berikutnya.', 'Tombol "Lirik" = pengaturan Lirik di notch.', 'Sumber apa pun: Spotify, browser, dll.'])],
+    ['CLI', pCli(), ux('CLI', ['Satu perintah sekali jalan, di PowerShell atau cmd.', 'DM Mono untuk output; prompt terakota.', 'Folder aktif di kanan atas; ↑ untuk riwayat.', 'Jendela terminal kecil terbuka di bawah panel.'])], 'Musik · CLI'),
+  panelPage('Panel · 7 Shortcuts', ['Shortcuts', pShort(), ux('Shortcuts', ['Halaman paling kanan, 8 tombol.', 'Ikon duotone 24 px di tile 18 px radius.', 'Klik menjalankan aksi dan menutup panel.'])],
+    ['Bentuk island', shapeCompare(), ux('Pill vs Notch', ['Pill: island melayang dengan jarak dari tepi atas.', 'Notch: island menempel ke tepi atas, sudut bawah membulat.', 'Panel memakai bentuk yang sama di kedua gaya; hanya posisi atasnya berbeda.'])], 'Shortcuts'),
+  `<section class="page"><div class="eyebrow">Editor · jendela kecil di bawah notch</div><h1>Catatan, pengingat, acara</h1>
+    <div style="display:flex;gap:20px;align-items:flex-start">${edNote}${edRem}${edEvent}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,320px);gap:20px;margin-top:16px">
+      ${ux('Catatan', ['Kotak teks biasa: copy-paste, undo, emoji, IME.', 'Tersimpan otomatis saat ditutup.', 'Hapus lewat ikon tempat sampah.'])}
+      ${ux('Pengingat', ['Teks, tanggal, jam, dan ulangi.', 'Hapus di kiri, aksi utama di kanan.'])}
+      ${ux('Acara (mode terang)', ['Editor mengikuti mode jendela.', 'Dikirim ke Google Calendar saat Simpan.'])}</div>${folio('Editor')}</section>`,
+  `<section class="page"><div class="eyebrow">Pengaturan · mode terang</div>
+    <div style="display:flex;gap:26px;margin-top:6px">${settings('wl', 'Tampilan', sAppearance)}${settings('wl', 'Umum', sGeneral)}</div>
+    <div style="display:grid;grid-template-columns:492px 492px;gap:26px;margin-top:16px">
+      ${ux('Tampilan', ['Semua perubahan langsung terlihat di island.', '6 aksen Studio: terakota, sage, oker, tanah liat, zaitun, plum.', 'Warna island: Espresso (default) atau Graphite.'])}
+      ${ux('Umum', ['Satu kartu, satu baris per pengaturan.', 'Kontrol selalu di kanan: segmen, toggle, stepper, tombol.'])}</div>${folio('Pengaturan')}</section>`,
+  `<section class="page"><div class="eyebrow">Pengaturan · mode terang & gelap</div>
+    <div style="display:flex;gap:26px;margin-top:6px">${settings('wl', 'Pomodoro', sPomo)}${settings('wd', 'Integrasi', sInteg)}</div>
+    <div style="display:grid;grid-template-columns:492px 492px;gap:26px;margin-top:16px">
+      ${ux('Pomodoro', ['Stepper − / + dengan satuan jelas.', 'Default 25 / 5 / 15 menit, 4 sesi.'])}
+      ${ux('Integrasi (mode gelap)', ['Status hijau sage = terhubung / terpasang.', 'Client secret selalu disamarkan.'])}</div>${folio('Pengaturan')}</section>`,
+  `<section class="page dark"><div class="eyebrow">Tentang · menu tray · jendela CLI</div>
+    <div style="display:flex;gap:26px;margin-top:10px;align-items:flex-start">${settings('wd', 'Tentang', sAbout, 492, 330)}
+      <div><div class="eyebrow" style="margin-bottom:8px">Menu tray</div><div class="menu wd"><div class="on">Pengaturan…</div><div>Sembunyikan island</div><hr><div>Gaya <small>Pill</small></div><div>Bahasa <small>Indonesia</small></div><hr><div>Keluar</div></div>
+        <div class="eyebrow" style="margin:20px 0 8px">Ikon tray</div><div style="display:flex;gap:10px;align-items:center;background:#202020;border-radius:8px;padding:8px 12px;width:210px">${logo(LOGO, 16)}<span style="font-size:10px;color:#ccc;font-family:'Segoe UI'">16 px di taskbar gelap</span></div></div>
+      <div class="win wd" style="width:260px;height:200px">${tb('CLI')}<div style="background:var(--term);flex:1;margin:0 8px 8px;border-radius:10px;padding:10px;font-family:var(--mono);font-size:10.5px;line-height:1.6;color:#E6DED3"><span style="color:var(--a)">›</span> npm run build<br><span style="color:var(--tx2)">vite v6 building…</span><br><span style="color:var(--sage)">✓ built in 2.1s</span><br><span style="color:var(--a)">›</span> <span class="caret"></span></div></div></div>
+    ${folio('Tentang').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`,
+];
+
+const tokens = `<section class="page"><div class="eyebrow">Token desain · Studio</div><h1>Sistem kecil, dipakai di mana-mana</h1>
+  <div class="tk"><div>
+    <div class="lbl">Island (selalu gelap)</div><div class="swr">${[['Surface','#17120F'],['Raised','#241D18'],['Raised hi','#3A2F27'],['Track','#332A23'],['Text','#F4EDE4'],['Secondary','#A89A8B']].map(([n, h]) => `<div class="sw"><i style="background:${h}"></i><b>${n}</b>${h}</div>`).join('')}</div>
+    <div class="lbl">Aksen & status</div><div class="swr">${[['Terakota','#E2683C'],['Sage','#9DB59A'],['Oker','#D9A441'],['Tanah liat','#C9826B'],['Zaitun','#A3A55A'],['Plum','#B07A9A']].map(([n, h]) => `<div class="sw"><i style="background:${h}"></i><b>${n}</b>${h}</div>`).join('')}</div>
+    <div class="lbl">Jendela terang</div><div class="swr">${[['Bg','#F4EEE6'],['Card','#FFFBF5'],['Text','#221A14'],['Secondary','#7A6B5D'],['Aksen','#C9542B'],['Pilih','#EADFD1']].map(([n, h]) => `<div class="sw"><i style="background:${h}"></i><b>${n}</b>${h}</div>`).join('')}</div>
+    <div class="lbl">Jendela gelap</div><div class="swr">${[['Bg','#1E1814'],['Card','#272019'],['Field','#2C241D'],['Text','#F4EDE4'],['Aksen','#E2683C'],['Pilih','#33291F']].map(([n, h]) => `<div class="sw"><i style="background:${h}"></i><b>${n}</b>${h}</div>`).join('')}</div>
+  </div><div>
+    <div class="lbl">Tipografi</div>
+    <div class="ts"><span>Jam besar</span><span style="font-family:var(--disp);font-style:italic;font-size:34px;line-height:1">18:42</span><small>Fraunces It 48</small></div>
+    <div class="ts"><span>Judul</span><span style="font-family:var(--disp);font-style:italic;font-size:20px;font-weight:500">Oktober 2026</span><small>Fraunces It 20</small></div>
+    <div class="ts"><span>Teks</span><span style="font-size:12px">Review desain klien</span><small>DM Sans 12</small></div>
+    <div class="ts"><span>Keterangan</span><span style="font-size:10.5px;color:var(--ink2)">10:00 – 11:30</span><small>DM Sans 10.5</small></div>
+    <div class="ts"><span>Kode</span><span style="font-family:var(--mono);font-size:11px">› git status</span><small>DM Mono 11</small></div>
+    <div class="lbl" style="margin-top:14px">Radius</div>
+    <div class="rad">${[['Panel', 30, 60], ['Tile', 18, 50], ['Kartu', 14, 44], ['Kontrol', 10, 36], ['Chip', 99, 22]].map(([n, r, s]) => `<div style="width:${s}px;height:${s}px;border-radius:${Math.min(r, s / 2)}px">${n}</div>`).join('')}</div>
+    <div class="lbl" style="margin-top:14px">Ikon · grid 24, garis 1,5, isian aksen 38%</div>
+    <div class="icrow">${['calendar','timer','bell','note','music','terminal','grid','gear','sparkle','trash'].map(n => `<span>${I(n)}</span>`).join('')}</div>
+  </div></div>${folio('Token')}</section>`;
+
+document.getElementById('doc').innerHTML = pages.join('') + tokens;
+
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>
