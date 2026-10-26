@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_for};
-use super::render::{CliCard, Frame, Renderer};
+use super::render::{CliCard, Frame, Progress, Renderer};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::cli::Shell;
@@ -41,6 +41,11 @@ use crate::reminders::{Reminder, Repeat};
 use crate::theme::{self, Accent, Palette, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
+/// The design's track position, 1:42 of 3:58 (about 43 %).
+const DEMO_PROGRESS: Progress = Progress {
+    position_ms: 102_000,
+    end_ms: 238_000,
+};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pomo {
@@ -419,6 +424,7 @@ pub fn run() {
                 lyric: lyric_state.shown(now),
                 lyrics_on: scene.lyrics_on,
                 cli: demo_cli(scene.cli),
+                progress: Some(DEMO_PROGRESS),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");

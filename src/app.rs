@@ -56,7 +56,7 @@ use crate::ui::cli_window::{self, CliAction, CliInit, WM_APP_CLI_ACTION};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
-use crate::ui::render::{CliCard, Frame, Renderer};
+use crate::ui::render::{CliCard, Frame, Progress, Renderer};
 use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
@@ -96,6 +96,9 @@ const TIMER_CLOCK: usize = 8;
 const TIMER_LYRIC: usize = 10;
 /// One-shot: a clicked shortcut runs once the panel is out of the way.
 const TIMER_SHORTCUT: usize = 11;
+/// One-shot to the track position's next whole second, only while the Music
+/// page shows a playing track of known length.
+const TIMER_PROGRESS: usize = 12;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
@@ -178,6 +181,7 @@ pub fn run() {
             eq_timer: false,
             pomo_timer: false,
             clock_timer: false,
+            progress_timer: false,
             lyrics: LyricsState::default(),
             lyrics_worker: None,
             lyric_timer: false,
@@ -297,6 +301,8 @@ struct App {
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
+    /// `TIMER_PROGRESS` is set.
+    progress_timer: bool,
     /// Lyrics looked up, the current track's lines and the line on screen.
     lyrics: LyricsState,
     /// The lyrics thread, started on the first lookup.
@@ -1006,6 +1012,32 @@ impl App {
                 }
             }
         }
+        self.sync_progress_timer(now);
+    }
+
+    /// Re-armed on every sync (a seek or new track re-aligns it) and after
+    /// each tick; killed as soon as the Music page, playback or the length
+    /// goes away, so a paused or idle island runs no timer for it.
+    fn sync_progress_timer(&mut self, now: Instant) {
+        let playing = self.state.media().is_some_and(|m| m.playing);
+        let wait = progress_wait(
+            &self.state.view(),
+            track_progress(&self.state, now),
+            playing,
+        );
+        unsafe {
+            match wait {
+                // `SetTimer` on the same id replaces the pending one.
+                Some(ms) => {
+                    SetTimer(Some(self.hwnd), TIMER_PROGRESS, ms, None);
+                }
+                None if self.progress_timer => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_PROGRESS);
+                }
+                None => {}
+            }
+        }
+        self.progress_timer = wait.is_some();
     }
 
     /// One-shot, re-armed after each redraw, so the shown second ticks over on time.
@@ -1104,6 +1136,13 @@ impl App {
                 if self.clock_timer {
                     self.arm_clock();
                 }
+            }
+            TIMER_PROGRESS => {
+                let now = Instant::now();
+                if !self.animating() {
+                    self.draw(now);
+                }
+                self.sync_progress_timer(now);
             }
             _ => {}
         }
@@ -1433,6 +1472,7 @@ impl App {
                 shell: self.config.cli_shell,
                 cwd: &cwd,
             },
+            progress: track_progress(state, now),
         };
         if let Err(error) = self
             .renderer
@@ -1565,6 +1605,21 @@ fn ms_to_next_second(remaining: Duration) -> u32 {
         0 => 1001,
         ms => ms + 1,
     }
+}
+
+/// Where the current track is now; `None` without media, a timeline or a
+/// known length.
+fn track_progress(state: &IslandState, now: Instant) -> Option<Progress> {
+    let playing = state.media()?.playing;
+    Progress::at(state.timeline(), playing, now)
+}
+
+/// How long until the Music page's elapsed time ticks over (just past the
+/// position's next whole second); `None` (no timer) unless that page shows
+/// a track that is playing and not yet at its end.
+fn progress_wait(view: &View, progress: Option<Progress>, playing: bool) -> Option<u32> {
+    let p = progress.filter(|p| p.position_ms < p.end_ms)?;
+    (*view == View::Panel(Page::Media) && playing).then(|| 1001 - (p.position_ms % 1000) as u32)
 }
 
 /// Messages after which the wall clock may have jumped.
@@ -2419,6 +2474,36 @@ mod tests {
         assert!(!is_clock_jump(WM_POWERBROADCAST, WPARAM(0x0004)));
         assert!(!is_clock_jump(WM_POWERBROADCAST, WPARAM(0x000A)));
         assert!(!is_clock_jump(WM_TIMER, WPARAM(0)));
+    }
+
+    #[test]
+    fn progress_timer_runs_only_on_the_music_page_while_playing() {
+        let music = View::Panel(Page::Media);
+        let at = |position_ms| {
+            Some(Progress {
+                position_ms,
+                end_ms: 238_000,
+            })
+        };
+        // Just past the position's next whole second.
+        assert_eq!(progress_wait(&music, at(102_000), true), Some(1001));
+        assert_eq!(progress_wait(&music, at(102_250), true), Some(751));
+        assert_eq!(progress_wait(&music, at(102_999), true), Some(2));
+        // Paused, at the end, or without a known length: no timer.
+        assert_eq!(progress_wait(&music, at(102_000), false), None);
+        assert_eq!(progress_wait(&music, at(238_000), true), None);
+        assert_eq!(progress_wait(&music, None, true), None);
+        // Other pages and views: the equalizer timer (compact) or nothing.
+        for view in [
+            View::Panel(Page::Calendar),
+            View::Panel(Page::Pomodoro),
+            View::MediaCompact,
+            View::MediaLyric,
+            View::Idle,
+            View::Hidden,
+        ] {
+            assert_eq!(progress_wait(&view, at(102_000), true), None, "{view:?}");
+        }
     }
 
     #[test]

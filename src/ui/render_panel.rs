@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliCard, Frame, Renderer, color, d2d_rect, mix};
+use super::{CliCard, Frame, Progress, Renderer, color, d2d_rect, mix};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
@@ -34,8 +34,8 @@ use crate::ui::icons::Icon;
 use crate::ui::panel_layout::{
     CalendarLayout, CliLayout, HOUR_GUTTER, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
     SEG_PAD, ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout,
-    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout,
-    shortcuts_layout, tile_parts, waiting_strip,
+    media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout,
+    regions, reminders_layout, shortcuts_layout, tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -53,6 +53,19 @@ const BLOCK_TEXT_MIX: f32 = 0.55;
 const TAG_TINT: f32 = 0.16;
 /// A note card's time, a step quieter than the snippet.
 const NOTE_TIME_ALPHA: f32 = 0.75;
+/// The round playhead on the Music page's progress bar.
+const PROGRESS_KNOB: f32 = 10.0;
+
+/// A track time as the player shows it: "m:ss", or "h:mm:ss" from an hour.
+fn track_time(ms: u64) -> String {
+    let secs = ms / 1000;
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
 
 impl Renderer {
     /// A page title in the header row.
@@ -198,7 +211,9 @@ impl Renderer {
                 self.paint_notes(l, frame.notes, frame.today);
                 Ok(())
             }
-            PageLayout::Media(l) => self.paint_media(l, frame.media, frame.lyrics_on),
+            PageLayout::Media(l) => {
+                self.paint_media(l, frame.media, frame.lyrics_on, frame.progress)
+            }
             PageLayout::Cli(l) => {
                 self.paint_cli(l, &frame.cli);
                 Ok(())
@@ -883,12 +898,14 @@ impl Renderer {
     }
 
     /// The big cover; "SEDANG DIPUTAR", the title in Fraunces, the artist;
-    /// prev, the round play/pause, next, and "Lirik".
+    /// the progress bar with its times; prev, the round play/pause, next,
+    /// and "Lirik".
     fn paint_media(
         &mut self,
         l: &ExpandedLayout,
         media: Option<&MediaInfo>,
         lyrics_on: bool,
+        progress: Option<Progress>,
     ) -> Result<()> {
         let p = self.palette;
         self.paint_art(l.art, radius::COVER, media.and_then(|m| m.art.as_deref()))?;
@@ -911,6 +928,9 @@ impl Renderer {
         self.text2(&label, &self.fonts.micro, l.label);
         self.text(&media.title, &self.fonts.song, l.title, 1.0);
         self.text2(&media.artist, &self.fonts.artist, l.artist);
+        if let Some(progress) = progress {
+            self.paint_progress(l, progress);
+        }
         let play = if media.playing {
             Icon::Pause
         } else {
@@ -923,6 +943,38 @@ impl Renderer {
         self.icon_colored(play, middle, 22.0, p.on_accent, 1.0, None);
         self.icon(Icon::Next, next, 20.0, 1.0, false);
         Ok(())
+    }
+
+    /// The track and its played part in the accent, a knob at the playhead,
+    /// and the elapsed and total times under the ends.
+    fn paint_progress(&self, l: &ExpandedLayout, progress: Progress) {
+        let Some(fraction) = progress.fraction() else {
+            return;
+        };
+        let p = self.palette;
+        let m = media_progress_layout(l);
+        let bar = m.bar;
+        self.set_color(p.track, 1.0);
+        self.fill_round(bar, bar.h / 2.0);
+        let fill = Rect {
+            w: bar.w * fraction,
+            ..bar
+        };
+        self.set_color(p.accent, 1.0);
+        if fill.w > 0.0 {
+            self.fill_round(fill, bar.h / 2.0);
+        }
+        let knob = Rect {
+            x: fill.right() - PROGRESS_KNOB / 2.0,
+            y: bar.y + (bar.h - PROGRESS_KNOB) / 2.0,
+            w: PROGRESS_KNOB,
+            h: PROGRESS_KNOB,
+        };
+        self.fill_round(knob, PROGRESS_KNOB / 2.0);
+        let elapsed = track_time(progress.position_ms.min(progress.end_ms));
+        self.text2(&elapsed, &self.fonts.track_time, m.elapsed);
+        let total = track_time(progress.end_ms);
+        self.text2(&total, &self.fonts.track_time_right, m.total);
     }
 
     /// "Lirik" with a quote mark: outlined in the accent while lyrics show in
@@ -1323,6 +1375,19 @@ mod tests {
     use crate::theme::{Accent, Surface, island};
     use chrono::{NaiveTime, TimeZone};
     use std::time::Instant;
+
+    #[test]
+    fn track_time_reads_like_a_player() {
+        assert_eq!(track_time(0), "0:00");
+        assert_eq!(track_time(999), "0:00", "whole seconds, rounded down");
+        assert_eq!(track_time(102_000), "1:42");
+        assert_eq!(track_time(238_500), "3:58");
+        assert_eq!(track_time(600_000), "10:00");
+        assert_eq!(track_time(3_599_999), "59:59");
+        assert_eq!(track_time(3_600_000), "1:00:00");
+        assert_eq!(track_time(3_723_000), "1:02:03");
+        assert_eq!(track_time(36_000_000), "10:00:00");
+    }
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
