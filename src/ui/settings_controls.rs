@@ -33,7 +33,7 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::fonts::{self, Face, Role};
-use super::geometry::{BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
+use super::geometry::{BAR_COUNT, BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
 use super::icons::{Icon, IconSet};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
@@ -49,8 +49,9 @@ use crate::theme::{Accent, Palette, WindowPalette};
 const LOGO_TILE: u32 = 0xE2683C;
 const LOGO_PILL: u32 = 0x17120F;
 const LOGO_DOT: u32 = 0xF4EDE4;
-/// The equalizer of the preview, frozen mid-beat.
-const PREVIEW_BARS: [f32; 4] = [8.0, 13.0, 6.0, 11.0];
+/// The equalizer of the preview, frozen mid-beat (the design's sample
+/// heights; the tallest is `BAR_MAX_H`).
+const PREVIEW_BARS: [f32; BAR_COUNT] = [5.0, 11.0, 8.0, 13.0, 6.0];
 
 /// One frame's worth of what to draw.
 pub struct Scene<'a> {
@@ -1084,6 +1085,13 @@ mod tests {
             w,
             h: 10.0,
         }
+    }
+
+    #[test]
+    fn preview_bars_fit_the_equalizer_box() {
+        let tallest = PREVIEW_BARS.into_iter().fold(0.0, f32::max);
+        assert_eq!(tallest, super::super::geometry::BAR_MAX_H);
+        assert!(PREVIEW_BARS.iter().all(|&h| h > 0.0));
     }
 
     #[test]
