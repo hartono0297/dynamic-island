@@ -15,6 +15,7 @@ use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
+use crate::ui::icons::Icon;
 
 pub use super::geometry::Rect;
 
@@ -101,14 +102,14 @@ impl Section {
         }
     }
 
-    /// Segoe Fluent Icons glyph in the sidebar.
-    pub fn glyph(self) -> &'static str {
+    /// The section's icon in the sidebar.
+    pub fn icon(self) -> Icon {
         match self {
-            Section::Appearance => "\u{E790}",
-            Section::General => "\u{E713}",
-            Section::Pomodoro => "\u{E916}",
-            Section::Integrations => "\u{E71B}",
-            Section::About => "\u{E946}",
+            Section::Appearance => Icon::Palette,
+            Section::General => Icon::Gear,
+            Section::Pomodoro => Icon::Timer,
+            Section::Integrations => Icon::Link,
+            Section::About => Icon::Info,
         }
     }
 

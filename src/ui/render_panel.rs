@@ -18,10 +18,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{
-    CliCard, Frame, GLYPH_NEXT, GLYPH_PAUSE, GLYPH_PLAY, GLYPH_PREV, Renderer, SECONDARY_ALPHA,
-    color, d2d_rect,
-};
+use super::{CliCard, Frame, Renderer, SECONDARY_ALPHA, color, d2d_rect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
@@ -32,6 +29,7 @@ use crate::reminders::{Reminder, Repeat, local_time};
 use crate::shortcuts;
 use crate::theme;
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
+use crate::ui::icons::Icon;
 use crate::ui::panel_layout::{
     CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
     ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout,
@@ -44,8 +42,6 @@ const FOCUS: u32 = 0xEF5350;
 const BREAK: u32 = 0x2ECC71;
 const CLAUDE: u32 = 0xD97757;
 const OFFLINE_W: f32 = 52.0;
-const GLYPH_LEFT: &str = "\u{E76B}";
-const GLYPH_RIGHT: &str = "\u{E76C}";
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
 /// A heading's line (Fraunces 20) is taller than the 22 px header row: its
@@ -224,7 +220,7 @@ impl Renderer {
             self.set_color(self.palette.raised, 1.0);
             self.fill_round(tile, 12.0);
             let (glyph, label) = tile_parts(tile);
-            self.text(shortcuts::glyph(s), &self.fonts.icon_tile, glyph, 0.95);
+            self.icon(shortcuts::icon(s), glyph, 22.0, 0.95, true);
             let name = text(lang, shortcuts::label(s));
             self.text(name, &self.fonts.small_center, label, 0.85);
         }
@@ -259,8 +255,8 @@ impl Renderer {
             );
         }
         self.heading(&title, header);
-        self.text(GLYPH_LEFT, &self.fonts.icon_small, l.prev, 0.8);
-        self.text(GLYPH_RIGHT, &self.fonts.icon_small, l.next, 0.8);
+        self.icon(Icon::ChevL, l.prev, 12.0, 0.8, true);
+        self.icon(Icon::ChevR, l.next, 12.0, 0.8, true);
 
         // View selector: one dark track, the active segment lit.
         let first = l.view_buttons[0].1;
@@ -696,14 +692,14 @@ impl Renderer {
             SECONDARY_ALPHA,
         );
         let play = if media.playing {
-            GLYPH_PAUSE
+            Icon::Pause
         } else {
-            GLYPH_PLAY
+            Icon::Play
         };
         let [prev, middle, next] = l.buttons;
-        self.text(GLYPH_PREV, &self.fonts.icon_panel, prev, 1.0);
-        self.text(play, &self.fonts.icon_panel_large, middle, 1.0);
-        self.text(GLYPH_NEXT, &self.fonts.icon_panel, next, 1.0);
+        self.icon(Icon::Prev, prev, 20.0, 1.0, true);
+        self.icon(play, middle, 28.0, 1.0, true);
+        self.icon(Icon::Next, next, 20.0, 1.0, true);
         Ok(())
     }
 

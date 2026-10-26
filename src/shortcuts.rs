@@ -14,6 +14,7 @@ use windows::core::{HSTRING, w};
 use crate::i18n::Key;
 use crate::model::Shortcut;
 use crate::ui::geometry::ANIM_MS;
+use crate::ui::icons::Icon;
 
 /// How a shortcut is carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,21 +57,17 @@ pub fn label(s: Shortcut) -> Key {
     }
 }
 
-/// The tile's icon in Segoe Fluent Icons / Segoe MDL2 Assets.
-pub fn glyph(s: Shortcut) -> &'static str {
+/// The tile's Studio icon.
+pub fn icon(s: Shortcut) -> Icon {
     match s {
-        // Camera.
-        Shortcut::Screenshot => "\u{E722}",
-        // Paste: a clipboard.
-        Shortcut::Clipboard => "\u{E77F}",
-        Shortcut::Emoji => "\u{E76E}",
-        // FileExplorer.
-        Shortcut::Explorer => "\u{EC50}",
-        Shortcut::Calculator => "\u{E8EF}",
-        // Diagnostic: an activity line.
-        Shortcut::TaskManager => "\u{E9D9}",
-        Shortcut::WindowsSettings => "\u{E713}",
-        Shortcut::Lock => "\u{E72E}",
+        Shortcut::Screenshot => Icon::Camera,
+        Shortcut::Clipboard => Icon::Clipboard,
+        Shortcut::Emoji => Icon::Emoji,
+        Shortcut::Explorer => Icon::Folder,
+        Shortcut::Calculator => Icon::Calc,
+        Shortcut::TaskManager => Icon::Activity,
+        Shortcut::WindowsSettings => Icon::Gear,
+        Shortcut::Lock => Icon::Lock,
     }
 }
 
@@ -178,9 +175,8 @@ mod tests {
         for (i, a) in Shortcut::ALL.iter().enumerate() {
             for b in &Shortcut::ALL[i + 1..] {
                 assert_ne!(label(*a), label(*b));
-                assert_ne!(glyph(*a), glyph(*b));
+                assert_ne!(icon(*a), icon(*b));
             }
-            assert_eq!(glyph(*a).chars().count(), 1);
         }
     }
 

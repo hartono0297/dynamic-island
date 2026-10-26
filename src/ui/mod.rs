@@ -6,6 +6,7 @@ pub mod editor;
 pub mod fonts;
 pub mod frame_clock;
 pub mod geometry;
+pub mod icons;
 pub mod panel_layout;
 pub mod render;
 pub mod settings;

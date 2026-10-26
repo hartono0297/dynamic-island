@@ -29,11 +29,12 @@ use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::core::{BOOL, PCWSTR, Result, w};
+use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
+use super::icons::{Icon, IconSet};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, Control, Field, Font, Group, Hit, LINK_GLYPH_W, Layout,
     Measure, Rect, Section, Segment, Text, Tone, accent_key,
@@ -42,11 +43,6 @@ use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
 use crate::theme::{Accent, Palette, WindowPalette};
 
-const GLYPH_MINUS: &str = "\u{E738}";
-const GLYPH_PLUS: &str = "\u{E710}";
-const GLYPH_OPEN: &str = "\u{E8A7}";
-const GLYPH_INFO: &str = "\u{E946}";
-const GLYPH_MUSIC: &str = "\u{E8D6}";
 /// The Bata logo's fixed brand colours, whatever the accent: terracotta
 /// tile, espresso island, cream "camera" dot.
 const LOGO_TILE: u32 = 0xE2683C;
@@ -84,10 +80,8 @@ pub struct Gfx {
     formats: HashMap<(Font, Align), IDWriteTextFormat>,
     /// Tabular figures, applied to every line drawn or measured.
     tabular: IDWriteTypography,
-    /// Segoe Fluent Icons at 16 (sidebar), 12 (steppers, links) and 14 px.
-    glyph16: IDWriteTextFormat,
-    glyph12: IDWriteTextFormat,
-    glyph14: IDWriteTextFormat,
+    /// Studio icon geometries, built on `d2d`.
+    icons: IconSet,
     /// The preview island's line of text.
     island_text: IDWriteTextFormat,
     widths: RefCell<HashMap<(String, Font), f32>>,
@@ -109,10 +103,6 @@ impl Gfx {
             // DM Sans and Fraunces Italic when embedded, else Segoe UI Variable.
             let text = Face::for_role(&dwrite, Role::Text);
             let display = Face::for_role(&dwrite, Role::Display);
-            let icon = Face::system(first_installed(
-                &dwrite,
-                &[w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")],
-            )?);
             let mut formats = HashMap::new();
             for font in Font::ALL {
                 let face = if font.display() { &display } else { &text };
@@ -125,12 +115,9 @@ impl Gfx {
                     formats.insert((font, align), format);
                 }
             }
-            let center = DWRITE_TEXT_ALIGNMENT_CENTER;
             let normal = DWRITE_FONT_WEIGHT_NORMAL;
             Ok(Gfx {
-                glyph16: line_format(&dwrite, &icon, normal, 16.0, center)?,
-                glyph12: line_format(&dwrite, &icon, normal, 12.0, center)?,
-                glyph14: line_format(&dwrite, &icon, normal, 14.0, center)?,
+                icons: IconSet::new(&d2d)?,
                 island_text: line_format(
                     &dwrite,
                     &text,
@@ -348,6 +335,17 @@ impl Painter<'_> {
         }
     }
 
+    /// A Studio icon `size` px square centred in `r`, faded with the painter;
+    /// `duo` adds the window accent's duotone fill.
+    fn icon(&self, icon: Icon, r: Rect, size: f32, rgb: u32, a: f32, duo: bool) {
+        let accent = duo.then_some(self.p.accent);
+        let alpha = a * self.alpha;
+        let _ = self
+            .gfx
+            .icons
+            .draw(self.rt, self.brush, icon, r, size, rgb, alpha, accent);
+    }
+
     fn format(&self, font: Font, align: Align) -> &IDWriteTextFormat {
         &self.gfx.formats[&(font, align)]
     }
@@ -428,8 +426,8 @@ impl Painter<'_> {
         for (i, n) in l.nav.iter().enumerate() {
             // How much the pill covers this row: colours follow it.
             let on = (1.0 - (s.nav_pos - i as f32).abs()).clamp(0.0, 1.0);
-            let glyph = mix(self.p.secondary, self.link(), on);
-            self.draw_str(n.section.glyph(), &self.gfx.glyph16, n.glyph, glyph, 1.0);
+            let ink = mix(self.p.secondary, self.link(), on);
+            self.icon(n.section.icon(), n.glyph, 16.0, ink, 1.0, true);
             let label = mix(mix(self.p.text, self.p.secondary, 0.25), self.p.text, on);
             self.draw_str(
                 &n.label.text,
@@ -500,7 +498,7 @@ impl Painter<'_> {
             self.logo(r);
         }
         if let Some(r) = l.note_glyph {
-            self.draw_str(GLYPH_INFO, &self.gfx.glyph14, r, self.p.secondary, 1.0);
+            self.icon(Icon::Info, r, 14.0, self.p.secondary, 1.0, true);
         }
         for (i, t) in l.texts.iter().enumerate() {
             match s.hover {
@@ -549,8 +547,8 @@ impl Painter<'_> {
                     value,
                     enabled,
                 } => {
-                    self.step_button(minus.0, GLYPH_MINUS, minus.1, s);
-                    self.step_button(plus.0, GLYPH_PLUS, plus.1, s);
+                    self.step_button(minus.0, Icon::Min, minus.1, s);
+                    self.step_button(plus.0, Icon::Plus, plus.1, s);
                     let a = if *enabled { 1.0 } else { 0.45 };
                     let format = self.format(value.font, value.align);
                     self.draw_str(&value.text, format, value.rect, self.p.text, a);
@@ -632,7 +630,7 @@ impl Painter<'_> {
         self.circle(cx, r.y + r.h / 2.0, radius, rgb, 1.0);
     }
 
-    fn step_button(&self, r: Rect, glyph: &str, hit: Option<Hit>, s: &Scene) {
+    fn step_button(&self, r: Rect, icon: Icon, hit: Option<Hit>, s: &Scene) {
         let hovered = hit.is_some() && s.hover == hit;
         let pressed = hovered && s.pressed == hit;
         let fill = if pressed {
@@ -647,7 +645,7 @@ impl Painter<'_> {
         if self.p.light {
             self.stroke_round(r, 6.0, self.p.border);
         }
-        self.draw_str(glyph, &self.gfx.glyph12, r, self.p.text, a);
+        self.icon(icon, r, 12.0, self.p.text, a, true);
     }
 
     fn swatch(&self, r: Rect, accent: Accent, selected: bool, hover: bool) {
@@ -721,7 +719,7 @@ impl Painter<'_> {
                     w: LINK_GLYPH_W,
                     ..b.rect
                 };
-                self.draw_str(GLYPH_OPEN, &self.gfx.glyph12, glyph, rgb, a);
+                self.icon(Icon::Ext, glyph, 12.0, rgb, a, true);
             }
         }
     }
@@ -858,7 +856,7 @@ impl Painter<'_> {
             pal.accent,
             0.9,
         );
-        self.draw_str(GLYPH_MUSIC, &self.gfx.glyph12, art, 0xFFFFFF, 0.95);
+        self.icon(Icon::Music, art, 12.0, 0xFFFFFF, 0.95, false);
         let label = text(s.lang, Key::PreviewTrack);
         self.draw_str(label, &self.gfx.island_text, l.text, pal.text, 0.7);
         for (i, h) in PREVIEW_BARS.into_iter().enumerate() {
@@ -1007,23 +1005,6 @@ fn notch_path(d2d: &ID2D1Factory, s: super::geometry::ShapeRect) -> Result<ID2D1
         sink.Close()?;
         Ok(path)
     }
-}
-
-fn first_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<PCWSTR> {
-    unsafe {
-        let mut collection = None;
-        dwrite.GetSystemFontCollection(&mut collection, false)?;
-        if let Some(collection) = collection {
-            for &name in names {
-                let (mut index, mut exists) = (0u32, BOOL(0));
-                collection.FindFamilyName(name, &mut index, &mut exists)?;
-                if exists.as_bool() {
-                    return Ok(name);
-                }
-            }
-        }
-    }
-    Ok(*names.last().expect("at least one family name"))
 }
 
 /// One line, vertically centered, trimmed with "…".

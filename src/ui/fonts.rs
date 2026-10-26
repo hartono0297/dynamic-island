@@ -261,15 +261,6 @@ impl Face {
         }
     }
 
-    /// A system family (icon fonts).
-    pub fn system(family: PCWSTR) -> Face {
-        Face {
-            family: HSTRING::from_wide(unsafe { family.as_wide() }),
-            collection: None,
-            style: DWRITE_FONT_STYLE_NORMAL,
-        }
-    }
-
     pub fn format(
         &self,
         dwrite: &IDWriteFactory,

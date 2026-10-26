@@ -33,7 +33,7 @@ use windows::Win32::Graphics::Imaging::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::WindowsAndMessaging::{ULW_ALPHA, UpdateLayeredWindow};
-use windows::core::{BOOL, Interface, PCWSTR, Result, w};
+use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use std::time::Instant;
@@ -45,6 +45,7 @@ use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
     compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_layout,
 };
+use super::icons::{Icon, IconSet};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::cli::Shell;
@@ -64,14 +65,6 @@ mod panel;
 const SECONDARY_ALPHA: f32 = 0.7;
 /// Decoded album art kept at once: one per size drawn (compact and media page).
 const ART_SLOTS: usize = 2;
-/// Glyphs shared by Segoe Fluent Icons and Segoe MDL2 Assets.
-const GLYPH_PREV: &str = "\u{E892}";
-const GLYPH_PLAY: &str = "\u{E768}";
-const GLYPH_PAUSE: &str = "\u{E769}";
-const GLYPH_NEXT: &str = "\u{E893}";
-const GLYPH_MUSIC: &str = "\u{E8D6}";
-/// "Ringer" in Segoe Fluent Icons and Segoe MDL2 Assets.
-const GLYPH_BELL: &str = "\u{EA8F}";
 /// Shown for an instrumental gap and before the first lyric line.
 const LYRIC_REST: &str = "\u{266A}";
 /// How far a lyric line rises while it crossfades into the next.
@@ -141,6 +134,8 @@ pub struct Renderer {
     /// Tabular figures, applied to every line of text.
     tabular: IDWriteTypography,
     fonts: Fonts,
+    /// Studio icon geometries, built on `d2d`.
+    icons: IconSet,
     surface: Option<Surface>,
     target: Option<Target>,
     /// Most recently used first; at most `ART_SLOTS`.
@@ -158,12 +153,7 @@ pub struct Renderer {
 struct Fonts {
     title: IDWriteTextFormat,
     secondary: IDWriteTextFormat,
-    icon: IDWriteTextFormat,
     badge: IDWriteTextFormat,
-    /// The reminder notice's bell.
-    badge_icon: IDWriteTextFormat,
-    /// Segoe Fluent Icons or Segoe MDL2 Assets is installed.
-    has_icons: bool,
     /// The idle clock.
     clock: IDWriteTextFormat,
     /// The lyric line in the notch.
@@ -184,11 +174,6 @@ struct Fonts {
     phase: IDWriteTextFormat,
     media_title: IDWriteTextFormat,
     media_artist: IDWriteTextFormat,
-    icon_small: IDWriteTextFormat,
-    icon_panel: IDWriteTextFormat,
-    icon_panel_large: IDWriteTextFormat,
-    /// Shortcut tile icons.
-    icon_tile: IDWriteTextFormat,
     /// The CLI card: DM Mono, else Cascadia Mono or Consolas.
     mono: IDWriteTextFormat,
 }
@@ -276,6 +261,7 @@ impl Renderer {
                 CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let fonts = Fonts::new(&dwrite)?;
+            let icons = IconSet::new(&d2d)?;
             let tabular = fonts::tabular_figures(&dwrite)?;
             let round_cap = d2d.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -295,6 +281,7 @@ impl Renderer {
                 dwrite,
                 tabular,
                 fonts,
+                icons,
                 surface: None,
                 target: None,
                 art: Vec::new(),
@@ -585,15 +572,9 @@ impl Renderer {
             );
         }
         if matches!(notice.kind, NoticeKind::Reminder { .. }) {
-            // A bell in the accent's ink; the letter if no icon font is installed.
+            // A bell in the accent's ink, without the duotone: it sits on the accent.
             let ink = self.palette.on_accent;
-            if self.fonts.has_icons {
-                let bell = &self.fonts.badge_icon;
-                self.text_colored(GLYPH_BELL, bell, layout.badge, ink, 1.0);
-            } else {
-                let letter = badge_letter(&notice.source);
-                self.text_colored(&letter, &self.fonts.badge, layout.badge, ink, 1.0);
-            }
+            self.icon_colored(Icon::Bell, layout.badge, 18.0, ink, 1.0, None);
         } else {
             // Dark letter on the light fills (WhatsApp green, amber), white otherwise.
             let ink = match fill {
@@ -624,7 +605,7 @@ impl Renderer {
         let Some(bitmap) = bitmap else {
             unsafe { target.brush.SetColor(&color(self.palette.placeholder, 1.0)) };
             self.fill_round(area, radius);
-            self.text(GLYPH_MUSIC, &self.fonts.icon, area, SECONDARY_ALPHA);
+            self.icon(Icon::Music, area, 16.0, SECONDARY_ALPHA, true);
             return Ok(());
         };
         unsafe {
@@ -772,6 +753,36 @@ impl Renderer {
         }
     }
 
+    /// A Studio icon `size` px square centred in `area`, in the text colour;
+    /// `duo` adds the accent's duotone fill.
+    fn icon(&self, icon: Icon, area: Rect, size: f32, alpha: f32, duo: bool) {
+        let accent = duo.then_some(self.palette.accent);
+        self.icon_colored(icon, area, size, self.palette.text, alpha, accent);
+    }
+
+    fn icon_colored(
+        &self,
+        icon: Icon,
+        area: Rect,
+        size: f32,
+        ink: u32,
+        alpha: f32,
+        accent: Option<u32>,
+    ) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        // Like text, a failed icon is skipped; a lost target surfaces at EndDraw.
+        let _ = self.icons.draw(
+            &target.rt,
+            &target.brush,
+            icon,
+            area,
+            size,
+            ink,
+            alpha,
+            accent,
+        );
+    }
+
     fn text(&self, text: &str, format: &IDWriteTextFormat, area: Rect, alpha: f32) {
         self.text_colored(text, format, area, self.palette.text, alpha);
     }
@@ -813,9 +824,6 @@ impl Fonts {
         let text = Face::for_role(dwrite, Role::Text);
         let display = Face::for_role(dwrite, Role::Display);
         let mono = Face::for_role(dwrite, Role::Mono);
-        let icon_names = [w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")];
-        let has_icons = find_installed(dwrite, &icon_names)?.is_some();
-        let icon = Face::system(first_installed(dwrite, &icon_names)?);
         let line = |face: &Face, weight, size| line_format(dwrite, face, weight, size);
         let aligned = |face: &Face, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
             let format = line_format(dwrite, face, weight, size)?;
@@ -834,10 +842,7 @@ impl Fonts {
         Ok(Self {
             title: line(&text, semi, 13.0)?,
             secondary: line(&text, normal, body)?,
-            icon: centered(&icon, normal, 16.0)?,
             badge: centered(&text, semi, 17.0)?,
-            badge_icon: centered(&icon, normal, 18.0)?,
-            has_icons,
             clock: centered(&text, semi, 13.0)?,
             lyric: centered(&text, semi, 13.0)?,
             lyric_rest: centered(&text, normal, 19.0)?,
@@ -853,37 +858,9 @@ impl Fonts {
             phase: centered(&text, semi, 15.0)?,
             media_title: line(&display, medium, 18.0)?,
             media_artist: line(&text, normal, body)?,
-            icon_small: centered(&icon, normal, 12.0)?,
-            icon_panel: centered(&icon, normal, 20.0)?,
-            icon_panel_large: centered(&icon, normal, 28.0)?,
-            icon_tile: centered(&icon, normal, 22.0)?,
             mono: line(&mono, normal, 11.0)?,
         })
     }
-}
-
-/// The first family in `names` present in the system collection (else the last name,
-/// letting DirectWrite's own fallback pick).
-fn first_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<PCWSTR> {
-    Ok(find_installed(dwrite, names)?.unwrap_or(*names.last().expect("at least one family name")))
-}
-
-/// The first family in `names` present in the system collection, if any.
-fn find_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<Option<PCWSTR>> {
-    unsafe {
-        let mut collection = None;
-        dwrite.GetSystemFontCollection(&mut collection, false)?;
-        if let Some(collection) = collection {
-            for &name in names {
-                let (mut index, mut exists) = (0u32, BOOL(0));
-                collection.FindFamilyName(name, &mut index, &mut exists)?;
-                if exists.as_bool() {
-                    return Ok(Some(name));
-                }
-            }
-        }
-    }
-    Ok(None)
 }
 
 /// Single line, vertically centered, never wrapping, trimmed per character with "…".
