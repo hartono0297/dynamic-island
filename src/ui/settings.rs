@@ -1866,7 +1866,7 @@ mod tests {
     fn model_from_config_copies_the_settings() {
         let cfg = Config {
             style: Style::Notch,
-            accent: Accent::Pink,
+            accent: Accent::Clay,
             battery_threshold: 35,
             google_client_id: "id".into(),
             idle_clock: false,
@@ -1883,7 +1883,7 @@ mod tests {
                 m.idle_clock,
                 m.lyrics
             ),
-            (Style::Notch, Accent::Pink, 35, "id", false, true)
+            (Style::Notch, Accent::Clay, 35, "id", false, true)
         );
     }
 

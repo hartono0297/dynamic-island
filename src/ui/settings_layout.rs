@@ -456,12 +456,12 @@ pub struct State<'a> {
 
 pub fn accent_key(a: Accent) -> Key {
     match a {
-        Accent::Blue => Key::AccentBlue,
-        Accent::Purple => Key::AccentPurple,
-        Accent::Green => Key::AccentGreen,
-        Accent::Orange => Key::AccentOrange,
-        Accent::Pink => Key::AccentPink,
-        Accent::Red => Key::AccentRed,
+        Accent::Terracotta => Key::AccentTerracotta,
+        Accent::Sage => Key::AccentSage,
+        Accent::Ochre => Key::AccentOchre,
+        Accent::Clay => Key::AccentClay,
+        Accent::Olive => Key::AccentOlive,
+        Accent::Plum => Key::AccentPlum,
     }
 }
 
@@ -923,7 +923,7 @@ fn appearance(b: &mut Builder, s: &State) {
     b.divider(card, rows[1]);
 
     let surfaces = [
-        (Surface::Black, Key::SurfaceBlack),
+        (Surface::Espresso, Key::SurfaceEspresso),
         (Surface::Graphite, Key::SurfaceGraphite),
     ];
     let items = surfaces
@@ -1322,7 +1322,7 @@ mod tests {
                     out.push(State {
                         lang,
                         style: Style::Notch,
-                        accent: Accent::Orange,
+                        accent: Accent::Ochre,
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
                         idle_clock: locked,

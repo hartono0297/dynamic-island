@@ -53,8 +53,8 @@ impl Default for Config {
             google_client_id: String::new(),
             google_client_secret: String::new(),
             language: Lang::Id,
-            accent: Accent::Blue,
-            surface: Surface::Black,
+            accent: Accent::Terracotta,
+            surface: Surface::Espresso,
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
@@ -286,8 +286,8 @@ mod tests {
         assert_eq!(c.muted_apps, vec!["Claude".to_string(), "Orca".to_string()]);
         assert!(!c.onboarding_done);
         assert_eq!(c.language, Lang::Id);
-        assert_eq!(c.accent, Accent::Blue);
-        assert_eq!(c.surface, Surface::Black);
+        assert_eq!(c.accent, Accent::Terracotta);
+        assert_eq!(c.surface, Surface::Espresso);
         assert_eq!(c.window_theme, WindowTheme::System);
         assert!(c.idle_clock);
         assert!(!c.lyrics);
@@ -327,7 +327,7 @@ mod tests {
             google_client_id: "id.apps.googleusercontent.com".into(),
             google_client_secret: "secret".into(),
             language: Lang::En,
-            accent: Accent::Orange,
+            accent: Accent::Ochre,
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
             idle_clock: false,
@@ -340,23 +340,23 @@ mod tests {
     #[test]
     fn theme_fields_are_names_and_typos_fall_back() {
         let c = Config {
-            accent: Accent::Purple,
+            accent: Accent::Plum,
             surface: Surface::Graphite,
             window_theme: WindowTheme::Dark,
             ..Config::default()
         };
         let json = serde_json::to_string(&c).unwrap();
         for field in [
-            r#""accent":"Purple""#,
+            r#""accent":"Plum""#,
             r#""surface":"Graphite""#,
             r#""window_theme":"Dark""#,
         ] {
             assert!(json.contains(field), "{json}");
         }
-        let hand = parse(r#"{"accent":"green","surface":"GRAPHITE","window_theme":"light"}"#);
+        let hand = parse(r#"{"accent":"sage","surface":"GRAPHITE","window_theme":"light"}"#);
         assert_eq!(
             (hand.accent, hand.surface, hand.window_theme),
-            (Accent::Green, Surface::Graphite, WindowTheme::Light)
+            (Accent::Sage, Surface::Graphite, WindowTheme::Light)
         );
         // A typo keeps the rest of the file: only that field falls back.
         let typo = parse(r#"{"style":"Notch","accent":"teal","surface":"grey","window_theme":1}"#);
@@ -364,7 +364,40 @@ mod tests {
         let typo = parse(r#"{"style":"Notch","accent":"teal","surface":"grey"}"#);
         assert_eq!(
             (typo.style, typo.accent, typo.surface),
-            (Style::Notch, Accent::Blue, Surface::Black)
+            (Style::Notch, Accent::Terracotta, Surface::Espresso)
+        );
+    }
+
+    #[test]
+    fn old_theme_names_load_as_studio_colours() {
+        for (old, accent) in [
+            ("Blue", Accent::Terracotta),
+            ("Purple", Accent::Plum),
+            ("Green", Accent::Sage),
+            ("Orange", Accent::Ochre),
+            ("pink", Accent::Clay),
+            ("Red", Accent::Terracotta),
+        ] {
+            let c = parse(&format!(
+                r#"{{"style":"Notch","accent":"{old}","surface":"Black"}}"#
+            ));
+            assert_eq!(
+                (c.style, c.accent, c.surface),
+                (Style::Notch, accent, Surface::Espresso),
+                "{old}"
+            );
+            // Saving writes the Studio name, not the old one.
+            let json = serde_json::to_string(&c).unwrap();
+            let field = format!(r#""accent":"{}""#, accent.name());
+            assert!(json.contains(&field), "{json}");
+            assert!(json.contains(r#""surface":"Espresso""#), "{json}");
+            assert_eq!(parse(&json), c);
+        }
+        // An old file that only picked a non-default accent keeps it.
+        let pink = parse(r#"{"accent":"Pink","surface":"Graphite"}"#);
+        assert_eq!(
+            (pink.accent, pink.surface),
+            (Accent::Clay, Surface::Graphite)
         );
     }
 
@@ -389,7 +422,7 @@ mod tests {
         assert_eq!(c.language, Lang::Id);
         assert_eq!(
             (c.accent, c.surface, c.window_theme),
-            (Accent::Blue, Surface::Black, WindowTheme::System)
+            (Accent::Terracotta, Surface::Espresso, WindowTheme::System)
         );
     }
 
@@ -450,8 +483,8 @@ mod tests {
             style: Style::Pill,
             pomodoro: PomoSettings::default(),
             language: Lang::Id,
-            accent: Accent::Blue,
-            surface: Surface::Black,
+            accent: Accent::Terracotta,
+            surface: Surface::Espresso,
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
@@ -467,7 +500,7 @@ mod tests {
                 ..PomoSettings::default()
             },
             language: Lang::En,
-            accent: Accent::Red,
+            accent: Accent::Olive,
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
             idle_clock: false,
