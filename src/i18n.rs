@@ -159,8 +159,8 @@ keys! {
     GoogleScopes => "Izin Google belum lengkap", "Google permissions incomplete";
     GoogleScopesBody => "Centang kedua izin saat login", "Check both permissions when you sign in";
     GoogleRefused => "Google menolak", "Google refused";
-    ClientRejected => "Client ID atau secret ditolak — cek config.json",
-        "Client ID or secret rejected — check config.json";
+    ClientRejected => "Client ID atau secret ditolak — cek Pengaturan → Integrasi",
+        "Client ID or secret rejected — check Settings → Integrations";
     ApiDisabled => "Google Calendar API belum diaktifkan — lihat README",
         "Google Calendar API isn't enabled — see the README";
     NoTitle => "(Tanpa judul)", "(No title)";
@@ -324,7 +324,7 @@ keys! {
     PopupsHelpDesc => "Supaya notifikasi tidak muncul dua kali", "So notifications don't show twice";
     ShowHow => "Buka petunjuk", "Show me how";
     LyricsInNotch => "Lirik di notch", "Lyrics in notch";
-    LyricsInNotchDesc => "Artis & judul dikirim ke lrclib.net", "Artist & title are sent to lrclib.net";
+    LyricsInNotchDesc => "Artis, judul & durasi dikirim ke lrclib.net", "Artist, title & length are sent to lrclib.net";
     ShellCli => "Shell CLI", "CLI shell";
     ShellCliDesc => "Untuk perintah di halaman CLI", "Runs the CLI page's commands";
     ShellPowerShell => "PowerShell", "PowerShell";

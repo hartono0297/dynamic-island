@@ -18,8 +18,11 @@ use crate::ui::geometry::ANIM_MS;
 /// How a shortcut is carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// `ShellExecute` "open": a URI or a program on the PATH.
+    /// `ShellExecute` "open" on a URI.
     Open(&'static str),
+    /// `ShellExecute` "open" on a program, by its path under `%SystemRoot%`,
+    /// so a same-named exe in the working directory is never picked.
+    System(&'static str),
     /// The Windows key with this key.
     WinKey(VIRTUAL_KEY),
     /// `LockWorkStation`.
@@ -31,9 +34,9 @@ pub fn shortcut_action(s: Shortcut) -> Action {
         Shortcut::Screenshot => Action::Open("ms-screenclip:"),
         Shortcut::Clipboard => Action::WinKey(VK_V),
         Shortcut::Emoji => Action::WinKey(VK_OEM_PERIOD),
-        Shortcut::Explorer => Action::Open("explorer.exe"),
-        Shortcut::Calculator => Action::Open("calc.exe"),
-        Shortcut::TaskManager => Action::Open("taskmgr.exe"),
+        Shortcut::Explorer => Action::System("explorer.exe"),
+        Shortcut::Calculator => Action::System(r"System32\calc.exe"),
+        Shortcut::TaskManager => Action::System(r"System32\taskmgr.exe"),
         Shortcut::WindowsSettings => Action::Open("ms-settings:"),
         Shortcut::Lock => Action::Lock,
     }
@@ -95,6 +98,20 @@ pub fn run(action: Action) {
                 SW_SHOWNORMAL,
             );
         },
+        Action::System(rel) => {
+            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+            let path = std::path::Path::new(&root).join(rel);
+            unsafe {
+                ShellExecuteW(
+                    None,
+                    w!("open"),
+                    &HSTRING::from(path.as_os_str()),
+                    None,
+                    None,
+                    SW_SHOWNORMAL,
+                );
+            }
+        }
         Action::WinKey(key) => {
             let input = |vk: VIRTUAL_KEY, up: bool| INPUT {
                 r#type: INPUT_KEYBOARD,
@@ -144,9 +161,12 @@ mod tests {
                 (Shortcut::Screenshot, Action::Open("ms-screenclip:")),
                 (Shortcut::Clipboard, Action::WinKey(VK_V)),
                 (Shortcut::Emoji, Action::WinKey(VK_OEM_PERIOD)),
-                (Shortcut::Explorer, Action::Open("explorer.exe")),
-                (Shortcut::Calculator, Action::Open("calc.exe")),
-                (Shortcut::TaskManager, Action::Open("taskmgr.exe")),
+                (Shortcut::Explorer, Action::System("explorer.exe")),
+                (Shortcut::Calculator, Action::System(r"System32\calc.exe")),
+                (
+                    Shortcut::TaskManager,
+                    Action::System(r"System32\taskmgr.exe")
+                ),
                 (Shortcut::WindowsSettings, Action::Open("ms-settings:")),
                 (Shortcut::Lock, Action::Lock),
             ]

@@ -428,7 +428,7 @@ fn demo_cli(which: CliDemo) -> CliCard<'static> {
         } else {
             Shell::PowerShell
         },
-        cwd: "C:\\Users\\Hartono",
+        cwd: "C:\\Users\\you",
     }
 }
 

@@ -1445,7 +1445,7 @@ mod tests {
             .unwrap();
         println!("status {status}, {} bytes", body.len());
         let Answer::Synced(lrc) = read_answer(status, &body) else {
-            panic!("no synced lyrics: {status} {body}");
+            panic!("no synced lyrics: status {status}");
         };
         let lines = parse_lrc(&lrc);
         // Timing only: the lyrics themselves are not printed.
