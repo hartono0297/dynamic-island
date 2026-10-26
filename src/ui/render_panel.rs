@@ -33,10 +33,10 @@ use crate::shortcuts;
 use crate::theme;
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
-    CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, ShortcutsLayout,
-    WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout, page_dots,
-    pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
-    tile_parts, waiting_strip,
+    CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
+    ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout,
+    page_dots, pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout,
+    shortcuts_layout, tile_parts, waiting_strip,
 };
 
 /// Pomodoro phases keep their red and green whatever the accent.
@@ -48,9 +48,6 @@ const GLYPH_LEFT: &str = "\u{E76B}";
 const GLYPH_RIGHT: &str = "\u{E76C}";
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
-/// The pomodoro countdown's box inside the ring (Fraunces 48).
-const BIG_TIME_H: f32 = 60.0;
-const BIG_TIME_SLACK: f32 = 16.0;
 /// A heading's line (Fraunces 20) is taller than the 22 px header row: its
 /// box grows by this much above and below so descenders are not clipped.
 const HEADING_BLEED: f32 = 4.0;
@@ -494,24 +491,14 @@ impl Renderer {
         self.ring(
             (cx, cy),
             l.ring_radius,
-            8.0,
+            RING_STROKE,
             pomo.progress(frame.now),
             accent,
         )?;
-        // Fraunces 48 needs a taller box than its digits: the line (ascent
-        // plus descent) is ~60 px, centred on the ring so nothing is clipped.
-        // The box also runs past the ring sideways so "mm:ss" is never
-        // trimmed to an ellipsis; centred, it stays inside the ring.
-        let half = l.ring_radius + BIG_TIME_SLACK;
         self.text(
             &mmss(pomo.remaining(frame.now)),
             &self.fonts.big_time,
-            Rect {
-                x: cx - half,
-                y: cy - BIG_TIME_H / 2.0,
-                w: 2.0 * half,
-                h: BIG_TIME_H,
-            },
+            l.time,
             1.0,
         );
 

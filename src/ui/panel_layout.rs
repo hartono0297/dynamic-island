@@ -62,6 +62,9 @@ pub struct PomodoroLayout {
     pub header: Rect,
     pub ring_center: (f32, f32),
     pub ring_radius: f32,
+    /// The countdown, centred on the ring: as wide as the stroke's inner edge
+    /// at the digits' top and bottom, so text centred in it never meets it.
+    pub time: Rect,
     /// The phase ("Fokus · dijeda"), right of the ring.
     pub phase: Rect,
     /// "Sesi 2 dari 4", under the phase.
@@ -162,7 +165,16 @@ const WEEK_GAP: f32 = 6.0;
 pub const WEEK_HEAD_H: f32 = 20.0;
 const WEEK_ROWS: usize = 3;
 
-const RING_RADIUS: f32 = 70.0;
+/// Big enough that the widest countdown (Fraunces It 48) clears the stroke;
+/// the design's r = 100 does not fit under the waiting strip (192 of 198 px).
+const RING_RADIUS: f32 = 92.0;
+/// The ring's stroke, centred on `RING_RADIUS`.
+pub const RING_STROKE: f32 = 8.0;
+/// The countdown's box: one Fraunces It 48 line (59.2 px) centred on the ring.
+const TIME_H: f32 = 60.0;
+/// The digits' ink reaches this far above and below the ring's centre
+/// (Fraunces It 48 measures cy - 17 to cy + 18).
+const TIME_INK_HALF: f32 = 18.0;
 /// Between the ring and the column of labels and buttons.
 const RING_GAP: f32 = 48.0;
 const PHASE_H: f32 = 24.0;
@@ -482,6 +494,14 @@ pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
     let group_x = l + ((r - l) - group_w) / 2.0;
     let cy = body + body_h / 2.0;
     let ring_center = (group_x + RING_RADIUS, cy);
+    let inner = RING_RADIUS - RING_STROKE / 2.0;
+    let half_w = (inner * inner - TIME_INK_HALF * TIME_INK_HALF).sqrt();
+    let time = rect(
+        ring_center.0 - half_w,
+        cy - TIME_H / 2.0,
+        2.0 * half_w,
+        TIME_H,
+    );
 
     let x = group_x + 2.0 * RING_RADIUS + RING_GAP;
     let column_h = PHASE_H + SESSION_GAP + SESSION_H + ACTION_GAP + ACTION_H;
@@ -501,6 +521,7 @@ pub fn pomodoro_layout(s: ShapeRect, strip: bool) -> PomodoroLayout {
         header,
         ring_center,
         ring_radius: RING_RADIUS,
+        time,
         phase,
         session,
         start_pause,
@@ -1423,14 +1444,14 @@ mod tests {
                         PageLayout::Pomodoro(l) => {
                             drawn.push(l.header);
                             let (cx, cy) = l.ring_center;
-                            let r = l.ring_radius + 4.0;
+                            let r = l.ring_radius + RING_STROKE / 2.0;
                             drawn.push(Rect {
                                 x: cx - r,
                                 y: cy - r,
                                 w: 2.0 * r,
                                 h: 2.0 * r,
                             });
-                            drawn.extend([l.phase, l.session]);
+                            drawn.extend([l.time, l.phase, l.session]);
                         }
                         PageLayout::Notes(l) | PageLayout::Reminders(l) => drawn.push(l.header),
                         PageLayout::Media(l) => drawn.extend([l.art, l.title, l.artist]),
@@ -1460,8 +1481,24 @@ mod tests {
             let s = panel(style);
             for strip in [false, true] {
                 let l = pomodoro_layout(s, strip);
-                assert_eq!(l.ring_radius, 70.0);
+                assert_eq!(l.ring_radius, 92.0);
                 let (cx, cy) = l.ring_center;
+                // The ring and its stroke stay between the header and the dots.
+                let outer = l.ring_radius + RING_STROKE / 2.0;
+                assert!(
+                    cy + outer <= content_bottom(s) + 0.01,
+                    "{style:?} strip={strip}"
+                );
+                // The countdown box is centred on the ring and wide enough for
+                // the widest countdown in Fraunces It 48 ("100:00", 157.7 px).
+                assert!((l.time.x + l.time.w / 2.0 - cx).abs() < 0.01);
+                assert!((l.time.y + l.time.h / 2.0 - cy).abs() < 0.01);
+                assert!(l.time.w >= 158.0, "time box {}", l.time.w);
+                // The digits' ink band (cy - 18 .. cy + 18) across the box stays
+                // inside the stroke's inner edge.
+                let inner = l.ring_radius - RING_STROKE / 2.0;
+                let corner = (l.time.w / 2.0).hypot(TIME_INK_HALF);
+                assert!(corner <= inner + 0.01, "corner {corner} vs inner {inner}");
                 assert!(cx < s.x + s.w / 2.0, "ring in the left half");
                 // Ring and column together sit centred in the panel.
                 let group_l = cx - l.ring_radius;
@@ -1486,7 +1523,7 @@ mod tests {
                 let mid = (l.phase.y + l.skip.bottom()) / 2.0;
                 assert!((mid - cy).abs() < 0.01);
                 assert!(l.phase.y >= l.header.bottom());
-                assert!(cy - l.ring_radius - 4.0 >= l.header.bottom() - 0.01);
+                assert!(cy - outer >= l.header.bottom() - 0.01);
             }
         }
     }
