@@ -274,7 +274,10 @@ pub fn spawn_watcher(tx: Sender<Event>, wake: impl Fn() + Send + Sync + 'static)
             if refresh.timeline || sent {
                 let timeline = if present { watcher.timeline() } else { None };
                 let now = Instant::now();
-                if timeline_moved(last_timeline.as_ref(), timeline.as_ref(), playing, now) {
+                // After new properties (a new track) it goes out even if
+                // unchanged, so the island pairs the new title with it.
+                let moved = timeline_moved(last_timeline.as_ref(), timeline.as_ref(), playing, now);
+                if refresh.properties || moved {
                     if tx.send(Event::MediaTimeline(timeline)).is_err() {
                         return;
                     }

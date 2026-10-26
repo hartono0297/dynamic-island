@@ -349,6 +349,7 @@ fn demo_lyrics(at: u64, fade: Option<f32>, now: Instant) -> LyricsState {
         artist: "Demo".into(),
         title: "Jalan Pulang".into(),
         duration_ms: 30_000,
+        provisional: false,
     };
     let mut state = LyricsState::default();
     state.want(Some(&query), true);
