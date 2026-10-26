@@ -24,9 +24,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreatePen, CreateSolidBrush,
-    DEFAULT_CHARSET, DeleteObject, EndPaint, FW_NORMAL, FillRect, GetDC, GetTextFaceW, HBRUSH, HDC,
-    HFONT, HGDIOBJ, InvalidateRect, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, ReleaseDC,
-    RoundRect, SelectObject, SetBkColor, SetTextColor,
+    DEFAULT_CHARSET, DeleteObject, EndPaint, FW_NORMAL, FillRect, HBRUSH, HDC, HFONT, HGDIOBJ,
+    InvalidateRect, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject, SetBkColor,
+    SetTextColor,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -56,6 +56,7 @@ use super::editor::{
     apply_mode, blend, brushes, colorref, create_font, editor_rect, init_common_controls, key_down,
     monitor_at, send, window_text,
 };
+use super::fonts;
 use crate::cli::{History, HistoryCursor, Shell};
 use crate::i18n::{Key, tr};
 use crate::theme::{self, TERMINAL_BG, TERMINAL_TEXT};
@@ -228,30 +229,24 @@ fn font_named(scale: f32, face: PCWSTR) -> HFONT {
     }
 }
 
-/// Cascadia Mono, or Consolas where it is not installed (GDI would quietly
-/// substitute some other face).
+/// DM Mono when it was registered with GDI, else Cascadia Mono, else
+/// Consolas (GDI would quietly substitute some other face for a missing one).
 fn mono_font(scale: f32) -> HFONT {
-    let font = font_named(scale, w!("Cascadia Mono"));
-    if font_face(font).eq_ignore_ascii_case("Cascadia Mono") {
-        return font;
+    let mut candidates = Vec::with_capacity(2);
+    if fonts::gdi().dm_mono {
+        candidates.push((w!("DM Mono"), fonts::DM_MONO));
     }
-    unsafe {
-        let _ = DeleteObject(HGDIOBJ(font.0));
+    candidates.push((w!("Cascadia Mono"), "Cascadia Mono"));
+    for (face, name) in candidates {
+        let font = font_named(scale, face);
+        if fonts::gdi_face(font).eq_ignore_ascii_case(name) {
+            return font;
+        }
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(font.0));
+        }
     }
     font_named(scale, w!("Consolas"))
-}
-
-/// The face GDI actually picked for `font`.
-fn font_face(font: HFONT) -> String {
-    unsafe {
-        let dc = GetDC(None);
-        let old = SelectObject(dc, HGDIOBJ(font.0));
-        let mut name = [0u16; 64];
-        let n = GetTextFaceW(dc, Some(&mut name)).max(1) as usize - 1;
-        SelectObject(dc, old);
-        ReleaseDC(None, dc);
-        String::from_utf16_lossy(&name[..n.min(name.len())])
-    }
 }
 
 thread_local! {

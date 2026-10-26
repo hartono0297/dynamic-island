@@ -158,20 +158,29 @@ impl Font {
         Font::AboutVersion,
     ];
 
+    /// Studio scale: Fraunces Italic 20 for titles (14 for the brand), DM Sans
+    /// 12 for text and 10.5 for descriptions.
     pub fn size(self) -> f32 {
         match self {
-            Font::Brand | Font::Nav | Font::Label => 14.0,
+            Font::Brand => 14.0,
             Font::Title | Font::AboutName => 20.0,
-            Font::Desc => 12.0,
-            Font::Control | Font::Value | Font::AboutVersion => 13.0,
+            Font::Nav | Font::Label | Font::Control | Font::Value | Font::AboutVersion => 12.0,
+            Font::Desc => 10.5,
         }
     }
 
-    pub fn semibold(self) -> bool {
-        matches!(
-            self,
-            Font::Brand | Font::Title | Font::Value | Font::AboutName
-        )
+    /// Set in the display face (Fraunces Italic) rather than DM Sans.
+    pub fn display(self) -> bool {
+        matches!(self, Font::Brand | Font::Title | Font::AboutName)
+    }
+
+    /// CSS-style weight: 400, 500 or 600 (the weights embedded).
+    pub fn weight(self) -> u16 {
+        match self {
+            Font::Brand | Font::Title | Font::AboutName | Font::Label => 500,
+            Font::Value => 600,
+            Font::Nav | Font::Desc | Font::Control | Font::AboutVersion => 400,
+        }
     }
 }
 
@@ -180,13 +189,21 @@ pub trait Measure {
     fn width(&self, text: &str, font: Font) -> f32;
 }
 
-/// A generous width estimate (wider than Segoe UI draws nearly any text), so
-/// a layout that fits with it also fits on screen.
+/// A generous width estimate (wider than DM Sans, Fraunces Italic or the
+/// Segoe UI fallback draw nearly any text), so a layout that fits with it
+/// also fits on screen.
 pub struct Estimate;
 
 impl Measure for Estimate {
     fn width(&self, text: &str, font: Font) -> f32 {
-        let per_char = if font.semibold() { 0.62 } else { 0.58 };
+        let per_char = if font.display() {
+            // Fraunces Italic runs narrower than DM Sans.
+            0.62
+        } else if font.weight() >= 500 {
+            0.66
+        } else {
+            0.62
+        };
         text.chars().count() as f32 * font.size() * per_char
     }
 }

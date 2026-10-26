@@ -36,8 +36,23 @@ fn demo_lang_from_env() {
     i18n::set_lang(i18n::Lang::from_code(&code).unwrap_or_default());
 }
 
+/// Modes that create windows: they need the embedded fonts registered with
+/// GDI before the first one opens.
+fn opens_windows(arg: Option<&str>) -> bool {
+    match arg {
+        None => true,
+        #[cfg(debug_assertions)]
+        Some("--demo" | "--demo-editor" | "--demo-cli" | "--settings") => true,
+        Some(_) => false,
+    }
+}
+
 fn main() {
-    match std::env::args().nth(1).as_deref() {
+    let arg = std::env::args().nth(1);
+    if opens_windows(arg.as_deref()) {
+        ui::fonts::register_gdi();
+    }
+    match arg.as_deref() {
         None => app::run(),
         // No console attach: the hook prints nothing, and attaching can swap an
         // unset stdin for the console's, leaving the hook blocked on keyboard input.

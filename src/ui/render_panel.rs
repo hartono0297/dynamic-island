@@ -48,8 +48,24 @@ const GLYPH_LEFT: &str = "\u{E76B}";
 const GLYPH_RIGHT: &str = "\u{E76C}";
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
+/// The pomodoro countdown's box inside the ring (Fraunces 48).
+const BIG_TIME_H: f32 = 60.0;
+const BIG_TIME_SLACK: f32 = 16.0;
+/// A heading's line (Fraunces 20) is taller than the 22 px header row: its
+/// box grows by this much above and below so descenders are not clipped.
+const HEADING_BLEED: f32 = 4.0;
 
 impl Renderer {
+    /// A page title in the header row.
+    fn heading(&self, title: &str, header: Rect) {
+        let area = Rect {
+            y: header.y - HEADING_BLEED,
+            h: header.h + 2.0 * HEADING_BLEED,
+            ..header
+        };
+        self.text(title, &self.fonts.heading, area, 1.0);
+    }
+
     /// The panel: content laid out for the resting panel shape, clipped to the
     /// current (possibly still morphing) shape and faded in while it grows.
     /// Clickable regions exist only once the shape has settled and no page
@@ -159,7 +175,7 @@ impl Renderer {
     fn paint_cli(&self, l: &CliLayout, card: &CliCard) {
         let lang = i18n::lang();
         let p = self.palette;
-        self.text(text(lang, Key::Cli), &self.fonts.heading, l.header, 1.0);
+        self.heading(text(lang, Key::Cli), l.header);
         if card.running {
             let label = format!("\u{25CF} {}", text(lang, Key::CliRunning));
             self.text_colored(&label, &self.fonts.body_right, l.status, p.accent, 1.0);
@@ -206,7 +222,7 @@ impl Renderer {
     fn paint_shortcuts(&self, l: &ShortcutsLayout) {
         let lang = i18n::lang();
         let heading = text(lang, Key::Shortcuts);
-        self.text(heading, &self.fonts.heading, l.header, 1.0);
+        self.heading(heading, l.header);
         for (s, tile) in l.tiles {
             self.set_color(self.palette.raised, 1.0);
             self.fill_round(tile, 12.0);
@@ -245,7 +261,7 @@ impl Renderer {
                 SECONDARY_ALPHA,
             );
         }
-        self.text(&title, &self.fonts.heading, header, 1.0);
+        self.heading(&title, header);
         self.text(GLYPH_LEFT, &self.fonts.icon_small, l.prev, 0.8);
         self.text(GLYPH_RIGHT, &self.fonts.icon_small, l.next, 0.8);
 
@@ -472,12 +488,7 @@ impl Renderer {
         let settings = pomo.settings();
         let status = pomo.status();
         let accent = phase_color(pomo.phase());
-        self.text(
-            text(lang, Key::Pomodoro),
-            &self.fonts.heading,
-            l.header,
-            1.0,
-        );
+        self.heading(text(lang, Key::Pomodoro), l.header);
 
         let (cx, cy) = l.ring_center;
         self.ring(
@@ -487,15 +498,19 @@ impl Renderer {
             pomo.progress(frame.now),
             accent,
         )?;
-        let r = l.ring_radius;
+        // Fraunces 48 needs a taller box than its digits: the line (ascent
+        // plus descent) is ~60 px, centred on the ring so nothing is clipped.
+        // The box also runs past the ring sideways so "mm:ss" is never
+        // trimmed to an ellipsis; centred, it stays inside the ring.
+        let half = l.ring_radius + BIG_TIME_SLACK;
         self.text(
             &mmss(pomo.remaining(frame.now)),
             &self.fonts.big_time,
             Rect {
-                x: cx - r,
-                y: cy - 21.0,
-                w: 2.0 * r,
-                h: 42.0,
+                x: cx - half,
+                y: cy - BIG_TIME_H / 2.0,
+                w: 2.0 * half,
+                h: BIG_TIME_H,
             },
             1.0,
         );
@@ -526,7 +541,7 @@ impl Renderer {
 
     fn paint_notes(&self, l: &ListLayout, notes: &[Note], today: NaiveDate) {
         let lang = i18n::lang();
-        self.text(text(lang, Key::Notes), &self.fonts.heading, l.header, 1.0);
+        self.heading(text(lang, Key::Notes), l.header);
         self.text(
             text(lang, Key::NewNote),
             &self.fonts.body_right,
@@ -592,12 +607,7 @@ impl Renderer {
     fn paint_reminders(&self, l: &ListLayout, reminders: &[Reminder], today: NaiveDate) {
         let lang = i18n::lang();
         let now = Local::now().timestamp();
-        self.text(
-            text(lang, Key::Reminders),
-            &self.fonts.heading,
-            l.header,
-            1.0,
-        );
+        self.heading(text(lang, Key::Reminders), l.header);
         self.text(
             text(lang, Key::NewNote),
             &self.fonts.body_right,
