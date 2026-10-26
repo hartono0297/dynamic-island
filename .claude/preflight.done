@@ -1,0 +1,5 @@
+2026-10-26
+Preflight marked done by the user. Already in place globally: RTK 1.1.0
+(Bash PreToolUse hook), Context7 MCP (user scope), Obsidian app.
+Created docs/memory/index.md.
+Note: the Rust toolchain (cargo/rustup) is not installed on this PC.
