@@ -43,8 +43,11 @@ pub struct IslandState {
     /// The CLI window is active; it keeps the panel open like an editor.
     cli_focused: bool,
     /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
-    /// open, until the pointer has left the island (`Hover(false)`).
-    collapsed: bool,
+    /// open (an editor, the CLI window), until the pointer leaves the island
+    /// and comes back. Leaving alone is not enough: once the panel shrinks
+    /// the pointer is over transparent pixels, so the leave arrives at the
+    /// next small move, before the screen clip or picker is up.
+    collapsed: Collapse,
     pomodoro: Pomodoro,
     /// The panel page, kept across closes so the panel reopens where it was left.
     page: Page,
@@ -74,7 +77,7 @@ impl IslandState {
             hover: false,
             editor_open: false,
             cli_focused: false,
-            collapsed: false,
+            collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
             wheel: 0,
@@ -129,9 +132,12 @@ impl IslandState {
             Event::Fullscreen(on) => self.fullscreen = on,
             Event::Hover(on) => {
                 self.hover = on;
-                if !on {
-                    self.collapsed = false;
-                }
+                self.collapsed = match (self.collapsed, on) {
+                    (Collapse::Shut, false) => Collapse::Left,
+                    // A new visit: the user came back for the panel.
+                    (Collapse::Left, true) => Collapse::No,
+                    (c, _) => c,
+                };
             }
             Event::EditorOpen(on) => self.editor_open = on,
             Event::CliFocus(on) => self.cli_focused = on,
@@ -242,7 +248,7 @@ impl IslandState {
     }
 
     fn panel_open(&self) -> bool {
-        !self.collapsed && (self.hover || self.editor_open || self.cli_focused)
+        self.collapsed == Collapse::No && (self.hover || self.editor_open || self.cli_focused)
     }
 
     fn click(&mut self, hit: Hit, now: Instant, effects: &mut Vec<Effect>) {
@@ -323,7 +329,13 @@ impl IslandState {
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => {
                 if matches!(self.view(), View::Panel(_)) {
-                    self.collapsed = true;
+                    // Without hover (an editor or the CLI pins the panel) the
+                    // pointer is already away: its next visit reopens it.
+                    self.collapsed = if self.hover {
+                        Collapse::Shut
+                    } else {
+                        Collapse::Left
+                    };
                     effects.push(Effect::RunShortcut(s));
                 }
             }
@@ -530,6 +542,16 @@ impl IslandState {
     pub fn reminders_page(&self) -> usize {
         self.reminders_page
     }
+}
+
+/// The panel after a shortcut click.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Collapse {
+    No,
+    /// Shut, the pointer still on this visit.
+    Shut,
+    /// Shut, and the pointer has left; the next hover opens it again.
+    Left,
 }
 
 /// What a sticky notice is for: one per Claude session, one per reminder.
@@ -1043,8 +1065,36 @@ mod tests {
             s.apply(keep.clone(), t0);
             s.apply(Event::Click(Hit::Shortcut(Shortcut::Screenshot)), t0);
             assert_eq!(s.view(), View::Idle, "{keep:?}");
-            // Once the pointer has left, what kept it open does so again.
+            // The shrunk panel leaves the pointer over transparent pixels:
+            // the leave comes at once and must not reopen it for the editor
+            // or CLI while the screen clip starts.
             s.apply(Event::Hover(false), t0);
+            assert_eq!(s.view(), View::Idle, "{keep:?} after the leave");
+            s.apply(Event::Tick, t0 + secs(5));
+            assert_eq!(s.view(), View::Idle, "{keep:?} later");
+            // The user comes back: the panel opens, and the editor or CLI
+            // holds it open again once the pointer leaves.
+            s.apply(Event::Hover(true), t0 + secs(6));
+            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
+            s.apply(Event::Hover(false), t0 + secs(7));
+            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?} pinned");
+        }
+    }
+
+    #[test]
+    fn panel_pinned_by_editor_or_cli_closes_for_a_shortcut_without_hover() {
+        // Hovering ended before the click lands (the leave raced the click):
+        // the shortcut still shuts the pinned panel until the next visit.
+        let t0 = Instant::now();
+        for keep in [Event::EditorOpen(true), Event::CliFocus(true)] {
+            let mut s = st();
+            open_on(&mut s, Page::Shortcuts, t0);
+            s.apply(keep.clone(), t0);
+            s.apply(Event::Hover(false), t0);
+            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
+            s.apply(Event::Click(Hit::Shortcut(Shortcut::Emoji)), t0);
+            assert_eq!(s.view(), View::Idle, "{keep:?}");
+            s.apply(Event::Hover(true), t0);
             assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
         }
     }

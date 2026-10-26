@@ -624,6 +624,7 @@ impl App {
         self.cli_history.push(cmd);
         // A history that cannot be written only loses the history.
         let _ = self.cli_history.save(&cli::history_path());
+        // While a command runs, `Session` keeps all of this off the card.
         match cli::builtin(cmd) {
             Some(Builtin::Clear) => {
                 self.cli.clear();
@@ -641,9 +642,8 @@ impl App {
                 }
             }
             None if self.cli.running().is_some() => {
-                // Only the window hears it; the card keeps the running command.
-                self.cli.output.push(cli::echo_line(cmd));
-                self.cli.output.push(tr(Key::CliBusy).into());
+                self.cli.begin(cmd);
+                self.cli.note(tr(Key::CliBusy).into());
             }
             None => {
                 self.cli.begin(cmd);

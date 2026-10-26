@@ -1073,8 +1073,8 @@ pub fn run_demo() {
                 }
             }
             None if d.session.running().is_some() => {
-                d.session.output.push(cli::echo_line(cmd));
-                d.session.output.push(tr(Key::CliBusy).into());
+                d.session.begin(cmd);
+                d.session.note(tr(Key::CliBusy).into());
             }
             None => {
                 d.session.begin(cmd);

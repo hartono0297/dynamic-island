@@ -506,10 +506,12 @@ pub struct History {
 }
 
 impl History {
+    /// Bytes that are not UTF-8 (a file saved by another editor) become
+    /// U+FFFD rather than an empty history the next save would write over.
     pub fn load(path: &Path) -> Self {
         let mut h = History::default();
-        if let Ok(text) = std::fs::read_to_string(path) {
-            for line in text.lines() {
+        if let Ok(bytes) = std::fs::read(path) {
+            for line in String::from_utf8_lossy(&bytes).lines() {
                 h.push(line);
             }
         }
@@ -697,11 +699,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// A command was entered: echoed, and the card follows it.
+    /// A command was entered: echoed, and the card follows it. While another
+    /// runs, only the output gets it: the card stays with the running one.
     pub fn begin(&mut self, cmd: &str) {
         self.output.push(echo_line(cmd));
-        self.last_command = Some(cmd.to_owned());
-        self.tail.clear();
+        if self.running.is_none() {
+            self.last_command = Some(cmd.to_owned());
+            self.tail.clear();
+        }
     }
 
     /// The command `begin` echoed now runs as `run`.
@@ -709,9 +714,14 @@ impl Session {
         self.running = Some(run);
     }
 
-    /// A line from the island itself (a builtin's answer, an error).
+    /// A line from the island itself (a builtin's answer, an error); on the
+    /// card only while nothing runs.
     pub fn note(&mut self, line: String) {
-        self.add(line);
+        if self.running.is_some() {
+            self.output.push(line);
+        } else {
+            self.add(line);
+        }
     }
 
     /// Lines of `run`; ignored (false) unless it is the one running.
@@ -735,11 +745,14 @@ impl Session {
         true
     }
 
-    /// `cls`: everything goes, the card too.
+    /// `cls`: the output goes, and the card too unless a command runs (its
+    /// lines keep coming to the card).
     pub fn clear(&mut self) {
         self.output.clear();
-        self.last_command = None;
-        self.tail.clear();
+        if self.running.is_none() {
+            self.last_command = None;
+            self.tail.clear();
+        }
     }
 
     pub fn running(&self) -> Option<u64> {
@@ -1147,6 +1160,12 @@ mod tests {
         // A hand-edited file with repeats and blank lines loads cleaned up.
         std::fs::write(&path, "a\na\n\nb\r\n").unwrap();
         assert_eq!(History::load(&path).items(), ["a", "b"]);
+        // Not UTF-8 (saved as ANSI elsewhere): the other lines survive.
+        std::fs::write(&path, b"dir\necho caf\xE9\ngit status\n").unwrap();
+        assert_eq!(
+            History::load(&path).items(),
+            ["dir", "echo caf\u{FFFD}", "git status"]
+        );
     }
 
     #[test]
@@ -1252,6 +1271,36 @@ mod tests {
         assert_eq!(s.tail().collect::<Vec<_>>(), ["cd: x"]);
         s.clear();
         assert_eq!((s.last_command(), s.output.lines().len()), (None, 0));
+        assert_eq!(s.tail().count(), 0);
+    }
+
+    #[test]
+    fn builtins_while_a_command_runs_stay_off_the_card() {
+        let mut s = Session::default();
+        s.begin("ping -n 20 127.0.0.1");
+        s.started(1);
+        s.lines(1, vec!["Reply 1".into()]);
+        // `cd`, an error, another command refused, and `cls`.
+        s.begin("cd nope");
+        s.note("cd: x".into());
+        s.begin("dir");
+        s.note("busy".into());
+        assert_eq!(s.last_command(), Some("ping -n 20 127.0.0.1"));
+        assert_eq!(s.tail().collect::<Vec<_>>(), ["Reply 1"]);
+        assert_eq!(s.output.lines().len(), 6, "the window still shows them");
+        s.clear();
+        assert_eq!(s.output.lines().len(), 0);
+        assert_eq!(s.last_command(), Some("ping -n 20 127.0.0.1"));
+        // The run goes on onto the card.
+        s.lines(1, vec!["Reply 2".into()]);
+        s.exit(1, Some(0), false);
+        assert_eq!(
+            s.tail().collect::<Vec<_>>(),
+            ["Reply 1", "Reply 2", "[exit 0]"]
+        );
+        // Once it is over, builtins take the card again.
+        s.begin("cd ..");
+        assert_eq!(s.last_command(), Some("cd .."));
         assert_eq!(s.tail().count(), 0);
     }
 
