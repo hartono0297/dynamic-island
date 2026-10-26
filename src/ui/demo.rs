@@ -98,7 +98,7 @@ enum View0 {
 enum DemoNotice {
     /// A due reminder: accent badge, "Selesai".
     Reminder,
-    /// A finished focus phase: sage badge, "Mulai".
+    /// A finished focus phase: badge and "Mulai" in the break's sage.
     Pomodoro,
     Claude,
     Battery,
@@ -225,7 +225,11 @@ const SCENES: [Scene; 33] = [
         ..panel("reminders-12", Page::Reminders)
     },
     notice("reminder-notice", DemoNotice::Reminder),
-    notice("notice-pomodoro", DemoNotice::Pomodoro),
+    // Focus done: the short break waits, so badge and chip are sage.
+    Scene {
+        pomo: Pomo::Ready,
+        ..notice("notice-pomodoro", DemoNotice::Pomodoro)
+    },
     notice("notice-claude", DemoNotice::Claude),
     notice("notice-battery", DemoNotice::Battery),
     notice("notice-app", DemoNotice::App),
@@ -589,8 +593,10 @@ fn local(d: NaiveDate, h: u32, m: u32) -> EventTime {
 /// Today: an exhibition running over several days and a birthday (all
 /// day), a review three hours before the current hour and a meeting the hour
 /// after it (so the day view shows the "now" line between them, as in the
-/// design), and a render running past midnight. The rest of the week has an
-/// event most days, one of them with a very long title.
+/// design), a coffee at 07.00 and a render from 22.00 past midnight: they
+/// never fit one window, so the day view always has a second page ("+N
+/// lagi", then "Kembali ke atas"). The rest of the week has an event most
+/// days, one of them with a very long title.
 fn demo_calendar(today: NaiveDate, p: &Palette) -> CalendarSnapshot {
     let day = |n: i64| {
         if n >= 0 {
@@ -624,6 +630,13 @@ fn demo_calendar(today: NaiveDate, p: &Palette) -> CalendarSnapshot {
             "Ulang tahun Rani",
             EventTime::AllDay(today),
             EventTime::AllDay(day(1)),
+            Some(p.plum),
+        ),
+        ev(
+            "standup",
+            "Kopi pagi dengan tim",
+            local(today, 7, 0),
+            local(today, 7, 45),
             Some(p.plum),
         ),
         ev(
@@ -774,6 +787,11 @@ fn many_notes(today: NaiveDate) -> Vec<Note> {
 fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
     let now = Local::now().naive_local();
     let whole = |t: NaiveDateTime| t.with_second(0).unwrap_or(t);
+    // The two later ones stay before midnight, so they stay under today.
+    let left = i64::from(24 * 60 - 1 - (now.hour() * 60 + now.minute()));
+    let later = |want: i64, share: i64, min: i64| {
+        now + chrono::Duration::minutes(want.min(left * share / 3).max(min))
+    };
     let r = |id: &str, text: &str, at: NaiveDateTime, repeat| Reminder {
         id: id.into(),
         text: text.into(),
@@ -792,13 +810,13 @@ fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
         r(
             "r2",
             "Kirim revisi denah lantai 2 ke klien",
-            whole(now + chrono::Duration::minutes(90)),
+            whole(later(90, 1, 1)),
             Repeat::Once,
         ),
         r(
             "r3",
             "Backup file proyek",
-            whole(now + chrono::Duration::minutes(150)),
+            whole(later(150, 2, 2)),
             Repeat::Daily,
         ),
         r(

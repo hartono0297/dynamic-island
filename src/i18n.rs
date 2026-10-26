@@ -140,6 +140,8 @@ keys! {
         "Will be saved as notes.json.bak on the next save";
     Missed => "Terlewat", "Missed";
     MarkDone => "Selesai", "Done";
+    // The Claude notice's chip.
+    Open => "Buka", "Open";
     RemindersSaveFailed => "Gagal simpan pengingat", "Couldn't save reminders";
     RemindersUnreadable => "reminders.json tidak terbaca", "Can't read reminders.json";
     RemindersUnreadableBody => "Disimpan sebagai reminders.json.bak saat menyimpan berikutnya",

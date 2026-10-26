@@ -55,7 +55,7 @@ use crate::i18n::{self, Key};
 use crate::lyrics::ShownLine;
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
-use crate::pomodoro::Pomodoro;
+use crate::pomodoro::{Phase, Pomodoro};
 use crate::reminders::Reminder;
 use crate::theme::{self, Accent, Palette, radius};
 
@@ -509,7 +509,8 @@ impl Renderer {
                 Ok(())
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
-            View::Notice(notice) => self.paint_notice(shape, notice),
+            // A pomodoro notice shows while the next phase waits (Ready).
+            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro.phase()),
             View::Idle => {
                 // Without the clock, idle is the empty shape.
                 if let Some(time) = &frame.clock {
@@ -583,16 +584,20 @@ impl Renderer {
     }
 
     /// Badge, title over body, and the chip naming what a click does: a
-    /// reminder is then done, a finished pomodoro phase starts the next.
-    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice) -> Result<()> {
+    /// reminder is then done, a finished pomodoro phase starts the next (in
+    /// that phase's colour); Claude's is a ghost chip on `raised`.
+    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice, next: Phase) -> Result<()> {
         let p = self.palette;
         let action = match notice.kind {
-            NoticeKind::Reminder { .. } => Some((Key::MarkDone, p.accent)),
-            NoticeKind::Pomodoro => Some((Key::Start, p.rest())),
+            NoticeKind::Reminder { .. } => Some((Key::MarkDone, p.accent, p.on_accent)),
+            NoticeKind::Pomodoro => Some((Key::Start, p.phase(next), p.on_accent)),
+            NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => {
+                Some((Key::Open, p.raised, p.text))
+            }
             _ => None,
         };
         let layout = notice_layout(shape, action.is_some());
-        let badge = badge_style(notice, &p);
+        let badge = badge_style(notice, &p, next);
         self.set_color(badge.fill, badge.alpha);
         self.fill_round(layout.badge, radius::BADGE);
         match badge.icon {
@@ -611,11 +616,11 @@ impl Renderer {
             p.secondary,
             1.0,
         );
-        if let (Some(chip), Some((key, fill))) = (layout.action, action) {
+        if let (Some(chip), Some((key, fill, ink))) = (layout.action, action) {
             self.set_color(fill, 1.0);
             self.fill_round(chip, chip.h / 2.0);
             let label = i18n::tr(key);
-            self.text_colored(label, &self.fonts.button_center, chip, p.on_accent, 1.0);
+            self.text_colored(label, &self.fonts.button_center, chip, ink, 1.0);
         }
         Ok(())
     }

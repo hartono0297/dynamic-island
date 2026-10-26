@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::config::Config;
+use crate::pomodoro::Phase;
 
 /// Declares a settings enum stored in config.json by its variant name. An
 /// unknown name (a typo while editing by hand) reads as the default instead of
@@ -215,6 +216,14 @@ impl Palette {
     /// The pomodoro's breaks: sage.
     pub fn rest(&self) -> u32 {
         self.sage
+    }
+
+    /// A pomodoro phase's colour: `focus` or `rest`.
+    pub fn phase(&self, phase: Phase) -> u32 {
+        match phase {
+            Phase::Focus => self.focus(),
+            Phase::ShortBreak | Phase::LongBreak => self.rest(),
+        }
     }
 }
 

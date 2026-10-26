@@ -212,6 +212,9 @@ const BLOCK_INSET: f32 = 8.0;
 /// Blocks end this short of the right edge, as in the design.
 const BLOCK_RIGHT: f32 = 100.0;
 const LANE_GAP: f32 = 4.0;
+/// Overlapping blocks never get narrower than this; the ones that would
+/// wait for a later page.
+const MIN_LANE_W: f32 = 44.0;
 const MIN_BLOCK_H: f32 = 18.0;
 /// The first hour shown on a day without timed events.
 const DAY_START_H: u32 = 8;
@@ -599,7 +602,9 @@ pub fn calendar_layout(
 /// Pages: the first shows the hours from just before the first event (or
 /// around `now` on today); each further one the hours of the earliest event
 /// not seen yet, and the next two all-day bands when there are more than
-/// two. "+N lagi" counts what the following pages add.
+/// two. Blocks that overlap share the width in lanes no narrower than
+/// `MIN_LANE_W`; any that do not fit wait for the next page. "+N lagi"
+/// counts what the following pages add.
 fn day_timeline(
     layout: &mut CalendarLayout,
     (l, r, body, bottom): (f32, f32, f32, f32),
@@ -635,19 +640,67 @@ fn day_timeline(
         .first()
         .map_or(DAY_START_H, |(s, _)| ((*s / 60) as u32).saturating_sub(1));
     let today_now = now.filter(|n| n.date() == day);
-    if let Some(n) = today_now {
-        if !(first..first + span).contains(&n.hour()) {
-            first = n.hour().saturating_sub(span / 2);
-        }
+    if let Some(n) = today_now
+        && !(first..first + span).contains(&n.hour())
+    {
+        first = n.hour().saturating_sub(span / 2);
     }
-    let mut windows = vec![first.min(24 - span)];
-    let mut seen: Vec<bool> = minutes.iter().map(|m| in_window(windows[0], *m)).collect();
-    while let Some(i) = seen.iter().position(|s| !s) {
-        let h = ((minutes[i].0 / 60) as u32).min(24 - span);
-        windows.push(h);
-        for (seen, m) in seen.iter_mut().zip(&minutes) {
-            *seen |= in_window(h, *m);
+    let tl_end = tl_top + span as f32 * HOUR_H;
+    let area_x = l + HOUR_GUTTER + BLOCK_INSET;
+    let area_w = r - BLOCK_RIGHT - area_x;
+    let max_lanes = (((area_w + LANE_GAP) / (MIN_LANE_W + LANE_GAP)).floor() as usize).max(1);
+    // An event's block (top, height) in the hours from `window`.
+    let block = |window: u32, (s, e): (i64, i64)| {
+        let y_of = |minute: i64| tl_top + (minute - i64::from(window) * 60) as f32 / 60.0 * HOUR_H;
+        let (y0, y1) = (y_of(s).max(tl_top), y_of(e).min(tl_end));
+        let h = (y1 - y0 - 2.0).max(MIN_BLOCK_H);
+        ((y0 + 1.0).min(tl_end - h), h)
+    };
+    // A placed block: index in `timed`, top, height, lane.
+    type Block = (usize, f32, f32, usize);
+    // The blocks of one window: each in the first lane free over its time,
+    // events not shown yet first. Past `max_lanes` a block waits for a
+    // later page.
+    let place = |window: u32, seen: &[bool]| {
+        let mut order: Vec<usize> = (0..minutes.len())
+            .filter(|&i| in_window(window, minutes[i]))
+            .collect();
+        order.sort_by_key(|&i| (seen[i], minutes[i].0, i));
+        let mut lanes: Vec<Vec<(f32, f32)>> = Vec::new();
+        let mut placed: Vec<Block> = Vec::new();
+        for i in order {
+            let (top, h) = block(window, minutes[i]);
+            let (a, b) = (top, top + h + 1.0);
+            let free = |lane: &Vec<(f32, f32)>| lane.iter().all(|(s, e)| b <= *s || *e <= a);
+            let lane = match lanes.iter().position(free) {
+                Some(k) => k,
+                None if lanes.len() < max_lanes => {
+                    lanes.push(Vec::new());
+                    lanes.len() - 1
+                }
+                None => continue,
+            };
+            lanes[lane].push((a, b));
+            placed.push((i, top, h, lane));
         }
+        placed
+    };
+    // Pages of the timeline: each further one starts at the hour of the
+    // earliest event not shown yet, which always gets a lane there.
+    let mut seen = vec![false; minutes.len()];
+    let mut windows: Vec<(u32, Vec<Block>)> = Vec::new();
+    let mut window = first.min(24 - span);
+    loop {
+        let placed = place(window, &seen);
+        for (i, ..) in &placed {
+            seen[*i] = true;
+        }
+        windows.push((window, placed));
+        let next = (0..minutes.len())
+            .filter(|&i| !seen[i])
+            .min_by_key(|&i| (minutes[i].0, i));
+        let Some(i) = next else { break };
+        window = ((minutes[i].0 / 60) as u32).min(24 - span);
     }
     let band_pages = if all_day.len() <= ALL_DAY_PER_PAGE {
         1
@@ -656,7 +709,8 @@ fn day_timeline(
     };
     let pages = windows.len().max(band_pages);
     let page = day_page % pages;
-    let window = windows[page.min(windows.len() - 1)];
+    let (window, placed) = &windows[page.min(windows.len() - 1)];
+    let window = *window;
 
     // All-day bands of this page.
     let bands: &[&CalEvent] = if all_day.len() <= ALL_DAY_PER_PAGE {
@@ -680,7 +734,6 @@ fn day_timeline(
 
     // The timeline and its blocks.
     let y_of = |minute: i64| tl_top + (minute - i64::from(window) * 60) as f32 / 60.0 * HOUR_H;
-    let tl_end = tl_top + span as f32 * HOUR_H;
     layout.list = rect(l, tl_top, r - l, tl_end - tl_top);
     layout.hours = (0..=span)
         .map(|k| (window + k, tl_top + k as f32 * HOUR_H))
@@ -690,41 +743,27 @@ fn day_timeline(
         let y = y_of(minute);
         (tl_top..=tl_end).contains(&y).then_some(y)
     });
-    let mut blocks: Vec<(String, f32, f32)> = timed
-        .iter()
-        .zip(&minutes)
-        .filter(|(_, m)| in_window(window, **m))
-        .map(|(ev, (s, e))| {
-            let (y0, y1) = (y_of(*s).max(tl_top), y_of(*e).min(tl_end));
-            let h = (y1 - y0 - 2.0).max(MIN_BLOCK_H);
-            let top = (y0 + 1.0).min(tl_end - h);
-            (ev.id.clone(), top, h)
-        })
-        .collect();
-    blocks.sort_by(|a, b| a.1.total_cmp(&b.1));
-    // Each block goes in the first lane free at its top.
-    let mut lane_ends: Vec<f32> = Vec::new();
-    let lanes: Vec<usize> = blocks
-        .iter()
-        .map(|(_, top, h)| {
-            let lane = match lane_ends.iter().position(|end| *end <= *top) {
-                Some(i) => i,
-                None => {
-                    lane_ends.push(0.0);
-                    lane_ends.len() - 1
-                }
-            };
-            lane_ends[lane] = top + h + 1.0;
-            lane
-        })
-        .collect();
-    let area_x = l + HOUR_GUTTER + BLOCK_INSET;
-    let area_w = r - BLOCK_RIGHT - area_x;
-    let n = lane_ends.len().max(1) as f32;
-    let lane_w = (area_w - (n - 1.0) * LANE_GAP) / n;
-    for ((id, top, h), lane) in blocks.into_iter().zip(lanes) {
-        let x = area_x + lane as f32 * (lane_w + LANE_GAP);
-        layout.rows.push((id, rect(x, top, lane_w, h)));
+    // Lanes split the width only within a run of overlapping blocks.
+    let mut by_top: Vec<&Block> = placed.iter().collect();
+    by_top.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    let mut start = 0;
+    while start < by_top.len() {
+        let mut end_y = by_top[start].1 + by_top[start].2 + 1.0;
+        let mut stop = start + 1;
+        while stop < by_top.len() && by_top[stop].1 < end_y {
+            end_y = end_y.max(by_top[stop].1 + by_top[stop].2 + 1.0);
+            stop += 1;
+        }
+        let cluster = &by_top[start..stop];
+        let n = cluster.iter().map(|b| b.3 + 1).max().unwrap_or(1) as f32;
+        let lane_w = ((area_w - (n - 1.0) * LANE_GAP) / n).max(0.0);
+        for (i, top, h, lane) in cluster {
+            let x = area_x + *lane as f32 * (lane_w + LANE_GAP);
+            layout
+                .rows
+                .push((timed[*i].id.clone(), rect(x, *top, lane_w, *h)));
+        }
+        start = stop;
     }
 
     // "+N lagi": what the next pages add; "Kembali ke atas" on the last.
@@ -734,14 +773,13 @@ fn day_timeline(
         } else {
             ((page + 1) * ALL_DAY_PER_PAGE).min(all_day.len())
         };
-        let shown_timed = minutes
-            .iter()
-            .filter(|m| {
-                windows[..=page.min(windows.len() - 1)]
-                    .iter()
-                    .any(|w| in_window(*w, **m))
-            })
-            .count();
+        let mut shown = vec![false; minutes.len()];
+        for (_, placed) in &windows[..=page.min(windows.len() - 1)] {
+            for (i, ..) in placed {
+                shown[*i] = true;
+            }
+        }
+        let shown_timed = shown.iter().filter(|s| **s).count();
         let later = all_day.len() + timed.len() - shown_bands - shown_timed;
         let count = if page + 1 == pages { 0 } else { later };
         let more = rect(layout.add.right() + 12.0, foot, MORE_W, ADD_H);
@@ -1673,6 +1711,67 @@ mod tests {
         assert_eq!(a.w, b.w);
         assert!(a.right() <= b.x || b.right() <= a.x);
         assert_eq!(l.more, None);
+    }
+
+    #[test]
+    fn day_lanes_split_only_overlapping_blocks() {
+        let s = panel(Style::Pill);
+        let d = date(2026, 10, 26);
+        let day = |events: &[CalEvent], page| {
+            super::calendar_layout(
+                s,
+                CalView::Day,
+                d,
+                d,
+                events,
+                &CalStatus::Ok,
+                page,
+                false,
+                200.0,
+                None,
+            )
+        };
+        let events = [
+            timed("a", at(d, 10, 0), at(d, 11, 0)),
+            timed("b", at(d, 10, 30), at(d, 12, 0)),
+            timed("c", at(d, 14, 0), at(d, 15, 0)),
+        ];
+        let l = day(&events, 0);
+        let row = |id: &str| l.rows.iter().find(|(x, _)| x == id).unwrap().1;
+        let (a, b, c) = (row("a"), row("b"), row("c"));
+        assert!(disjoint(a, b));
+        assert_eq!(c.x, a.x);
+        assert!(
+            (c.w - (b.right() - a.x)).abs() < 0.01,
+            "a lone block keeps the full width"
+        );
+
+        // Far more at once than fit side by side: lanes keep a minimum
+        // width and the rest come on the next pages, each shown once.
+        let crowd: Vec<CalEvent> = (0..100)
+            .map(|i| timed(&format!("e{i}"), at(d, 10, 0), at(d, 11, 0)))
+            .collect();
+        let first = day(&crowd, 0);
+        let per_page = first.rows.len();
+        assert!(per_page > 1 && per_page < 100);
+        let mut ids = std::collections::BTreeSet::new();
+        let mut page = 0;
+        loop {
+            let l = day(&crowd, page);
+            for (id, r) in &l.rows {
+                assert!(r.w >= MIN_LANE_W, "{id}: {r:?}");
+                ids.insert(id.clone());
+            }
+            let (count, _) = l.more.expect("paged");
+            if count == 0 {
+                break;
+            }
+            assert_eq!(count, 100 - ids.len());
+            page += 1;
+            assert!(page < 100, "pages end");
+        }
+        assert_eq!(ids.len(), 100);
+        assert_eq!(page + 1, 100usize.div_ceil(per_page));
     }
 
     #[test]

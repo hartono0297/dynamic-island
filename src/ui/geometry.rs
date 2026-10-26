@@ -5,6 +5,7 @@ use super::icons::Icon;
 use super::panel_layout::Region;
 use crate::config::Style;
 use crate::model::{Hit, Notice, NoticeKind};
+use crate::pomodoro::Phase;
 use crate::theme::{Palette, radius};
 
 pub const WINDOW_W: f32 = 620.0;
@@ -302,7 +303,7 @@ impl HitRegions {
     }
 }
 
-/// Claude's brand orange: its badge and the waiting strip's dot.
+/// Claude's brand orange: the waiting strip's dot.
 pub const CLAUDE: u32 = 0xD97757;
 /// WhatsApp's brand green.
 pub const WHATSAPP: u32 = 0x25D366;
@@ -320,9 +321,10 @@ pub struct BadgeStyle {
 }
 
 /// Reminders on a solid accent with a bell; the island's own notices on a
-/// tint of their colour (Claude orange, battery ochre, pomodoro sage); apps
-/// by their letter, WhatsApp on its green tint, others on `raised_hi`.
-pub fn badge_style(notice: &Notice, p: &Palette) -> BadgeStyle {
+/// tint of their colour (Claude the accent, battery ochre, pomodoro the
+/// colour of `pomo_next`, the phase a click starts); apps by their letter,
+/// WhatsApp on its green tint, others on `raised_hi`.
+pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle {
     let tint = |color: u32, icon| BadgeStyle {
         fill: color,
         alpha: BADGE_TINT,
@@ -331,10 +333,10 @@ pub fn badge_style(notice: &Notice, p: &Palette) -> BadgeStyle {
     };
     match notice.kind {
         NoticeKind::ClaudeDone { .. } | NoticeKind::ClaudeWaiting { .. } => {
-            tint(CLAUDE, Icon::Sparkle)
+            tint(p.accent, Icon::Sparkle)
         }
         NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
-        NoticeKind::Pomodoro => tint(p.rest(), Icon::Timer),
+        NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
         NoticeKind::Reminder { .. } => BadgeStyle {
             fill: p.accent,
             alpha: 1.0,
@@ -526,19 +528,21 @@ mod tests {
     fn badge_colors_by_source_and_kind() {
         use crate::theme::{Accent, Surface, island};
         let p = island(Accent::Plum, Surface::Espresso);
+        let style = |n: &Notice| badge_style(n, &p, Phase::ShortBreak);
         let fill = |n: &Notice| {
-            let b = badge_style(n, &p);
+            let b = style(n);
             (b.fill, b.ink, b.icon)
         };
         let app = |s: &str| notice(s, NoticeKind::App { app_id: None });
         assert_eq!(fill(&app("WhatsApp")), (WHATSAPP, WHATSAPP, None));
         assert_eq!(fill(&app("whatsapp beta")), (WHATSAPP, WHATSAPP, None));
         assert_eq!(fill(&app("Discord")), (p.raised_hi, p.text, None));
-        assert_eq!(badge_style(&app("Discord"), &p).alpha, 1.0);
+        assert_eq!(style(&app("Discord")).alpha, 1.0);
         let done = NoticeKind::ClaudeDone {
             session_id: "s".into(),
         };
-        let claude = (CLAUDE, CLAUDE, Some(Icon::Sparkle));
+        // Claude on a tint of the accent, as in the design.
+        let claude = (0xB07A9A, 0xB07A9A, Some(Icon::Sparkle));
         assert_eq!(fill(&notice("Claude", done)), claude);
         let waiting = NoticeKind::ClaudeWaiting {
             session_id: "s".into(),
@@ -546,12 +550,15 @@ mod tests {
         assert_eq!(fill(&notice("Claude", waiting)), claude);
         let battery = notice("Baterai", NoticeKind::BatteryLow);
         assert_eq!(fill(&battery), (0xD9A441, 0xD9A441, Some(Icon::Battery)));
-        assert!(badge_style(&battery, &p).alpha < 0.5, "a tint");
+        assert!(style(&battery).alpha < 0.5, "a tint");
+        // Pomodoro: the colour of the phase a click starts.
         let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
         assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
+        let focus = badge_style(&pomo, &p, Phase::Focus);
+        assert_eq!((focus.fill, focus.ink), (p.accent, p.accent));
         // Reminders follow the accent, solid, with its ink.
         let reminder = NoticeKind::Reminder { id: "r".into() };
-        let r = badge_style(&notice("Pengingat", reminder), &p);
+        let r = style(&notice("Pengingat", reminder));
         assert_eq!((r.fill, r.alpha), (0xB07A9A, 1.0));
         assert_eq!((r.ink, r.icon), (p.on_accent, Some(Icon::Bell)));
     }

@@ -659,7 +659,7 @@ impl Renderer {
         let pomo = frame.pomodoro;
         let settings = pomo.settings();
         let status = pomo.status();
-        let tint = phase_color(pomo.phase(), &p);
+        let tint = p.phase(pomo.phase());
         self.heading(text(lang, Key::Pomodoro), l.header);
         let durations = i18n::pomo_durations(
             lang,
@@ -731,7 +731,7 @@ impl Renderer {
             w: (l.next_up.w - after).max(0.0),
             ..l.next_up
         };
-        let ink = phase_color(next, &p);
+        let ink = p.phase(next);
         self.text_colored(&what, &self.fonts.button, rest, ink, 1.0);
         Ok(())
     }
@@ -998,7 +998,7 @@ impl Renderer {
     pub(super) fn paint_pomodoro_compact(&mut self, shape: ShapeRect, frame: &Frame) -> Result<()> {
         let pomo = frame.pomodoro;
         let (center, radius, text) = pomodoro_compact_layout(shape);
-        let tint = phase_color(pomo.phase(), &self.palette);
+        let tint = self.palette.phase(pomo.phase());
         self.ring(center, radius, 3.0, pomo.progress(frame.now), tint)?;
         let paused = matches!(pomo.status(), PomoStatus::Paused { .. });
         let time = Rect { w: 42.0, ..text };
@@ -1150,14 +1150,6 @@ fn inset(r: Rect, dx: f32, dy: f32) -> Rect {
     }
 }
 
-/// Focus in the accent, breaks in sage.
-fn phase_color(phase: Phase, p: &Palette) -> u32 {
-    match phase {
-        Phase::Focus => p.focus(),
-        Phase::ShortBreak | Phase::LongBreak => p.rest(),
-    }
-}
-
 fn phase_name(lang: Lang, phase: Phase) -> &'static str {
     text(
         lang,
@@ -1251,7 +1243,7 @@ fn note_time_label(lang: Lang, updated: NaiveDateTime, today: NaiveDate) -> Stri
 }
 
 /// A reminder row's time ("09.30") and text (its first line).
-fn reminder_row<'a>(lang: Lang, r: &'a Reminder) -> (String, &'a str) {
+fn reminder_row(lang: Lang, r: &Reminder) -> (String, &str) {
     let time = local_time(r.due_unix)
         .map(|due| i18n::time_hm(lang, due))
         .unwrap_or_default();
@@ -1555,7 +1547,7 @@ mod tests {
         let t0 = Instant::now();
         let mut p = Pomodoro::new(PomoSettings::default());
         assert_eq!(primary_icon(p.status()), Icon::Play);
-        assert_eq!(phase_color(p.phase(), &pal), pal.accent);
+        assert_eq!(pal.phase(p.phase()), pal.accent);
         assert_eq!(next_phase(&p), (Phase::ShortBreak, 5));
         p.start_pause(t0);
         assert_eq!(compact_label(l, &p), "Fokus 1/4");
@@ -1568,7 +1560,7 @@ mod tests {
         assert_eq!(compact_label(l, &p), "Siap · klik");
         assert_eq!(phase_label(l, &p), "Istirahat siap");
         assert_eq!(primary_icon(p.status()), Icon::Play);
-        assert_eq!(phase_color(p.phase(), &pal), pal.sage);
+        assert_eq!(pal.phase(p.phase()), pal.sage);
         assert_eq!(next_phase(&p), (Phase::Focus, 25));
         p.start_pause(t0);
         assert_eq!(compact_label(l, &p), "Istirahat");
