@@ -38,8 +38,19 @@ pub const ROW_ICON: f32 = 17.0;
 const FIELD_X: f32 = PAD_X + ICON_COL + 8.0;
 const TOGGLE_W: f32 = 32.0;
 const TOGGLE_H: f32 = 18.0;
-const SEG_W: f32 = 84.0;
+/// The reminder's repeat track (`.seg`): 28 high, segments 22 high inside
+/// its 1 px border and 2 px padding, each its text plus 11 a side.
+const SEG_H: f32 = 28.0;
 const SEG_PAD: f32 = 3.0;
+const SEG_TEXT_PAD: f32 = 11.0;
+/// The reminder's summary line (11 px text) under the repeat row.
+const SUMMARY_H: f32 = 15.0;
+/// Extra space before the reminder's clock icon, after the date chip.
+const CLOCK_GAP: f32 = 6.0;
+/// The gap between a row icon and its chip.
+const ICON_GAP: f32 = 8.0;
+/// The reminder's Hapus (`.btn.dng`): 4 px before the text, 14 after.
+pub const DANGER_PAD: (f32, f32) = (4.0, 14.0);
 /// Chip padding (11 each side) plus its 1 px border.
 const CHIP_PAD: f32 = 12.0;
 /// The chevron after a date chip's text: a 6 px gap and an 11 px icon.
@@ -133,8 +144,11 @@ pub enum Text {
     Body,
     /// The picked time row, 12 medium.
     BodyStrong,
-    /// Muted captions: "Sepanjang hari", the arrow, durations, 11.
+    /// Muted captions: "Sepanjang hari", the arrow, durations, the
+    /// reminder's segments and summary, 11.
     Small,
+    /// The picked segment and the summary's bold part, 11 medium.
+    SmallStrong,
     /// Pills, the footer account, the error line, 10.5.
     Mini,
     /// Batal, 11.5.
@@ -149,12 +163,13 @@ pub enum Text {
 }
 
 impl Text {
-    pub const ALL: [Text; 11] = [
+    pub const ALL: [Text; 12] = [
         Text::Heading,
         Text::Month,
         Text::Body,
         Text::BodyStrong,
         Text::Small,
+        Text::SmallStrong,
         Text::Mini,
         Text::Button,
         Text::ButtonStrong,
@@ -168,7 +183,7 @@ impl Text {
             Text::Heading => 21.0,
             Text::Month => 16.0,
             Text::Body | Text::BodyStrong => 12.0,
-            Text::Small => 11.0,
+            Text::Small | Text::SmallStrong => 11.0,
             Text::Mini => 10.5,
             Text::Button | Text::ButtonStrong | Text::Day | Text::DayBold => 11.5,
             Text::Weekday => 9.5,
@@ -178,7 +193,11 @@ impl Text {
     /// CSS weight: 400, 500 or 600.
     pub fn weight(self) -> u16 {
         match self {
-            Text::Heading | Text::Month | Text::BodyStrong | Text::ButtonStrong => 500,
+            Text::Heading
+            | Text::Month
+            | Text::BodyStrong
+            | Text::SmallStrong
+            | Text::ButtonStrong => 500,
             Text::DayBold => 600,
             _ => 400,
         }
@@ -199,6 +218,8 @@ pub struct Labels<'a> {
     pub time: &'a str,
     pub pills: [&'a str; 4],
     pub all_day: &'a str,
+    /// The reminder's segments: Sekali, Harian, Mingguan.
+    pub repeat: [&'a str; 3],
     pub delete: &'a str,
     pub cancel: &'a str,
     pub save: &'a str,
@@ -212,7 +233,8 @@ pub struct Spec<'a> {
     pub read_only: bool,
     /// Event only: hides the time row.
     pub all_day: bool,
-    /// The one-line error under the time (event) or repeat (reminder) row.
+    /// The one-line error under the time row (event), or in the summary's
+    /// place (reminder).
     pub error: bool,
     /// Hapus on the left of the footer (editing a note or reminder).
     pub delete: bool,
@@ -240,6 +262,9 @@ pub struct Layout {
     pub arrow: Option<Rect>,
     pub duration: Option<Rect>,
     pub repeat_track: Option<Rect>,
+    /// The reminder's one-line summary under the repeat row (absent while
+    /// the error shows in its place).
+    pub summary: Option<Rect>,
     pub error: Option<Rect>,
     /// The hairline over the footer.
     pub footer_rule: Rect,
@@ -395,31 +420,43 @@ pub fn layout(spec: &Spec, measure: &dyn Fn(&str, Text) -> f32) -> Layout {
             ));
             y += NOTES_H;
         } else {
+            // Date and time share a row: the clock icon 6 px after the date.
+            let date = rect(FIELD_X, y, date_w, ROW_H);
+            let clock_x = date.right() + ICON_GAP + CLOCK_GAP;
+            l.icons
+                .push((Icon::Clock, rect(clock_x, y, ICON_COL, ROW_H)));
+            let tw = chip_w(measure(labels.time, Text::Body), true);
+            let tx = clock_x + ICON_COL + ICON_GAP;
+            l.items.push((Item::TimeChip, rect(tx, y, tw, ROW_H)));
             y += ROW_H + GAP;
-            icon(&mut l, Icon::Clock, y);
-            let tw = chip_w(measure(labels.time, Text::Body), false);
-            l.items.push((Item::TimeChip, rect(FIELD_X, y, tw, ROW_H)));
-            y += ROW_H + GAP;
-            icon(&mut l, Icon::Repeat, y);
-            let track = rect(FIELD_X, y, 3.0 * SEG_W + 2.0 * SEG_PAD, ROW_H);
-            l.repeat_track = Some(track);
-            for (i, r) in [Repeat::Once, Repeat::Daily, Repeat::Weekly]
+
+            // The repeat segments.
+            l.icons
+                .push((Icon::Repeat, rect(PAD_X, y, ICON_COL, SEG_H)));
+            let widths = labels
+                .repeat
+                .map(|s| measure(s, Text::Small).ceil() + 2.0 * SEG_TEXT_PAD);
+            let track_w = widths.iter().sum::<f32>() + 2.0 * SEG_PAD;
+            l.repeat_track = Some(rect(FIELD_X, y, track_w, SEG_H));
+            let mut x = FIELD_X + SEG_PAD;
+            for (r, sw) in [Repeat::Once, Repeat::Daily, Repeat::Weekly]
                 .into_iter()
-                .enumerate()
+                .zip(widths)
             {
-                let seg = rect(
-                    track.x + SEG_PAD + i as f32 * SEG_W,
-                    y + SEG_PAD,
-                    SEG_W,
-                    ROW_H - 2.0 * SEG_PAD,
-                );
+                let seg = rect(x, y + SEG_PAD, sw, SEG_H - 2.0 * SEG_PAD);
                 l.items.push((Item::Repeat(r), seg));
+                x += sw;
             }
-            y += ROW_H;
+            y += SEG_H + GAP;
+
+            // The summary, or the error in its place.
+            let line = rect(FIELD_X, y, right - FIELD_X, SUMMARY_H);
             if spec.error {
-                l.error = Some(rect(FIELD_X, y + GAP - ERR_PULL, right - FIELD_X, ERR_H));
-                y += GAP - ERR_PULL + ERR_H;
+                l.error = Some(line);
+            } else {
+                l.summary = Some(line);
             }
+            y += SUMMARY_H;
         }
     }
 
@@ -448,7 +485,11 @@ pub fn layout(spec: &Spec, measure: &dyn Fn(&str, Text) -> f32) -> Layout {
     }
     let mut status_x = PAD_X;
     if spec.delete && spec.form != Form::Event {
-        let dw = button(labels.delete, Text::Button);
+        let dw = if spec.form == Form::Reminder {
+            measure(labels.delete, Text::Button).ceil() + DANGER_PAD.0 + DANGER_PAD.1
+        } else {
+            button(labels.delete, Text::Button)
+        };
         l.items
             .insert(first_button, (Item::Delete, rect(PAD_X, by, dw, BUTTON_H)));
         status_x = PAD_X + dw + 10.0;
@@ -494,6 +535,7 @@ mod tests {
             time: "08.00",
             pills: ["Hari ini", "Besok", "Rabu", "Minggu depan"],
             all_day: "Seharian",
+            repeat: ["Sekali", "Harian", "Mingguan"],
             delete: "Hapus",
             cancel: "Batal",
             save: "Simpan",
@@ -530,6 +572,7 @@ mod tests {
             ("arrow", l.arrow),
             ("duration", l.duration),
             ("track", l.repeat_track),
+            ("summary", l.summary),
             ("error", l.error),
             ("footer", Some(l.footer_rule)),
             ("status", Some(l.status)),
@@ -681,6 +724,93 @@ mod tests {
             &estimate,
         );
         assert_eq!(new_note.focus_order(), [Item::Notes, Item::Save]);
+    }
+
+    #[test]
+    fn reminder_rows_follow_the_design() {
+        let l = layout(&spec(Form::Reminder), &estimate);
+        // The design's card without the 6b rows.
+        assert_eq!(l.size, (400.0, 278.0));
+        let date = l.item(Item::DateChip).unwrap();
+        let time = l.item(Item::TimeChip).unwrap();
+        assert_eq!(date.y, time.y, "date and time share a row");
+        assert_eq!(date.x, FIELD_X);
+        let clock = l
+            .icons
+            .iter()
+            .find(|(i, _)| *i == Icon::Clock)
+            .map(|(_, r)| *r)
+            .unwrap();
+        assert_eq!(clock.y, date.y);
+        assert_eq!(clock.x, date.right() + ICON_GAP + CLOCK_GAP);
+        assert!(time.x >= clock.right());
+        // Both chips have a chevron.
+        assert_eq!(time.w, chip_w(estimate("08.00", Text::Body), true));
+        // The segments: as wide as their text, inside a padded track.
+        let track = l.repeat_track.unwrap();
+        assert_eq!(track.h, SEG_H);
+        let segs: Vec<Rect> = [Repeat::Once, Repeat::Daily, Repeat::Weekly]
+            .map(|r| l.item(Item::Repeat(r)).unwrap())
+            .to_vec();
+        for (seg, text) in segs.iter().zip(["Sekali", "Harian", "Mingguan"]) {
+            assert_eq!(seg.w, estimate(text, Text::Small).ceil() + 22.0);
+            assert_eq!(seg.h, SEG_H - 6.0);
+            assert!(seg.x >= track.x && seg.right() <= track.right());
+        }
+        assert_eq!(segs[0].x, track.x + SEG_PAD);
+        assert_eq!(segs[2].right(), track.right() - SEG_PAD);
+        assert!(segs[1].w < segs[2].w, "widths follow the labels");
+        // The summary between the repeat row and the footer, at the field.
+        let summary = l.summary.unwrap();
+        assert!(summary.y >= track.bottom());
+        assert!(summary.bottom() <= l.footer_rule.y);
+        assert_eq!(summary.x, FIELD_X);
+        assert!(l.error.is_none());
+        // The error takes the summary's place: no extra row.
+        let bad = layout(
+            &Spec {
+                error: true,
+                ..spec(Form::Reminder)
+            },
+            &estimate,
+        );
+        assert_eq!(bad.size, l.size);
+        assert_eq!(bad.error, Some(summary));
+        assert!(bad.summary.is_none());
+        // Hapus on the left, the design's narrow danger button.
+        let delete = l.item(Item::Delete).unwrap();
+        assert_eq!(delete.x, PAD_X);
+        assert_eq!(delete.w, estimate("Hapus", Text::Button).ceil() + 18.0);
+        // A new reminder: the status in Hapus' place.
+        let new = layout(
+            &Spec {
+                delete: false,
+                ..spec(Form::Reminder)
+            },
+            &estimate,
+        );
+        assert!(new.item(Item::Delete).is_none());
+        assert_eq!(new.status.x, PAD_X);
+        assert!(new.status.right() <= new.item(Item::Cancel).unwrap().x);
+        assert_eq!(
+            new.focus_order(),
+            [
+                Item::Title,
+                Item::DateChip,
+                Item::TimeChip,
+                Item::Repeat(Repeat::Once),
+                Item::Repeat(Repeat::Daily),
+                Item::Repeat(Repeat::Weekly),
+                Item::Cancel,
+                Item::Save,
+            ]
+        );
+        // The note's Delete keeps its pill.
+        let note = layout(&spec(Form::Note), &estimate);
+        assert_eq!(
+            note.item(Item::Delete).unwrap().w,
+            estimate("Hapus", Text::Button).ceil() + 28.0
+        );
     }
 
     #[test]

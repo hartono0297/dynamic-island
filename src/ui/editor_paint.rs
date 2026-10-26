@@ -34,9 +34,7 @@ use super::editor_layout::Text;
 use super::fonts::{self, Face, Role};
 use super::geometry::Rect;
 use super::icons::{Icon, IconSet};
-use super::settings_controls::{
-    Pen, color, d2d_rect, draw_segment_track, draw_toggle, line_format,
-};
+use super::settings_controls::{Pen, color, d2d_rect, draw_toggle, line_format};
 use crate::theme::WindowPalette;
 
 /// Horizontal alignment of a line of text in its box.
@@ -296,10 +294,5 @@ impl Painter<'_> {
             hover,
             a,
         );
-    }
-
-    /// The settings window's segmented track.
-    pub fn segment_track(&self, r: Rect, a: f32) {
-        draw_segment_track(self.rt, self.brush, &self.p, r, a);
     }
 }

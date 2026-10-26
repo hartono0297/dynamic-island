@@ -86,6 +86,10 @@ pub struct DayState {
     pub in_month: bool,
     pub events: bool,
     pub hover: bool,
+    /// Before today, in a picker that dims those (the reminder's): drawn
+    /// like another month's day, still clickable. Today's ring and the
+    /// pick's fill win over it.
+    pub past: bool,
 }
 
 impl DayState {
@@ -96,6 +100,7 @@ impl DayState {
             in_month: d.month() == month_of.month() && d.year() == month_of.year(),
             events: false,
             hover: false,
+            past: false,
         }
     }
 }
@@ -161,7 +166,7 @@ pub fn day_marks(s: DayState, look: &CellLook) -> DayMarks {
         ring: ringed.then_some(look.accent),
         ink: if accent_ink {
             look.accent
-        } else if s.in_month {
+        } else if s.in_month && !s.past {
             look.text
         } else {
             look.dim
@@ -351,6 +356,45 @@ mod tests {
             date(2026, 10, 28),
             date(2026, 10, 1),
         );
-        assert!(!state.in_month && !state.today && !state.selected);
+        assert!(!state.in_month && !state.today && !state.selected && !state.past);
+    }
+
+    #[test]
+    fn past_days_are_dimmed_but_today_and_the_pick_still_show() {
+        let l = look(Filled::Selected);
+        let past = DayState {
+            in_month: true,
+            past: true,
+            ..Default::default()
+        };
+        let m = day_marks(past, &l);
+        assert_eq!((m.disc, m.ring, m.ink, m.bold), (None, None, 4, false));
+        // Hovered, it still lights up (it can be picked).
+        let hovered = DayState {
+            hover: true,
+            ..past
+        };
+        assert_eq!(day_marks(hovered, &l).disc, Some(6));
+        // A past pick keeps its fill.
+        let picked = DayState {
+            selected: true,
+            ..past
+        };
+        let m = day_marks(picked, &l);
+        assert_eq!((m.disc, m.ink, m.bold), (Some(1), 2, true));
+        // Today is never past, but even so its ring wins.
+        let today = DayState {
+            today: true,
+            ..past
+        };
+        let m = day_marks(today, &l);
+        assert_eq!((m.ring, m.ink, m.bold), (Some(1), 1, true));
+        // The panel never sets it: in-month days stay in the text colour.
+        let panel = look(Filled::Today);
+        let plain = DayState {
+            in_month: true,
+            ..Default::default()
+        };
+        assert_eq!(day_marks(plain, &panel).ink, 3);
     }
 }

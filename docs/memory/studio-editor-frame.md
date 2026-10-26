@@ -44,10 +44,10 @@ Run 5 of the v3 Studio plan replaced the Win32 dialog look of the editors
   `CellCanvas`). The panel fills today and rings the selection
   (`Filled::Today`); the picker fills the pick and rings today
   (`Filled::Selected`).
-- **For Run 6:** reuse `editor_layout` (add the reminder's rows there and
-  extend its tests), the chip drawing in `Editor::draw`, `Kind::Date` /
-  `Kind::Time` popovers, and `i18n::{editor_date, time_label,
-  duration_label}`. Dates never come from the Windows locale.
+- **Run 6a is done:** the reminder editor now uses this frame. See
+  [[studio-reminder-editor]]. Run 6b (quick-time pills, weekday chips) should
+  add its rows in `editor_layout` beside the reminder's, with tests. Dates
+  never come from the Windows locale.
 - Demo: `--demo-editor event|event-bad|event-allday|...` with
   `DI_POPOVER=calendar|time|start`, `DI_WINDOW`, `DI_LANG`. Screenshots taken
   from a non-DPI-aware PowerShell are scaled; call `SetProcessDPIAware` first.
