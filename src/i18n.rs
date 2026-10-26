@@ -228,6 +228,28 @@ keys! {
     NothingPlayingHint => "Putar lagu di aplikasi mana pun", "Play music in any app";
     LyricsButton => "Lirik", "Lyrics";
 
+    // CLI page and window.
+    Cli => "CLI", "CLI";
+    CliTypeCommand => "Ketik perintah", "Type a command";
+    CliRunning => "berjalan", "running";
+    CliEmpty => "Belum ada perintah", "No commands yet";
+    CliEmptyHint => "Perintah jalan di folder ini; cd untuk pindah", "Commands run in this folder; cd to move";
+    CliStop => "Hentikan", "Stop";
+    CliStopped => "dihentikan", "stopped";
+    CliBusy => "Masih ada perintah berjalan — Ctrl+C untuk menghentikan",
+        "A command is still running — Ctrl+C to stop it";
+
+    // Shortcut page.
+    Shortcuts => "Pintasan", "Shortcuts";
+    ShortcutScreenshot => "Screenshot", "Screenshot";
+    ShortcutClipboard => "Clipboard", "Clipboard";
+    ShortcutEmoji => "Emoji", "Emoji";
+    ShortcutExplorer => "Explorer", "Explorer";
+    ShortcutCalculator => "Kalkulator", "Calculator";
+    ShortcutTaskManager => "Task Manager", "Task Manager";
+    ShortcutSettings => "Pengaturan Windows", "Windows Settings";
+    ShortcutLock => "Kunci layar", "Lock screen";
+
     // Editors.
     EditorNote => "Note", "Note";
     EditorEvent => "Acara", "Event";
@@ -303,6 +325,10 @@ keys! {
     ShowHow => "Buka petunjuk", "Show me how";
     LyricsInNotch => "Lirik di notch", "Lyrics in notch";
     LyricsInNotchDesc => "Artis & judul dikirim ke lrclib.net", "Artist & title are sent to lrclib.net";
+    ShellCli => "Shell CLI", "CLI shell";
+    ShellCliDesc => "Untuk perintah di halaman CLI", "Runs the CLI page's commands";
+    ShellPowerShell => "PowerShell", "PowerShell";
+    ShellCmd => "cmd", "cmd";
     FocusDesc => "Lama satu sesi fokus", "Length of one focus session";
     BreakDesc => "Jeda di antara sesi", "Pause between sessions";
     LongBreakDesc => "Setelah sesi terakhir", "After the last session";
@@ -410,6 +436,22 @@ pub fn version_label(lang: Lang, version: &str) -> String {
     match lang {
         Lang::Id => format!("Versi {version}"),
         Lang::En => format!("Version {version}"),
+    }
+}
+
+/// The CLI's `cd` to a folder that does not exist.
+pub fn cd_not_found(lang: Lang, path: &str) -> String {
+    match lang {
+        Lang::Id => format!("cd: folder tidak ada: {path}"),
+        Lang::En => format!("cd: no such folder: {path}"),
+    }
+}
+
+/// The CLI could not start the shell.
+pub fn cli_start_failed(lang: Lang, error: &str) -> String {
+    match lang {
+        Lang::Id => format!("Gagal menjalankan: {error}"),
+        Lang::En => format!("Couldn't run it: {error}"),
     }
 }
 

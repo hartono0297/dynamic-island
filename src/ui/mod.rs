@@ -1,4 +1,5 @@
 pub mod app_icon;
+pub mod cli_window;
 #[cfg(debug_assertions)]
 pub mod demo;
 pub mod editor;

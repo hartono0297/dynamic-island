@@ -40,6 +40,11 @@ pub struct IslandState {
     hover: bool,
     /// An editor window is open; it keeps the panel open like hover.
     editor_open: bool,
+    /// The CLI window is active; it keeps the panel open like an editor.
+    cli_focused: bool,
+    /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
+    /// open, until the pointer has left the island (`Hover(false)`).
+    collapsed: bool,
     pomodoro: Pomodoro,
     /// The panel page, kept across closes so the panel reopens where it was left.
     page: Page,
@@ -68,6 +73,8 @@ impl IslandState {
             fullscreen: false,
             hover: false,
             editor_open: false,
+            cli_focused: false,
+            collapsed: false,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
             wheel: 0,
@@ -120,13 +127,19 @@ impl IslandState {
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => self.fullscreen = on,
-            Event::Hover(on) => self.hover = on,
+            Event::Hover(on) => {
+                self.hover = on;
+                if !on {
+                    self.collapsed = false;
+                }
+            }
             Event::EditorOpen(on) => self.editor_open = on,
+            Event::CliFocus(on) => self.cli_focused = on,
             Event::Wheel(delta) => self.wheel(delta),
             Event::Today(date) => self.set_today(date),
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
             Event::Click(hit) => self.click(hit, now, &mut effects),
-            Event::Calendar(_) | Event::Lyrics(_) | Event::Tick => {}
+            Event::Calendar(_) | Event::Lyrics(_) | Event::Cli(_) | Event::Tick => {}
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
@@ -191,6 +204,11 @@ impl IslandState {
         self.lyrics_on
     }
 
+    /// The CLI window is active and holds the panel open.
+    pub fn cli_focused(&self) -> bool {
+        self.cli_focused
+    }
+
     pub fn lyrics_ready(&self) -> bool {
         self.lyrics_ready
     }
@@ -224,7 +242,7 @@ impl IslandState {
     }
 
     fn panel_open(&self) -> bool {
-        self.hover || self.editor_open
+        !self.collapsed && (self.hover || self.editor_open || self.cli_focused)
     }
 
     fn click(&mut self, hit: Hit, now: Instant, effects: &mut Vec<Effect>) {
@@ -301,6 +319,15 @@ impl IslandState {
                     effects.extend(self.dismiss_newest_sticky());
                 }
             }
+            // The panel gets out of the way first: the screenshot or picker
+            // is for the window underneath. `App` waits for that.
+            Hit::Shortcut(s) => {
+                if matches!(self.view(), View::Panel(_)) {
+                    self.collapsed = true;
+                    effects.push(Effect::RunShortcut(s));
+                }
+            }
+            Hit::CliOpen => effects.push(Effect::OpenCli),
         }
     }
 
@@ -960,13 +987,101 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 4), t0);
-        assert_eq!(s.view(), View::Panel(Page::Media));
+        s.apply(Event::Wheel(-120 * 6), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Media));
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         // Scrolling past the end is not stored up: one notch back moves one page.
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Notes));
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+    }
+
+    #[test]
+    fn pages_end_with_cli_then_shortcuts() {
+        assert_eq!(
+            Page::ALL,
+            [
+                Page::Calendar,
+                Page::Pomodoro,
+                Page::Reminders,
+                Page::Notes,
+                Page::Media,
+                Page::Cli,
+                Page::Shortcuts,
+            ]
+        );
+    }
+
+    #[test]
+    fn shortcut_collapses_the_panel_until_the_pointer_leaves() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Clipboard)), t0);
+        assert_eq!(effects, vec![Effect::RunShortcut(Shortcut::Clipboard)]);
+        assert_eq!(
+            s.view(),
+            View::Idle,
+            "collapsed with the pointer still over it"
+        );
+        // Still hovering: nothing reopens it.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // A new visit opens it again, on the same page.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+    }
+
+    #[test]
+    fn shortcut_collapse_beats_an_open_editor_or_cli() {
+        let t0 = Instant::now();
+        for keep in [Event::EditorOpen(true), Event::CliFocus(true)] {
+            let mut s = st();
+            open_on(&mut s, Page::Shortcuts, t0);
+            s.apply(keep.clone(), t0);
+            s.apply(Event::Click(Hit::Shortcut(Shortcut::Screenshot)), t0);
+            assert_eq!(s.view(), View::Idle, "{keep:?}");
+            // Once the pointer has left, what kept it open does so again.
+            s.apply(Event::Hover(false), t0);
+            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
+        }
+    }
+
+    #[test]
+    fn shortcut_click_outside_the_panel_does_nothing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert_eq!(
+            s.apply(Event::Click(Hit::Shortcut(Shortcut::Lock)), t0),
+            vec![]
+        );
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+    }
+
+    #[test]
+    fn cli_card_opens_the_cli_and_focus_keeps_the_panel_open() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::CliOpen), t0),
+            vec![Effect::OpenCli]
+        );
+        s.apply(Event::CliFocus(true), t0);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        s.apply(Event::CliFocus(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // Output arriving changes nothing in the reducer.
+        let output = crate::cli::CliEvent::Output {
+            run: 1,
+            lines: vec!["x".into()],
+        };
+        assert_eq!(s.apply(Event::Cli(output), t0), vec![]);
+        assert_eq!(s.view(), View::Idle);
     }
 
     #[test]

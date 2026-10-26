@@ -183,6 +183,11 @@ pub fn island_palette(cfg: &Config) -> Palette {
     island(cfg.accent, cfg.surface)
 }
 
+/// The CLI's terminal (the panel card and the window's output), the same in
+/// both window modes: background and text.
+pub const TERMINAL_BG: u32 = 0x0C0C0E;
+pub const TERMINAL_TEXT: u32 = 0xE6E6E6;
+
 /// Colours of ordinary windows (editors, settings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowPalette {

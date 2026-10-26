@@ -19,8 +19,8 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    Frame, GLYPH_NEXT, GLYPH_PAUSE, GLYPH_PLAY, GLYPH_PREV, Renderer, SECONDARY_ALPHA, color,
-    d2d_rect,
+    CliCard, Frame, GLYPH_NEXT, GLYPH_PAUSE, GLYPH_PLAY, GLYPH_PREV, Renderer, SECONDARY_ALPHA,
+    color, d2d_rect,
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::config::Style;
@@ -29,11 +29,14 @@ use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
+use crate::shortcuts;
+use crate::theme;
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
-    CalendarLayout, ListLayout, PageLayout, PomodoroLayout, WEEK_HEAD_H, calendar_layout,
-    media_panel_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions,
-    reminders_layout, waiting_strip,
+    CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, ShortcutsLayout,
+    WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout, page_dots,
+    pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
+    tile_parts, waiting_strip,
 };
 
 /// Pomodoro phases keep their red and green whatever the accent.
@@ -140,6 +143,77 @@ impl Renderer {
                 Ok(())
             }
             PageLayout::Media(l) => self.paint_media(l, frame.media, frame.lyrics_on),
+            PageLayout::Cli(l) => {
+                self.paint_cli(l, &frame.cli);
+                Ok(())
+            }
+            PageLayout::Shortcuts(l) => {
+                self.paint_shortcuts(l);
+                Ok(())
+            }
+        }
+    }
+
+    /// Header and status, the terminal card (`>` and the last command, then
+    /// its last lines in the terminal's colours), and "Ketik perintah".
+    fn paint_cli(&self, l: &CliLayout, card: &CliCard) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.text(text(lang, Key::Cli), &self.fonts.heading, l.header, 1.0);
+        if card.running {
+            let label = format!("\u{25CF} {}", text(lang, Key::CliRunning));
+            self.text_colored(&label, &self.fonts.body_right, l.status, p.accent, 1.0);
+        } else {
+            let name = card.shell.name();
+            self.text(name, &self.fonts.body_right, l.status, 0.5);
+        }
+
+        self.set_color(theme::TERMINAL_BG, 1.0);
+        self.fill_round(l.card, 10.0);
+        self.stroke_round(inset(l.card, 0.5, 0.5), 10.0, p.track);
+        let [prompt, rest @ ..] = l.lines;
+        let mark = Rect { w: 14.0, ..prompt };
+        let after = Rect {
+            x: prompt.x + 16.0,
+            w: prompt.w - 16.0,
+            ..prompt
+        };
+        self.text_colored(">", &self.fonts.mono, mark, p.accent, 1.0);
+        let ink = theme::TERMINAL_TEXT;
+        match card.command {
+            Some(cmd) => {
+                self.text_colored(cmd, &self.fonts.mono, after, ink, 1.0);
+                for (line, r) in card.tail.iter().zip(rest) {
+                    self.text_colored(line, &self.fonts.mono, r, ink, 0.72);
+                }
+            }
+            None => {
+                let empty = text(lang, Key::CliEmpty);
+                self.text_colored(empty, &self.fonts.mono, after, ink, 0.45);
+                self.text_colored(card.cwd, &self.fonts.mono, rest[0], ink, 0.45);
+                let hint = text(lang, Key::CliEmptyHint);
+                self.text_colored(hint, &self.fonts.small, rest[1], ink, 0.45);
+            }
+        }
+
+        self.set_color(p.accent, 1.0);
+        self.fill_round(l.button, 8.0);
+        let label = text(lang, Key::CliTypeCommand);
+        self.text_colored(label, &self.fonts.body_center, l.button, p.on_accent, 1.0);
+    }
+
+    /// Two rows of tiles: an icon over its label.
+    fn paint_shortcuts(&self, l: &ShortcutsLayout) {
+        let lang = i18n::lang();
+        let heading = text(lang, Key::Shortcuts);
+        self.text(heading, &self.fonts.heading, l.header, 1.0);
+        for (s, tile) in l.tiles {
+            self.set_color(self.palette.raised, 1.0);
+            self.fill_round(tile, 12.0);
+            let (glyph, label) = tile_parts(tile);
+            self.text(shortcuts::glyph(s), &self.fonts.icon_tile, glyph, 0.95);
+            let name = text(lang, shortcuts::label(s));
+            self.text(name, &self.fonts.small_center, label, 0.85);
         }
     }
 
@@ -846,6 +920,8 @@ fn page_layout(s: ShapeRect, frame: &Frame, page: Page, strip: bool) -> PageLayo
         )),
         Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
         Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
+        Page::Cli => PageLayout::Cli(cli_layout(s, strip)),
+        Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip)),
     }
 }
 

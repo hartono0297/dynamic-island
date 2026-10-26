@@ -9,6 +9,7 @@
 
 use crate::calendar::CalStatus;
 use crate::claude::install::HookState;
+use crate::cli::Shell;
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
@@ -202,6 +203,7 @@ pub enum Hit {
     Autostart,
     IdleClock,
     Lyrics,
+    Shell(Shell),
     Battery(i32),
     DndHelp,
     Pomo(PomoField, i32),
@@ -248,6 +250,7 @@ pub enum Group {
     Surface,
     Window,
     Lang,
+    Shell,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -433,6 +436,8 @@ pub struct State<'a> {
     pub idle_clock: bool,
     /// Synced lyrics in the notch.
     pub lyrics: bool,
+    /// The CLI page's shell.
+    pub shell: Shell,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -963,8 +968,8 @@ fn appearance(b: &mut Builder, s: &State) {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(5.0 * ROW_H);
-    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(6.0 * ROW_H);
+    let rows: [f32; 6] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1013,6 +1018,16 @@ fn general(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
     b.row_text(card, rows[4], b.t(Key::LyricsInNotch), desc, false, x);
     b.divider(card, rows[4]);
+
+    let items = vec![
+        (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
+        (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
+    ];
+    let selected = index_of(&Shell::ALL, &s.shell);
+    let x = b.segmented(Group::Shell, RIGHT, cy(rows[5]), items, selected);
+    let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
+    b.row_text(card, rows[5], b.t(Key::ShellCli), desc, false, x);
+    b.divider(card, rows[5]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1312,6 +1327,11 @@ mod tests {
                         window: WindowTheme::System,
                         idle_clock: locked,
                         lyrics: !locked,
+                        shell: if locked {
+                            Shell::Cmd
+                        } else {
+                            Shell::PowerShell
+                        },
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -1702,6 +1722,49 @@ mod tests {
         // Not in Appearance, which is full.
         let l = layout(Section::Appearance, &states()[0], &Estimate);
         assert!(!l.hits().iter().any(|(h, _)| *h == Hit::Lyrics));
+    }
+
+    #[test]
+    fn shell_choice_is_the_last_row_of_general() {
+        for lang in [Lang::Id, Lang::En] {
+            for shell in Shell::ALL {
+                let s = State {
+                    lang,
+                    shell,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::General, &s, &Estimate);
+                let (track, items, selected) = l.segmented(Group::Shell).expect("Shell CLI");
+                assert_eq!(items[selected].hit, Hit::Shell(shell));
+                let hits: Vec<Hit> = items.iter().map(|i| i.hit).collect();
+                assert_eq!(
+                    hits,
+                    [Hit::Shell(Shell::PowerShell), Hit::Shell(Shell::Cmd)]
+                );
+                let r = items[1].rect;
+                assert_eq!(
+                    l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                    Some(Hit::Shell(Shell::Cmd))
+                );
+                // Below every other control of the card.
+                for c in &l.controls {
+                    if !matches!(
+                        c,
+                        Control::Segmented {
+                            group: Group::Shell,
+                            ..
+                        }
+                    ) {
+                        assert!(c.bounds().bottom() <= track.y, "{c:?}");
+                    }
+                }
+                for key in [Key::ShellCli, Key::ShellCliDesc] {
+                    assert!(l.texts.iter().any(|t| t.text == text(lang, key)));
+                }
+            }
+        }
+        let l = layout(Section::Appearance, &states()[0], &Estimate);
+        assert!(l.segmented(Group::Shell).is_none());
     }
 
     #[test]

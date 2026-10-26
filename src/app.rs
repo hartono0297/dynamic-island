@@ -10,12 +10,14 @@ use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
@@ -36,6 +38,7 @@ use windows::core::{PCWSTR, w};
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::pipe_server::spawn_pipe_server;
+use crate::cli::{self, Builtin, CliEvent, History, RunHandle, Session, SyncStep, WindowSync};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
@@ -43,15 +46,17 @@ use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
+use crate::shortcuts;
 use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
 use crate::theme::{self, Theme};
+use crate::ui::cli_window::{self, CliAction, CliInit, WM_APP_CLI_ACTION};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
-use crate::ui::render::{Frame, Renderer};
+use crate::ui::render::{CliCard, Frame, Renderer};
 use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
@@ -89,6 +94,8 @@ const TIMER_REMINDER: usize = 9;
 const TIMER_CLOCK: usize = 8;
 /// One-shot to the next lyric line, only while the lyric view shows.
 const TIMER_LYRIC: usize = 10;
+/// One-shot: a clicked shortcut runs once the panel is out of the way.
+const TIMER_SHORTCUT: usize = 11;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
@@ -113,6 +120,7 @@ thread_local! {
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_SETTINGS: RefCell<Vec<SettingsAction>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_CLI: RefCell<Vec<CliAction>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -175,6 +183,14 @@ pub fn run() {
             lyric_timer: false,
             lyric_fading: false,
             config_warned: false,
+            cli: Session::default(),
+            cli_run: None,
+            cli_runs: 0,
+            cli_history: History::load(&cli::history_path()),
+            cli_cwd: cli::load_cwd(&cli::cwd_path()),
+            cli_shown: WindowSync::default(),
+            cli_wake: Arc::new(AtomicBool::new(false)),
+            shortcut: None,
         });
     });
     with_app(|app| {
@@ -291,14 +307,34 @@ struct App {
     lyric_fading: bool,
     /// The invalid-config notice was shown this run.
     config_warned: bool,
+    /// The CLI's output, last command and running state.
+    cli: Session,
+    /// The running command, if any.
+    cli_run: Option<RunHandle>,
+    /// Run ids given out so far.
+    cli_runs: u64,
+    cli_history: History,
+    /// Where commands run; `cd` changes it.
+    cli_cwd: PathBuf,
+    /// What the CLI window has shown of the output.
+    cli_shown: WindowSync,
+    /// Set by a run's threads when they post a wake, cleared when `drain`
+    /// reads the queue: a burst of output posts one message, not hundreds.
+    cli_wake: Arc<AtomicBool>,
+    /// A clicked shortcut waiting for `TIMER_SHORTCUT`.
+    shortcut: Option<shortcuts::Action>,
 }
 
 impl App {
     fn drain(&mut self) {
         let now = Instant::now();
+        // Before reading: output queued after this posts a new wake.
+        self.cli_wake.store(false, Ordering::SeqCst);
         while let Ok(event) = self.rx.try_recv() {
             self.apply(event, now);
         }
+        // Once per burst of command output, not per chunk.
+        self.sync_cli_window();
         self.refresh(now);
     }
 
@@ -318,6 +354,10 @@ impl App {
                 // Lyrics are `App`'s too; `refresh` tells the reducer they exist.
                 Event::Lyrics(found) => {
                     self.lyrics.found(found);
+                    continue;
+                }
+                Event::Cli(event) => {
+                    self.on_cli_event(event);
                     continue;
                 }
                 other => other,
@@ -356,6 +396,20 @@ impl App {
                 self.config.lyrics = on;
                 self.save_config();
             }
+            Effect::RunShortcut(s) => {
+                let action = shortcuts::shortcut_action(s);
+                self.shortcut = Some(action);
+                // Replaces a pending one: only the last click runs.
+                unsafe {
+                    SetTimer(
+                        Some(self.hwnd),
+                        TIMER_SHORTCUT,
+                        shortcuts::delay_ms(action),
+                        None,
+                    );
+                }
+            }
+            Effect::OpenCli => self.open_cli(),
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
                 self.reminder_fired.retain(|f| *f != id);
@@ -503,9 +557,9 @@ impl App {
     /// Opens an editor under the panel. If one is already open, Windows
     /// brings that one forward instead and nothing else changes.
     fn open_editor(&mut self, kind: EditorKind) -> Option<Event> {
-        let win = self.win.as_ref()?;
-        let panel = shape_for(self.config.style, ShapeKind::Panel);
-        let anchor = win.to_screen(panel.x + panel.w / 2.0, panel.y + panel.h);
+        let anchor = self.under_panel()?;
+        // One window under the panel: the CLI window has nothing to lose.
+        cli_window::close();
         match editor::open_editor(self.hwnd, anchor, kind) {
             Ok(hwnd) if self.editor == Some(hwnd) => None,
             Ok(hwnd) => {
@@ -518,6 +572,150 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Screen point under the panel's bottom centre, where editors and the
+    /// CLI window hang.
+    fn under_panel(&self) -> Option<POINT> {
+        let win = self.win.as_ref()?;
+        let panel = shape_for(self.config.style, ShapeKind::Panel);
+        Some(win.to_screen(panel.x + panel.w / 2.0, panel.y + panel.h))
+    }
+
+    /// Opens the CLI window with everything so far, or brings it forward.
+    /// An open editor comes forward instead: it may hold unsaved text.
+    fn open_cli(&mut self) {
+        if editor::focus_open_editor() {
+            return;
+        }
+        let Some(anchor) = self.under_panel() else {
+            return;
+        };
+        let init = CliInit {
+            text: self.cli.output.text(),
+            cwd: self.cli_cwd.to_string_lossy().into_owned(),
+            shell: self.config.cli_shell,
+            running: self.cli.running().is_some(),
+            history: self.cli_history.clone(),
+        };
+        let fresh = !cli_window::is_open();
+        match cli_window::open(self.hwnd, anchor, init) {
+            Ok(_) if fresh => self.cli_shown.reset(&self.cli.output),
+            Ok(_) => {}
+            Err(error) => eprintln!("dynamic-island: cannot open the CLI: {error}"),
+        }
+    }
+
+    fn on_cli_action(&mut self, action: CliAction) {
+        match action {
+            CliAction::Run(cmd) => self.run_cli(&cmd),
+            CliAction::Stop => {
+                if let Some(run) = &self.cli_run {
+                    run.kill();
+                }
+            }
+            CliAction::Focus(on) => self.apply_now(Event::CliFocus(on)),
+            CliAction::Closed => self.apply_now(Event::CliFocus(false)),
+        }
+    }
+
+    /// A command from the CLI window: a builtin, or a run in the shell.
+    fn run_cli(&mut self, cmd: &str) {
+        self.cli_history.push(cmd);
+        // A history that cannot be written only loses the history.
+        let _ = self.cli_history.save(&cli::history_path());
+        match cli::builtin(cmd) {
+            Some(Builtin::Clear) => {
+                self.cli.clear();
+                self.cli_shown.reset(&self.cli.output);
+                cli_window::reset("");
+            }
+            Some(Builtin::Cd(arg)) => {
+                self.cli.begin(cmd);
+                match cli::resolve_cd(&self.cli_cwd, arg.as_deref(), &cli::home()) {
+                    Ok(dir) => {
+                        let _ = cli::save_cwd(&cli::cwd_path(), &dir);
+                        self.cli_cwd = dir;
+                    }
+                    Err(arg) => self.cli.note(cli::cd_error(&arg)),
+                }
+            }
+            None if self.cli.running().is_some() => {
+                // Only the window hears it; the card keeps the running command.
+                self.cli.output.push(cli::echo_line(cmd));
+                self.cli.output.push(tr(Key::CliBusy).into());
+            }
+            None => {
+                self.cli.begin(cmd);
+                self.cli_runs += 1;
+                let id = self.cli_runs;
+                let shell = self.config.cli_shell;
+                match cli::spawn(id, cmd, &self.cli_cwd, shell, self.cli_sink()) {
+                    Ok(run) => {
+                        self.cli.started(id);
+                        self.cli_run = Some(run);
+                    }
+                    Err(error) => {
+                        let line = i18n::cli_start_failed(i18n::lang(), &error.to_string());
+                        self.cli.note(line);
+                    }
+                }
+            }
+        }
+        self.sync_cli_window();
+        self.refresh(Instant::now());
+    }
+
+    /// Where a run's threads send their output: the island's queue, waking
+    /// it once per burst.
+    fn cli_sink(&self) -> cli::Sink {
+        let tx = self.tx.clone();
+        let wake = poster(self.hwnd, WM_APP_EVENT);
+        let pending = self.cli_wake.clone();
+        Arc::new(move |event| {
+            if tx.send(Event::Cli(event)).is_ok() && !pending.swap(true, Ordering::SeqCst) {
+                wake();
+            }
+        })
+    }
+
+    fn on_cli_event(&mut self, event: CliEvent) {
+        match event {
+            CliEvent::Output { run, lines } => {
+                self.cli.lines(run, lines);
+            }
+            CliEvent::Exit { run, code, killed } => {
+                if self.cli.exit(run, code, killed) {
+                    // The command is over; what it started may go on.
+                    self.cli_run = None;
+                }
+            }
+        }
+    }
+
+    /// Brings an open CLI window up to date with the output and status.
+    fn sync_cli_window(&mut self) {
+        if !cli_window::is_open() {
+            return;
+        }
+        match self.cli_shown.next(&self.cli.output) {
+            SyncStep::Nothing => {}
+            SyncStep::Append(lines) => cli_window::append(&lines),
+            SyncStep::Reset => cli_window::reset(&self.cli.output.text()),
+        }
+        cli_window::set_status(
+            &self.cli_cwd.to_string_lossy(),
+            self.config.cli_shell,
+            self.cli.running().is_some(),
+        );
+    }
+
+    /// The shortcut `TIMER_SHORTCUT` was waiting for, taken once.
+    fn take_shortcut(&mut self) -> Option<shortcuts::Action> {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SHORTCUT);
+        }
+        self.shortcut.take()
     }
 
     fn on_editor_result(&mut self, result: EditorResult) {
@@ -857,6 +1055,10 @@ impl App {
             TIMER_SYSTEM => {
                 self.check_fullscreen();
                 self.check_editor();
+                // A CLI window that died without `Closed` must not pin the panel.
+                if self.state.cli_focused() && !cli_window::is_open() {
+                    self.apply_now(Event::CliFocus(false));
+                }
             }
             TIMER_BATTERY => self.check_battery(),
             TIMER_DEADLINE => {
@@ -1061,6 +1263,7 @@ impl App {
     fn apply_theme(&mut self) {
         if theme::set_current(Theme::of(&self.config)) {
             editor::restyle_open_editor();
+            cli_window::restyle();
             settings::restyle();
             self.draw(Instant::now());
         }
@@ -1129,6 +1332,7 @@ impl App {
                 // `adopt_config` switches the strings; everything showing text relabels.
                 self.save_config();
                 editor::relabel_open_editor();
+                cli_window::relabel();
                 self.draw(now);
             }
             SettingsAction::Autostart(on) => self.set_autostart(on),
@@ -1143,6 +1347,13 @@ impl App {
                 self.save_config();
                 // Looks the track up and switches the view now.
                 self.apply_now(Event::LyricsSetting(on));
+            }
+            SettingsAction::Shell(shell) => {
+                // The next command runs in it; one running goes on as it is.
+                self.config.cli_shell = shell;
+                self.save_config();
+                self.sync_cli_window();
+                self.draw(now);
             }
             SettingsAction::BatteryThreshold(threshold) => {
                 self.save_config_with(|c| c.battery_threshold = threshold);
@@ -1191,6 +1402,7 @@ impl App {
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
         let state = &self.state;
+        let cwd = self.cli_cwd.to_string_lossy();
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -1214,6 +1426,13 @@ impl App {
                 .then(|| Local::now().format("%H:%M").to_string()),
             lyric: self.lyrics.shown(now),
             lyrics_on: state.lyrics_on(),
+            cli: CliCard {
+                command: self.cli.last_command(),
+                tail: self.cli.tail().collect(),
+                running: self.cli.running().is_some(),
+                shell: self.config.cli_shell,
+                cwd: &cwd,
+            },
         };
         if let Err(error) = self
             .renderer
@@ -1733,6 +1952,9 @@ fn deliver_settings_action(action: SettingsAction) {
 fn shutdown(hwnd: HWND) {
     settings::close();
     flush_editor();
+    // A command still running ends with the island's process, which closes
+    // its job.
+    cli_window::close();
     unsafe {
         let _ = DestroyWindow(hwnd);
     }
@@ -1830,6 +2052,30 @@ fn run_deferred() {
     for action in DEFERRED_SETTINGS.take() {
         deliver_settings_action(action);
     }
+    for action in DEFERRED_CLI.take() {
+        deliver_cli_action(action);
+    }
+}
+
+/// Handles a CLI window action now, or once the handler holding the app returns.
+fn deliver_cli_action(action: CliAction) {
+    let mut pending = Some(action);
+    with_app(|app| {
+        if let Some(action) = pending.take() {
+            app.on_cli_action(action);
+        }
+    });
+    if let Some(action) = pending {
+        DEFERRED_CLI.with_borrow_mut(|queue| queue.push(action));
+    }
+}
+
+/// `TIMER_SHORTCUT`: runs the waiting shortcut outside the app borrow (the
+/// shell may pump messages). If the app is busy, the timer fires again.
+fn run_shortcut() {
+    if let Some(action) = with_app(App::take_shortcut).flatten() {
+        shortcuts::run(action);
+    }
 }
 
 /// `WM_SETTINGCHANGE` for "ImmersiveColorSet": the Windows app mode (light or
@@ -1845,6 +2091,7 @@ fn on_system_theme_changed() {
     let changed = theme::set_system_light(theme::read_system_light());
     if changed && theme::current().window == theme::WindowTheme::System {
         editor::restyle_open_editor();
+        cli_window::restyle();
         settings::restyle();
     }
 }
@@ -1867,6 +2114,10 @@ unsafe extern "system" fn wnd_proc(
             if with_app(App::animate).is_none() {
                 DEFERRED_FRAME.set(true);
             }
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == TIMER_SHORTCUT => {
+            run_shortcut();
             LRESULT(0)
         }
         WM_TIMER => {
@@ -1926,6 +2177,13 @@ unsafe extern "system" fn wnd_proc(
             // Each result is taken exactly once, here.
             if let Some(result) = unsafe { editor::take_result(lparam) } {
                 deliver_result(result);
+            }
+            LRESULT(0)
+        }
+        WM_APP_CLI_ACTION => {
+            // Each action is taken exactly once, here.
+            if let Some(action) = unsafe { cli_window::take_action(lparam) } {
+                deliver_cli_action(action);
             }
             LRESULT(0)
         }

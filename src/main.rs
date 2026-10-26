@@ -3,6 +3,7 @@
 mod app;
 mod calendar;
 mod claude;
+mod cli;
 mod config;
 mod google;
 mod i18n;
@@ -11,6 +12,7 @@ mod model;
 mod notes;
 mod pomodoro;
 mod reminders;
+mod shortcuts;
 mod sources;
 mod state;
 mod theme;
@@ -65,6 +67,12 @@ fn main() {
             attach_parent_console();
             demo_lang_from_env();
             ui::editor::run_demo(std::env::args().nth(2).as_deref());
+        }
+        #[cfg(debug_assertions)]
+        Some("--demo-cli") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            ui::cli_window::run_demo();
         }
         #[cfg(debug_assertions)]
         Some("--settings") => {

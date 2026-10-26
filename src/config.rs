@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::cli::Shell;
 use crate::i18n::Lang;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
@@ -36,6 +37,8 @@ pub struct Config {
     /// While music plays, the compact island shows the current synced lyric
     /// line (looked up at lrclib.net) instead of the artist.
     pub lyrics: bool,
+    /// The shell the CLI page runs commands in.
+    pub cli_shell: Shell,
 }
 
 impl Default for Config {
@@ -55,6 +58,7 @@ impl Default for Config {
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
+            cli_shell: Shell::PowerShell,
         }
     }
 }
@@ -102,9 +106,9 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language, theme, idle clock, lyrics) over everything else as it is on disk (Google client, muted
-/// apps, battery threshold), which the owner may have edited by hand while the
-/// island ran.
+/// language, theme, idle clock, lyrics, CLI shell) over everything else as it
+/// is on disk (Google client, muted apps, battery threshold), which the owner
+/// may have edited by hand while the island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
     Config {
         style: mem.style,
@@ -117,6 +121,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         window_theme: mem.window_theme,
         idle_clock: mem.idle_clock,
         lyrics: mem.lyrics,
+        cli_shell: mem.cli_shell,
         ..disk
     }
 }
@@ -286,6 +291,23 @@ mod tests {
         assert_eq!(c.window_theme, WindowTheme::System);
         assert!(c.idle_clock);
         assert!(!c.lyrics);
+        assert_eq!(c.cli_shell, Shell::PowerShell);
+    }
+
+    #[test]
+    fn cli_shell_is_a_name_and_a_typo_falls_back() {
+        let cmd = Config {
+            cli_shell: Shell::Cmd,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""cli_shell":"cmd""#), "{json}");
+        assert_eq!(parse(&json).cli_shell, Shell::Cmd);
+        let typo = parse(r#"{"style":"Notch","cli_shell":"zsh"}"#);
+        assert_eq!(
+            (typo.style, typo.cli_shell),
+            (Style::Notch, Shell::PowerShell)
+        );
     }
 
     #[test]
@@ -310,6 +332,7 @@ mod tests {
             window_theme: WindowTheme::Light,
             idle_clock: false,
             lyrics: true,
+            cli_shell: Shell::Cmd,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -396,6 +419,7 @@ mod tests {
         WindowTheme,
         bool,
         bool,
+        Shell,
     );
 
     fn owned(c: &Config) -> Owned {
@@ -410,6 +434,7 @@ mod tests {
             c.window_theme,
             c.idle_clock,
             c.lyrics,
+            c.cli_shell,
         )
     }
 
@@ -430,6 +455,7 @@ mod tests {
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
+            cli_shell: Shell::PowerShell,
             ..Config::default()
         };
         let mem = Config {
@@ -446,6 +472,7 @@ mod tests {
             window_theme: WindowTheme::Light,
             idle_clock: false,
             lyrics: true,
+            cli_shell: Shell::Cmd,
             ..Config::default()
         };
         (disk, mem)

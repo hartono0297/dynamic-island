@@ -161,7 +161,7 @@ const REMINDER_SIZE: (f32, f32) = (420.0, 236.0);
 const GAP: i32 = 8;
 
 /// `0xRRGGBB` as GDI's `0x00BBGGRR`.
-const fn colorref(rgb: u32) -> COLORREF {
+pub(super) const fn colorref(rgb: u32) -> COLORREF {
     COLORREF((rgb >> 16) & 0xFF | (rgb & 0xFF00) | (rgb & 0xFF) << 16)
 }
 
@@ -766,7 +766,7 @@ thread_local! {
 /// `(window, field)` brushes of `p`'s mode, created once per mode and kept
 /// for the process lifetime (the background and field colours depend only on
 /// the mode).
-fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
+pub(super) fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
     BRUSHES.with(|b| {
         let mut all = b.get();
         let slot = &mut all[usize::from(p.light)];
@@ -786,7 +786,7 @@ fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
 }
 
 /// Title bar and control styles of `hwnd` for `p`'s mode.
-fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
+pub(super) fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
     let dark = i32::from(!p.light);
     let style = if p.light {
         w!("Explorer")
@@ -892,11 +892,11 @@ fn take_editor(hwnd: HWND) -> Option<Editor> {
     })
 }
 
-fn send(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
+pub(super) fn send(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
     unsafe { SendMessageW(hwnd, msg, Some(WPARAM(wparam)), Some(LPARAM(lparam))).0 }
 }
 
-fn window_text(hwnd: HWND) -> String {
+pub(super) fn window_text(hwnd: HWND) -> String {
     let len = usize::try_from(unsafe { GetWindowTextLengthW(hwnd) }).unwrap_or(0);
     let mut buf = vec![0u16; len + 1];
     let copied = usize::try_from(unsafe { GetWindowTextW(hwnd, &mut buf) }).unwrap_or(0);
@@ -921,7 +921,7 @@ fn post_result(owner: HWND, result: EditorResult) -> bool {
     true
 }
 
-fn init_common_controls() {
+pub(super) fn init_common_controls() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let icc = INITCOMMONCONTROLSEX {
@@ -961,7 +961,7 @@ fn register_class(instance: HINSTANCE) -> Result<()> {
 }
 
 /// DPI scale and work area of the monitor under `pt`.
-fn monitor_at(pt: POINT) -> (f32, RECT) {
+pub(super) fn monitor_at(pt: POINT) -> (f32, RECT) {
     unsafe {
         let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
@@ -977,7 +977,7 @@ fn monitor_at(pt: POINT) -> (f32, RECT) {
     }
 }
 
-fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
+pub(super) fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
     unsafe {
         CreateFontW(
             -(13.0 * scale).round() as i32,
@@ -1150,6 +1150,22 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
         send(edit, EM_SETSEL, end, end as isize);
     }
     Ok(hwnd)
+}
+
+/// Brings the open editor forward. False when none is open.
+pub fn focus_open_editor() -> bool {
+    let open = EDITOR.with(|cell| {
+        cell.try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|ed| ed.hwnd))
+    });
+    match open {
+        Some(hwnd) if unsafe { IsWindow(Some(hwnd)) }.as_bool() => {
+            bring_to_front(hwnd);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Makes `hwnd` the foreground window and focuses its last-focused control.
@@ -1788,7 +1804,7 @@ fn paint_field_borders(hwnd: HWND) {
 }
 
 /// `over` at `alpha` on `base` (`0xRRGGBB`).
-fn blend(base: u32, over: u32, alpha: f32) -> u32 {
+pub(super) fn blend(base: u32, over: u32, alpha: f32) -> u32 {
     let ch = |shift: u32| {
         let (b, o) = (
             ((base >> shift) & 0xFF) as f32,
@@ -2043,7 +2059,7 @@ fn post_command(control: HWND, id: i32) {
     }
 }
 
-fn key_down(key: u16) -> bool {
+pub(super) fn key_down(key: u16) -> bool {
     unsafe { GetKeyState(i32::from(key)) < 0 }
 }
 

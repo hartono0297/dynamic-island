@@ -25,9 +25,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_for};
-use super::render::{Frame, Renderer};
+use super::render::{CliCard, Frame, Renderer};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
+use crate::cli::Shell;
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
@@ -64,6 +65,15 @@ struct Scene {
     lyric_at: u64,
     /// "Lirik di notch" is on (the Musik page's button).
     lyrics_on: bool,
+    /// What the CLI page's card shows.
+    cli: CliDemo,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CliDemo {
+    Empty,
+    Done,
+    Running,
 }
 
 /// `View` without its payloads, so scenes can be `const`.
@@ -91,6 +101,7 @@ const BASE: Scene = Scene {
     strip: false,
     lyric_at: 2_000,
     lyrics_on: false,
+    cli: CliDemo::Empty,
 };
 
 /// Made-up lyrics: a metadata tag, an offset, a line timed twice, an
@@ -120,7 +131,7 @@ const fn panel(name: &'static str, page: Page) -> Scene {
     }
 }
 
-const SCENES: [Scene; 22] = [
+const SCENES: [Scene; 26] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -204,6 +215,16 @@ const SCENES: [Scene; 22] = [
         lyrics_on: true,
         ..panel("media-lyrics-on", Page::Media)
     },
+    panel("cli-empty", Page::Cli),
+    Scene {
+        cli: CliDemo::Done,
+        ..panel("cli-done", Page::Cli)
+    },
+    Scene {
+        cli: CliDemo::Running,
+        ..panel("cli-running", Page::Cli)
+    },
+    panel("shortcuts", Page::Shortcuts),
 ];
 
 fn env<T: std::str::FromStr>(name: &str) -> Option<T> {
@@ -331,6 +352,7 @@ pub fn run() {
                 clock: clock_on.then(|| Local::now().format("%H:%M").to_string()),
                 lyric: lyric_state.shown(now),
                 lyrics_on: scene.lyrics_on,
+                cli: demo_cli(scene.cli),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -370,6 +392,44 @@ fn demo_lyrics(at: u64, fade: Option<f32>, now: Instant) -> LyricsState {
         state.advance(at, now);
     }
     state
+}
+
+/// The CLI card: empty, after `git status`, or while a ping runs.
+fn demo_cli(which: CliDemo) -> CliCard<'static> {
+    let (command, tail, running): (Option<&str>, Vec<&str>, bool) = match which {
+        CliDemo::Empty => (None, Vec::new(), false),
+        CliDemo::Done => (
+            Some("git status"),
+            vec![
+                "On branch feat/settings-ui",
+                "Your branch is up to date with 'origin/feat/settings-ui'.",
+                "nothing to commit, working tree clean",
+                "[exit 0]",
+            ],
+            false,
+        ),
+        CliDemo::Running => (
+            Some("ping -n 20 127.0.0.1"),
+            vec![
+                "Pinging 127.0.0.1 with 32 bytes of data:",
+                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
+                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
+                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
+            ],
+            true,
+        ),
+    };
+    CliCard {
+        command,
+        tail,
+        running,
+        shell: if which == CliDemo::Running {
+            Shell::Cmd
+        } else {
+            Shell::PowerShell
+        },
+        cwd: "C:\\Users\\Hartono",
+    }
 }
 
 fn scene(step: usize) -> (Style, Scene) {

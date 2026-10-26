@@ -6,7 +6,8 @@ use chrono::{Days, NaiveDate};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, events_on, range_for};
-use crate::model::{CalView, Hit, Page};
+use crate::cli::CARD_LINES;
+use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::notes::Note;
 use crate::reminders::Reminder;
 
@@ -84,6 +85,30 @@ pub struct ListLayout {
     pub more: Option<(usize, Rect)>,
 }
 
+/// The CLI page: a terminal-like card with the last command and its last
+/// lines, and a button that opens the CLI window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CliLayout {
+    /// "CLI".
+    pub header: Rect,
+    /// Right of the header: "● berjalan" or the shell's name.
+    pub status: Rect,
+    pub card: Rect,
+    /// `> command` first, then up to `cli::CARD_LINES` output lines.
+    pub lines: [Rect; 1 + CARD_LINES],
+    /// "Ketik perintah".
+    pub button: Rect,
+}
+
+/// The Pintasan page: two rows of four tiles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShortcutsLayout {
+    /// "Pintasan".
+    pub header: Rect,
+    /// In `Shortcut::ALL` order, row by row.
+    pub tiles: [(Shortcut, Rect); 8],
+}
+
 /// One page's layout, for `regions`.
 // Built on the stack for one frame and dropped; boxing the calendar would
 // only add an allocation per frame.
@@ -95,6 +120,8 @@ pub enum PageLayout {
     Reminders(ListLayout),
     Notes(ListLayout),
     Media(ExpandedLayout),
+    Cli(CliLayout),
+    Shortcuts(ShortcutsLayout),
 }
 
 /// Side padding of the panel content.
@@ -153,6 +180,20 @@ const NEW_W: f32 = 64.0;
 const NOTE_H: f32 = 40.0;
 const NOTE_GAP: f32 = 4.0;
 const NOTES_MORE_W: f32 = 120.0;
+
+const CLI_STATUS_W: f32 = 160.0;
+const CLI_LINE_H: f32 = 20.0;
+const CLI_PAD: f32 = 14.0;
+const CLI_BUTTON_W: f32 = 150.0;
+const CLI_BUTTON_H: f32 = 30.0;
+const CLI_GAP: f32 = 12.0;
+
+const TILE_GAP: f32 = 10.0;
+/// Tiles stay this short when the panel has room to spare.
+const TILE_MAX_H: f32 = 84.0;
+const TILE_GLYPH_H: f32 = 30.0;
+const TILE_LABEL_H: f32 = 16.0;
+const TILE_INNER_GAP: f32 = 6.0;
 
 const MEDIA_ART: f32 = 128.0;
 const MEDIA_BUTTON_W: f32 = 56.0;
@@ -552,6 +593,75 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
     }
 }
 
+/// Header with the status on its right; under it the card (prompt line and
+/// output lines from its top) and the button at its right edge, the two
+/// centred in the space left.
+pub fn cli_layout(s: ShapeRect, strip: bool) -> CliLayout {
+    let top = content_top(s, strip);
+    let bottom = content_bottom(s);
+    let (l, r) = (left(s), right(s));
+    let header = rect(l, top, r - l - CLI_STATUS_W - 8.0, HEADER_H);
+    let status = rect(r - CLI_STATUS_W, top, CLI_STATUS_W, HEADER_H);
+    let body = header.bottom() + 8.0;
+    let card_h = 2.0 * CLI_PAD + (1 + CARD_LINES) as f32 * CLI_LINE_H;
+    let group_h = card_h + CLI_GAP + CLI_BUTTON_H;
+    let y = body + ((bottom - body - group_h) / 2.0).max(0.0);
+    let card = rect(l, y, r - l, card_h);
+    let lines = std::array::from_fn(|i| {
+        rect(
+            card.x + CLI_PAD,
+            card.y + CLI_PAD + i as f32 * CLI_LINE_H,
+            card.w - 2.0 * CLI_PAD,
+            CLI_LINE_H,
+        )
+    });
+    let button = rect(
+        r - CLI_BUTTON_W,
+        card.bottom() + CLI_GAP,
+        CLI_BUTTON_W,
+        CLI_BUTTON_H,
+    );
+    CliLayout {
+        header,
+        status,
+        card,
+        lines,
+        button,
+    }
+}
+
+/// Four equal tiles per row, two rows, centred under the header.
+pub fn shortcuts_layout(s: ShapeRect, strip: bool) -> ShortcutsLayout {
+    let top = content_top(s, strip);
+    let bottom = content_bottom(s);
+    let (l, r) = (left(s), right(s));
+    let header = rect(l, top, r - l, HEADER_H);
+    let body = header.bottom() + 8.0;
+    let w = (r - l - 3.0 * TILE_GAP) / 4.0;
+    let h = ((bottom - body - TILE_GAP) / 2.0).min(TILE_MAX_H);
+    let y0 = body + ((bottom - body) - (2.0 * h + TILE_GAP)) / 2.0;
+    let tiles = std::array::from_fn(|i| {
+        let (row, col) = ((i / 4) as f32, (i % 4) as f32);
+        let x = l + col * (w + TILE_GAP);
+        (Shortcut::ALL[i], rect(x, y0 + row * (h + TILE_GAP), w, h))
+    });
+    ShortcutsLayout { header, tiles }
+}
+
+/// A tile's icon and, under it, its label; the two centred in the tile.
+pub fn tile_parts(tile: Rect) -> (Rect, Rect) {
+    let h = TILE_GLYPH_H + TILE_INNER_GAP + TILE_LABEL_H;
+    let y = tile.y + (tile.h - h) / 2.0;
+    let glyph = rect(tile.x, y, tile.w, TILE_GLYPH_H);
+    let label = rect(
+        tile.x + 4.0,
+        glyph.bottom() + TILE_INNER_GAP,
+        tile.w - 8.0,
+        TILE_LABEL_H,
+    );
+    (glyph, label)
+}
+
 /// Small ring on the left (center, radius 11), then the time and label.
 pub fn pomodoro_compact_layout(s: ShapeRect) -> ((f32, f32), f32, Rect) {
     const RADIUS: f32 = 11.0;
@@ -630,6 +740,15 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(play, Hit::PlayPause);
             add(next, Hit::Next);
             add(l.lyrics, Hit::LyricsToggle);
+        }
+        PageLayout::Cli(l) => {
+            add(l.card, Hit::CliOpen);
+            add(l.button, Hit::CliOpen);
+        }
+        PageLayout::Shortcuts(l) => {
+            for (s, r) in l.tiles {
+                add(r, Hit::Shortcut(s));
+            }
         }
     }
     out
@@ -730,6 +849,11 @@ mod tests {
         out.push((
             "media".into(),
             PageLayout::Media(media_panel_layout(s, strip)),
+        ));
+        out.push(("cli".into(), PageLayout::Cli(cli_layout(s, strip))));
+        out.push((
+            "shortcuts".into(),
+            PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         ));
         out
     }
@@ -1158,6 +1282,82 @@ mod tests {
         for hit in [Hit::Prev, Hit::PlayPause, Hit::Next, Hit::LyricsToggle] {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
+
+        let l = cli_layout(s, false);
+        let r = regions(s, &PageLayout::Cli(l), false);
+        assert_eq!(
+            r,
+            [
+                Region {
+                    rect: l.card,
+                    hit: Hit::CliOpen
+                },
+                Region {
+                    rect: l.button,
+                    hit: Hit::CliOpen
+                }
+            ]
+        );
+
+        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false)), false);
+        let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
+        let want: Vec<Hit> = Shortcut::ALL.into_iter().map(Hit::Shortcut).collect();
+        assert_eq!(hits, want);
+    }
+
+    #[test]
+    fn shortcut_tiles_two_rows_of_four_in_order() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                let l = shortcuts_layout(s, strip);
+                let order: Vec<Shortcut> = l.tiles.iter().map(|(t, _)| *t).collect();
+                assert_eq!(order, Shortcut::ALL);
+                let first = l.tiles[0].1;
+                assert!(first.h >= 60.0, "{style:?} strip={strip}: {first:?}");
+                assert!(first.y >= l.header.bottom());
+                for (i, (_, t)) in l.tiles.iter().enumerate() {
+                    assert_eq!((t.w, t.h), (first.w, first.h), "equal tiles");
+                    let (row, col) = (i / 4, i % 4);
+                    assert_eq!(t.y, l.tiles[row * 4].1.y, "rows line up");
+                    assert_eq!(t.x, l.tiles[col].1.x, "columns line up");
+                    let (glyph, label) = tile_parts(*t);
+                    assert!(glyph.y >= t.y && label.bottom() <= t.bottom());
+                    assert!(glyph.bottom() <= label.y);
+                }
+                // Edge to edge across the content width, 10 px apart.
+                assert_eq!(first.x, left(s));
+                assert!((l.tiles[3].1.right() - right(s)).abs() < 0.01);
+                assert_eq!(l.tiles[1].1.x - first.right(), 10.0);
+                assert_eq!(l.tiles[4].1.y - first.bottom(), 10.0);
+            }
+        }
+    }
+
+    #[test]
+    fn cli_card_holds_the_prompt_and_four_lines_above_its_button() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                let l = cli_layout(s, strip);
+                assert_eq!(l.lines.len(), 5);
+                for line in l.lines {
+                    assert!(line.x > l.card.x && line.right() < l.card.right());
+                    assert!(line.y >= l.card.y && line.bottom() <= l.card.bottom());
+                }
+                for pair in l.lines.windows(2) {
+                    assert!(pair[0].bottom() <= pair[1].y);
+                }
+                assert!(l.card.y >= l.header.bottom());
+                assert!(l.button.y >= l.card.bottom());
+                assert_eq!(l.button.right(), l.card.right(), "right-aligned");
+                assert!(l.header.right() < l.status.x);
+                assert_eq!(l.status.right(), right(s));
+            }
+            let (a, b) = (cli_layout(s, false), cli_layout(s, true));
+            assert_eq!(b.header.y - a.header.y, 24.0);
+            assert!(b.card.y >= a.card.y);
+        }
     }
 
     #[test]
@@ -1234,6 +1434,17 @@ mod tests {
                         }
                         PageLayout::Notes(l) | PageLayout::Reminders(l) => drawn.push(l.header),
                         PageLayout::Media(l) => drawn.extend([l.art, l.title, l.artist]),
+                        PageLayout::Cli(l) => {
+                            drawn.extend([l.header, l.status]);
+                            drawn.extend(l.lines);
+                        }
+                        PageLayout::Shortcuts(l) => {
+                            drawn.push(l.header);
+                            for (_, tile) in l.tiles {
+                                let (glyph, label) = tile_parts(tile);
+                                drawn.extend([glyph, label]);
+                            }
+                        }
                     }
                 }
                 for r in drawn {

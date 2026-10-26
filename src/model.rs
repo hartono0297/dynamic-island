@@ -3,6 +3,7 @@ use std::time::Instant;
 use chrono::NaiveDate;
 
 use crate::calendar::CalendarSnapshot;
+use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::pomodoro::PomoSettings;
 
@@ -90,8 +91,13 @@ pub enum Event {
     /// The reminder was edited, deleted or dismissed elsewhere: its sticky
     /// notice goes.
     ReminderCleared(String),
+    /// The CLI window is the active window (true) or not: like an open editor,
+    /// it keeps the panel open meanwhile.
+    CliFocus(bool),
     /// A calendar sync result; `App` keeps it, the reducer ignores it.
     Calendar(CalendarSnapshot),
+    /// Output or the end of a CLI command; `App` keeps it, the reducer ignores it.
+    Cli(CliEvent),
     Tick,
 }
 
@@ -129,6 +135,10 @@ pub enum Hit {
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
+    /// A tile on the Pintasan page.
+    Shortcut(Shortcut),
+    /// The CLI page's card or its "Ketik perintah" button.
+    CliOpen,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,6 +173,10 @@ pub enum Effect {
     ReminderDone(String),
     /// The Musik page's lyric button changed the setting; save it.
     SaveLyrics(bool),
+    /// Run a shortcut once the panel has collapsed.
+    RunShortcut(Shortcut),
+    /// Open the CLI window (or bring it forward).
+    OpenCli,
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
@@ -182,15 +196,46 @@ pub enum Page {
     Reminders,
     Notes,
     Media,
+    Cli,
+    /// Pintasan, the right-most page.
+    Shortcuts,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [
+    pub const ALL: [Page; 7] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
         Page::Notes,
         Page::Media,
+        Page::Cli,
+        Page::Shortcuts,
+    ];
+}
+
+/// The Pintasan page's tiles, in reading order (two rows of four).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shortcut {
+    Screenshot,
+    Clipboard,
+    Emoji,
+    Explorer,
+    Calculator,
+    TaskManager,
+    WindowsSettings,
+    Lock,
+}
+
+impl Shortcut {
+    pub const ALL: [Shortcut; 8] = [
+        Shortcut::Screenshot,
+        Shortcut::Clipboard,
+        Shortcut::Emoji,
+        Shortcut::Explorer,
+        Shortcut::Calculator,
+        Shortcut::TaskManager,
+        Shortcut::WindowsSettings,
+        Shortcut::Lock,
     ];
 }
 

@@ -68,6 +68,7 @@ use super::settings_layout::{
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
+use crate::cli::Shell;
 use crate::config::{Config, Style};
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
@@ -93,6 +94,7 @@ pub enum Action {
     Autostart(bool),
     IdleClock(bool),
     Lyrics(bool),
+    Shell(Shell),
     BatteryThreshold(u8),
     DndHelp,
     Pomo(PomoField, i32),
@@ -126,6 +128,7 @@ pub struct Model {
     pub autostart: bool,
     pub idle_clock: bool,
     pub lyrics: bool,
+    pub shell: Shell,
     pub battery_threshold: u8,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
@@ -146,6 +149,7 @@ impl Model {
             autostart: cfg.start_with_windows,
             idle_clock: cfg.idle_clock,
             lyrics: cfg.lyrics,
+            shell: cfg.cli_shell,
             battery_threshold: cfg.battery_threshold,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
@@ -849,6 +853,7 @@ impl Settings {
             autostart: m.autostart,
             idle_clock: m.idle_clock,
             lyrics: m.lyrics,
+            shell: m.shell,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             pomodoro: m.pomodoro,
@@ -927,9 +932,16 @@ impl Settings {
                     .position(|w| *w == m.window)
                     .unwrap_or(0) as f32,
                 Group::Lang => usize::from(m.lang == Lang::En) as f32,
+                Group::Shell => usize::from(m.shell == Shell::Cmd) as f32,
             }
         };
-        for group in [Group::Style, Group::Surface, Group::Window, Group::Lang] {
+        for group in [
+            Group::Style,
+            Group::Surface,
+            Group::Window,
+            Group::Lang,
+            Group::Shell,
+        ] {
             let (from, to) = (index(group, &old), index(group, new));
             if from != to {
                 let t = Tween::toward(self.anims.segment(group), from, to, now);
@@ -1087,6 +1099,7 @@ impl Settings {
             Hit::Autostart => post(Action::Autostart(!m.autostart)),
             Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
             Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
+            Hit::Shell(v) if v != m.shell => post(Action::Shell(v)),
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1163,7 +1176,8 @@ impl Settings {
             | Hit::Accent(_)
             | Hit::Surface(_)
             | Hit::WindowMode(_)
-            | Hit::Lang(_) => Vec::new(),
+            | Hit::Lang(_)
+            | Hit::Shell(_) => Vec::new(),
         };
         self.relayout();
         after
@@ -1674,6 +1688,7 @@ pub fn run_demo(args: &[String]) {
             Action::Autostart(v) => m.autostart = v,
             Action::IdleClock(v) => m.idle_clock = v,
             Action::Lyrics(v) => m.lyrics = v,
+            Action::Shell(v) => m.shell = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);

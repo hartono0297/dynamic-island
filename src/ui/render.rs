@@ -47,6 +47,7 @@ use super::geometry::{
 };
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
+use crate::cli::Shell;
 use crate::config::Style;
 use crate::lyrics::ShownLine;
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, View};
@@ -113,6 +114,20 @@ pub struct Frame<'a> {
     pub lyric: Option<ShownLine<'a>>,
     /// "Lirik di notch" is on: the Musik page's button is lit.
     pub lyrics_on: bool,
+    /// The CLI page's card.
+    pub cli: CliCard<'a>,
+}
+
+/// What the CLI page shows.
+pub struct CliCard<'a> {
+    /// The last command entered, `None` before any (or after `cls`).
+    pub command: Option<&'a str>,
+    /// Its last lines, oldest first (at most `cli::CARD_LINES`).
+    pub tail: Vec<&'a str>,
+    pub running: bool,
+    pub shell: Shell,
+    /// Where commands run; shown while the card is empty.
+    pub cwd: &'a str,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
@@ -168,6 +183,10 @@ struct Fonts {
     icon_small: IDWriteTextFormat,
     icon_panel: IDWriteTextFormat,
     icon_panel_large: IDWriteTextFormat,
+    /// Shortcut tile icons.
+    icon_tile: IDWriteTextFormat,
+    /// The CLI card: Cascadia Mono, else Consolas.
+    mono: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -791,6 +810,7 @@ impl Fonts {
         let icon_names = [w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")];
         let has_icons = find_installed(dwrite, &icon_names)?.is_some();
         let icon_family = first_installed(dwrite, &icon_names)?;
+        let mono_family = first_installed(dwrite, &[w!("Cascadia Mono"), w!("Consolas")])?;
         let line = |weight, size| line_format(dwrite, text_family, weight, size);
         let aligned = |family, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
             let format = line_format(dwrite, family, weight, size)?;
@@ -825,6 +845,8 @@ impl Fonts {
             icon_small: centered(icon_family, normal, 12.0)?,
             icon_panel: centered(icon_family, normal, 20.0)?,
             icon_panel_large: centered(icon_family, normal, 28.0)?,
+            icon_tile: centered(icon_family, normal, 22.0)?,
+            mono: line_format(dwrite, mono_family, normal, 12.5)?,
         })
     }
 }
