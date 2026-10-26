@@ -365,12 +365,21 @@ pub(super) fn restyle() {
         return;
     };
     set_frame(hwnd, &theme::current_window(), true);
+    if let Some(edit) = edit {
+        set_cue(edit);
+    }
     unsafe {
         let _ = InvalidateRect(Some(hwnd), None, false);
         if let Some(edit) = edit {
             let _ = InvalidateRect(Some(edit), None, true);
         }
     }
+}
+
+/// The typing EDIT's cue banner, in the language now in effect.
+fn set_cue(edit: HWND) {
+    let cue = HSTRING::from(tr(Key::TypeTime));
+    send(edit, EM_SETCUEBANNER, 1, cue.as_ptr() as isize);
 }
 
 const CLASS_NAME: PCWSTR = w!("DynamicIslandEditorPopover");
@@ -497,8 +506,7 @@ pub(super) fn open(editor: HWND, chip: RECT, gfx: Rc<Gfx>, item: Item, kind: Kin
             .ok();
             if let Some(edit) = edit {
                 send(edit, WM_SETFONT, font.0 as usize, 0);
-                let cue = HSTRING::from(tr(Key::TypeTime));
-                send(edit, EM_SETCUEBANNER, 1, cue.as_ptr() as isize);
+                set_cue(edit);
                 unsafe {
                     let _ = SetWindowSubclass(edit, Some(edit_proc), SUBCLASS_ID, 0);
                 }

@@ -279,6 +279,7 @@ keys! {
     NotePlaceholder => "Tulis catatan…", "Write a note…";
     ReminderPlaceholder => "Ingatkan saya untuk…", "Remind me to…";
     TypeTime => "Ketik jam", "Type a time";
+    AllDayToggle => "Sepanjang hari", "All day";
 
     // Tray menu.
     MenuStylePill => "Gaya: Pill", "Style: Pill";

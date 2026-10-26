@@ -1121,7 +1121,7 @@ fn compute_layout(mode: &Mode, error: bool, lang: Lang, gfx: &Gfx) -> Layout {
                 &labels.pills[2],
                 &labels.pills[3],
             ],
-            all_day: text(lang, Key::AllDay),
+            all_day: text(lang, Key::AllDayToggle),
             delete: text(lang, Key::Delete),
             cancel: text(lang, cancel),
             save: text(lang, Key::Save),
@@ -1497,7 +1497,7 @@ impl Editor {
                     }
                 }
                 if let (Some(label), Some(toggle)) = (l.all_day_label, l.toggle) {
-                    let all_day = tr(Key::AllDay);
+                    let all_day = tr(Key::AllDayToggle);
                     pt.text(
                         all_day,
                         Text::Small,
@@ -1971,6 +1971,14 @@ fn on_command(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         _ => return,
     };
     let edit = HWND(lparam.0 as *mut c_void);
+    if code == EN_CHANGE {
+        // The placeholder is painted from the EDIT's own WM_PAINT, and the
+        // parent's WS_CLIPCHILDREN keeps `ed.invalidate()` from reaching it:
+        // emptied text must repaint the EDIT itself to bring it back.
+        unsafe {
+            let _ = InvalidateRect(Some(edit), None, true);
+        }
+    }
     match code {
         EN_CHANGE if item == Item::Title => {
             let value = window_text(edit);
