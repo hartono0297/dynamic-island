@@ -1,4 +1,5 @@
-# Renders the Dynamic Island logo and writes assets\icon.ico (16-256 px) and
+# Renders the Dynamic Island logo ("Bata": terracotta tile, espresso island,
+# cream dot, fixed brand colours) and writes assets\icon.ico (16-256 px) and
 # assets\logo-256.png. The vector source is assets\logo.svg; keep both in sync.
 # Sizes up to 32 px use hand-snapped geometry so the pill keeps crisp edges;
 # larger sizes scale the 256 px design and round to whole pixels.
@@ -48,11 +49,9 @@ New-Item -ItemType Directory -Force -Path $assets, $OutDir | Out-Null
 $sizes = 16, 20, 24, 32, 40, 48, 64, 128, 256
 $supersample = 8
 
-$tileTop = [System.Drawing.Color]::FromArgb(255, 0x2A, 0x2A, 0x2E)
-$tileBottom = [System.Drawing.Color]::FromArgb(255, 0x0E, 0x0E, 0x10)
-$hairline = [System.Drawing.Color]::FromArgb(26, 255, 255, 255)
-$pillColor = [System.Drawing.Color]::White
-$dotColor = [System.Drawing.Color]::FromArgb(255, 0x4F, 0x8C, 0xFF)
+$tileColor = [System.Drawing.Color]::FromArgb(255, 0xE2, 0x68, 0x3C)
+$pillColor = [System.Drawing.Color]::FromArgb(255, 0x17, 0x12, 0x0F)
+$dotColor = [System.Drawing.Color]::FromArgb(255, 0xF4, 0xED, 0xE4)
 
 # Squircle tile: straight edges joined by one cubic per corner. Each corner
 # curve spans 70/232 of the side from the corner and its control points sit
@@ -62,15 +61,18 @@ $cornerSpan = 70 / 232
 $cornerPull = 0.76
 
 # The 256 px design, as fractions of the tile side (tile = 232 px, inset 12).
-$design = @{ Inset = 12 / 256; PillW = 136 / 232; PillH = 44 / 232; PillTop = 48 / 232; Dot = 20 / 44 }
+# The pill sits centred on the tile (104..152 at 256 px).
+$design = @{ Inset = 12 / 256; PillW = 140 / 232; PillH = 48 / 232; PillTop = 92 / 232; Dot = 19 / 48 }
 
 # Hand-tuned small sizes: tile inset, pill width, height and top (absolute y),
-# dot diameter. The dot is centred on the pill's right end cap.
+# dot diameter. The pill is vertically centred on whole pixels and the dot is
+# centred on the pill's right end cap. 16 px fills the whole square so the
+# terracotta tile reads on dark and light taskbars alike.
 $hand = @{
-    16 = @{ Inset = 0; PillW = 10; PillH = 4; PillY = 4; Dot = 2 }
-    20 = @{ Inset = 1; PillW = 12; PillH = 4; PillY = 5; Dot = 2 }
-    24 = @{ Inset = 1; PillW = 14; PillH = 5; PillY = 6; Dot = 3 }
-    32 = @{ Inset = 1; PillW = 20; PillH = 7; PillY = 7; Dot = 3 }
+    16 = @{ Inset = 0; PillW = 10; PillH = 4; PillY = 6; Dot = 2 }
+    20 = @{ Inset = 1; PillW = 12; PillH = 4; PillY = 8; Dot = 2 }
+    24 = @{ Inset = 1; PillW = 14; PillH = 6; PillY = 9; Dot = 2 }
+    32 = @{ Inset = 1; PillW = 18; PillH = 6; PillY = 13; Dot = 2 }
 }
 
 function Round-Parity([double]$value, [int]$parity) {
@@ -90,17 +92,22 @@ function Get-Geometry([int]$size) {
         $tile = $size - 2 * $inset
         # Same parity as the canvas keeps the pill centred on whole pixels.
         $pillW = Round-Parity ($tile * $design.PillW) ($size % 2)
-        $pillH = [int][math]::Round($tile * $design.PillH)
-        $pillY = $inset + [int][math]::Round($tile * $design.PillTop)
-        # Same parity as the pill height keeps the dot on whole pixels.
-        $dot = Round-Parity ($pillH * $design.Dot) ($pillH % 2)
+        $pillH = Round-Parity ($tile * $design.PillH) ($size % 2)
+        # Keep the design's pill centre, so the snapped pill stays centred.
+        $pillY = $inset + [int][math]::Round($tile * $design.PillTop - ($pillH - $tile * $design.PillH) / 2)
+        if ($size -ge 128) {
+            # Big enough for the exact dot; anti-aliasing hides the half pixels.
+            $dot = $pillH * $design.Dot
+        } else {
+            # Same parity as the pill height keeps the dot on whole pixels.
+            $dot = Round-Parity ($pillH * $design.Dot) ($pillH % 2)
+        }
     }
     $pillX = ($size - $pillW) / 2
     return @{
         Inset = $inset
         PillX = $pillX; PillY = $pillY; PillW = $pillW; PillH = $pillH
         DotCx = $pillX + $pillW - $pillH / 2; DotCy = $pillY + $pillH / 2; Dot = $dot
-        Hairline = [math]::Max(1, [math]::Floor($size / 128))
     }
 }
 
@@ -141,15 +148,8 @@ function Render-Logo([int]$size) {
     $left = $g.Inset * $s
     $side = ($size - 2 * $g.Inset) * $s
     $tile = New-SquirclePath $left $left $side
-    $gradRect = New-Object System.Drawing.RectangleF ([single]0), ([single]($left - 1)), ([single]($size * $s)), ([single]($side + 2))
-    $grad = New-Object System.Drawing.Drawing2D.LinearGradientBrush $gradRect, $tileTop, $tileBottom, ([System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
-    $gfx.FillPath($grad, $tile)
-
-    # Inner hairline: a pen twice as wide, clipped to the tile.
-    $gfx.SetClip($tile)
-    $pen = New-Object System.Drawing.Pen $hairline, ([single](2 * $g.Hairline * $s))
-    $gfx.DrawPath($pen, $tile)
-    $gfx.ResetClip()
+    $tileBrush = New-Object System.Drawing.SolidBrush $tileColor
+    $gfx.FillPath($tileBrush, $tile)
 
     $pillBrush = New-Object System.Drawing.SolidBrush $pillColor
     $gfx.FillPath($pillBrush, (New-PillPath ($g.PillX * $s) ($g.PillY * $s) ($g.PillW * $s) ($g.PillH * $s)))

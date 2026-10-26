@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
     D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
-    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -47,8 +47,11 @@ const GLYPH_PLUS: &str = "\u{E710}";
 const GLYPH_OPEN: &str = "\u{E8A7}";
 const GLYPH_INFO: &str = "\u{E946}";
 const GLYPH_MUSIC: &str = "\u{E8D6}";
-/// The logo's "camera" dot: the brand blue, whatever the accent.
-const LOGO_DOT: u32 = 0x4F8CFF;
+/// The Bata logo's fixed brand colours, whatever the accent: terracotta
+/// tile, espresso island, cream "camera" dot.
+const LOGO_TILE: u32 = 0xE2683C;
+const LOGO_PILL: u32 = 0x17120F;
+const LOGO_DOT: u32 = 0xF4EDE4;
 /// The equalizer of the preview, frozen mid-beat.
 const PREVIEW_BARS: [f32; 4] = [8.0, 13.0, 6.0, 11.0];
 
@@ -94,7 +97,6 @@ pub struct Gfx {
 struct Target {
     rt: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
-    tile_fill: ID2D1LinearGradientBrush,
 }
 
 impl Gfx {
@@ -203,34 +205,7 @@ impl Gfx {
                 let rt = self.d2d.CreateHwndRenderTarget(&props, &hwnd_props)?;
                 rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
                 let brush = rt.CreateSolidColorBrush(&color(0, 1.0), None)?;
-                let stops = [
-                    D2D1_GRADIENT_STOP {
-                        position: 0.0,
-                        color: color(0x2A2A2E, 1.0),
-                    },
-                    D2D1_GRADIENT_STOP {
-                        position: 1.0,
-                        color: color(0x0E0E10, 1.0),
-                    },
-                ];
-                let stops = rt.CreateGradientStopCollection(
-                    &stops,
-                    D2D1_GAMMA_2_2,
-                    D2D1_EXTEND_MODE_CLAMP,
-                )?;
-                let tile_fill = rt.CreateLinearGradientBrush(
-                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                        startPoint: Vector2::new(0.0, 12.0),
-                        endPoint: Vector2::new(0.0, 244.0),
-                    },
-                    None,
-                    &stops,
-                )?;
-                self.target = Some(Target {
-                    rt,
-                    brush,
-                    tile_fill,
-                });
+                self.target = Some(Target { rt, brush });
             }
         }
         Ok(self.target.as_ref().expect("target just made"))
@@ -251,7 +226,6 @@ impl Gfx {
             rt,
             brush: &target.brush,
             gfx: self,
-            tile_fill: &target.tile_fill,
             p: scene.p,
             alpha: 1.0,
         };
@@ -302,7 +276,6 @@ struct Painter<'a> {
     rt: &'a ID2D1RenderTarget,
     brush: &'a ID2D1SolidColorBrush,
     gfx: &'a Gfx,
-    tile_fill: &'a ID2D1LinearGradientBrush,
     p: WindowPalette,
     /// Multiplies every colour's alpha (the section crossfade).
     alpha: f32,
@@ -482,7 +455,7 @@ impl Painter<'_> {
         }
     }
 
-    /// The app logo (assets/logo.svg) scaled into `r`.
+    /// The app logo, Bata (assets/logo.svg), scaled into `r`.
     fn logo(&self, r: Rect) {
         if r.w <= 0.0 {
             return;
@@ -501,25 +474,20 @@ impl Painter<'_> {
                 M32: r.y,
             };
             rt.SetTransform(&(local * previous));
-            self.tile_fill.SetOpacity(self.alpha);
-            rt.FillGeometry(&self.gfx.tile, self.tile_fill, None);
-            if r.w >= 48.0 {
-                // The inner hairline only shows at large sizes.
-                self.set(0xFFFFFF, 0.1);
-                rt.DrawGeometry(&self.gfx.tile, self.brush, 2.0 / k.max(0.25) * k, None);
-            }
+            self.set(LOGO_TILE, 1.0);
+            rt.FillGeometry(&self.gfx.tile, self.brush, None);
             self.fill_round(
                 Rect {
-                    x: 60.0,
-                    y: 60.0,
-                    w: 136.0,
-                    h: 44.0,
+                    x: 58.0,
+                    y: 104.0,
+                    w: 140.0,
+                    h: 48.0,
                 },
-                22.0,
-                0xFFFFFF,
+                24.0,
+                LOGO_PILL,
                 1.0,
             );
-            self.circle(174.0, 82.0, 10.0, LOGO_DOT, 1.0);
+            self.circle(174.0, 128.0, 9.5, LOGO_DOT, 1.0);
             rt.SetTransform(&previous);
         }
     }
@@ -994,7 +962,7 @@ fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
     }
 }
 
-/// The logo tile (assets/logo.svg): a squircle from 12 to 244.
+/// The Bata logo tile (assets/logo.svg): a squircle from 12 to 244.
 fn tile_geometry(d2d: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
     let pt = |x: f32, y: f32| Vector2::new(x, y);
     let bez = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| D2D1_BEZIER_SEGMENT {

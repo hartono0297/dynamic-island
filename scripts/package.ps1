@@ -85,20 +85,17 @@ $size = 150
 $bitmap = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 try {
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    # The Bata logo, scaled down from the one scripts\make-icon.ps1 renders.
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $graphics.Clear([System.Drawing.Color]::Transparent)
-    $pillWidth = 130
-    $pillHeight = 50
-    $x = ($size - $pillWidth) / 2
-    $y = ($size - $pillHeight) / 2
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc($x, $y, $pillHeight, $pillHeight, 90, 180)
-    $path.AddArc($x + $pillWidth - $pillHeight, $y, $pillHeight, $pillHeight, 270, 180)
-    $path.CloseFigure()
-    $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
-    $graphics.FillPath($brush, $path)
-    $brush.Dispose()
-    $path.Dispose()
+    $logo = [System.Drawing.Image]::FromFile((Join-Path $root 'assets\logo-256.png'))
+    try {
+        $graphics.DrawImage($logo, 0, 0, $size, $size)
+    }
+    finally {
+        $logo.Dispose()
+    }
     $bitmap.Save((Join-Path $stagingDir 'logo.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 }
 finally {
