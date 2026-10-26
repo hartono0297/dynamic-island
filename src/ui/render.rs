@@ -14,12 +14,11 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_MEDIUM,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
     DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -41,6 +40,7 @@ use std::time::Instant;
 
 use chrono::NaiveDate;
 
+use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_color, badge_letter,
     compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_layout,
@@ -136,6 +136,10 @@ pub struct CliCard<'a> {
 pub struct Renderer {
     d2d: ID2D1Factory,
     wic: IWICImagingFactory,
+    /// The shared DirectWrite factory: text layouts are made per draw.
+    dwrite: IDWriteFactory,
+    /// Tabular figures, applied to every line of text.
+    tabular: IDWriteTypography,
     fonts: Fonts,
     surface: Option<Surface>,
     target: Option<Target>,
@@ -185,7 +189,7 @@ struct Fonts {
     icon_panel_large: IDWriteTextFormat,
     /// Shortcut tile icons.
     icon_tile: IDWriteTextFormat,
-    /// The CLI card: Cascadia Mono, else Consolas.
+    /// The CLI card: DM Mono, else Cascadia Mono or Consolas.
     mono: IDWriteTextFormat,
 }
 
@@ -272,6 +276,7 @@ impl Renderer {
                 CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let fonts = Fonts::new(&dwrite)?;
+            let tabular = fonts::tabular_figures(&dwrite)?;
             let round_cap = d2d.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -287,6 +292,8 @@ impl Renderer {
             Ok(Self {
                 d2d,
                 wic,
+                dwrite,
+                tabular,
                 fonts,
                 surface: None,
                 target: None,
@@ -769,7 +776,9 @@ impl Renderer {
         self.text_colored(text, format, area, self.palette.text, alpha);
     }
 
-    /// One line of text in `area`, trimmed with an ellipsis when too long.
+    /// One line of text in `area`, trimmed with an ellipsis when too long and
+    /// clipped to it, with tabular figures (a layout, since `DrawText` cannot
+    /// carry OpenType features).
     fn text_colored(
         &self,
         text: &str,
@@ -783,15 +792,15 @@ impl Renderer {
         }
         let target = self.target.as_ref().expect("target ensured by paint");
         let wide: Vec<u16> = text.encode_utf16().collect();
+        let layout = fonts::text_layout(&self.dwrite, &wide, format, area.w, area.h, &self.tabular);
+        let Ok(layout) = layout else { return };
         unsafe {
             target.brush.SetColor(&color(rgb, alpha));
-            target.rt.DrawText(
-                &wide,
-                format,
-                &d2d_rect(area),
+            target.rt.DrawTextLayout(
+                Vector2::new(area.x, area.y),
+                &layout,
                 &target.brush,
                 D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-                DWRITE_MEASURING_MODE_NATURAL,
             );
         }
     }
@@ -799,54 +808,56 @@ impl Renderer {
 
 impl Fonts {
     fn new(dwrite: &IDWriteFactory) -> Result<Self> {
-        let text_family = first_installed(
-            dwrite,
-            &[
-                w!("Segoe UI Variable Text"),
-                w!("Segoe UI Variable"),
-                w!("Segoe UI"),
-            ],
-        )?;
+        // DM Sans, Fraunces Italic and DM Mono when embedded, else Segoe UI
+        // Variable and Cascadia Mono / Consolas.
+        let text = Face::for_role(dwrite, Role::Text);
+        let display = Face::for_role(dwrite, Role::Display);
+        let mono = Face::for_role(dwrite, Role::Mono);
         let icon_names = [w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")];
         let has_icons = find_installed(dwrite, &icon_names)?.is_some();
-        let icon_family = first_installed(dwrite, &icon_names)?;
-        let mono_family = first_installed(dwrite, &[w!("Cascadia Mono"), w!("Consolas")])?;
-        let line = |weight, size| line_format(dwrite, text_family, weight, size);
-        let aligned = |family, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
-            let format = line_format(dwrite, family, weight, size)?;
+        let icon = Face::system(first_installed(dwrite, &icon_names)?);
+        let line = |face: &Face, weight, size| line_format(dwrite, face, weight, size);
+        let aligned = |face: &Face, weight, size, align: DWRITE_TEXT_ALIGNMENT| -> Result<_> {
+            let format = line_format(dwrite, face, weight, size)?;
             unsafe { format.SetTextAlignment(align)? };
             Ok(format)
         };
         let centered =
-            |family, weight, size| aligned(family, weight, size, DWRITE_TEXT_ALIGNMENT_CENTER);
-        let (normal, semi) = (DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            |face: &Face, weight, size| aligned(face, weight, size, DWRITE_TEXT_ALIGNMENT_CENTER);
+        let (normal, medium, semi) = (
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD,
+        );
+        // Studio scale: body 12, captions 10.5, code 11; Fraunces only from 16 px.
+        let (body, caption) = (12.0, 10.5);
         Ok(Self {
-            title: line(semi, 13.0)?,
-            secondary: line(normal, 12.0)?,
-            icon: centered(icon_family, normal, 16.0)?,
-            badge: centered(text_family, DWRITE_FONT_WEIGHT_BOLD, 17.0)?,
-            badge_icon: centered(icon_family, normal, 18.0)?,
+            title: line(&text, semi, 13.0)?,
+            secondary: line(&text, normal, body)?,
+            icon: centered(&icon, normal, 16.0)?,
+            badge: centered(&text, semi, 17.0)?,
+            badge_icon: centered(&icon, normal, 18.0)?,
             has_icons,
-            clock: centered(text_family, semi, 13.0)?,
-            lyric: centered(text_family, semi, 13.0)?,
-            lyric_rest: centered(text_family, normal, 19.0)?,
-            heading: line(semi, 15.0)?,
-            small: line(normal, 11.0)?,
-            small_center: centered(text_family, normal, 11.0)?,
-            small_center_bold: centered(text_family, semi, 11.0)?,
-            tiny: line(normal, 10.0)?,
-            tiny_center: centered(text_family, normal, 10.0)?,
-            body_center: centered(text_family, normal, 12.0)?,
-            body_right: aligned(text_family, normal, 12.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-            big_time: centered(text_family, semi, 32.0)?,
-            phase: centered(text_family, semi, 15.0)?,
-            media_title: line(semi, 17.0)?,
-            media_artist: line(normal, 13.0)?,
-            icon_small: centered(icon_family, normal, 12.0)?,
-            icon_panel: centered(icon_family, normal, 20.0)?,
-            icon_panel_large: centered(icon_family, normal, 28.0)?,
-            icon_tile: centered(icon_family, normal, 22.0)?,
-            mono: line_format(dwrite, mono_family, normal, 12.5)?,
+            clock: centered(&text, semi, 13.0)?,
+            lyric: centered(&text, semi, 13.0)?,
+            lyric_rest: centered(&text, normal, 19.0)?,
+            heading: line(&display, medium, 20.0)?,
+            small: line(&text, normal, caption)?,
+            small_center: centered(&text, normal, caption)?,
+            small_center_bold: centered(&text, semi, caption)?,
+            tiny: line(&text, normal, caption)?,
+            tiny_center: centered(&text, normal, caption)?,
+            body_center: centered(&text, normal, body)?,
+            body_right: aligned(&text, normal, body, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            big_time: centered(&display, normal, 48.0)?,
+            phase: centered(&text, semi, 15.0)?,
+            media_title: line(&display, medium, 18.0)?,
+            media_artist: line(&text, normal, body)?,
+            icon_small: centered(&icon, normal, 12.0)?,
+            icon_panel: centered(&icon, normal, 20.0)?,
+            icon_panel_large: centered(&icon, normal, 28.0)?,
+            icon_tile: centered(&icon, normal, 22.0)?,
+            mono: line(&mono, normal, 11.0)?,
         })
     }
 }
@@ -878,20 +889,12 @@ fn find_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<Option<PC
 /// Single line, vertically centered, never wrapping, trimmed per character with "…".
 fn line_format(
     dwrite: &IDWriteFactory,
-    family: PCWSTR,
+    face: &Face,
     weight: DWRITE_FONT_WEIGHT,
     size: f32,
 ) -> Result<IDWriteTextFormat> {
+    let format = face.format(dwrite, weight, size)?;
     unsafe {
-        let format = dwrite.CreateTextFormat(
-            family,
-            None,
-            weight,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!("en-us"),
-        )?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         let ellipsis = dwrite.CreateEllipsisTrimmingSign(&format)?;

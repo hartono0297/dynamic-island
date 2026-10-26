@@ -993,7 +993,7 @@ pub(super) fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
             CLIP_DEFAULT_PRECIS,
             quality,
             0,
-            w!("Segoe UI"),
+            super::fonts::gdi_text_face(),
         )
     }
 }

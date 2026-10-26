@@ -455,7 +455,7 @@ fn create_font(dpi: u32) -> HFONT {
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
             0,
-            w!("Segoe UI"),
+            super::fonts::gdi_text_face(),
         )
     }
 }

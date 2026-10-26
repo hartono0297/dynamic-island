@@ -33,10 +33,10 @@ use crate::shortcuts;
 use crate::theme;
 use crate::ui::geometry::{ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::panel_layout::{
-    CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, ShortcutsLayout,
-    WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout, page_dots,
-    pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
-    tile_parts, waiting_strip,
+    CalendarLayout, CliLayout, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
+    ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout, notes_layout,
+    page_dots, pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout,
+    shortcuts_layout, tile_parts, waiting_strip,
 };
 
 /// Pomodoro phases keep their red and green whatever the accent.
@@ -48,8 +48,21 @@ const GLYPH_LEFT: &str = "\u{E76B}";
 const GLYPH_RIGHT: &str = "\u{E76C}";
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
+/// A heading's line (Fraunces 20) is taller than the 22 px header row: its
+/// box grows by this much above and below so descenders are not clipped.
+const HEADING_BLEED: f32 = 4.0;
 
 impl Renderer {
+    /// A page title in the header row.
+    fn heading(&self, title: &str, header: Rect) {
+        let area = Rect {
+            y: header.y - HEADING_BLEED,
+            h: header.h + 2.0 * HEADING_BLEED,
+            ..header
+        };
+        self.text(title, &self.fonts.heading, area, 1.0);
+    }
+
     /// The panel: content laid out for the resting panel shape, clipped to the
     /// current (possibly still morphing) shape and faded in while it grows.
     /// Clickable regions exist only once the shape has settled and no page
@@ -159,7 +172,7 @@ impl Renderer {
     fn paint_cli(&self, l: &CliLayout, card: &CliCard) {
         let lang = i18n::lang();
         let p = self.palette;
-        self.text(text(lang, Key::Cli), &self.fonts.heading, l.header, 1.0);
+        self.heading(text(lang, Key::Cli), l.header);
         if card.running {
             let label = format!("\u{25CF} {}", text(lang, Key::CliRunning));
             self.text_colored(&label, &self.fonts.body_right, l.status, p.accent, 1.0);
@@ -206,7 +219,7 @@ impl Renderer {
     fn paint_shortcuts(&self, l: &ShortcutsLayout) {
         let lang = i18n::lang();
         let heading = text(lang, Key::Shortcuts);
-        self.text(heading, &self.fonts.heading, l.header, 1.0);
+        self.heading(heading, l.header);
         for (s, tile) in l.tiles {
             self.set_color(self.palette.raised, 1.0);
             self.fill_round(tile, 12.0);
@@ -245,7 +258,7 @@ impl Renderer {
                 SECONDARY_ALPHA,
             );
         }
-        self.text(&title, &self.fonts.heading, header, 1.0);
+        self.heading(&title, header);
         self.text(GLYPH_LEFT, &self.fonts.icon_small, l.prev, 0.8);
         self.text(GLYPH_RIGHT, &self.fonts.icon_small, l.next, 0.8);
 
@@ -472,31 +485,20 @@ impl Renderer {
         let settings = pomo.settings();
         let status = pomo.status();
         let accent = phase_color(pomo.phase());
-        self.text(
-            text(lang, Key::Pomodoro),
-            &self.fonts.heading,
-            l.header,
-            1.0,
-        );
+        self.heading(text(lang, Key::Pomodoro), l.header);
 
         let (cx, cy) = l.ring_center;
         self.ring(
             (cx, cy),
             l.ring_radius,
-            8.0,
+            RING_STROKE,
             pomo.progress(frame.now),
             accent,
         )?;
-        let r = l.ring_radius;
         self.text(
             &mmss(pomo.remaining(frame.now)),
             &self.fonts.big_time,
-            Rect {
-                x: cx - r,
-                y: cy - 21.0,
-                w: 2.0 * r,
-                h: 42.0,
-            },
+            l.time,
             1.0,
         );
 
@@ -526,7 +528,7 @@ impl Renderer {
 
     fn paint_notes(&self, l: &ListLayout, notes: &[Note], today: NaiveDate) {
         let lang = i18n::lang();
-        self.text(text(lang, Key::Notes), &self.fonts.heading, l.header, 1.0);
+        self.heading(text(lang, Key::Notes), l.header);
         self.text(
             text(lang, Key::NewNote),
             &self.fonts.body_right,
@@ -592,12 +594,7 @@ impl Renderer {
     fn paint_reminders(&self, l: &ListLayout, reminders: &[Reminder], today: NaiveDate) {
         let lang = i18n::lang();
         let now = Local::now().timestamp();
-        self.text(
-            text(lang, Key::Reminders),
-            &self.fonts.heading,
-            l.header,
-            1.0,
-        );
+        self.heading(text(lang, Key::Reminders), l.header);
         self.text(
             text(lang, Key::NewNote),
             &self.fonts.body_right,

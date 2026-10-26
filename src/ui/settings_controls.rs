@@ -22,17 +22,17 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
+    IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{BOOL, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
+use super::fonts::{self, Face, Role};
 use super::geometry::{BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, Control, Field, Font, Group, Hit, LINK_GLYPH_W, Layout,
@@ -82,6 +82,8 @@ pub struct Gfx {
     d2d: ID2D1Factory,
     dwrite: IDWriteFactory,
     formats: HashMap<(Font, Align), IDWriteTextFormat>,
+    /// Tabular figures, applied to every line drawn or measured.
+    tabular: IDWriteTypography,
     /// Segoe Fluent Icons at 16 (sidebar), 12 (steppers, links) and 14 px.
     glyph16: IDWriteTextFormat,
     glyph12: IDWriteTextFormat,
@@ -104,60 +106,40 @@ impl Gfx {
         unsafe {
             let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let text_family = first_installed(
-                &dwrite,
-                &[
-                    w!("Segoe UI Variable Text"),
-                    w!("Segoe UI Variable"),
-                    w!("Segoe UI"),
-                ],
-            )?;
-            let display_family = first_installed(
-                &dwrite,
-                &[
-                    w!("Segoe UI Variable Display"),
-                    w!("Segoe UI Variable"),
-                    w!("Segoe UI"),
-                ],
-            )?;
-            let icon_family = first_installed(
+            // DM Sans and Fraunces Italic when embedded, else Segoe UI Variable.
+            let text = Face::for_role(&dwrite, Role::Text);
+            let display = Face::for_role(&dwrite, Role::Display);
+            let icon = Face::system(first_installed(
                 &dwrite,
                 &[w!("Segoe Fluent Icons"), w!("Segoe MDL2 Assets")],
-            )?;
+            )?);
             let mut formats = HashMap::new();
             for font in Font::ALL {
-                let family = if font.size() >= 20.0 {
-                    display_family
-                } else {
-                    text_family
-                };
-                let weight = if font.semibold() {
-                    DWRITE_FONT_WEIGHT_SEMI_BOLD
-                } else {
-                    DWRITE_FONT_WEIGHT_NORMAL
-                };
+                let face = if font.display() { &display } else { &text };
+                let weight = DWRITE_FONT_WEIGHT(i32::from(font.weight()));
                 for (align, a) in [
                     (Align::Left, DWRITE_TEXT_ALIGNMENT_LEADING),
                     (Align::Center, DWRITE_TEXT_ALIGNMENT_CENTER),
                 ] {
-                    let format = line_format(&dwrite, family, weight, font.size(), a)?;
+                    let format = line_format(&dwrite, face, weight, font.size(), a)?;
                     formats.insert((font, align), format);
                 }
             }
             let center = DWRITE_TEXT_ALIGNMENT_CENTER;
             let normal = DWRITE_FONT_WEIGHT_NORMAL;
             Ok(Gfx {
-                glyph16: line_format(&dwrite, icon_family, normal, 16.0, center)?,
-                glyph12: line_format(&dwrite, icon_family, normal, 12.0, center)?,
-                glyph14: line_format(&dwrite, icon_family, normal, 14.0, center)?,
+                glyph16: line_format(&dwrite, &icon, normal, 16.0, center)?,
+                glyph12: line_format(&dwrite, &icon, normal, 12.0, center)?,
+                glyph14: line_format(&dwrite, &icon, normal, 14.0, center)?,
                 island_text: line_format(
                     &dwrite,
-                    text_family,
+                    &text,
                     normal,
                     12.0,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                 )?,
                 tile: tile_geometry(&d2d)?,
+                tabular: fonts::tabular_figures(&dwrite)?,
                 d2d,
                 dwrite,
                 formats,
@@ -257,10 +239,9 @@ impl Measure for Gfx {
             .formats
             .get(&(font, Align::Left))
             .and_then(|format| unsafe {
-                let layout = self
-                    .dwrite
-                    .CreateTextLayout(&wide, format, 4096.0, 64.0)
-                    .ok()?;
+                let layout =
+                    fonts::text_layout(&self.dwrite, &wide, format, 4096.0, 64.0, &self.tabular)
+                        .ok()?;
                 let mut m = DWRITE_TEXT_METRICS::default();
                 layout.GetMetrics(&mut m).ok()?;
                 Some(m.widthIncludingTrailingWhitespace.ceil())
@@ -349,15 +330,20 @@ impl Painter<'_> {
             return;
         }
         let wide: Vec<u16> = s.encode_utf16().collect();
+        // A layout rather than `DrawText`, to carry tabular figures; same box,
+        // trimming and clip.
+        let gfx = self.gfx;
+        let Ok(layout) = fonts::text_layout(&gfx.dwrite, &wide, format, r.w, r.h, &gfx.tabular)
+        else {
+            return;
+        };
         self.set(rgb, a);
         unsafe {
-            self.rt.DrawText(
-                &wide,
-                format,
-                &d2d_rect(r),
+            self.rt.DrawTextLayout(
+                Vector2::new(r.x, r.y),
+                &layout,
                 self.brush,
                 D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                DWRITE_MEASURING_MODE_NATURAL,
             );
         }
     }
@@ -1043,21 +1029,13 @@ fn first_installed(dwrite: &IDWriteFactory, names: &[PCWSTR]) -> Result<PCWSTR> 
 /// One line, vertically centered, trimmed with "…".
 fn line_format(
     dwrite: &IDWriteFactory,
-    family: PCWSTR,
+    face: &Face,
     weight: DWRITE_FONT_WEIGHT,
     size: f32,
     align: DWRITE_TEXT_ALIGNMENT,
 ) -> Result<IDWriteTextFormat> {
+    let format = face.format(dwrite, weight, size)?;
     unsafe {
-        let format = dwrite.CreateTextFormat(
-            family,
-            None,
-            weight,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!("en-us"),
-        )?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         format.SetTextAlignment(align)?;
