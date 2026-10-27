@@ -1,6 +1,6 @@
 ---
 tags: [decision, calendar, layout]
-date: 2026-10-26
+date: 2026-10-27
 ---
 
 # Calendar layout: title width, day paging, "now" line
@@ -13,7 +13,9 @@ date: 2026-10-26
   page shows "Kembali ke atas".
 - The "now" line uses `Local::now()` inside the renderer, so it is not testable
   from layout alone. Demo scenes must stay on today, see [[demo-data-time-of-day]].
-- Not done yet: the media progress bar (`Frame` has no playback position, so it
-  needs a change in `src/app.rs`), and the equalizer still has 4 bars, not 5.
+- The media progress bar and the 5-bar equalizer, once open items here, are
+  done: see [[studio-media-progress-timer]].
+- The month grid is shared with the editors' date picker, see
+  [[studio-editor-frame]].
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

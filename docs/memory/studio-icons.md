@@ -1,6 +1,6 @@
 ---
 tags: [icons, direct2d, decision]
-date: 2026-10-26
+date: 2026-10-27
 ---
 
 # Studio icons: Direct2D vector set
@@ -12,3 +12,6 @@ Implemented in `src/ui/icons.rs`. The shapes come from `icon()` in `docs/design/
 - Geometries are built once per `ID2D1Factory`, in three layers (duo fill, stroke, dots). They are device independent, so a lost target needs no rebuild.
 - Gotcha: a `D2D1_FIGURE_BEGIN_HOLLOW` figure has empty bounds (`GetBounds` returns inf). All figures therefore begin FILLED, including the stroke layer, which is never filled.
 - SVG arc sweep flag 1 maps to `D2D1_SWEEP_DIRECTION_CLOCKWISE` (y down). The bell's dome rising to y = 5 is the unit test for this.
+- **Adding an icon:** copy its path from the design's `icon()` (24-unit grid) rather than drawing a new one, keep strokes at 1.5, and decide whether it can sit on the accent (then no duotone fill). Bata is drawn separately, see [[bata-robot-expressions]].
+
+Part of [[v3-studio-overview]].

@@ -6,6 +6,10 @@ tags: [memory, index]
 
 One note per decision, gotcha or convention. Link each new note here.
 
+## Overview
+
+- [[v3-studio-overview]]: the v3 Studio redesign, one line per decision
+
 ## Decisions
 
 - [[studio-palette-accent-aliases]]

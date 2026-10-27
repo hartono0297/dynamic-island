@@ -32,4 +32,4 @@ and the Animasi row grows by `DESC_LINE_H` per extra line
 
 Related: [[bata-robot-expressions]], [[bata-idle-power-budget]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

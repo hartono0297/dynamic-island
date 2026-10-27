@@ -41,4 +41,4 @@ blinks, replace the first two marks.
 Related: [[bata-idle-power-budget]], [[bata-morning-greeting]],
 [[studio-bata-logo-sources]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

@@ -6,8 +6,8 @@ date: 2026-10-27
 # Editor frame: frameless DWM window, Direct2D, borderless EDITs
 
 Run 5 of the v3 Studio plan replaced the Win32 dialog look of the editors
-(`src/ui/editor.rs`). What to know before touching it or building Run 6
-(the reminder redesign) on top of it:
+(`src/ui/editor.rs`). The event and reminder editors both use it. What to
+know before touching it:
 
 - **Frame.** `WS_POPUP` with no caption, `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`,
   owned by the island. Windows 11 rounds it via
@@ -44,15 +44,16 @@ Run 5 of the v3 Studio plan replaced the Win32 dialog look of the editors
   `CellCanvas`). The panel fills today and rings the selection
   (`Filled::Today`); the picker fills the pick and rings today
   (`Filled::Selected`).
-- **Run 6a is done:** the reminder editor now uses this frame. See
-  [[studio-reminder-editor]]. Run 6b (quick-time pills, weekday chips) should
-  add its rows in `editor_layout` beside the reminder's, with tests. Dates
+- **New rows** go in `editor_layout`, with tests, the way the reminder's
+  quick-time pills and weekday chips did (see [[studio-reminder-editor]]);
+  a row that appears or hides grows the window through `refresh`. Dates
   never come from the Windows locale.
 - Demo: `--demo-editor event|event-bad|event-allday|...` with
   `DI_POPOVER=calendar|time|start`, `DI_WINDOW`, `DI_LANG`. Screenshots taken
   from a non-DPI-aware PowerShell are scaled; call `SetProcessDPIAware` first.
 
 Related: [[studio-font-loading]], [[studio-tabular-figures-word-gaps]],
-[[studio-light-secondary-text-contrast]], [[studio-calendar-day-view]]
+[[studio-light-secondary-text-contrast]], [[studio-calendar-day-view]],
+[[cli-panel-keyboard-focus]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

@@ -14,4 +14,4 @@ Keep at least one sample pinned far from any "now" (the 07.00 coffee keeps a
 second day page), and clamp relative times so they stay on today. Check
 scenes at an early and a late hour before trusting a screenshot.
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

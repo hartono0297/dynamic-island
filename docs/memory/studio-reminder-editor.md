@@ -54,15 +54,15 @@ shared [[studio-editor-frame]]. What to know before changing it:
 - **Hapus** is the design's `.btn.dng` for reminders only: no fill until it is
   hovered, error colour, 4 px left padding (`editor_layout::DANGER_PAD`). The
   note keeps its pill.
-- **Run 6b is done**: rows in design order are title, date + time, quick
-  pills (wrap if too wide), repeat segments, day chips (only for Mingguan;
-  the window grows by 42 px through `refresh`), summary. Tab follows that
-  order.
+- **Row order** (design order): title, date + time, quick pills (wrap if
+  too wide), repeat segments, day chips (only for Mingguan; the window grows
+  by 42 px through `refresh`), summary. Tab follows that order; keep both in
+  step when adding a row.
 - Demo: `--demo-editor reminder|reminder-new|reminder-weekly|reminder-past`
   (debug build only), with `DI_POPOVER=calendar|time`. `reminder-weekly` is
   Sen/Rab/Jum 09.00 from this week's Monday (design state 3).
 
 Related: [[studio-editor-frame]], [[studio-tabular-figures-word-gaps]],
-[[studio-light-secondary-text-contrast]]
+[[studio-light-secondary-text-contrast]], [[demo-data-time-of-day]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

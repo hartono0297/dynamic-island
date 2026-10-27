@@ -35,4 +35,4 @@ Robot off: nothing of this runs; widths, timers and drawing are as before.
 
 Related: [[bata-robot-expressions]], [[studio-media-progress-timer]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].
