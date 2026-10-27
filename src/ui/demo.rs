@@ -638,7 +638,7 @@ fn demo_notice(which: DemoNotice) -> Notice {
             NoticeKind::Reminder { id: "demo".into() },
         ),
         DemoNotice::Pomodoro => notice(
-            "Pomodoro",
+            tr(Key::Pomodoro),
             tr(Key::FocusDone),
             crate::i18n::focus_done_body(crate::i18n::lang(), 5),
             NoticeKind::Pomodoro,
@@ -646,7 +646,7 @@ fn demo_notice(which: DemoNotice) -> Notice {
         DemoNotice::Claude => notice(
             "Claude",
             tr(Key::ClaudeWaiting),
-            "dynamic-island · izin menjalankan perintah".into(),
+            format!("dynamic-island · {}", tr(Key::DemoClaudeAsks)),
             NoticeKind::ClaudeWaiting {
                 session_id: "demo".into(),
             },
@@ -671,8 +671,8 @@ fn demo_notice(which: DemoNotice) -> Notice {
         ),
         DemoNotice::ClaudeWorking => notice(
             "Claude",
-            "Claude sedang bekerja",
-            "dynamic-island · 3 file diubah".into(),
+            tr(Key::DemoClaudeWorking),
+            format!("dynamic-island · {}", tr(Key::DemoFilesChanged)),
             NoticeKind::ClaudeDone {
                 session_id: "demo".into(),
             },

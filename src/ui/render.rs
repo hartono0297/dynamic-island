@@ -543,9 +543,10 @@ impl Renderer {
             w: 300.0,
             h: 28.0,
         };
-        self.text("Bata", &self.fonts.heading, title, 1.0);
-        let pose = Pose::default();
         let lang = i18n::lang();
+        let name = i18n::text(lang, i18n::Key::SourceBata);
+        self.text(name, &self.fonts.heading, title, 1.0);
+        let pose = Pose::default();
         let col = (card.w - 40.0) / 5.0;
         for (i, expr) in Expr::ALL.into_iter().enumerate() {
             let (row, c) = (i / 5, i % 5);
