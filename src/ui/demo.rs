@@ -804,6 +804,7 @@ fn demo_reminders(today: NaiveDate) -> Vec<Reminder> {
         due_unix: stamp(at),
         repeat,
         done: false,
+        days: Vec::new(),
     };
     let on = |d: NaiveDate, h, m| d.and_time(NaiveTime::from_hms_opt(h, m, 0).unwrap());
     vec![
@@ -853,6 +854,7 @@ fn many_reminders(today: NaiveDate) -> Vec<Reminder> {
                 due_unix: stamp(at),
                 repeat: repeats[i as usize % 3],
                 done: false,
+                days: Vec::new(),
             }
         })
         .collect()
