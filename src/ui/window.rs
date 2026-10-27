@@ -11,16 +11,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, Result, w};
 
-use super::geometry::{WINDOW_H, WINDOW_W};
+use super::geometry::{TALL_WINDOW_H, WINDOW_H, WINDOW_W};
 
-/// The island's layered popup: a fixed-size transparent canvas at the
-/// top-center of the primary monitor. Content and per-pixel alpha come from
-/// `Renderer::draw` via `UpdateLayeredWindow`.
+/// The island's layered popup: a transparent canvas at the top-center of the
+/// primary monitor, `WINDOW_H` tall, or `TALL_WINDOW_H` while the enlarged
+/// CLI panel needs it. Content and per-pixel alpha come from
+/// `Renderer::draw` via `UpdateLayeredWindow`, which also applies a new size.
+///
+/// It never activates on a click (`WS_EX_NOACTIVATE`, and `MA_NOACTIVATE`
+/// in the window procedure); only the CLI input activates it on purpose.
 pub struct IslandWindow {
     hwnd: HWND,
     scale: f32,
     origin: POINT,
     size: SIZE,
+    tall: bool,
 }
 
 impl IslandWindow {
@@ -42,7 +47,7 @@ impl IslandWindow {
                     return Err(error);
                 }
             }
-            let (origin, size, scale) = placement();
+            let (origin, size, scale) = placement(false);
             let ex_style: WINDOW_EX_STYLE =
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
             let hwnd = CreateWindowExW(
@@ -66,8 +71,20 @@ impl IslandWindow {
                 scale,
                 origin,
                 size,
+                tall: false,
             })
         }
+    }
+
+    /// Grows the canvas to `TALL_WINDOW_H` or back; the next draw resizes
+    /// the window. True when it changed.
+    pub fn set_tall(&mut self, tall: bool) -> bool {
+        if self.tall == tall {
+            return false;
+        }
+        self.tall = tall;
+        self.size.cy = (height(tall) * self.scale).round() as i32;
+        true
     }
 
     pub fn hwnd(&self) -> HWND {
@@ -82,7 +99,7 @@ impl IslandWindow {
     /// Re-centers on the primary monitor at its current DPI. Call on
     /// `WM_DPICHANGED` and `WM_DISPLAYCHANGE`, then redraw.
     pub fn reposition(&mut self) {
-        let (origin, size, scale) = placement();
+        let (origin, size, scale) = placement(self.tall);
         self.origin = origin;
         self.size = size;
         self.scale = scale;
@@ -124,7 +141,11 @@ impl IslandWindow {
 /// always lives on the primary monitor, where the two agree, and asking the
 /// monitor avoids moving the window first, which would send `WM_DPICHANGED`
 /// back into the caller's window procedure mid-call.
-fn placement() -> (POINT, SIZE, f32) {
+fn height(tall: bool) -> f32 {
+    if tall { TALL_WINDOW_H } else { WINDOW_H }
+}
+
+fn placement(tall: bool) -> (POINT, SIZE, f32) {
     unsafe {
         let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
         let mut info = MONITORINFO {
@@ -139,7 +160,7 @@ fn placement() -> (POINT, SIZE, f32) {
         let scale = dpi_x as f32 / 96.0;
         let size = SIZE {
             cx: (WINDOW_W * scale).round() as i32,
-            cy: (WINDOW_H * scale).round() as i32,
+            cy: (height(tall) * scale).round() as i32,
         };
         let rc = info.rcMonitor;
         let origin = POINT {

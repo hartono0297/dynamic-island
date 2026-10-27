@@ -5,22 +5,24 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::mem::ManuallyDrop;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
+    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
     D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_ROUNDED_RECT,
     D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Geometry,
 };
+use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliCard, Frame, Progress, Renderer, color, d2d_rect, mix};
+use super::{CliView, Frame, Progress, Renderer, color, d2d_rect, mix};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
@@ -33,10 +35,11 @@ use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, sh
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CalendarLayout, CliLayout, HOUR_GUTTER, ListLayout, PageLayout, PomodoroLayout, RING_STROKE,
-    SEG_PAD, ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_layout, media_panel_layout,
-    media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout,
-    regions, reminders_layout, shortcuts_layout, tile_parts, waiting_strip,
+    CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
+    PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, ShortcutsLayout, WEEK_HEAD_H,
+    calendar_layout, cli_layout, cli_suggestions, media_panel_layout, media_progress_layout,
+    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout,
+    shortcuts_layout, tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -56,6 +59,86 @@ const TAG_TINT: f32 = 0.16;
 const NOTE_TIME_ALPHA: f32 = 0.75;
 /// The round playhead on the Music page's progress bar.
 const PROGRESS_KNOB: f32 = 10.0;
+
+/// The CLI page after `.hchip`, `.stop`, `.spin`, `.lockb`, `.sugg` and
+/// `.caret` in docs/design/pengingat-cli.html.
+const CHIP_PAD_X: f32 = 9.0;
+const SPIN: f32 = 12.0;
+const SPIN_GAP: f32 = 5.0;
+const STOP_SQUARE: f32 = 7.0;
+const STOP_GAP: f32 = 5.0;
+const STOP_PAD_X: f32 = 10.0;
+/// The lock banner hangs from the panel's top edge, this far over the header.
+const CLI_LOCK_ABOVE: f32 = 16.0;
+const LOCK_H: f32 = 16.0;
+const LOCK_PAD_X: f32 = 10.0;
+const LOCK_DOT: f32 = 6.0;
+const LOCK_GAP: f32 = 5.0;
+const LOCK_RADIUS: f32 = 8.0;
+/// `›` and the space after it in front of an echoed command.
+const CLI_MARK_W: f32 = 14.0;
+const SUGGEST_RADIUS: f32 = 12.0;
+const SUGGEST_ROW_RADIUS: f32 = 8.0;
+const SUGGEST_PAD_X: f32 = 9.0;
+const HINT_GAP: f32 = 8.0;
+const CARET_W: f32 = 7.0;
+const CARET_H: f32 = 14.0;
+const FOCUS_W: f32 = 1.5;
+
+/// How a CLI header chip looks: the folder (path ellipsis) and the shell in
+/// mono on the raised fill; the run's state tinted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ChipLook {
+    Mono,
+    Path,
+    Run,
+    Ok,
+    Err,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CliChip {
+    text: String,
+    look: ChipLook,
+}
+
+/// The header chips left to right: folder and shell; "Berjalan · 0:42"
+/// while a command runs (Stop follows it); folder, the result and the shell
+/// once one ended.
+fn cli_chips(lang: Lang, cli: &CliView, now: Instant) -> Vec<CliChip> {
+    let chip = |text: String, look| CliChip { text, look };
+    let folder = chip(cli.cwd.to_owned(), ChipLook::Path);
+    let shell = chip(cli.shell.name().to_owned(), ChipLook::Mono);
+    match cli.run {
+        RunState::Idle => vec![folder, shell],
+        RunState::Running { since } => {
+            let elapsed = now.saturating_duration_since(since);
+            vec![chip(i18n::cli_running(lang, elapsed), ChipLook::Run)]
+        }
+        RunState::Ended { code, killed, took } => {
+            let look = if code == Some(0) && !killed {
+                ChipLook::Ok
+            } else {
+                ChipLook::Err
+            };
+            let result = chip(i18n::cli_result(lang, code, killed, took), look);
+            vec![folder, result, shell]
+        }
+    }
+}
+
+/// The first `n` UTF-16 units of `s` (an EDIT's offsets), never splitting a
+/// character.
+fn utf16_prefix(s: &str, n: usize) -> &str {
+    let mut units = 0;
+    for (i, c) in s.char_indices() {
+        units += c.len_utf16();
+        if units > n {
+            return &s[..i];
+        }
+    }
+    s
+}
 
 /// A track time as the player shows it: "m:ss", or "h:mm:ss" from an hour.
 fn track_time(ms: u64) -> String {
@@ -89,7 +172,12 @@ impl Renderer {
         shape: ShapeRect,
         frame: &Frame,
     ) -> Result<()> {
-        let rest = shape_for(style, ShapeKind::Panel);
+        let kind = if frame.page == Page::Cli && frame.cli.tall {
+            ShapeKind::PanelTall
+        } else {
+            ShapeKind::Panel
+        };
+        let rest = shape_for(style, kind);
         let settled = shape == rest;
         // Content is fully visible by ~70 % of the growth, so the panel reads
         // as open while the shape is still easing into place.
@@ -152,6 +240,12 @@ impl Renderer {
             self.regions.regions = hits;
             // The v1 media buttons must never fire on another page.
             self.regions.buttons = None;
+            if let PageLayout::Cli(l) = &layout {
+                self.regions.cli_output = Some(Rect {
+                    h: l.input.y - l.term.y,
+                    ..l.term
+                });
+            }
         }
         Ok(())
     }
@@ -192,7 +286,11 @@ impl Renderer {
             )),
             Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
             Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
-            Page::Cli => PageLayout::Cli(cli_layout(s, strip)),
+            Page::Cli => {
+                let chips = cli_chips(i18n::lang(), &frame.cli, frame.now);
+                let head = self.cli_head(&chips, frame.cli.run.running());
+                PageLayout::Cli(cli_layout(s, strip, &head))
+            }
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         }
     }
@@ -215,10 +313,7 @@ impl Renderer {
             PageLayout::Media(l) => {
                 self.paint_media(l, frame.media, frame.lyrics_on, frame.progress)
             }
-            PageLayout::Cli(l) => {
-                self.paint_cli(l, &frame.cli);
-                Ok(())
-            }
+            PageLayout::Cli(l) => self.paint_cli(l, frame),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l);
                 Ok(())
@@ -226,52 +321,456 @@ impl Renderer {
         }
     }
 
-    /// Header and status, the terminal card (`>` and the last command, then
-    /// its last lines in the terminal's colours), and "Ketik perintah".
-    fn paint_cli(&self, l: &CliLayout, card: &CliCard) {
+    /// The measured header of the CLI page: each chip's full width and,
+    /// while a command runs, the Stop button's.
+    fn cli_head(&self, chips: &[CliChip], running: bool) -> CliHead {
+        let lang = i18n::lang();
+        let widths = chips
+            .iter()
+            .map(|c| {
+                let w = self.text_width(&c.text, self.chip_format(c.look)).ceil();
+                let spin = if c.look == ChipLook::Run {
+                    SPIN + SPIN_GAP
+                } else {
+                    0.0
+                };
+                w + spin + 2.0 * CHIP_PAD_X
+            })
+            .collect();
+        let stop = running.then(|| {
+            let w = self.text_width(text(lang, Key::CliStop), &self.fonts.small_medium);
+            w.ceil() + STOP_SQUARE + STOP_GAP + 2.0 * STOP_PAD_X
+        });
+        CliHead {
+            chips: widths,
+            stop,
+        }
+    }
+
+    fn chip_format(&self, look: ChipLook) -> &IDWriteTextFormat {
+        match look {
+            ChipLook::Mono => &self.fonts.mono_small,
+            ChipLook::Path => &self.fonts.chip_mono,
+            ChipLook::Run | ChipLook::Ok | ChipLook::Err => &self.fonts.small,
+        }
+    }
+
+    /// The CLI page as in pengingat-cli.html: title and chips, the terminal
+    /// with output filling from the bottom, suggestions over the input, and
+    /// the input line with its prompt, caret and hint.
+    fn paint_cli(&self, l: &CliLayout, frame: &Frame) -> Result<()> {
         let lang = i18n::lang();
         let p = self.palette;
+        let cli = &frame.cli;
         self.heading(text(lang, Key::Cli), l.header);
-        if card.running {
-            let label = format!("\u{25CF} {}", text(lang, Key::CliRunning));
-            self.text_colored(&label, &self.fonts.body_right, l.status, p.accent, 1.0);
-        } else {
-            let name = card.shell.name();
-            self.text(name, &self.fonts.body_right, l.status, 0.5);
+        let chips = cli_chips(lang, cli, frame.now);
+        for (chip, r) in chips.iter().zip(&l.chips) {
+            self.paint_cli_chip(chip, *r, cli.run, frame.now)?;
+        }
+        if let Some(stop) = l.stop {
+            self.set_color(p.accent, 1.0);
+            self.fill_round(stop, stop.h / 2.0);
+            let mid = stop.y + stop.h / 2.0;
+            let square = Rect {
+                x: stop.x + STOP_PAD_X,
+                y: mid - STOP_SQUARE / 2.0,
+                w: STOP_SQUARE,
+                h: STOP_SQUARE,
+            };
+            self.set_color(p.on_accent, 1.0);
+            self.fill_round(square, 1.5);
+            let label = Rect {
+                x: square.right() + STOP_GAP,
+                w: stop.right() - square.right() - STOP_GAP,
+                ..stop
+            };
+            let word = text(lang, Key::CliStop);
+            self.text_colored(word, &self.fonts.small_medium, label, p.on_accent, 1.0);
+        }
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.expand, l.expand.w / 2.0);
+        let icon = if cli.tall { Icon::Shrink } else { Icon::Expand };
+        self.icon_colored(icon, l.expand, 13.0, p.secondary, 1.0, None);
+        if cli.focused && frame.strip.is_none() {
+            self.paint_cli_lock(l);
         }
 
         self.set_color(theme::TERMINAL_BG, 1.0);
-        self.fill_round(l.card, 10.0);
-        self.stroke_round(inset(l.card, 0.5, 0.5), 10.0, p.track);
-        let [prompt, rest @ ..] = l.lines;
-        let mark = Rect { w: 14.0, ..prompt };
-        let after = Rect {
-            x: prompt.x + 16.0,
-            w: prompt.w - 16.0,
-            ..prompt
+        self.fill_round(l.term, CLI_TERM_RADIUS);
+        self.paint_cli_output(l, cli);
+        if cli.focused && !cli.suggestions.is_empty() {
+            self.paint_cli_suggestions(l, cli);
+        }
+        self.paint_cli_input(l, cli)
+    }
+
+    fn paint_cli_chip(&self, chip: &CliChip, r: Rect, run: RunState, now: Instant) -> Result<()> {
+        if r.w <= 0.0 {
+            return Ok(());
+        }
+        let p = self.palette;
+        let (fill, alpha, ink) = match chip.look {
+            ChipLook::Mono | ChipLook::Path => (p.raised, 1.0, p.secondary),
+            ChipLook::Run => (p.accent, 0.15, p.accent),
+            ChipLook::Ok => (p.sage, 0.15, p.sage),
+            ChipLook::Err => (theme::SOFT_RED, 0.14, theme::SOFT_RED),
         };
-        self.text_colored(">", &self.fonts.mono, mark, p.accent, 1.0);
-        let ink = theme::TERMINAL_TEXT;
-        match card.command {
-            Some(cmd) => {
-                self.text_colored(cmd, &self.fonts.mono, after, ink, 1.0);
-                for (line, r) in card.tail.iter().zip(rest) {
-                    self.text_colored(line, &self.fonts.mono, r, ink, 0.72);
-                }
+        self.set_color(fill, alpha);
+        self.fill_round(r, r.h / 2.0);
+        let mut area = inset(r, CHIP_PAD_X, 0.0);
+        if chip.look == ChipLook::Run {
+            let turn = match run {
+                RunState::Running { since } => now.saturating_duration_since(since).as_secs(),
+                _ => 0,
+            };
+            let center = (area.x + SPIN / 2.0, r.y + r.h / 2.0);
+            self.spinner(center, turn)?;
+            area.x += SPIN + SPIN_GAP;
+            area.w = (area.w - SPIN - SPIN_GAP).max(0.0);
+        }
+        self.text_colored(&chip.text, self.chip_format(chip.look), area, ink, 1.0);
+        Ok(())
+    }
+
+    /// The design's `.spin`: a faint ring with a quarter in the accent,
+    /// turned a quarter more each second the command runs.
+    fn spinner(&self, (cx, cy): (f32, f32), turn: u64) -> Result<()> {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let r = SPIN / 2.0 - 1.0;
+        let accent = self.palette.accent;
+        unsafe {
+            target.brush.SetColor(&color(accent, 0.25));
+            let ellipse = D2D1_ELLIPSE {
+                point: Vector2::new(cx, cy),
+                radiusX: r,
+                radiusY: r,
+            };
+            target.rt.DrawEllipse(&ellipse, &target.brush, 2.0, None);
+            let start = -FRAC_PI_2 + (turn % 4) as f32 * FRAC_PI_2;
+            let end = start + FRAC_PI_2;
+            let path = self.d2d.CreatePathGeometry()?;
+            let sink = path.Open()?;
+            sink.BeginFigure(
+                Vector2::new(cx + r * start.cos(), cy + r * start.sin()),
+                D2D1_FIGURE_BEGIN_HOLLOW,
+            );
+            sink.AddArc(&D2D1_ARC_SEGMENT {
+                point: Vector2::new(cx + r * end.cos(), cy + r * end.sin()),
+                size: D2D_SIZE_F {
+                    width: r,
+                    height: r,
+                },
+                rotationAngle: 0.0,
+                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                arcSize: D2D1_ARC_SIZE_SMALL,
+            });
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            target.brush.SetColor(&color(accent, 1.0));
+            target
+                .rt
+                .DrawGeometry(&path, &target.brush, 2.0, &self.round_cap);
+        }
+        Ok(())
+    }
+
+    /// "Panel tetap terbuka saat mengetik · Esc untuk keluar", hanging from
+    /// the panel's top edge while the input has the keyboard.
+    fn paint_cli_lock(&self, l: &CliLayout) {
+        let p = self.palette;
+        let label = text(i18n::lang(), Key::CliLocked);
+        let tw = self.text_width(label, &self.fonts.micro).ceil();
+        let w = LOCK_PAD_X * 2.0 + LOCK_DOT + LOCK_GAP + tw;
+        let top = l.header.y - CLI_LOCK_ABOVE;
+        let x = l.term.x + (l.term.w - w) / 2.0;
+        // Rounded at the bottom only: the top corners rise past the edge,
+        // where the panel's mask cuts them off.
+        self.set_color(p.raised, 1.0);
+        self.fill_round(
+            Rect {
+                x,
+                y: top - LOCK_RADIUS,
+                w,
+                h: LOCK_H + LOCK_RADIUS,
+            },
+            LOCK_RADIUS,
+        );
+        let mid = top + LOCK_H / 2.0;
+        let dot = Rect {
+            x: x + LOCK_PAD_X,
+            y: mid - LOCK_DOT / 2.0,
+            w: LOCK_DOT,
+            h: LOCK_DOT,
+        };
+        self.set_color(p.accent, 1.0);
+        self.fill_round(dot, LOCK_DOT / 2.0);
+        let area = Rect {
+            x: dot.right() + LOCK_GAP,
+            y: top,
+            w: tw + 1.0,
+            h: LOCK_H,
+        };
+        self.text2(label, &self.fonts.micro, area);
+    }
+
+    /// The output's last lines from the bottom up (`scroll` lines above the
+    /// newest), coloured by kind; an empty terminal says where commands run.
+    fn paint_cli_output(&self, l: &CliLayout, cli: &CliView) {
+        let p = self.palette;
+        let lines = cli.output.lines();
+        let out = l.output;
+        let row = |k: usize| Rect {
+            x: out.x,
+            y: out.bottom() - (k + 1) as f32 * CLI_LINE_H,
+            w: out.w,
+            h: CLI_LINE_H,
+        };
+        if lines.is_empty() {
+            let lang = i18n::lang();
+            let empty = [
+                (text(lang, Key::CliEmpty), &self.fonts.mono),
+                (cli.cwd, &self.fonts.mono),
+                (text(lang, Key::CliEmptyHint), &self.fonts.small),
+            ];
+            for (k, (line, format)) in empty.iter().rev().enumerate() {
+                self.text_colored(line, format, row(k), p.secondary, 0.8);
             }
-            None => {
-                let empty = text(lang, Key::CliEmpty);
-                self.text_colored(empty, &self.fonts.mono, after, ink, 0.45);
-                self.text_colored(card.cwd, &self.fonts.mono, rest[0], ink, 0.45);
-                let hint = text(lang, Key::CliEmptyHint);
-                self.text_colored(hint, &self.fonts.small, rest[1], ink, 0.45);
+            return;
+        }
+        let shown = visible_range(lines.len(), l.rows, cli.scroll);
+        let first = shown.start;
+        for (k, i) in shown.rev().enumerate() {
+            let line = &lines[i];
+            let r = row(k);
+            let kind = line_kind(line, cli.echoes.is_echo(cli.output, i));
+            match kind {
+                LineKind::Command => {
+                    if i > first {
+                        // The design's `.sep` between one command's output
+                        // and the next command.
+                        self.set_color(theme::TERMINAL_SEP, 1.0);
+                        self.fill_round(Rect { h: 1.0, ..r }, 0.0);
+                    }
+                    let mark = Rect { w: CLI_MARK_W, ..r };
+                    self.text_colored("\u{203A}", &self.fonts.mono, mark, p.accent, 1.0);
+                    let rest = Rect {
+                        x: r.x + CLI_MARK_W,
+                        w: r.w - CLI_MARK_W,
+                        ..r
+                    };
+                    let cmd = echo_command(line);
+                    self.text_colored(cmd, &self.fonts.mono, rest, theme::TERMINAL_TEXT, 1.0);
+                }
+                LineKind::Output => self.text_colored(line, &self.fonts.mono, r, p.secondary, 1.0),
+                LineKind::Error => {
+                    self.text_colored(line, &self.fonts.mono, r, theme::SOFT_RED, 1.0)
+                }
+                LineKind::Ok => self.text_colored(line, &self.fonts.mono, r, p.sage, 1.0),
+                LineKind::Quiet => self.text_colored(line, &self.fonts.mono, r, p.secondary, 0.7),
             }
         }
+    }
 
-        self.set_color(p.accent, 1.0);
-        self.fill_round(l.button, 8.0);
-        let label = text(lang, Key::CliTypeCommand);
-        self.text_colored(label, &self.fonts.body_center, l.button, p.on_accent, 1.0);
+    /// Earlier commands matching the input in a raised box above it: the
+    /// typed part in the accent, the highlighted row tinted.
+    fn paint_cli_suggestions(&self, l: &CliLayout, cli: &CliView) {
+        let p = self.palette;
+        let (boxed, rows) = cli_suggestions(l, cli.suggestions.len());
+        self.set_color(p.raised, 1.0);
+        self.fill_round(boxed, SUGGEST_RADIUS);
+        self.stroke_round(inset(boxed, 0.5, 0.5), SUGGEST_RADIUS, p.track);
+        let typed = cli.input.trim_start();
+        let selected = cli.selected.min(cli.suggestions.len().saturating_sub(1));
+        for (i, (cmd, r)) in cli.suggestions.iter().zip(rows).enumerate() {
+            if i == selected {
+                self.set_color(p.accent, 0.16);
+                self.fill_round(r, SUGGEST_ROW_RADIUS);
+            }
+            let area = inset(r, SUGGEST_PAD_X, 0.0);
+            let head = &cmd[..typed.len().min(cmd.len())];
+            let hw = self.text_width(head, &self.fonts.mono_medium);
+            self.text_colored(head, &self.fonts.mono_medium, area, p.accent, 1.0);
+            let rest = Rect {
+                x: area.x + hw,
+                w: (area.w - hw).max(0.0),
+                ..area
+            };
+            let tail = &cmd[head.len()..];
+            self.text_colored(tail, &self.fonts.mono, rest, theme::TERMINAL_TEXT, 1.0);
+        }
+    }
+
+    /// The input line: the rule above it, the focus ring, `›`, the typed
+    /// text with its selection, the rest of the highlighted suggestion in
+    /// ghost ink, the caret, and the hint at the right.
+    fn paint_cli_input(&self, l: &CliLayout, cli: &CliView) -> Result<()> {
+        let lang = i18n::lang();
+        let p = self.palette;
+        let rule = Rect {
+            y: l.input.y,
+            h: 1.0,
+            ..l.input
+        };
+        self.set_color(theme::TERMINAL_RULE, 1.0);
+        self.fill_round(rule, 0.0);
+        if cli.focused {
+            self.focus_ring(l.input)?;
+        }
+        self.text_colored("\u{203A}", &self.fonts.mono, l.prompt, p.accent, 1.0);
+
+        let running = cli.run.running();
+        let hint = if running {
+            Some(Key::CliHintRunning)
+        } else if cli.focused && !cli.suggestions.is_empty() {
+            Some(Key::CliHintSuggest)
+        } else if cli.focused {
+            Some(Key::CliHintReady)
+        } else {
+            None
+        };
+        let mut field = l.field;
+        if let Some(key) = hint {
+            let label = text(lang, key);
+            let w = self.text_width(label, &self.fonts.micro).ceil() + 1.0;
+            let area = Rect {
+                x: field.right() - w,
+                w,
+                ..field
+            };
+            self.text_colored(label, &self.fonts.micro, area, theme::TERMINAL_HINT, 1.0);
+            field.w = (area.x - HINT_GAP - field.x).max(0.0);
+        }
+
+        let mid = field.y + field.h / 2.0;
+        if cli.input.is_empty() {
+            let ghost = if running {
+                Some(Key::CliWaiting)
+            } else if !cli.focused {
+                Some(Key::CliHintIdle)
+            } else {
+                None
+            };
+            if let Some(key) = ghost {
+                let area = Rect {
+                    x: field.x + if cli.focused { CARET_W + 4.0 } else { 0.0 },
+                    ..field
+                };
+                let format = &self.fonts.mono;
+                self.text_colored(text(lang, key), format, area, theme::TERMINAL_GHOST, 1.0);
+            }
+        }
+        // Measured in the mono font: offsets are UTF-16, as the EDIT gives them.
+        let len = cli.input.encode_utf16().count();
+        let (a, b) = (cli.selection.0.min(len), cli.selection.1.min(len));
+        let x_of = |n: usize| self.text_width(utf16_prefix(cli.input, n), &self.fonts.mono);
+        let caret_x = x_of(b);
+        // Long input scrolls left so the caret stays in view.
+        let shift = (caret_x + CARET_W - field.w).max(0.0);
+        let origin = field.x - shift;
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            target
+                .rt
+                .PushAxisAlignedClip(&d2d_rect(field), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
+        if a != b && cli.focused {
+            let xa = x_of(a);
+            self.set_color(p.accent, 0.32);
+            self.fill_round(
+                Rect {
+                    x: origin + xa,
+                    y: mid - CARET_H / 2.0,
+                    w: caret_x - xa,
+                    h: CARET_H,
+                },
+                2.0,
+            );
+        }
+        let typed = Rect {
+            x: origin,
+            w: 4096.0,
+            ..field
+        };
+        self.text_colored(
+            cli.input,
+            &self.fonts.mono,
+            typed,
+            theme::TERMINAL_TEXT,
+            1.0,
+        );
+        let at_end = b == len;
+        if cli.focused && at_end && !cli.input.is_empty() {
+            let pick = cli.selected.min(cli.suggestions.len().saturating_sub(1));
+            if let Some(rest) = cli
+                .suggestions
+                .get(pick)
+                .and_then(|s| s.strip_prefix(cli.input))
+            {
+                let area = Rect {
+                    x: origin + caret_x,
+                    w: 4096.0,
+                    ..field
+                };
+                self.text_colored(rest, &self.fonts.mono, area, theme::TERMINAL_GHOST, 1.0);
+            }
+        }
+        if cli.focused {
+            let caret = if at_end {
+                Rect {
+                    x: origin + caret_x,
+                    y: mid - CARET_H / 2.0,
+                    w: CARET_W,
+                    h: CARET_H,
+                }
+            } else {
+                Rect {
+                    x: origin + caret_x - 0.75,
+                    y: mid - CARET_H / 2.0,
+                    w: 1.5,
+                    h: CARET_H,
+                }
+            };
+            self.set_color(p.accent, if at_end { 1.0 } else { 0.95 });
+            self.fill_round(caret, 0.0);
+            self.cli_caret.set(Some(caret));
+        }
+        unsafe { target.rt.PopAxisAlignedClip() };
+        Ok(())
+    }
+
+    /// The design's `.inp.focus`: an inset accent line round the input,
+    /// square at the top, following the terminal's bottom corners.
+    fn focus_ring(&self, input: Rect) -> Result<()> {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let half = FOCUS_W / 2.0;
+        let r = inset(input, half, half);
+        let radius = CLI_TERM_RADIUS - half;
+        let (left, right, top, bottom) = (r.x, r.right(), r.y, r.bottom());
+        let corner = |x: f32, y: f32| D2D1_ARC_SEGMENT {
+            point: Vector2::new(x, y),
+            size: D2D_SIZE_F {
+                width: radius,
+                height: radius,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        };
+        unsafe {
+            let path = self.d2d.CreatePathGeometry()?;
+            let sink = path.Open()?;
+            sink.BeginFigure(Vector2::new(left, top), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink.AddLine(Vector2::new(right, top));
+            sink.AddLine(Vector2::new(right, bottom - radius));
+            sink.AddArc(&corner(right - radius, bottom));
+            sink.AddLine(Vector2::new(left + radius, bottom));
+            sink.AddArc(&corner(left, bottom - radius));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close()?;
+            target.brush.SetColor(&color(self.palette.accent, 0.55));
+            target.rt.DrawGeometry(&path, &target.brush, FOCUS_W, None);
+        }
+        Ok(())
     }
 
     /// Two rows of tiles: a duotone icon over its label.
@@ -1378,6 +1877,79 @@ mod tests {
     use crate::theme::{Accent, Surface, island};
     use chrono::{NaiveTime, TimeZone};
     use std::time::Instant;
+
+    #[test]
+    fn utf16_offsets_map_to_whole_characters() {
+        assert_eq!(utf16_prefix("git status", 3), "git");
+        assert_eq!(utf16_prefix("git", 0), "");
+        assert_eq!(utf16_prefix("git", 9), "git");
+        // "é" is one unit, "😀" two: an offset inside it stops before it.
+        assert_eq!(utf16_prefix("é😀x", 1), "é");
+        assert_eq!(utf16_prefix("é😀x", 2), "é");
+        assert_eq!(utf16_prefix("é😀x", 3), "é😀");
+    }
+
+    fn cli_view<'a>(
+        output: &'a crate::cli::Output,
+        echoes: &'a crate::cli_panel::Echoes,
+        run: RunState,
+    ) -> CliView<'a> {
+        CliView {
+            output,
+            echoes,
+            scroll: 0,
+            run,
+            shell: crate::cli::Shell::PowerShell,
+            cwd: "D:\\Proyek",
+            input: "",
+            selection: (0, 0),
+            focused: true,
+            suggestions: Vec::new(),
+            selected: 0,
+            tall: false,
+        }
+    }
+
+    #[test]
+    fn cli_chips_follow_the_run() {
+        let (output, echoes) = Default::default();
+        let t0 = Instant::now();
+        let looks = |run| {
+            cli_chips(
+                Lang::Id,
+                &cli_view(&output, &echoes, run),
+                t0 + Duration::from_secs(42),
+            )
+            .into_iter()
+            .map(|c| (c.text, c.look))
+            .collect::<Vec<_>>()
+        };
+        let folder = ("D:\\Proyek".to_owned(), ChipLook::Path);
+        let shell = ("PowerShell".to_owned(), ChipLook::Mono);
+        assert_eq!(looks(RunState::Idle), [folder.clone(), shell.clone()]);
+        assert_eq!(
+            looks(RunState::Running { since: t0 }),
+            [("Berjalan · 0:42".to_owned(), ChipLook::Run)]
+        );
+        let ended = |code, killed| RunState::Ended {
+            code,
+            killed,
+            took: Duration::from_millis(2_100),
+        };
+        assert_eq!(
+            looks(ended(Some(0), false)),
+            [
+                folder.clone(),
+                ("selesai · 2,1 dtk".to_owned(), ChipLook::Ok),
+                shell.clone()
+            ]
+        );
+        assert_eq!(
+            looks(ended(Some(1), false))[1],
+            ("exit 1 · 2,1 dtk".to_owned(), ChipLook::Err)
+        );
+        assert_eq!(looks(ended(Some(0), true))[1].1, ChipLook::Err, "stopped");
+    }
 
     #[test]
     fn track_time_reads_like_a_player() {

@@ -284,10 +284,18 @@ pub fn island_palette(cfg: &Config) -> Palette {
     island(cfg.accent, cfg.surface)
 }
 
-/// The CLI's terminal (the panel card and the window's output), the same in
-/// both window modes: background and text.
+/// The CLI page's terminal (`.term` in docs/design/pengingat-cli.html),
+/// whatever the surface: background and text.
 pub const TERMINAL_BG: u32 = 0x0F0C0A;
-pub const TERMINAL_TEXT: u32 = 0xF4EDE4;
+pub const TERMINAL_TEXT: u32 = 0xE6DED3;
+/// The line over the input (`.inp`), and between commands (`.sep`).
+pub const TERMINAL_RULE: u32 = 0x221B16;
+pub const TERMINAL_SEP: u32 = 0x2A221C;
+/// The input's placeholder and completion (`.ghost`) and its hint.
+pub const TERMINAL_GHOST: u32 = 0x5E5248;
+pub const TERMINAL_HINT: u32 = 0x6E6155;
+/// Error lines and a failed command's chip on the island: soft red.
+pub const SOFT_RED: u32 = 0xFF8A73;
 
 /// Colours of ordinary windows (editors, settings).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

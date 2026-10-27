@@ -5,6 +5,9 @@
 //! until the process is killed.
 //!
 //! Environment knobs for screenshots:
+//! `--demo-cli` runs only the CLI page's scenes, for comparing with
+//! `docs/design/pengingat-cli.html` (p3, p4, p5).
+//!
 //! - `DI_DEMO_STEP=n` holds step `n` (see `SCENES`; Notch adds `SCENES.len()`).
 //!   A scene's name works too: `DI_DEMO_STEP=cal-day`, or `notch:cal-day`.
 //! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
@@ -27,10 +30,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_for};
-use super::render::{CliCard, Frame, Progress, Renderer};
+use super::render::{CliView, Frame, Progress, Renderer};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
-use crate::cli::Shell;
+use crate::cli::{self, Output, Shell};
+use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
@@ -80,11 +84,23 @@ struct Scene {
     long_media: bool,
 }
 
+/// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
 #[derive(Clone, Copy, PartialEq)]
 enum CliDemo {
+    /// Nothing run yet, the input not clicked.
     Empty,
-    Done,
+    /// p3 "Siap mengetik": two commands done, the input focused.
+    Ready,
+    /// p4 "Riwayat & saran": "git" typed, three suggestions.
+    Typing,
+    /// p3 "Perintah berjalan": npm run build at 0:42.
     Running,
+    /// A command that ended with exit 0.
+    Done,
+    /// p4 "Selesai dengan error": npm test, exit 1 after 3.8 s.
+    Error,
+    /// p5: the enlarged panel with a long git log.
+    Tall,
 }
 
 /// `View` without its payloads, so scenes can be `const`.
@@ -164,7 +180,21 @@ const fn notice(name: &'static str, which: DemoNotice) -> Scene {
     }
 }
 
-const SCENES: [Scene; 33] = [
+const fn cli(name: &'static str, which: CliDemo) -> Scene {
+    Scene {
+        name,
+        view: View0::Panel(Page::Cli),
+        kind: if matches!(which, CliDemo::Tall) {
+            ShapeKind::PanelTall
+        } else {
+            ShapeKind::Panel
+        },
+        cli: which,
+        ..BASE
+    }
+}
+
+const SCENES: [Scene; 37] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -263,29 +293,27 @@ const SCENES: [Scene; 33] = [
         lyrics_on: true,
         ..panel("media-lyrics-on", Page::Media)
     },
-    panel("cli-empty", Page::Cli),
-    Scene {
-        cli: CliDemo::Done,
-        ..panel("cli-done", Page::Cli)
-    },
-    Scene {
-        cli: CliDemo::Running,
-        ..panel("cli-running", Page::Cli)
-    },
+    cli("cli-empty", CliDemo::Empty),
+    cli("cli-ready", CliDemo::Ready),
+    cli("cli-typing", CliDemo::Typing),
+    cli("cli-running", CliDemo::Running),
+    cli("cli-done", CliDemo::Done),
+    cli("cli-error", CliDemo::Error),
+    cli("cli-tall", CliDemo::Tall),
     panel("shortcuts", Page::Shortcuts),
 ];
 
 /// `DI_DEMO_STEP`: a step number, or a scene's name (Pill), or
 /// `notch:` and a name.
-fn held_step(value: &str) -> Option<usize> {
+fn held_step(scenes: &[Scene], value: &str) -> Option<usize> {
     if let Ok(n) = value.trim().parse() {
         return Some(n);
     }
     let (offset, name) = match value.trim().strip_prefix("notch:") {
-        Some(name) => (SCENES.len(), name),
+        Some(name) => (scenes.len(), name),
         None => (0, value.trim()),
     };
-    SCENES
+    scenes
         .iter()
         .position(|s| s.name == name)
         .map(|i| i + offset)
@@ -296,10 +324,28 @@ fn env<T: std::str::FromStr>(name: &str) -> Option<T> {
 }
 
 pub fn run() {
+    run_scenes(&SCENES);
+}
+
+/// `--demo-cli`: only the CLI page's scenes (`cli-empty`, `cli-ready`,
+/// `cli-typing`, `cli-running`, `cli-done`, `cli-error`, `cli-tall`), Pill
+/// then Notch; `DI_DEMO_STEP` picks one by number or name as in `--demo`.
+pub fn run_cli() {
+    let scenes: Vec<Scene> = SCENES
+        .iter()
+        .copied()
+        .filter(|s| s.name.starts_with("cli-"))
+        .collect();
+    run_scenes(&scenes);
+}
+
+fn run_scenes(scenes: &[Scene]) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
-    let win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
+    let mut win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
+    // Room for the enlarged CLI panel in every scene.
+    win.set_tall(true);
     let mut renderer = Renderer::new().expect("create renderer");
     let media = MediaInfo {
         title: "Senja di Kemang".into(),
@@ -334,13 +380,13 @@ pub fn run() {
     };
     let hold: Option<usize> = std::env::var("DI_DEMO_STEP")
         .ok()
-        .and_then(|v| held_step(&v));
+        .and_then(|v| held_step(scenes, &v));
     let frozen_t: Option<f32> = env("DI_DEMO_T");
     let slide: f32 = env("DI_DEMO_SLIDE").unwrap_or(0.0);
     let clock_on = std::env::var("DI_CLOCK").map_or(true, |v| v != "0");
     let lyric_at: Option<u64> = env("DI_LYRIC_AT");
     let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
-    let steps = 2 * SCENES.len();
+    let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
     let mut settled = usize::MAX;
@@ -357,7 +403,7 @@ pub fn run() {
             ),
         };
         let t = frozen_t.unwrap_or((into as f32 / ANIM_MS as f32).min(1.0));
-        let (style, scene) = scene(step);
+        let (style, scene) = scene(scenes, step);
         // The equalizer animates; everything else redraws only while morphing.
         let animated = scene.view == View0::MediaCompact;
         if step != settled || animated {
@@ -367,7 +413,7 @@ pub fn run() {
                 }
                 settled = step;
             }
-            let (prev_style, prev) = self::scene((step + steps - 1) % steps);
+            let (prev_style, prev) = self::scene(scenes, (step + steps - 1) % steps);
             let from = shape_for(prev_style, prev.kind);
             let shape = lerp_shape(from, shape_for(style, scene.kind), ease_out_back(t));
             let now = Instant::now();
@@ -389,6 +435,7 @@ pub fn run() {
                 status: scene.status,
                 ..calendar.clone()
             };
+            let cli = demo_cli(scene.cli, now);
             let notes: &[Note] = match scene.notes {
                 30 => &notes30,
                 n => &notes[..n.min(notes.len())],
@@ -423,7 +470,7 @@ pub fn run() {
                 clock: clock_on.then(|| Local::now().format("%H:%M").to_string()),
                 lyric: lyric_state.shown(now),
                 lyrics_on: scene.lyrics_on,
-                cli: demo_cli(scene.cli),
+                cli: cli.view(),
                 progress: Some(DEMO_PROGRESS),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
@@ -511,51 +558,158 @@ fn demo_lyrics(at: u64, fade: Option<f32>, now: Instant) -> LyricsState {
     state
 }
 
-/// The CLI card: empty, after `git status`, or while a ping runs.
-fn demo_cli(which: CliDemo) -> CliCard<'static> {
-    let (command, tail, running): (Option<&str>, Vec<&str>, bool) = match which {
-        CliDemo::Empty => (None, Vec::new(), false),
-        CliDemo::Done => (
-            Some("git status"),
-            vec![
-                "On branch feat/settings-ui",
-                "Your branch is up to date with 'origin/feat/settings-ui'.",
-                "nothing to commit, working tree clean",
-                "[exit 0]",
-            ],
-            false,
-        ),
-        CliDemo::Running => (
-            Some("ping -n 20 127.0.0.1"),
-            vec![
-                "Pinging 127.0.0.1 with 32 bytes of data:",
-                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
-                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
-                "Reply from 127.0.0.1: bytes=32 time<1ms TTL=128",
-            ],
-            true,
-        ),
-    };
-    CliCard {
-        command,
-        tail,
-        running,
-        shell: if which == CliDemo::Running {
-            Shell::Cmd
-        } else {
-            Shell::PowerShell
-        },
-        cwd: "C:\\Users\\you",
+/// What one CLI scene shows, owned for the frame.
+struct DemoCli {
+    output: Output,
+    echoes: Echoes,
+    run: RunState,
+    input: &'static str,
+    focused: bool,
+    suggestions: Vec<&'static str>,
+    tall: bool,
+}
+
+impl DemoCli {
+    fn view(&self) -> CliView<'_> {
+        let end = self.input.encode_utf16().count();
+        CliView {
+            output: &self.output,
+            echoes: &self.echoes,
+            scroll: 0,
+            run: self.run,
+            shell: Shell::PowerShell,
+            cwd: "D:\\Proyek\\rumah-kemang",
+            input: self.input,
+            selection: (end, end),
+            focused: self.focused,
+            suggestions: self.suggestions.clone(),
+            selected: 0,
+            tall: self.tall,
+        }
     }
 }
 
-fn scene(step: usize) -> (Style, Scene) {
-    let style = if step < SCENES.len() {
+/// The design's terminals (`OUT_READY`, `OUT_RUN`, `OUT_ERR`, `OUT_TALL`),
+/// with commands echoed the way the island echoes them.
+fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
+    let mut output = Output::default();
+    let mut echoes = Echoes::default();
+    let mut command = |output: &mut Output, cmd: &str, lines: &[&str]| {
+        echoes.mark(output);
+        output.push(cli::echo_line(cmd));
+        for line in lines {
+            output.push((*line).to_owned());
+        }
+    };
+    let ready = |output: &mut Output, command: &mut dyn FnMut(&mut Output, &str, &[&str])| {
+        command(
+            output,
+            "git status",
+            &["On branch main · nothing to commit, working tree clean"],
+        );
+        command(
+            output,
+            "ls *.dwg",
+            &["denah-lt1.dwg   denah-lt2.dwg   tampak-depan.dwg"],
+        );
+    };
+    let secs = |s: f32| Duration::from_secs_f32(s);
+    let mut run = RunState::Idle;
+    match which {
+        CliDemo::Empty => {}
+        CliDemo::Ready | CliDemo::Typing => ready(&mut output, &mut command),
+        CliDemo::Running => {
+            command(
+                &mut output,
+                "npm run build",
+                &[
+                    "> rumah-kemang@1.4.0 build",
+                    "> vite build",
+                    "vite v6.0.7 building for production...",
+                    "\u{2713} 1284 modules transformed.",
+                    "rendering chunks (12/18)...",
+                ],
+            );
+            run = RunState::Running {
+                since: now.checked_sub(secs(42.3)).unwrap_or(now),
+            };
+        }
+        CliDemo::Done => {
+            ready(&mut output, &mut command);
+            command(
+                &mut output,
+                "git pull",
+                &["Already up to date.", &cli::exit_line(Some(0), false)],
+            );
+            run = RunState::Ended {
+                code: Some(0),
+                killed: false,
+                took: secs(2.1),
+            };
+        }
+        CliDemo::Error => {
+            command(
+                &mut output,
+                "npm test",
+                &[
+                    "PASS src/denah.test.ts",
+                    "FAIL src/rab.test.ts",
+                    "  \u{25CF} hitungRAB \u{203A} total termasuk PPN",
+                    "    Expected: 12.210.000 \u{00B7} Received: 11.000.000",
+                    "Tests: 1 failed, 23 passed, 24 total",
+                ],
+            );
+            run = RunState::Ended {
+                code: Some(1),
+                killed: false,
+                took: secs(3.8),
+            };
+        }
+        CliDemo::Tall => {
+            let log: Vec<String> = [
+                ("b83979b", "fix: shortcut programs by full path"),
+                ("bc85b93", "fix: shortcuts keep the panel closed"),
+                ("118800e", "docs: english readme for v2.2"),
+                ("77d3f16", "feat: shortcuts page and cli"),
+                ("4106ddd", "fix: lyrics wait for the new track"),
+                ("9c1e2aa", "feat: synced lyrics in the notch"),
+                ("5d0b7f1", "feat: reminders"),
+                ("a2e44c9", "feat: idle clock"),
+                ("e81f3b0", "feat: settings window"),
+                ("0b9d2c6", "feat: pomodoro ring"),
+                ("7f3a510", "feat: google calendar"),
+                ("3c6e9d1", "init"),
+            ]
+            .iter()
+            .map(|(hash, msg)| format!("{hash} {msg}"))
+            .collect();
+            let lines: Vec<&str> = log.iter().map(String::as_str).collect();
+            ready(&mut output, &mut command);
+            command(&mut output, "git log --oneline -12", &lines);
+        }
+    }
+    DemoCli {
+        output,
+        echoes,
+        run,
+        input: if which == CliDemo::Typing { "git" } else { "" },
+        focused: which != CliDemo::Empty,
+        suggestions: if which == CliDemo::Typing {
+            vec!["git status", "git pull", "git log --oneline -12"]
+        } else {
+            Vec::new()
+        },
+        tall: which == CliDemo::Tall,
+    }
+}
+
+fn scene(scenes: &[Scene], step: usize) -> (Style, Scene) {
+    let style = if step < scenes.len() {
         Style::Pill
     } else {
         Style::Notch
     };
-    (style, SCENES[step % SCENES.len()])
+    (style, scenes[step % scenes.len()])
 }
 
 /// Focus session 2 of 4 with 18:42 left (running or paused), a short break

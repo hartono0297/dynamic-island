@@ -77,11 +77,15 @@ pub enum Icon {
     Clock,
     /// The editors' date chip: a down chevron (`down` in editor-acara.html).
     ChevD,
+    /// The CLI page's enlarge and shrink buttons (`expand`, `shrink` in
+    /// pengingat-cli.html).
+    Expand,
+    Shrink,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 41] = [
+    pub const ALL: [Icon; 43] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -123,6 +127,8 @@ impl Icon {
         Icon::Max,
         Icon::Clock,
         Icon::ChevD,
+        Icon::Expand,
+        Icon::Shrink,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -301,6 +307,8 @@ impl Icon {
                 Part::Path("M12 7.5V12l3 2"),
             ],
             Icon::ChevD => &[Part::Path("M6 9l6 6 6-6")],
+            Icon::Expand => &[Part::Path("M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4")],
+            Icon::Shrink => &[Part::Path("M4 8h4V4M20 8h-4V4M4 16h4v4M20 16h-4v4")],
         }
     }
 }

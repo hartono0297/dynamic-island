@@ -230,13 +230,18 @@ keys! {
     LyricsButton => "Lirik", "Lyrics";
     NowPlaying => "Sedang diputar", "Now playing";
 
-    // CLI page and window.
+    // CLI page.
     Cli => "CLI", "CLI";
-    CliTypeCommand => "Ketik perintah", "Type a command";
-    CliRunning => "berjalan", "running";
     CliEmpty => "Belum ada perintah", "No commands yet";
     CliEmptyHint => "Perintah jalan di folder ini; cd untuk pindah", "Commands run in this folder; cd to move";
-    CliStop => "Hentikan", "Stop";
+    CliStop => "Stop", "Stop";
+    CliHintReady => "Enter jalankan · ↑ riwayat · Esc keluar", "Enter runs · ↑ history · Esc leaves";
+    CliHintRunning => "Ctrl+C berhenti", "Ctrl+C stops";
+    CliHintSuggest => "Tab terima · ↑↓ pilih", "Tab accepts · ↑↓ choose";
+    CliHintIdle => "Klik untuk mengetik", "Click to type";
+    CliWaiting => "tunggu perintah selesai…", "waiting for the command to finish…";
+    CliLocked => "Panel tetap terbuka saat mengetik · Esc untuk keluar",
+        "The panel stays open while you type · Esc to leave";
     CliStopped => "dihentikan", "stopped";
     CliBusy => "Masih ada perintah berjalan — Ctrl+C untuk menghentikan",
         "A command is still running — Ctrl+C to stop it";
@@ -496,6 +501,69 @@ pub fn cli_start_failed(lang: Lang, error: &str) -> String {
     match lang {
         Lang::Id => format!("Gagal menjalankan: {error}"),
         Lang::En => format!("Couldn't run it: {error}"),
+    }
+}
+
+/// A running command's time on the clock: "0:42", "12:05", "1:02:03".
+pub fn run_clock(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// How long a finished command took: "2,1 dtk" ("2.1 s") under a minute,
+/// then "1 mnt 12 dtk" ("1 min 12 s"), from an hour "1 jam 5 mnt"
+/// ("1 h 5 min").
+pub fn run_duration(lang: Lang, took: std::time::Duration) -> String {
+    let (sec, min, hour) = match lang {
+        Lang::Id => ("dtk", "mnt", "jam"),
+        Lang::En => ("s", "min", "h"),
+    };
+    // Tenths, rounded; 59.96 s is a whole minute.
+    let tenths = (took.as_millis() + 50) / 100;
+    if tenths < 600 {
+        let (whole, tenth) = (tenths / 10, tenths % 10);
+        let point = pick(lang, ",", ".");
+        return format!("{whole}{point}{tenth} {sec}");
+    }
+    let secs = (took.as_millis() + 500) / 1000;
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h} {hour} {m} {min}")
+    } else {
+        format!("{m} {min} {s} {sec}")
+    }
+}
+
+/// The CLI header chip while a command runs: "Berjalan · 0:42".
+pub fn cli_running(lang: Lang, elapsed: std::time::Duration) -> String {
+    let word = pick(lang, "Berjalan", "Running");
+    format!("{word} · {}", run_clock(elapsed))
+}
+
+/// The chip once a command ended: "selesai · 2,1 dtk" for exit 0,
+/// "exit 1 · 3,8 dtk" otherwise, "dihentikan · 3,8 dtk" after Stop. A run
+/// that took no measurable time (a builtin) leaves the time out.
+pub fn cli_result(
+    lang: Lang,
+    code: Option<i32>,
+    killed: bool,
+    took: std::time::Duration,
+) -> String {
+    let head = match (killed, code) {
+        (true, _) => text(lang, Key::CliStopped).to_owned(),
+        (false, Some(0)) => pick(lang, "selesai", "done").to_owned(),
+        (false, Some(c)) => format!("exit {c}"),
+        (false, None) => "exit ?".to_owned(),
+    };
+    if took.is_zero() {
+        head
+    } else {
+        format!("{head} · {}", run_duration(lang, took))
     }
 }
 
@@ -1323,6 +1391,47 @@ mod tests {
             text(Lang::En, Key::QuickTomorrowMorning),
             "Tomorrow morning"
         );
+    }
+
+    #[test]
+    fn run_times_and_results_in_both_languages() {
+        use std::time::Duration;
+        let ms = Duration::from_millis;
+        assert_eq!(run_clock(ms(42_900)), "0:42");
+        assert_eq!(run_clock(ms(725_000)), "12:05");
+        assert_eq!(run_clock(ms(3_723_000)), "1:02:03");
+        assert_eq!(cli_running(Lang::Id, ms(42_000)), "Berjalan · 0:42");
+        assert_eq!(cli_running(Lang::En, ms(42_000)), "Running · 0:42");
+        assert_eq!(run_duration(Lang::Id, ms(2_100)), "2,1 dtk");
+        assert_eq!(run_duration(Lang::En, ms(2_100)), "2.1 s");
+        assert_eq!(run_duration(Lang::Id, ms(149)), "0,1 dtk");
+        assert_eq!(run_duration(Lang::Id, ms(59_960)), "1 mnt 0 dtk");
+        assert_eq!(run_duration(Lang::Id, ms(72_000)), "1 mnt 12 dtk");
+        assert_eq!(run_duration(Lang::En, ms(72_000)), "1 min 12 s");
+        assert_eq!(run_duration(Lang::Id, ms(3_900_000)), "1 jam 5 mnt");
+        assert_eq!(run_duration(Lang::En, ms(3_900_000)), "1 h 5 min");
+        let took = ms(2_100);
+        assert_eq!(
+            cli_result(Lang::Id, Some(0), false, took),
+            "selesai · 2,1 dtk"
+        );
+        assert_eq!(cli_result(Lang::En, Some(0), false, took), "done · 2.1 s");
+        let took = ms(3_800);
+        assert_eq!(
+            cli_result(Lang::Id, Some(1), false, took),
+            "exit 1 · 3,8 dtk"
+        );
+        assert_eq!(cli_result(Lang::En, Some(1), false, took), "exit 1 · 3.8 s");
+        assert_eq!(
+            cli_result(Lang::Id, Some(1), false, Duration::ZERO),
+            "exit 1"
+        );
+        assert_eq!(cli_result(Lang::Id, None, false, Duration::ZERO), "exit ?");
+        assert_eq!(
+            cli_result(Lang::Id, Some(1), true, took),
+            "dihentikan · 3,8 dtk"
+        );
+        assert_eq!(cli_result(Lang::En, Some(1), true, took), "stopped · 3.8 s");
     }
 
     #[test]

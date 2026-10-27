@@ -19,26 +19,29 @@ use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, IsWindow, KillTimer,
-    MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, SW_SHOWNORMAL,
-    SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
-    WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetForegroundWindow, GetMessageW,
+    IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
+    PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
+    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
 };
 use windows::core::{PCWSTR, w};
 
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::pipe_server::spawn_pipe_server;
-use crate::cli::{self, Builtin, CliEvent, History, RunHandle, Session, SyncStep, WindowSync};
+use crate::cli::{self, Builtin, CliEvent, History, HistoryCursor, RunHandle, Session};
+use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
@@ -52,11 +55,12 @@ use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
 use crate::theme::{self, Theme};
-use crate::ui::cli_window::{self, CliAction, CliInit, WM_APP_CLI_ACTION};
+use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
-use crate::ui::render::{CliCard, Frame, Progress, Renderer};
+use crate::ui::panel_layout::{CliHead, cli_layout};
+use crate::ui::render::{CliView, Frame, Progress, Renderer};
 use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
@@ -99,6 +103,12 @@ const TIMER_SHORTCUT: usize = 11;
 /// One-shot to the track position's next whole second, only while the Music
 /// page shows a playing track of known length.
 const TIMER_PROGRESS: usize = 12;
+/// The CLI chip's running time, each second, only while the CLI page shows
+/// a running command.
+const TIMER_CLI: usize = 13;
+const CLI_MS: u32 = 1000;
+/// Output lines one wheel notch scrolls (Windows' default of three).
+const WHEEL_LINES: i32 = 3;
 const SYSTEM_MS: u32 = 1000;
 const BATTERY_MS: u32 = 30_000;
 /// Values table: ~30 fps equalizer.
@@ -123,7 +133,8 @@ thread_local! {
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_SETTINGS: RefCell<Vec<SettingsAction>> = const { RefCell::new(Vec::new()) };
-    static DEFERRED_CLI: RefCell<Vec<CliAction>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_CLI: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_CLI_REDRAW: Cell<bool> = const { Cell::new(false) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -142,6 +153,9 @@ pub fn run() {
     let win = IslandWindow::create(Some(wnd_proc)).expect("create island window");
     let renderer = Renderer::new().expect("create renderer");
     let hwnd = win.hwnd();
+    let cli_input = CliInput::create(hwnd, deliver_cli_key)
+        .inspect_err(|e| eprintln!("dynamic-island: no CLI input: {e}"))
+        .ok();
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
@@ -192,7 +206,16 @@ pub fn run() {
             cli_runs: 0,
             cli_history: History::load(&cli::history_path()),
             cli_cwd: cli::load_cwd(&cli::cwd_path()),
-            cli_shown: WindowSync::default(),
+            cli_seen: 0,
+            cli_clock: RunClock::default(),
+            cli_echoes: Echoes::default(),
+            cli_input,
+            cli_prev: None,
+            cli_cursor: HistoryCursor::default(),
+            cli_browsing: false,
+            cli_pick: 0,
+            cli_text: String::new(),
+            cli_timer: false,
             cli_wake: Arc::new(AtomicBool::new(false)),
             shortcut: None,
         });
@@ -322,8 +345,28 @@ struct App {
     cli_history: History,
     /// Where commands run; `cd` changes it.
     cli_cwd: PathBuf,
-    /// What the CLI window has shown of the output.
-    cli_shown: WindowSync,
+    /// `Output::total` as of the last drain: what is new since.
+    cli_seen: u64,
+    /// When the running or last command started and how it ended.
+    cli_clock: RunClock,
+    /// Which output lines are echoed commands.
+    cli_echoes: Echoes,
+    /// The hidden EDIT behind the CLI page's input line.
+    cli_input: Option<CliInput>,
+    /// The foreground window before the input took the keyboard; it gets
+    /// it back on Esc, a page change or the panel closing.
+    cli_prev: Option<HWND>,
+    /// Up / Down through the history while no suggestions show.
+    cli_cursor: HistoryCursor,
+    /// The input holds a history entry put there by Up / Down: no
+    /// suggestions until it is edited.
+    cli_browsing: bool,
+    /// The highlighted suggestion.
+    cli_pick: usize,
+    /// The input's text as last seen, to tell the user's edits from ours.
+    cli_text: String,
+    /// `TIMER_CLI` is set.
+    cli_timer: bool,
     /// Set by a run's threads when they post a wake, cleared when `drain`
     /// reads the queue: a burst of output posts one message, not hundreds.
     cli_wake: Arc<AtomicBool>,
@@ -340,8 +383,19 @@ impl App {
             self.apply(event, now);
         }
         // Once per burst of command output, not per chunk.
-        self.sync_cli_window();
+        self.note_cli_output(now);
         self.refresh(now);
+    }
+
+    /// Tells the reducer how many output lines arrived since last time, so a
+    /// view scrolled up stays on what it shows.
+    fn note_cli_output(&mut self, now: Instant) {
+        let total = self.cli.output.total();
+        let new = total.saturating_sub(self.cli_seen) as usize;
+        self.cli_seen = total;
+        if new > 0 {
+            self.apply(Event::CliOutput(new), now);
+        }
     }
 
     /// Runs `event` through the reducer and performs its effects; events an
@@ -415,7 +469,9 @@ impl App {
                     );
                 }
             }
-            Effect::OpenCli => self.open_cli(),
+            Effect::FocusCliInput => return self.focus_cli_input(),
+            Effect::ReleaseCliFocus => self.return_keyboard(),
+            Effect::StopCli => self.stop_cli(),
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
                 self.reminder_fired.retain(|f| *f != id);
@@ -564,8 +620,6 @@ impl App {
     /// brings that one forward instead and nothing else changes.
     fn open_editor(&mut self, kind: EditorKind) -> Option<Event> {
         let anchor = self.under_panel()?;
-        // One window under the panel: the CLI window has nothing to lose.
-        cli_window::close();
         match editor::open_editor(self.hwnd, anchor, kind) {
             Ok(hwnd) if self.editor == Some(hwnd) => None,
             Ok(hwnd) => {
@@ -580,65 +634,222 @@ impl App {
         }
     }
 
-    /// Screen point under the panel's bottom centre, where editors and the
-    /// CLI window hang.
+    /// Screen point under the panel's bottom centre, where editors hang.
     fn under_panel(&self) -> Option<POINT> {
         let win = self.win.as_ref()?;
-        let panel = shape_for(self.config.style, ShapeKind::Panel);
+        let panel = shape_for(self.config.style, self.panel_kind());
         Some(win.to_screen(panel.x + panel.w / 2.0, panel.y + panel.h))
     }
 
-    /// Opens the CLI window with everything so far, or brings it forward.
-    /// An open editor comes forward instead: it may hold unsaved text.
-    fn open_cli(&mut self) {
-        if editor::focus_open_editor() {
-            return;
-        }
-        let Some(anchor) = self.under_panel() else {
-            return;
-        };
-        let init = CliInit {
-            text: self.cli.output.text(),
-            cwd: self.cli_cwd.to_string_lossy().into_owned(),
-            shell: self.config.cli_shell,
-            running: self.cli.running().is_some(),
-            history: self.cli_history.clone(),
-        };
-        let fresh = !cli_window::is_open();
-        match cli_window::open(self.hwnd, anchor, init) {
-            Ok(_) if fresh => self.cli_shown.reset(&self.cli.output),
-            Ok(_) => {}
-            Err(error) => eprintln!("dynamic-island: cannot open the CLI: {error}"),
+    /// The open panel's shape: enlarged on the CLI page when asked for.
+    fn panel_kind(&self) -> ShapeKind {
+        if self.state.page() == Page::Cli && self.state.cli_tall() {
+            ShapeKind::PanelTall
+        } else {
+            ShapeKind::Panel
         }
     }
 
-    fn on_cli_action(&mut self, action: CliAction) {
-        match action {
-            CliAction::Run(cmd) => self.run_cli(&cmd),
-            CliAction::Stop => {
-                if let Some(run) = &self.cli_run {
-                    run.kill();
+    /// The CLI page's input has the keyboard for real: the island is the
+    /// foreground window and the hidden EDIT its focus.
+    fn cli_has_keyboard(&self) -> bool {
+        self.cli_input.as_ref().is_some_and(CliInput::has_focus)
+            && unsafe { GetForegroundWindow() } == self.hwnd
+    }
+
+    /// A click on the CLI page's terminal: the island activates (allowed,
+    /// since this process got the click) and the hidden EDIT takes the
+    /// keyboard. The window that had it is remembered for later. An open
+    /// editor comes forward instead: it may hold unsaved text.
+    fn focus_cli_input(&mut self) -> Option<Event> {
+        if editor::focus_open_editor() {
+            return None;
+        }
+        let input = self.cli_input.as_ref()?;
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg != self.hwnd {
+                self.cli_prev = (!fg.is_invalid()).then_some(fg);
+                let _ = SetForegroundWindow(self.hwnd);
+            }
+        }
+        let ok = input.focus() && unsafe { GetForegroundWindow() } == self.hwnd;
+        if !ok {
+            self.return_keyboard();
+            return None;
+        }
+        (!self.state.cli_focused()).then_some(Event::CliFocus(true))
+    }
+
+    /// Gives the keyboard back to the window that had it before the input
+    /// took it, if the island still has it (a click elsewhere already chose
+    /// a new one). With nowhere to go back to, keys at least stop reaching
+    /// the hidden input.
+    fn return_keyboard(&mut self) {
+        let prev = self.cli_prev.take();
+        unsafe {
+            if GetForegroundWindow() != self.hwnd {
+                return;
+            }
+            if let Some(prev) = prev
+                && IsWindow(Some(prev)).as_bool()
+                && IsWindowVisible(prev).as_bool()
+                && SetForegroundWindow(prev).as_bool()
+            {
+                return;
+            }
+            if self.cli_input.as_ref().is_some_and(CliInput::has_focus) {
+                let _ = SetFocus(None);
+            }
+        }
+    }
+
+    /// Esc, or the reducer letting go: the panel unlocks and the keyboard
+    /// goes back.
+    fn release_cli(&mut self) {
+        self.return_keyboard();
+        if self.state.cli_focused() {
+            self.apply_now(Event::CliFocus(false));
+        }
+    }
+
+    fn stop_cli(&self) {
+        if let Some(run) = &self.cli_run {
+            run.kill();
+        }
+    }
+
+    /// Output lines the CLI page shows at once, for PageUp / PageDown and
+    /// how far the output can scroll.
+    fn cli_rows(&self) -> usize {
+        let s = shape_for(self.config.style, self.panel_kind());
+        let strip = self.state.waiting_strip().is_some();
+        cli_layout(s, strip, &CliHead::default()).rows.max(1)
+    }
+
+    fn cli_scroll(&mut self, lines: i32) {
+        let max = cli_panel::max_scroll(self.cli.output.lines().len(), self.cli_rows());
+        self.apply_now(Event::CliScroll { lines, max });
+    }
+
+    /// Earlier commands starting with the input, while it is being typed
+    /// (not while Up / Down shows a history entry).
+    fn cli_suggestions(&self, typed: &str) -> Vec<&str> {
+        if self.cli_browsing || !self.state.cli_focused() {
+            return Vec::new();
+        }
+        cli_panel::suggestions(self.cli_history.items(), typed, MAX_SUGGESTIONS)
+    }
+
+    /// Puts `text` in the input as the island's own change (not an edit
+    /// that would end history browsing).
+    fn set_cli_text(&mut self, text: &str) {
+        self.cli_text = text.to_owned();
+        if let Some(input) = &self.cli_input {
+            input.set_text(text);
+        }
+    }
+
+    /// A key the CLI page handles itself, from the hidden EDIT.
+    fn on_cli_key(&mut self, key: InputKey) {
+        let typed = self
+            .cli_input
+            .as_ref()
+            .map(CliInput::text)
+            .unwrap_or_default();
+        match key {
+            InputKey::Enter => {
+                let cmd = typed.trim().to_owned();
+                self.cli_cursor.reset();
+                self.cli_browsing = false;
+                self.cli_pick = 0;
+                self.set_cli_text("");
+                if !cmd.is_empty() {
+                    self.run_cli(&cmd);
+                    // A new command shows from the bottom.
+                    self.cli_scroll(-i32::MAX);
                 }
             }
-            CliAction::Focus(on) => self.apply_now(Event::CliFocus(on)),
-            CliAction::Closed => self.apply_now(Event::CliFocus(false)),
+            InputKey::Up | InputKey::Down => {
+                let step = if key == InputKey::Up { -1 } else { 1 };
+                let shown = self.cli_suggestions(&typed).len();
+                if shown > 0 {
+                    self.cli_pick = cli_panel::step_selection(self.cli_pick, shown, step);
+                    self.redraw_cli();
+                    return;
+                }
+                let items = self.cli_history.items();
+                let next = if key == InputKey::Up {
+                    self.cli_cursor.up(items, &typed)
+                } else {
+                    self.cli_cursor.down(items)
+                };
+                if let Some(text) = next {
+                    // Suggestions stay away until the entry is edited.
+                    self.cli_browsing = true;
+                    self.set_cli_text(&text);
+                }
+            }
+            InputKey::Tab => {
+                let taken = cli_panel::accept(&self.cli_suggestions(&typed), self.cli_pick);
+                if let Some(text) = taken {
+                    self.cli_pick = 0;
+                    self.set_cli_text(&text);
+                }
+            }
+            InputKey::Stop => self.stop_cli(),
+            InputKey::Escape => self.release_cli(),
+            InputKey::PageUp => self.cli_scroll(self.cli_rows() as i32),
+            InputKey::PageDown => self.cli_scroll(-(self.cli_rows() as i32)),
+            InputKey::Blur => {
+                // Another window took the keyboard (a click outside the panel,
+                // Alt+Tab): no foreground to hand back.
+                if self.state.cli_focused() && !self.cli_has_keyboard() {
+                    self.cli_prev = None;
+                    self.apply_now(Event::CliFocus(false));
+                }
+            }
         }
     }
 
-    /// A command from the CLI window: a builtin, or a run in the shell.
+    /// The input's text or selection changed: the page redraws, and an edit
+    /// by the user ends history browsing and restarts the suggestions.
+    fn on_cli_changed(&mut self) {
+        cli_input::redraw_done();
+        let typed = self
+            .cli_input
+            .as_ref()
+            .map(CliInput::text)
+            .unwrap_or_default();
+        if typed != self.cli_text {
+            self.cli_text = typed;
+            self.cli_browsing = false;
+            self.cli_cursor.reset();
+            self.cli_pick = 0;
+        }
+        self.redraw_cli();
+    }
+
+    fn redraw_cli(&mut self) {
+        if self.state.view() == View::Panel(Page::Cli) && !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// A command from the CLI page: a builtin, or a run in the shell.
     fn run_cli(&mut self, cmd: &str) {
         self.cli_history.push(cmd);
         // A history that cannot be written only loses the history.
         let _ = self.cli_history.save(&cli::history_path());
+        let now = Instant::now();
         // While a command runs, `Session` keeps all of this off the card.
         match cli::builtin(cmd) {
             Some(Builtin::Clear) => {
                 self.cli.clear();
-                self.cli_shown.reset(&self.cli.output);
-                cli_window::reset("");
+                self.cli_clock.clear();
             }
             Some(Builtin::Cd(arg)) => {
-                self.cli.begin(cmd);
+                self.begin_cli(cmd);
                 match cli::resolve_cd(&self.cli_cwd, arg.as_deref(), &cli::home()) {
                     Ok(dir) => {
                         let _ = cli::save_cwd(&cli::cwd_path(), &dir);
@@ -648,11 +859,11 @@ impl App {
                 }
             }
             None if self.cli.running().is_some() => {
-                self.cli.begin(cmd);
+                self.begin_cli(cmd);
                 self.cli.note(tr(Key::CliBusy).into());
             }
             None => {
-                self.cli.begin(cmd);
+                self.begin_cli(cmd);
                 self.cli_runs += 1;
                 let id = self.cli_runs;
                 let shell = self.config.cli_shell;
@@ -660,6 +871,7 @@ impl App {
                     Ok(run) => {
                         self.cli.started(id);
                         self.cli_run = Some(run);
+                        self.cli_clock.start(now);
                     }
                     Err(error) => {
                         let line = i18n::cli_start_failed(i18n::lang(), &error.to_string());
@@ -668,8 +880,14 @@ impl App {
                 }
             }
         }
-        self.sync_cli_window();
-        self.refresh(Instant::now());
+        self.note_cli_output(now);
+        self.refresh(now);
+    }
+
+    /// Echoes `cmd`, remembering that line as a command.
+    fn begin_cli(&mut self, cmd: &str) {
+        self.cli_echoes.mark(&self.cli.output);
+        self.cli.begin(cmd);
     }
 
     /// Where a run's threads send their output: the island's queue, waking
@@ -694,26 +912,10 @@ impl App {
                 if self.cli.exit(run, code, killed) {
                     // The command is over; what it started may go on.
                     self.cli_run = None;
+                    self.cli_clock.end(code, killed, Instant::now());
                 }
             }
         }
-    }
-
-    /// Brings an open CLI window up to date with the output and status.
-    fn sync_cli_window(&mut self) {
-        if !cli_window::is_open() {
-            return;
-        }
-        match self.cli_shown.next(&self.cli.output) {
-            SyncStep::Nothing => {}
-            SyncStep::Append(lines) => cli_window::append(&lines),
-            SyncStep::Reset => cli_window::reset(&self.cli.output.text()),
-        }
-        cli_window::set_status(
-            &self.cli_cwd.to_string_lossy(),
-            self.config.cli_shell,
-            self.cli.running().is_some(),
-        );
     }
 
     /// The shortcut `TIMER_SHORTCUT` was waiting for, taken once.
@@ -853,7 +1055,7 @@ impl App {
             View::MediaCompact => Some(ShapeKind::MediaCompact),
             View::MediaLyric => Some(ShapeKind::MediaLyric),
             View::PomodoroCompact => Some(ShapeKind::PomodoroCompact),
-            View::Panel(_) => Some(ShapeKind::Panel),
+            View::Panel(_) => Some(self.panel_kind()),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
         let target = kind.map(|kind| shape_for(self.config.style, kind));
@@ -876,6 +1078,8 @@ impl App {
                 start: now,
                 running: true,
             };
+            // The enlarged panel needs the taller canvas before it grows.
+            self.sync_window_height(now);
             self.frame_log.start(now);
             self.ensure_clock();
         } else if !self.animating() {
@@ -889,6 +1093,17 @@ impl App {
 
     fn animating(&self) -> bool {
         self.anim.running || self.slide.is_some() || self.lyric_fading
+    }
+
+    /// The window is `TALL_WINDOW_H` tall while the enlarged CLI panel shows
+    /// or morphs, `WINDOW_H` otherwise (fewer pixels to push each frame).
+    /// True when it changed.
+    fn sync_window_height(&mut self, now: Instant) -> bool {
+        let small = shape_for(self.config.style, ShapeKind::Panel);
+        let tall = |s: ShapeRect| s.y + s.h > small.y + small.h + 1.0;
+        let need = tall(self.anim.to)
+            || (self.anim.running && (tall(self.anim.from) || tall(self.anim.frame(now).0)));
+        self.win.as_mut().is_some_and(|w| w.set_tall(need))
     }
 
     /// Looks up lyrics for the playing track (memory first, else the worker;
@@ -1014,6 +1229,17 @@ impl App {
             }
         }
         self.sync_progress_timer(now);
+        let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
+        if cli != self.cli_timer {
+            self.cli_timer = cli;
+            unsafe {
+                if cli {
+                    SetTimer(Some(self.hwnd), TIMER_CLI, CLI_MS, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_CLI);
+                }
+            }
+        }
     }
 
     /// Re-armed on every sync (a seek or new track re-aligns it) and after
@@ -1088,8 +1314,9 @@ impl App {
             TIMER_SYSTEM => {
                 self.check_fullscreen();
                 self.check_editor();
-                // A CLI window that died without `Closed` must not pin the panel.
-                if self.state.cli_focused() && !cli_window::is_open() {
+                // A focus lost without its message must not pin the panel.
+                if self.state.cli_focused() && !self.cli_has_keyboard() {
+                    self.cli_prev = None;
                     self.apply_now(Event::CliFocus(false));
                 }
             }
@@ -1145,6 +1372,7 @@ impl App {
                 }
                 self.sync_progress_timer(now);
             }
+            TIMER_CLI => self.redraw_cli(),
             _ => {}
         }
     }
@@ -1167,6 +1395,10 @@ impl App {
         if shape_done && self.anim.running {
             self.anim.running = false;
             self.frame_log.finish();
+            // Back from the enlarged panel: the canvas shrinks again.
+            if self.sync_window_height(now) {
+                self.draw(now);
+            }
         }
         // Checked at the drawn frame's time, so its last frame was the settled one.
         if self.lyric_fading && !self.lyrics.fading(now) {
@@ -1232,6 +1464,26 @@ impl App {
         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
         if let Some(hit) = self.renderer.hit_test(x, y) {
             self.apply_now(Event::Click(hit));
+        }
+    }
+
+    /// The wheel scrolls the CLI output while the pointer is over it, and
+    /// pages through the panel anywhere else. `lparam` holds the pointer in
+    /// screen coordinates.
+    fn on_wheel(&mut self, delta: i32, lparam: LPARAM) {
+        let mut pt = POINT {
+            x: (lparam.0 & 0xFFFF) as i16 as i32,
+            y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+        };
+        let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
+        let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
+        if over && self.state.view() == View::Panel(Page::Cli) {
+            // A notch away from the user scrolls up to older lines.
+            let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);
+            let lines = if lines == 0 { delta.signum() } else { lines };
+            self.cli_scroll(lines);
+        } else {
+            self.apply_now(Event::Wheel(delta));
         }
     }
 
@@ -1303,7 +1555,6 @@ impl App {
     fn apply_theme(&mut self) {
         if theme::set_current(Theme::of(&self.config)) {
             editor::restyle_open_editor();
-            cli_window::restyle();
             settings::restyle();
             self.draw(Instant::now());
         }
@@ -1372,7 +1623,6 @@ impl App {
                 // `adopt_config` switches the strings; everything showing text relabels.
                 self.save_config();
                 editor::relabel_open_editor();
-                cli_window::relabel();
                 self.draw(now);
             }
             SettingsAction::Autostart(on) => self.set_autostart(on),
@@ -1392,7 +1642,6 @@ impl App {
                 // The next command runs in it; one running goes on as it is.
                 self.config.cli_shell = shell;
                 self.save_config();
-                self.sync_cli_window();
                 self.draw(now);
             }
             SettingsAction::BatteryThreshold(threshold) => {
@@ -1443,6 +1692,16 @@ impl App {
         let (shape, opacity) = self.anim.frame(now);
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
+        let input = self.cli_input.as_ref();
+        let typed = input.map(CliInput::text).unwrap_or_default();
+        let selection = input.map_or((0, 0), CliInput::selection);
+        let focused = state.cli_focused();
+        // As `cli_suggestions`, borrowing only the history.
+        let suggestions = if self.cli_browsing || !focused {
+            Vec::new()
+        } else {
+            cli_panel::suggestions(self.cli_history.items(), &typed, MAX_SUGGESTIONS)
+        };
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -1466,12 +1725,19 @@ impl App {
                 .then(|| Local::now().format("%H:%M").to_string()),
             lyric: self.lyrics.shown(now),
             lyrics_on: state.lyrics_on(),
-            cli: CliCard {
-                command: self.cli.last_command(),
-                tail: self.cli.tail().collect(),
-                running: self.cli.running().is_some(),
+            cli: CliView {
+                output: &self.cli.output,
+                echoes: &self.cli_echoes,
+                scroll: state.cli_scroll(),
+                run: self.cli_clock.state(),
                 shell: self.config.cli_shell,
                 cwd: &cwd,
+                input: &typed,
+                selection,
+                focused,
+                suggestions,
+                selected: self.cli_pick,
+                tall: state.cli_tall(),
             },
             progress: track_progress(state, now),
         };
@@ -1480,6 +1746,10 @@ impl App {
             .draw(win, self.config.style, shape, &frame, opacity)
         {
             eprintln!("dynamic-island: draw failed: {error}");
+        }
+        // The IME composes where the panel drew the caret.
+        if focused && let (Some(input), Some(caret)) = (input, self.renderer.cli_caret()) {
+            input.set_ime_caret(caret);
         }
     }
 }
@@ -2017,7 +2287,6 @@ fn shutdown(hwnd: HWND) {
     flush_editor();
     // A command still running ends with the island's process, which closes
     // its job.
-    cli_window::close();
     unsafe {
         let _ = DestroyWindow(hwnd);
     }
@@ -2115,21 +2384,25 @@ fn run_deferred() {
     for action in DEFERRED_SETTINGS.take() {
         deliver_settings_action(action);
     }
-    for action in DEFERRED_CLI.take() {
-        deliver_cli_action(action);
+    for key in DEFERRED_CLI.take() {
+        deliver_cli_key(key);
+    }
+    if DEFERRED_CLI_REDRAW.take() {
+        with_app(App::on_cli_changed);
     }
 }
 
-/// Handles a CLI window action now, or once the handler holding the app returns.
-fn deliver_cli_action(action: CliAction) {
-    let mut pending = Some(action);
+/// Handles a key of the CLI input now, or once the handler holding the app
+/// returns (the EDIT loses the keyboard inside `SetForegroundWindow`).
+fn deliver_cli_key(key: InputKey) {
+    let mut pending = Some(key);
     with_app(|app| {
-        if let Some(action) = pending.take() {
-            app.on_cli_action(action);
+        if let Some(key) = pending.take() {
+            app.on_cli_key(key);
         }
     });
-    if let Some(action) = pending {
-        DEFERRED_CLI.with_borrow_mut(|queue| queue.push(action));
+    if let Some(key) = pending {
+        DEFERRED_CLI.with_borrow_mut(|queue| queue.push(key));
     }
 }
 
@@ -2154,7 +2427,6 @@ fn on_system_theme_changed() {
     let changed = theme::set_system_light(theme::read_system_light());
     if changed && theme::current().window == theme::WindowTheme::System {
         editor::restyle_open_editor();
-        cli_window::restyle();
         settings::restyle();
     }
 }
@@ -2208,8 +2480,29 @@ unsafe extern "system" fn wnd_proc(
         WM_MOUSEWHEEL => {
             // High word of wParam: signed delta, +120 per notch away from the user.
             let delta = (wparam.0 >> 16) as u16 as i16;
-            with_app(|app| app.apply_now(Event::Wheel(i32::from(delta))));
+            with_app(|app| app.on_wheel(i32::from(delta), lparam));
             LRESULT(0)
+        }
+        WM_COMMAND => {
+            // The hidden CLI input's text changed (typing, paste, undo).
+            if ((wparam.0 >> 16) & 0xFFFF) as u32 == EN_CHANGE {
+                cli_input::request_redraw();
+            }
+            LRESULT(0)
+        }
+        WM_APP_CLI_REDRAW => {
+            if with_app(App::on_cli_changed).is_none() {
+                DEFERRED_CLI_REDRAW.set(true);
+            }
+            LRESULT(0)
+        }
+        WM_ACTIVATE => {
+            // The island lost activation (a click elsewhere, Alt+Tab): the
+            // CLI input lets go.
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
+                deliver_cli_key(InputKey::Blur);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_LBUTTONUP => {
             with_app(|app| app.on_click(lparam));
@@ -2240,13 +2533,6 @@ unsafe extern "system" fn wnd_proc(
             // Each result is taken exactly once, here.
             if let Some(result) = unsafe { editor::take_result(lparam) } {
                 deliver_result(result);
-            }
-            LRESULT(0)
-        }
-        WM_APP_CLI_ACTION => {
-            // Each action is taken exactly once, here.
-            if let Some(action) = unsafe { cli_window::take_action(lparam) } {
-                deliver_cli_action(action);
             }
             LRESULT(0)
         }

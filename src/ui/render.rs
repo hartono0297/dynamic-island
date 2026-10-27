@@ -49,7 +49,8 @@ use super::geometry::{
 use super::icons::{Icon, IconSet};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
-use crate::cli::Shell;
+use crate::cli::{Output, Shell};
+use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n;
 use crate::lyrics::{self, ShownLine};
@@ -109,8 +110,8 @@ pub struct Frame<'a> {
     pub lyric: Option<ShownLine<'a>>,
     /// "Lirik di notch" is on: the Musik page's button is lit.
     pub lyrics_on: bool,
-    /// The CLI page's card.
-    pub cli: CliCard<'a>,
+    /// The CLI page.
+    pub cli: CliView<'a>,
     /// Where the playing track is: the notch's progress line and the Music
     /// page's bar. `None` without a timeline or a known length.
     pub progress: Option<Progress>,
@@ -185,15 +186,30 @@ fn compact_progress(style: Style, s: ShapeRect, progress: Progress) -> Option<Li
 }
 
 /// What the CLI page shows.
-pub struct CliCard<'a> {
-    /// The last command entered, `None` before any (or after `cls`).
-    pub command: Option<&'a str>,
-    /// Its last lines, oldest first (at most `cli::CARD_LINES`).
-    pub tail: Vec<&'a str>,
-    pub running: bool,
+pub struct CliView<'a> {
+    /// Everything printed so far (echoed commands included).
+    pub output: &'a Output,
+    /// Which of those lines are echoed commands.
+    pub echoes: &'a Echoes,
+    /// Lines scrolled up from the newest.
+    pub scroll: usize,
+    /// The header chip: idle, running since, or how the last run ended.
+    pub run: RunState,
     pub shell: Shell,
-    /// Where commands run; shown while the card is empty.
+    /// Where commands run.
     pub cwd: &'a str,
+    /// The hidden EDIT's text and selection (UTF-16 offsets, start ≤ end;
+    /// the caret is at the end).
+    pub input: &'a str,
+    pub selection: (usize, usize),
+    /// The input has the keyboard: caret, focus ring and the lock banner.
+    pub focused: bool,
+    /// Earlier commands starting with the input, newest first, and the
+    /// highlighted one.
+    pub suggestions: Vec<&'a str>,
+    pub selected: usize,
+    /// The enlarged panel.
+    pub tall: bool,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the
@@ -221,6 +237,9 @@ pub struct Renderer {
     epoch: Instant,
     /// The palette of the frame being drawn.
     palette: Palette,
+    /// Where the last frame drew the CLI input's caret, in logical px; the
+    /// IME's composition window goes there.
+    cli_caret: std::cell::Cell<Option<Rect>>,
 }
 
 struct Fonts {
@@ -274,8 +293,17 @@ struct Fonts {
     /// The media page's title (Fraunces It 28) and artist.
     song: IDWriteTextFormat,
     artist: IDWriteTextFormat,
-    /// The CLI card: DM Mono, else Cascadia Mono or Consolas.
+    /// The CLI's output and input: DM Mono 11, else Cascadia Mono or Consolas.
     mono: IDWriteTextFormat,
+    /// The CLI's suggestions: the matched part in DM Mono 11 medium.
+    mono_medium: IDWriteTextFormat,
+    /// The CLI's folder chip: DM Mono 10.5; a folder too long is cut in the
+    /// middle, keeping its last part (path ellipsis).
+    chip_mono: IDWriteTextFormat,
+    /// The CLI's shell chip: DM Mono 10.5.
+    mono_small: IDWriteTextFormat,
+    /// The CLI's Stop button: DM Sans 10.5 medium.
+    small_medium: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -390,6 +418,7 @@ impl Renderer {
                 round_cap,
                 epoch: Instant::now(),
                 palette: theme::island(Accent::default(), theme::Surface::default()),
+                cli_caret: std::cell::Cell::new(None),
             })
         }
     }
@@ -408,6 +437,7 @@ impl Renderer {
         self.palette = frame.palette;
         self.scale = win.scale();
         self.regions = HitRegions::default();
+        self.cli_caret.set(None);
         self.ensure_surface(win.size())?;
         // A lost target is rebuilt once; a second failure is reported.
         if let Err(error) = self.paint(style, shape, frame, opacity) {
@@ -444,6 +474,24 @@ impl Renderer {
     /// Maps a client point in physical pixels to what the last frame drew there.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
         self.regions.hit(x / self.scale, y / self.scale)
+    }
+
+    /// Whether the wheel at this client point (physical pixels) scrolls the
+    /// CLI output rather than the pages.
+    pub fn over_cli_output(&self, x: f32, y: f32) -> bool {
+        self.regions.over_cli_output(x / self.scale, y / self.scale)
+    }
+
+    /// The CLI caret the last frame drew, in client physical pixels.
+    pub fn cli_caret(&self) -> Option<RECT> {
+        let r = self.cli_caret.get()?;
+        let px = |v: f32| (v * self.scale).round() as i32;
+        Some(RECT {
+            left: px(r.x),
+            top: px(r.y),
+            right: px(r.right()),
+            bottom: px(r.bottom()),
+        })
     }
 
     fn ensure_surface(&mut self, size: SIZE) -> Result<()> {
@@ -1005,6 +1053,17 @@ impl Fonts {
             };
             snippet.SetTrimming(&trimming, &ellipsis)?;
         }
+        let chip_mono = line(&mono, normal, caption)?;
+        unsafe {
+            let ellipsis = dwrite.CreateEllipsisTrimmingSign(&chip_mono)?;
+            // Trimmed in the middle, keeping what follows the last `\`.
+            let path = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: u32::from('\\'),
+                delimiterCount: 1,
+            };
+            chip_mono.SetTrimming(&path, &ellipsis)?;
+        }
         Ok(Self {
             title: line(&text, medium, 12.5)?,
             secondary: line(&text, normal, body)?,
@@ -1038,6 +1097,10 @@ impl Fonts {
             song: line(&display, medium, 28.0)?,
             artist: line(&text, normal, 12.5)?,
             mono: line(&mono, normal, 11.0)?,
+            mono_medium: line(&mono, medium, 11.0)?,
+            chip_mono,
+            mono_small: line(&mono, normal, caption)?,
+            small_medium: line(&text, medium, caption)?,
         })
     }
 }

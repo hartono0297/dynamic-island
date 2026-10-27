@@ -615,6 +615,8 @@ impl Output {
     }
 
     /// The whole buffer for an EDIT control (`\r\n` line breaks).
+    // The CLI window that read it is gone (the panel draws `lines`).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn text(&self) -> String {
         let mut text = String::new();
         for (i, line) in self.lines.iter().enumerate() {
@@ -628,6 +630,8 @@ impl Output {
 }
 
 /// What the window must do to show the output as it is now.
+// Unused since the CLI moved into the panel, which draws the buffer itself.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum SyncStep {
     Nothing,
@@ -641,6 +645,7 @@ pub enum SyncStep {
 /// holds a few hundred more than the buffer (old ones scrolled out of the
 /// buffer but not out of the window), it is given the whole buffer again,
 /// so the window never holds much more than `OUTPUT_CAP` lines.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, Default)]
 pub struct WindowSync {
     /// `Output::total` when last synced.
@@ -649,6 +654,7 @@ pub struct WindowSync {
     held: usize,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl WindowSync {
     /// The window now shows the whole buffer (just opened, or after `cls`).
     pub fn reset(&mut self, output: &Output) {
@@ -759,11 +765,15 @@ impl Session {
         self.running
     }
 
+    // The panel card that showed these is now the full terminal; the
+    // notch's run status (v3 Run 8) is their next reader.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn last_command(&self) -> Option<&str> {
         self.last_command.as_deref()
     }
 
     /// The last command's last `CARD_LINES` lines, oldest first.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn tail(&self) -> impl Iterator<Item = &str> {
         self.tail.iter().map(String::as_str)
     }

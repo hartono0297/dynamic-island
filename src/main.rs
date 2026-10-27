@@ -4,6 +4,7 @@ mod app;
 mod calendar;
 mod claude;
 mod cli;
+mod cli_panel;
 mod config;
 mod google;
 mod i18n;
@@ -87,7 +88,7 @@ fn main() {
         Some("--demo-cli") => {
             attach_parent_console();
             demo_lang_from_env();
-            ui::cli_window::run_demo();
+            ui::demo::run_cli();
         }
         #[cfg(debug_assertions)]
         Some("--settings") => {
