@@ -268,7 +268,7 @@ const results = await pipeline(
   async task => {
     const b = await safe(
       `build:${task.id}`,
-      `Build this task. Create and commit on a new branch named "task/${task.id}". Run the relevant tests (cargo test --locked) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
+      `Build this task. Create and commit on a new branch named "task/${task.id}". Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Run the relevant tests (cargo test --locked) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
       { phase: 'Build', isolation: 'worktree', model: OPUS, schema: BUILD }
     )
     return b ? { ...b, id: task.id, weight: task.weight, state: 'built' } : { id: task.id, weight: task.weight, state: 'build-failed' }
