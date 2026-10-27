@@ -19,8 +19,11 @@ scrolls instead of growing the window.
 - The painter clips the content to the viewport and draws a thin
   scrollbar thumb (`Layout::scrollbar`).
 - `WM_MOUSEWHEEL` scrolls one row (52 px) per notch (`scroll_by`); a
-  section change resets it. Only Appearance has a viewport; the tests
-  assert that, and that at the end the last card meets the margin.
+  section change resets it. Appearance and General (its second card holds
+  the disk / RAM warnings, [[system-page]]) have a viewport; every other
+  section, Clipboard's seven rows included ([[clipboard-history]]), fits
+  without one. The tests assert that, and that at the end the last card
+  meets the margin.
 
 The robot rows fade and take no clicks when the robot is off (`enabled`
 on `Toggle` / `Segmented`, the stepper's existing flag); the sleep stepper
