@@ -65,7 +65,7 @@ use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
     CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
-    Section, State, Tone, battery_step, layout, scroll_by,
+    Section, State, Tone, battery_step, disk_warn_step, layout, ram_warn_step, scroll_by,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -103,6 +103,10 @@ pub enum Action {
     RobotSleep(u32),
     Greeting(bool),
     BatteryThreshold(u8),
+    /// "Peringatan disk": GB free.
+    DiskWarn(u32),
+    /// "Peringatan RAM": percent used.
+    RamWarn(u8),
     DndHelp,
     Pomo(PomoField, i32),
     SaveGoogle {
@@ -142,6 +146,8 @@ pub struct Model {
     pub robot_sleep: u32,
     pub greeting: bool,
     pub battery_threshold: u8,
+    pub disk_warn_gb: u32,
+    pub ram_warn_percent: u8,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
     pub pomodoro_locked: bool,
@@ -168,6 +174,8 @@ impl Model {
             robot_sleep: cfg.robot_sleep_minutes,
             greeting: cfg.morning_greeting,
             battery_threshold: cfg.battery_threshold,
+            disk_warn_gb: cfg.disk_warn_gb,
+            ram_warn_percent: cfg.ram_warn_percent,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
             calendar: CalStatus::NotConfigured,
@@ -882,6 +890,8 @@ impl Settings {
             cli_start: m.cli_start,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
+            disk_warn_gb: m.disk_warn_gb,
+            ram_warn_percent: m.ram_warn_percent,
             pomodoro: m.pomodoro,
             pomodoro_locked: m.pomodoro_locked,
             google: GoogleState {
@@ -1173,6 +1183,22 @@ impl Settings {
                     Vec::new()
                 } else {
                     post(Action::BatteryThreshold(t))
+                }
+            }
+            Hit::DiskWarn(dir) => {
+                let v = disk_warn_step(m.disk_warn_gb, dir);
+                if v == m.disk_warn_gb {
+                    Vec::new()
+                } else {
+                    post(Action::DiskWarn(v))
+                }
+            }
+            Hit::RamWarn(dir) => {
+                let v = ram_warn_step(m.ram_warn_percent, dir);
+                if v == m.ram_warn_percent {
+                    Vec::new()
+                } else {
+                    post(Action::RamWarn(v))
                 }
             }
             Hit::DndHelp => post(Action::DndHelp),
@@ -1771,6 +1797,8 @@ pub fn run_demo(args: &[String]) {
             Action::RobotSleep(v) => m.robot_sleep = v,
             Action::Greeting(v) => m.greeting = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
+            Action::DiskWarn(v) => m.disk_warn_gb = v,
+            Action::RamWarn(v) => m.ram_warn_percent = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
                 let v = match field {

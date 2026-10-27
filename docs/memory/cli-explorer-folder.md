@@ -49,8 +49,9 @@ Run 3 of the v3.1 plan (keputusan-v3.1.html p2). Pure logic in
   the folder would be cut below 120 px (the Ended state with a result).
 
 Keyboard focus is untouched by the menu: [[cli-panel-keyboard-focus]].
-Settings → Umum gained "Folder awal CLI"; General still fits without
-scrolling (7 rows end at y 432), unlike [[settings-appearance-scroll]].
+Settings → Umum gained "Folder awal CLI" (7 rows end at y 432). Since
+[[system-page]] added a warnings card under them, General scrolls too, like
+[[settings-appearance-scroll]].
 Demo scenes `cli-from-explorer` and `cli-folder-menu` use a fixed "now"
 ([[demo-data-time-of-day]]); shots in [[screenshot-capture-script]].
 

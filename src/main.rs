@@ -18,6 +18,7 @@ mod reminders;
 mod shortcuts;
 mod sources;
 mod state;
+mod system;
 mod theme;
 mod ui;
 

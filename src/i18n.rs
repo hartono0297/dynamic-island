@@ -256,6 +256,16 @@ keys! {
         "No folders yet — open Explorer or cd first";
     CliJustNow => "baru saja", "just now";
 
+    // System page and its notices.
+    System => "Sistem", "System";
+    SystemClean => "Bersihkan", "Clean up";
+    SystemSoon => "segera", "soon";
+    SystemBusiest => "Paling sibuk", "Busiest";
+    SystemRam => "RAM", "RAM";
+    SystemDiskBody => "Buka halaman Sistem untuk detailnya", "Open the System page for details";
+    SystemRamBody => "Di atas batas lebih dari semenit", "Above the limit for over a minute";
+    Open => "Buka", "Open";
+
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
     ShortcutScreenshot => "Screenshot", "Screenshot";
@@ -357,6 +367,10 @@ keys! {
     BatteryAlert => "Peringatan baterai", "Battery alert";
     BatteryAlertDesc => "Kasih tahu saat baterai di bawah ini", "Warn when the charge drops below";
     NoBattery => "Tidak ada baterai", "No battery found";
+    DiskAlert => "Peringatan disk", "Disk alert";
+    DiskAlertDesc => "Saat sisa ruang di bawah", "When free space drops below";
+    RamAlert => "Peringatan RAM", "RAM alert";
+    RamAlertDesc => "Di atas, selama 1 menit", "Above it for 1 minute";
     PopupsHelp => "Cara matikan popup Windows", "Turn off Windows pop-ups";
     PopupsHelpDesc => "Supaya notifikasi tidak muncul dua kali", "So notifications don't show twice";
     ShowHow => "Buka petunjuk", "Show me how";
@@ -531,6 +545,93 @@ pub fn battery_body(lang: Lang, percent: u8) -> String {
     match lang {
         Lang::Id => format!("Sisa {percent}%. Colokin charger."),
         Lang::En => format!("{percent}% left. Plug in the charger."),
+    }
+}
+
+const MIB: u64 = 1024 * 1024;
+const GIB: u64 = MIB * 1024;
+
+/// `value` with one decimal, a comma in Indonesian ("47,2"), a point in
+/// English ("47.2").
+fn one_decimal(lang: Lang, value: f64) -> String {
+    let s = format!("{value:.1}");
+    match lang {
+        Lang::Id => s.replace('.', ","),
+        Lang::En => s,
+    }
+}
+
+/// A size as the System page shows it: "512 MB" under 1 GB, "47,2 GB"
+/// ("47.2 GB"), "1,8 TB" from 1000 GB. Binary units, as Explorer counts.
+pub fn format_size(lang: Lang, bytes: u64) -> String {
+    let mb = (bytes as f64 / MIB as f64).round();
+    // Just under 1 GB rounds up to 1024 MB: "1,0 GB" instead.
+    if mb < 1024.0 {
+        return format!("{mb:.0} MB");
+    }
+    let gb = bytes as f64 / GIB as f64;
+    // Compared as shown (one decimal), so 999.96 GB is not "1000,0 GB".
+    if (gb * 10.0).round() >= 10_000.0 {
+        return format!("{} TB", one_decimal(lang, gb / 1024.0));
+    }
+    format!("{} GB", one_decimal(lang, gb))
+}
+
+/// A drive's meter: "sisa 47,2 GB dari 338,4 GB", "47.2 GB free of 338.4 GB".
+pub fn disk_free(lang: Lang, free: u64, total: u64) -> String {
+    let (f, t) = (format_size(lang, free), format_size(lang, total));
+    match lang {
+        Lang::Id => format!("sisa {f} dari {t}"),
+        Lang::En => format!("{f} free of {t}"),
+    }
+}
+
+/// The RAM meter: "14,2 / 31,8 GB · 44%", both in GB.
+pub fn ram_usage(lang: Lang, used: u64, total: u64, percent: u8) -> String {
+    let gb = |b: u64| one_decimal(lang, b as f64 / GIB as f64);
+    format!("{} / {} GB · {percent}%", gb(used), gb(total))
+}
+
+/// "Uptime 6 j 1 m" ("6 h 1 m"); from a day "Uptime 2 hr 6 j" ("2 d 6 h");
+/// under an hour only the minutes.
+pub fn uptime(lang: Lang, up: std::time::Duration) -> String {
+    let (day, hour) = pick(lang, ("hr", "j"), ("d", "h"));
+    let mins = up.as_secs() / 60;
+    let (d, h, m) = (mins / 1440, mins / 60 % 24, mins % 60);
+    let span = if d > 0 {
+        format!("{d} {day} {h} {hour}")
+    } else if h > 0 {
+        format!("{h} {hour} {m} m")
+    } else {
+        format!("{m} m")
+    };
+    format!("Uptime {span}")
+}
+
+/// Under the CPU ring: "CPU · 8 inti", "CPU · 8 cores" (drawn in capitals).
+pub fn cpu_cores(lang: Lang, cores: u32) -> String {
+    format!("CPU · {cores} {}", pick(lang, "inti", "cores"))
+}
+
+/// A drive's meter name and the start of its notice: "Disk C:".
+pub fn disk_name(letter: char) -> String {
+    format!("Disk {letter}:")
+}
+
+/// The low-disk notice: "Disk C: tinggal 9,6 GB", "Disk C: 9.6 GB left".
+pub fn disk_low_title(lang: Lang, letter: char, free: u64) -> String {
+    let (name, f) = (disk_name(letter), format_size(lang, free));
+    match lang {
+        Lang::Id => format!("{name} tinggal {f}"),
+        Lang::En => format!("{name} {f} left"),
+    }
+}
+
+/// The RAM notice: "RAM terpakai 93%", "RAM 93% used".
+pub fn ram_high_title(lang: Lang, percent: u8) -> String {
+    match lang {
+        Lang::Id => format!("RAM terpakai {percent}%"),
+        Lang::En => format!("RAM {percent}% used"),
     }
 }
 
@@ -1823,6 +1924,14 @@ mod tests {
             for minutes in [30, 60, 90] {
                 all.push(duration_label(lang, minutes));
             }
+            for secs in [300, 21_660, 194_400] {
+                all.push(uptime(lang, Duration::from_secs(secs)));
+            }
+            all.push(disk_free(lang, 47 * GIB, 338 * GIB));
+            all.push(ram_usage(lang, 14 * GIB, 31 * GIB, 44));
+            all.push(cpu_cores(lang, 8));
+            all.push(disk_low_title(lang, 'C', 9 * GIB));
+            all.push(ram_high_title(lang, 93));
             {
                 use crate::cli_folders::Ago;
                 for ago in [
@@ -1852,6 +1961,59 @@ mod tests {
                 assert_no_leak(lang, "formatted", s);
             }
         }
+    }
+
+    #[test]
+    fn system_page_texts_in_both_languages() {
+        use std::time::Duration;
+        let gb = |x: f64| (x * GIB as f64).round() as u64;
+        assert_eq!(format_size(Lang::Id, gb(47.2)), "47,2 GB");
+        assert_eq!(format_size(Lang::En, gb(47.2)), "47.2 GB");
+        assert_eq!(format_size(Lang::Id, gb(3.1)), "3,1 GB");
+        assert_eq!(format_size(Lang::Id, 512 * MIB), "512 MB");
+        assert_eq!(format_size(Lang::En, 0), "0 MB");
+        assert_eq!(format_size(Lang::Id, GIB - 1), "1,0 GB");
+        assert_eq!(format_size(Lang::En, 1023 * MIB), "1023 MB");
+        assert_eq!(format_size(Lang::En, gb(999.96)), "1.0 TB");
+        assert_eq!(format_size(Lang::En, gb(999.9)), "999.9 GB");
+        assert_eq!(format_size(Lang::Id, gb(1863.0)), "1,8 TB");
+        assert_eq!(
+            disk_free(Lang::Id, gb(47.2), gb(338.4)),
+            "sisa 47,2 GB dari 338,4 GB"
+        );
+        assert_eq!(
+            disk_free(Lang::En, gb(47.2), gb(338.4)),
+            "47.2 GB free of 338.4 GB"
+        );
+        assert_eq!(
+            ram_usage(Lang::Id, gb(14.2), gb(31.8), 44),
+            "14,2 / 31,8 GB · 44%"
+        );
+        assert_eq!(
+            ram_usage(Lang::En, gb(14.2), gb(31.8), 44),
+            "14.2 / 31.8 GB · 44%"
+        );
+        let up = Duration::from_secs(6 * 3600 + 60 + 30);
+        assert_eq!(uptime(Lang::Id, up), "Uptime 6 j 1 m");
+        assert_eq!(uptime(Lang::En, up), "Uptime 6 h 1 m");
+        let days = Duration::from_secs(2 * 86_400 + 6 * 3600 + 59 * 60);
+        assert_eq!(uptime(Lang::Id, days), "Uptime 2 hr 6 j");
+        assert_eq!(uptime(Lang::En, days), "Uptime 2 d 6 h");
+        assert_eq!(uptime(Lang::En, Duration::from_secs(720)), "Uptime 12 m");
+        assert_eq!(cpu_cores(Lang::Id, 8), "CPU · 8 inti");
+        assert_eq!(cpu_cores(Lang::En, 8), "CPU · 8 cores");
+        assert_eq!(
+            disk_low_title(Lang::Id, 'C', gb(9.6)),
+            "Disk C: tinggal 9,6 GB"
+        );
+        assert_eq!(
+            disk_low_title(Lang::En, 'C', gb(9.6)),
+            "Disk C: 9.6 GB left"
+        );
+        assert_eq!(ram_high_title(Lang::Id, 93), "RAM terpakai 93%");
+        assert_eq!(ram_high_title(Lang::En, 93), "RAM 93% used");
+        assert_eq!(text(Lang::Id, Key::System), "Sistem");
+        assert_eq!(text(Lang::En, Key::SystemSoon), "soon");
     }
 
     #[test]

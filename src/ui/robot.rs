@@ -519,6 +519,8 @@ pub enum NoticeSort {
     ClaudeWaiting,
     ClaudeDone,
     BatteryLow,
+    /// A drive low on space or RAM high for a minute.
+    SystemLow,
     Greeting,
 }
 
@@ -531,6 +533,7 @@ impl NoticeSort {
             NoticeKind::ClaudeWaiting { .. } => NoticeSort::ClaudeWaiting,
             NoticeKind::ClaudeDone { .. } => NoticeSort::ClaudeDone,
             NoticeKind::BatteryLow => NoticeSort::BatteryLow,
+            NoticeKind::SystemLow => NoticeSort::SystemLow,
             NoticeKind::Greeting => NoticeSort::Greeting,
         }
     }
@@ -604,8 +607,8 @@ pub struct RobotInputs {
 ///
 /// 1. Hidden and the open panel: no robot.
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
-///    pomodoro phase done and Claude done → Happy, low battery → Sad,
-///    greeting → Wave. Other apps' notifications (`App`) → no robot: they
+///    pomodoro phase done and Claude done → Happy, low battery and low disk
+///    or high RAM → Sad, greeting → Wave. Other apps' notifications (`App`) → no robot: they
 ///    keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
 /// 4. Pomodoro → Focus, media → Music, lyric line → Sing.
@@ -620,7 +623,7 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
                 NoticeSort::App => None,
                 NoticeSort::Reminder | NoticeSort::ClaudeWaiting => Some(Expr::Alert),
                 NoticeSort::PomodoroDone | NoticeSort::ClaudeDone => Some(Expr::Happy),
-                NoticeSort::BatteryLow => Some(Expr::Sad),
+                NoticeSort::BatteryLow | NoticeSort::SystemLow => Some(Expr::Sad),
                 NoticeSort::Greeting => Some(Expr::Wave),
             };
         }
@@ -1128,6 +1131,7 @@ mod tests {
             (NoticeSort::PomodoroDone, Expr::Happy),
             (NoticeSort::ClaudeDone, Expr::Happy),
             (NoticeSort::BatteryLow, Expr::Sad),
+            (NoticeSort::SystemLow, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
         ] {
             let spot = Spot::Notice(sort);
@@ -1377,6 +1381,7 @@ mod tests {
             Spot::Notice(NoticeSort::Reminder),
             Spot::Notice(NoticeSort::Greeting),
             Spot::Notice(NoticeSort::BatteryLow),
+            Spot::Notice(NoticeSort::SystemLow),
             Spot::Panel,
             Spot::Hidden,
         ] {

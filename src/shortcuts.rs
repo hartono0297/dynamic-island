@@ -28,6 +28,13 @@ pub enum Action {
     WinKey(VIRTUAL_KEY),
     /// `LockWorkStation`.
     Lock,
+    /// Explorer on a drive's root ("C:\"), from the System page.
+    Drive(char),
+}
+
+/// A drive's root as Explorer takes it: "C:\".
+pub fn drive_root(letter: char) -> String {
+    format!("{letter}:\\")
 }
 
 pub fn shortcut_action(s: Shortcut) -> Action {
@@ -81,6 +88,12 @@ pub fn delay_ms(action: Action) -> u32 {
     }
 }
 
+/// `rel` under `%SystemRoot%`.
+fn system_path(rel: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    std::path::Path::new(&root).join(rel)
+}
+
 /// Carries `action` out. May pump messages (the shell), so the caller must
 /// not hold the app state.
 pub fn run(action: Action) {
@@ -95,20 +108,26 @@ pub fn run(action: Action) {
                 SW_SHOWNORMAL,
             );
         },
-        Action::System(rel) => {
-            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-            let path = std::path::Path::new(&root).join(rel);
-            unsafe {
-                ShellExecuteW(
-                    None,
-                    w!("open"),
-                    &HSTRING::from(path.as_os_str()),
-                    None,
-                    None,
-                    SW_SHOWNORMAL,
-                );
-            }
-        }
+        Action::System(rel) => unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(system_path(rel).as_os_str()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        },
+        Action::Drive(letter) => unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(system_path("explorer.exe").as_os_str()),
+                &HSTRING::from(drive_root(letter)),
+                None,
+                SW_SHOWNORMAL,
+            );
+        },
         Action::WinKey(key) => {
             let input = |vk: VIRTUAL_KEY, up: bool| INPUT {
                 r#type: INPUT_KEYBOARD,
@@ -188,5 +207,7 @@ mod tests {
             let ms = delay_ms(shortcut_action(s));
             assert!((100..=400).contains(&ms), "{s:?}: {ms}");
         }
+        assert_eq!(delay_ms(Action::Drive('C')), 120);
+        assert_eq!(drive_root('D'), r"D:\");
     }
 }

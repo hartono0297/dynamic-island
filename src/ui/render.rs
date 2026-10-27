@@ -64,6 +64,7 @@ use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, Timeline, 
 use crate::notes::Note;
 use crate::pomodoro::Pomodoro;
 use crate::reminders::Reminder;
+use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
 
 // Page drawing lives in its own file; as a child module it shares the
@@ -131,6 +132,20 @@ pub struct Frame<'a> {
     /// Bata in the compact island or in place of a notice's badge; `None`
     /// when it is off or the view has none (the panel, other apps' notices).
     pub robot: Option<RobotFrame>,
+    /// The System page's readings; `None` draws it without numbers.
+    pub system: Option<&'a SystemView<'a>>,
+}
+
+/// What the System page shows.
+pub struct SystemView<'a> {
+    /// The last page sample; `None` before the first (dashes, not zeros).
+    pub sample: Option<&'a SystemSample>,
+    /// The CPU line's points, oldest first (`system::CpuHistory`).
+    pub history: &'a [f32],
+    /// The warning limits: a drive under `disk_warn_gb` free or RAM over
+    /// `ram_warn_percent` draws its meter in ochre.
+    pub disk_warn_gb: u32,
+    pub ram_warn_percent: u8,
 }
 
 /// The robot's face and pose for one frame.
@@ -340,6 +355,14 @@ struct Fonts {
     mono_small: IDWriteTextFormat,
     /// The CLI's Stop button: DM Sans 10.5 medium.
     small_medium: IDWriteTextFormat,
+    /// The System page's CPU figure: DM Sans 600 30, centred.
+    sys_big: IDWriteTextFormat,
+    /// A meter's name ("RAM", "Disk C:"): DM Sans 600 11.5.
+    meter_name: IDWriteTextFormat,
+    /// A meter's figures: DM Sans 11, right-aligned.
+    eleven_right: IDWriteTextFormat,
+    /// A process row's CPU and memory: DM Sans 10.5, right-aligned.
+    small_right: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -1374,6 +1397,7 @@ impl Fonts {
             &self.heading,
             &self.big_time,
             &self.song,
+            &self.sys_big,
         ]
         .contains(&format)
     }
@@ -1464,6 +1488,10 @@ impl Fonts {
             chip_mono,
             mono_small: line(&mono, normal, caption)?,
             small_medium: line(&text, medium, caption)?,
+            sys_big: centered(&display, semi, 30.0)?,
+            meter_name: line(&text, semi, 11.5)?,
+            eleven_right: aligned(&text, normal, 11.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            small_right: aligned(&text, normal, caption, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         })
     }
 }

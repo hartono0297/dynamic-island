@@ -33,7 +33,16 @@ Motion policy (`Motion`, config `robot_animation`):
 
 Robot off: nothing of this runs; widths, timers and drawing are as before.
 
-Related: [[bata-robot-expressions]], [[studio-media-progress-timer]],
+The System page adds two one-shots (see [[system-page]]):
+
+- `TIMER_SYSTEM_PAGE` (17): 2 s, re-armed on each sample, and only while the
+  panel shows the System page. It is killed when the page or panel closes.
+- `TIMER_SYSTEM_WARN` (18): 5 min (sooner only to confirm RAM's minute),
+  re-armed when its reading returns. It is the only new timer while the
+  panel is closed. Its reading runs on the sampler thread, and the island
+  redraws only if it raises a notice.
+
+Related: [[bata-robot-expressions]], [[studio-media-progress-timer]], [[system-page]],
 [[lyric-notch-width]] (a long lyric line's one-shot scroll timer follows the same rule)
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

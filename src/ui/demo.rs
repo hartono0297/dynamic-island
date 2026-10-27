@@ -45,7 +45,7 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
+use super::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
@@ -59,6 +59,7 @@ use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
+use crate::system::{Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice};
 use crate::theme::{self, Accent, Palette, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
@@ -105,6 +106,8 @@ struct Scene {
     clock: Option<&'static str>,
     /// Bata's sheet of faces instead of the island.
     sheet: bool,
+    /// The System page with drive C: under the 10 GB warning (ochre).
+    system_low: bool,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -157,6 +160,8 @@ enum DemoNotice {
     Greeting,
     /// Claude at work (the design's "Claude Code" state).
     ClaudeWorking,
+    /// Disk C: low (keputusan-v3.1.html p4): Bata low, "Buka".
+    System,
 }
 
 const BASE: Scene = Scene {
@@ -177,6 +182,7 @@ const BASE: Scene = Scene {
     robot: None,
     clock: None,
     sheet: false,
+    system_low: false,
 };
 
 /// A scene of Bata in the notch (studio-robot.html p3).
@@ -242,7 +248,7 @@ const fn cli(name: &'static str, which: CliDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 55] = [
+const SCENES: [Scene; 59] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -315,6 +321,7 @@ const SCENES: [Scene; 55] = [
     },
     notice("notice-claude", DemoNotice::Claude),
     notice("notice-battery", DemoNotice::Battery),
+    notice("notice-system", DemoNotice::System),
     notice("notice-app", DemoNotice::App),
     panel("notes-4", Page::Notes),
     Scene {
@@ -343,6 +350,12 @@ const SCENES: [Scene; 55] = [
     Scene {
         lyrics_on: true,
         ..panel("media-lyrics-on", Page::Media)
+    },
+    // Fixed figures (keputusan-v3.1.html p4); never the real machine.
+    panel("system", Page::System),
+    Scene {
+        system_low: true,
+        ..panel("system-low", Page::System)
     },
     cli("cli-empty", CliDemo::Empty),
     cli("cli-ready", CliDemo::Ready),
@@ -444,7 +457,57 @@ const SCENES: [Scene; 55] = [
     ),
     bata("bata-cli-done", ShapeKind::Idle, View0::Idle, Expr::Happy),
     bata("bata-cli-failed", ShapeKind::Idle, View0::Idle, Expr::Sad),
+    bata(
+        "bata-sistem",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::System),
+        Expr::Sad,
+    ),
 ];
+
+/// The design's CPU line: 30 points (60 s), ending on the ring's 33 %.
+const DEMO_CPU: [f32; 30] = [
+    22.0, 26.0, 30.0, 27.0, 25.0, 33.0, 41.0, 39.0, 38.0, 45.0, 52.0, 44.0, 35.0, 30.0, 28.0, 31.0,
+    33.0, 40.0, 47.0, 42.0, 31.0, 29.0, 33.0, 36.0, 31.0, 28.0, 30.0, 35.0, 31.0, 33.0,
+];
+
+/// The System page's fixed figures (keputusan-v3.1.html `sysPanel`): CPU
+/// 33 % on 8 cores, RAM 14,2 of 31,8 GB (44 %), C: and D:, three apps,
+/// up 6 h 1 m. `low`: C: has 9,6 GB left, under the 10 GB warning.
+fn demo_system(low: bool) -> SystemSample {
+    let gb = |x: f64| (x * GIB as f64) as u64;
+    let app = |name: &str, cpu: f32, mem: f64| ProcUsage {
+        name: name.into(),
+        cpu,
+        mem: gb(mem),
+    };
+    SystemSample {
+        kind: SampleKind::Page,
+        cpu: 33.0,
+        cores: 8,
+        // Shown as 14,2 GB, and 44 % rather than the 45 % 14.2 would round to.
+        ram_used: gb(14.1505),
+        ram_total: gb(31.8),
+        drives: vec![
+            Drive {
+                letter: 'C',
+                free: gb(if low { 9.6 } else { 47.2 }),
+                total: gb(338.4),
+            },
+            Drive {
+                letter: 'D',
+                free: gb(33.0),
+                total: gb(137.0),
+            },
+        ],
+        procs: vec![
+            app("Chrome", 12.0, 3.1),
+            app("Code", 7.0, 1.4),
+            app("AutoCAD", 5.0, 2.2),
+        ],
+        uptime: Duration::from_secs(6 * 3600 + 60),
+    }
+}
 
 /// `DI_DEMO_STEP`: a step number, or a scene's name (Pill), or
 /// `notch:` and a name.
@@ -525,6 +588,7 @@ fn run_scenes(scenes: &[Scene]) {
     let notes30 = many_notes(today);
     let reminders5 = demo_reminders(today);
     let reminders12 = many_reminders(today);
+    let (system_ok, system_low) = (demo_system(false), demo_system(true));
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -624,6 +688,16 @@ fn run_scenes(scenes: &[Scene]) {
                 30 => &notes30,
                 n => &notes[..n.min(notes.len())],
             };
+            let system = SystemView {
+                sample: Some(if scene.system_low {
+                    &system_low
+                } else {
+                    &system_ok
+                }),
+                history: &DEMO_CPU,
+                disk_warn_gb: 10,
+                ram_warn_percent: 90,
+            };
             let frame = Frame {
                 view: &view,
                 media: Some(if scene.long_media {
@@ -665,6 +739,7 @@ fn run_scenes(scenes: &[Scene]) {
                     expr,
                     pose: Pose::default(),
                 }),
+                system: Some(&system),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -735,6 +810,13 @@ fn demo_notice(which: DemoNotice) -> Notice {
             format!("dynamic-island · {}", tr(Key::DemoFilesChanged)),
             NoticeKind::ClaudeDone {
                 session_id: "demo".into(),
+            },
+        ),
+        DemoNotice::System => alert_notice(
+            crate::i18n::lang(),
+            &Alert::Disk {
+                letter: 'C',
+                free: (9.6 * GIB as f64) as u64,
             },
         ),
     }

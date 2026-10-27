@@ -62,10 +62,41 @@ pub struct Config {
     /// the file while off.
     #[serde(skip_serializing_if = "is_false")]
     pub media_log: bool,
+    /// The low-disk notice: a fixed drive with less than this many GB free
+    /// (`DISK_WARN_RANGE`). Owned by the file like the battery threshold.
+    #[serde(deserialize_with = "disk_warn")]
+    pub disk_warn_gb: u32,
+    /// The RAM notice: used memory above this percent for a minute
+    /// (`RAM_WARN_RANGE`).
+    #[serde(deserialize_with = "ram_warn")]
+    pub ram_warn_percent: u8,
 }
+
+/// The disk limit's (min, max, step) in GB.
+pub const DISK_WARN_RANGE: (u32, u32, u32) = (5, 100, 5);
+/// The RAM limit's (min, max, step) in percent.
+pub const RAM_WARN_RANGE: (u8, u8, u8) = (70, 98, 1);
 
 fn is_false(b: &bool) -> bool {
     !b
+}
+
+/// Any number, kept in `DISK_WARN_RANGE`; a non-number is the default.
+fn disk_warn<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let (min, max, _) = DISK_WARN_RANGE;
+    Ok(v.as_f64().map_or(Config::default().disk_warn_gb, |n| {
+        n.clamp(f64::from(min), f64::from(max)).round() as u32
+    }))
+}
+
+/// Any number, kept in `RAM_WARN_RANGE`; a non-number is the default.
+fn ram_warn<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let (min, max, _) = RAM_WARN_RANGE;
+    Ok(v.as_f64().map_or(Config::default().ram_warn_percent, |n| {
+        n.clamp(f64::from(min), f64::from(max)).round() as u8
+    }))
 }
 
 /// Any number, kept in 1–60; a non-number is the default.
@@ -109,6 +140,8 @@ impl Default for Config {
             morning_greeting: true,
             last_greeting: None,
             media_log: false,
+            disk_warn_gb: 10,
+            ram_warn_percent: 90,
         }
     }
 }
@@ -158,8 +191,8 @@ pub fn read_at(path: &Path) -> OnDisk {
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
 /// language, theme, idle clock, lyrics, CLI shell and start folder, the robot, its greeting
 /// and the day it last greeted) over everything else as it
-/// is on disk (Google client, muted apps, battery threshold), which the owner
-/// may have edited by hand while the island ran.
+/// is on disk (Google client, muted apps, battery threshold, the disk and RAM
+/// limits), which the owner may have edited by hand while the island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
     Config {
         style: mem.style,
@@ -493,8 +526,46 @@ mod tests {
             morning_greeting: false,
             last_greeting: NaiveDate::from_ymd_opt(2026, 1, 2),
             media_log: true,
+            disk_warn_gb: 25,
+            ram_warn_percent: 85,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn system_limits_default_round_trip_and_clamp() {
+        let c = Config::default();
+        assert_eq!((c.disk_warn_gb, c.ram_warn_percent), (10, 90));
+        // An older config without the fields loads the defaults.
+        let old = parse(r#"{"style":"Notch","battery_threshold":30}"#);
+        assert_eq!((old.disk_warn_gb, old.ram_warn_percent), (10, 90));
+        let set = Config {
+            disk_warn_gb: 40,
+            ram_warn_percent: 75,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains(r#""disk_warn_gb":40"#), "{json}");
+        assert!(json.contains(r#""ram_warn_percent":75"#), "{json}");
+        assert_eq!(parse(&json), set);
+        // Out of range clamps; a typo is the default; the rest of the file stays.
+        let hand = parse(r#"{"style":"Notch","disk_warn_gb":500,"ram_warn_percent":5}"#);
+        assert_eq!(
+            (hand.style, hand.disk_warn_gb, hand.ram_warn_percent),
+            (Style::Notch, 100, 70)
+        );
+        let low = parse(r#"{"disk_warn_gb":-3,"ram_warn_percent":120}"#);
+        assert_eq!((low.disk_warn_gb, low.ram_warn_percent), (5, 98));
+        let typo = parse(r#"{"disk_warn_gb":"sepuluh","ram_warn_percent":null}"#);
+        assert_eq!((typo.disk_warn_gb, typo.ram_warn_percent), (10, 90));
+        // Owned by the file: a save keeps the value on disk.
+        let disk = Config {
+            disk_warn_gb: 30,
+            ram_warn_percent: 80,
+            ..Config::default()
+        };
+        let merged = merge_owned(disk, &Config::default());
+        assert_eq!((merged.disk_warn_gb, merged.ram_warn_percent), (30, 80));
     }
 
     #[test]
