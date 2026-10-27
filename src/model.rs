@@ -91,9 +91,18 @@ pub enum Event {
     /// The reminder was edited, deleted or dismissed elsewhere: its sticky
     /// notice goes.
     ReminderCleared(String),
-    /// The CLI window is the active window (true) or not: like an open editor,
-    /// it keeps the panel open meanwhile.
+    /// The CLI page's input has the keyboard (true) or lost it: like an open
+    /// editor, it keeps the panel open meanwhile.
     CliFocus(bool),
+    /// Scroll the CLI output `lines` up (negative: down), at most `max` lines
+    /// above the newest: the wheel over the output, PageUp and PageDown.
+    CliScroll {
+        lines: i32,
+        max: usize,
+    },
+    /// This many new output lines arrived; a view scrolled up stays on the
+    /// lines it shows.
+    CliOutput(usize),
     /// A calendar sync result; `App` keeps it, the reducer ignores it.
     Calendar(CalendarSnapshot),
     /// Output or the end of a CLI command; `App` keeps it, the reducer ignores it.
@@ -137,8 +146,12 @@ pub enum Hit {
     Strip,
     /// A tile on the Pintasan page.
     Shortcut(Shortcut),
-    /// The CLI page's card or its "Ketik perintah" button.
-    CliOpen,
+    /// The CLI page's terminal: the input takes the keyboard.
+    CliInput,
+    /// The CLI header's Stop button (the same as Ctrl+C).
+    CliStop,
+    /// The CLI header's enlarge / shrink button.
+    CliExpand,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,8 +188,13 @@ pub enum Effect {
     SaveLyrics(bool),
     /// Run a shortcut once the panel has collapsed.
     RunShortcut(Shortcut),
-    /// Open the CLI window (or bring it forward).
-    OpenCli,
+    /// Give the CLI input the keyboard (the island activates for it).
+    FocusCliInput,
+    /// The CLI input lets go of the keyboard; the window that had it
+    /// before gets it back.
+    ReleaseCliFocus,
+    /// End the running command (Stop, Ctrl+C).
+    StopCli,
 }
 
 /// A Pomodoro setting the settings window's steppers can change.

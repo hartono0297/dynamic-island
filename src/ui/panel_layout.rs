@@ -7,7 +7,6 @@ use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
-use crate::cli::CARD_LINES;
 use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::notes::Note;
 use crate::reminders::{Reminder, local_time};
@@ -106,20 +105,46 @@ pub struct ListLayout {
     pub more: Option<(usize, Rect)>,
 }
 
-/// The CLI page: a terminal-like card with the last command and its last
-/// lines, and a button that opens the CLI window.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The CLI page's header chips as the renderer measured them: each chip's
+/// full width, left to right (the first, the folder, gives way when room is
+/// short), and the Stop button's while a command runs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CliHead {
+    pub chips: Vec<f32>,
+    pub stop: Option<f32>,
+}
+
+/// The CLI page: the title and header chips, then the terminal: output
+/// filling from the bottom over the input line.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CliLayout {
     /// "CLI".
     pub header: Rect,
-    /// Right of the header: "● berjalan" or the shell's name.
-    pub status: Rect,
-    pub card: Rect,
-    /// `> command` first, then up to `cli::CARD_LINES` output lines.
-    pub lines: [Rect; 1 + CARD_LINES],
-    /// "Ketik perintah".
-    pub button: Rect,
+    /// Folder, shell or the run's state, left to right as asked.
+    pub chips: Vec<Rect>,
+    /// While a command runs, right of the chips.
+    pub stop: Option<Rect>,
+    /// The enlarge / shrink button, top right.
+    pub expand: Rect,
+    /// The dark terminal under the header.
+    pub term: Rect,
+    /// Where output lines are drawn, the newest at the bottom.
+    pub output: Rect,
+    /// Output lines that fit, `CLI_LINE_H` apart.
+    pub rows: usize,
+    /// The input line along the terminal's bottom.
+    pub input: Rect,
+    /// The `›` prompt, then the typed text up to the hint.
+    pub prompt: Rect,
+    pub field: Rect,
 }
+
+/// The CLI output's line pitch: DM Mono 11 at the design's 1.62.
+pub const CLI_LINE_H: f32 = 17.8;
+/// The terminal's corners.
+pub const CLI_TERM_RADIUS: f32 = 16.0;
+/// A suggestion row's height.
+pub const CLI_SUGGEST_ROW: f32 = 30.0;
 
 /// The Pintasan page: two rows of four tiles.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -264,12 +289,26 @@ const NOTE_MAX_H: f32 = 92.0;
 const LIST_MORE_GAP: f32 = 4.0;
 const LIST_MORE_W: f32 = 120.0;
 
-const CLI_STATUS_W: f32 = 160.0;
-const CLI_LINE_H: f32 = 20.0;
-const CLI_PAD: f32 = 14.0;
-const CLI_BUTTON_W: f32 = 150.0;
-const CLI_BUTTON_H: f32 = 30.0;
-const CLI_GAP: f32 = 12.0;
+/// The CLI page after the design's `.panel` (16 px over the header, 28 px
+/// under the terminal for the dots), `.ph` (28 px, 8 under it), `.term`,
+/// `.out` (10 / 14 px in) and `.inp` (44 px).
+const CLI_TOP: f32 = 16.0;
+const CLI_STRIP_GAP: f32 = 6.0;
+const CLI_HEAD_H: f32 = 28.0;
+const CLI_HEAD_GAP: f32 = 8.0;
+const CLI_BOTTOM: f32 = 24.0;
+const CLI_TITLE_W: f32 = 56.0;
+const CLI_CHIP_H: f32 = 20.0;
+const CLI_CHIP_GAP: f32 = 6.0;
+const CLI_STOP_H: f32 = 22.0;
+const CLI_EXPAND: f32 = 26.0;
+const CLI_OUT_X: f32 = 14.0;
+const CLI_OUT_TOP: f32 = 10.0;
+const CLI_INPUT_H: f32 = 44.0;
+const CLI_PROMPT_W: f32 = 16.0;
+const CLI_SUGGEST_INSET: f32 = 10.0;
+const CLI_SUGGEST_GAP: f32 = 6.0;
+const CLI_SUGGEST_PAD: f32 = 5.0;
 
 const TILE_GAP: f32 = 10.0;
 /// Tiles stay this short when the panel has room to spare.
@@ -1087,41 +1126,98 @@ pub fn media_progress_layout(l: &ExpandedLayout) -> MediaProgress {
     }
 }
 
-/// Header with the status on its right; under it the card (prompt line and
-/// output lines from its top) and the button at its right edge, the two
-/// centred in the space left.
-pub fn cli_layout(s: ShapeRect, strip: bool) -> CliLayout {
-    let top = content_top(s, strip);
-    let bottom = content_bottom(s);
+/// The title on the left; the chips, Stop and the enlarge button right-
+/// aligned on the same row; under them the terminal down to the dots: the
+/// output area over the input line. Works for the small and the enlarged
+/// panel alike (`s` is the shape drawn).
+pub fn cli_layout(s: ShapeRect, strip: bool, head: &CliHead) -> CliLayout {
+    let top = if strip {
+        waiting_strip(s).bottom() + CLI_STRIP_GAP
+    } else {
+        s.y + CLI_TOP
+    };
     let (l, r) = (left(s), right(s));
-    let header = rect(l, top, r - l - CLI_STATUS_W - 8.0, HEADER_H);
-    let status = rect(r - CLI_STATUS_W, top, CLI_STATUS_W, HEADER_H);
-    let body = header.bottom() + 8.0;
-    let card_h = 2.0 * CLI_PAD + (1 + CARD_LINES) as f32 * CLI_LINE_H;
-    let group_h = card_h + CLI_GAP + CLI_BUTTON_H;
-    let y = body + ((bottom - body - group_h) / 2.0).max(0.0);
-    let card = rect(l, y, r - l, card_h);
-    let lines = std::array::from_fn(|i| {
-        rect(
-            card.x + CLI_PAD,
-            card.y + CLI_PAD + i as f32 * CLI_LINE_H,
-            card.w - 2.0 * CLI_PAD,
-            CLI_LINE_H,
-        )
+    let mid = top + CLI_HEAD_H / 2.0;
+    let header = rect(l, top, CLI_TITLE_W, CLI_HEAD_H);
+    let expand = rect(
+        r - CLI_EXPAND,
+        mid - CLI_EXPAND / 2.0,
+        CLI_EXPAND,
+        CLI_EXPAND,
+    );
+    // Right to left from the button: Stop, then the chips.
+    let mut x = expand.x - CLI_CHIP_GAP;
+    let stop = head.stop.map(|w| {
+        x -= w;
+        let r = rect(x, mid - CLI_STOP_H / 2.0, w, CLI_STOP_H);
+        x -= CLI_CHIP_GAP;
+        r
     });
-    let button = rect(
-        r - CLI_BUTTON_W,
-        card.bottom() + CLI_GAP,
-        CLI_BUTTON_W,
-        CLI_BUTTON_H,
+    let floor = header.right() + CLI_CHIP_GAP;
+    let mut chips = Vec::with_capacity(head.chips.len());
+    for (i, &want) in head.chips.iter().enumerate().rev() {
+        // The first chip (the folder) takes what the others leave.
+        let w = if i == 0 {
+            want.min(x - floor).max(0.0)
+        } else {
+            want
+        };
+        x -= w;
+        chips.push(rect(x, mid - CLI_CHIP_H / 2.0, w, CLI_CHIP_H));
+        x -= CLI_CHIP_GAP;
+    }
+    chips.reverse();
+    let term_top = header.bottom() + CLI_HEAD_GAP;
+    let term = rect(l, term_top, r - l, s.y + s.h - CLI_BOTTOM - term_top);
+    let input = rect(term.x, term.bottom() - CLI_INPUT_H, term.w, CLI_INPUT_H);
+    let output = rect(
+        term.x + CLI_OUT_X,
+        term.y + CLI_OUT_TOP,
+        term.w - 2.0 * CLI_OUT_X,
+        input.y - term.y - CLI_OUT_TOP,
+    );
+    let rows = (output.h / CLI_LINE_H).floor().max(0.0) as usize;
+    let prompt = rect(input.x + CLI_OUT_X, input.y, CLI_PROMPT_W, input.h);
+    let field = rect(
+        prompt.right(),
+        input.y,
+        input.right() - CLI_OUT_X - prompt.right(),
+        input.h,
     );
     CliLayout {
         header,
-        status,
-        card,
-        lines,
-        button,
+        chips,
+        stop,
+        expand,
+        term,
+        output,
+        rows,
+        input,
+        prompt,
+        field,
     }
+}
+
+/// The suggestion box just above the input, `n` rows tall, and its rows.
+pub fn cli_suggestions(l: &CliLayout, n: usize) -> (Rect, Vec<Rect>) {
+    let h = n as f32 * CLI_SUGGEST_ROW + 2.0 * CLI_SUGGEST_PAD;
+    let boxed = rect(
+        l.term.x + CLI_SUGGEST_INSET,
+        l.input.y - CLI_SUGGEST_GAP - h,
+        l.term.w - 2.0 * CLI_SUGGEST_INSET,
+        h,
+    );
+    let rows = (0..n)
+        .map(|i| {
+            rect(
+                boxed.x + CLI_SUGGEST_PAD,
+                boxed.y + CLI_SUGGEST_PAD + i as f32 * CLI_SUGGEST_ROW,
+                boxed.w - 2.0 * CLI_SUGGEST_PAD,
+                CLI_SUGGEST_ROW,
+            )
+        })
+        .collect();
+    (boxed, rows)
 }
 
 /// Four equal tiles per row, two rows, centred under the header.
@@ -1236,8 +1332,11 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(l.lyrics, Hit::LyricsToggle);
         }
         PageLayout::Cli(l) => {
-            add(l.card, Hit::CliOpen);
-            add(l.button, Hit::CliOpen);
+            if let Some(stop) = l.stop {
+                add(stop, Hit::CliStop);
+            }
+            add(l.expand, Hit::CliExpand);
+            add(l.term, Hit::CliInput);
         }
         PageLayout::Shortcuts(l) => {
             for (s, r) in l.tiles {
@@ -1420,12 +1519,35 @@ mod tests {
             "media".into(),
             PageLayout::Media(media_panel_layout(s, strip)),
         ));
-        out.push(("cli".into(), PageLayout::Cli(cli_layout(s, strip))));
+        for head in cli_heads() {
+            let l = cli_layout(s, strip, &head);
+            out.push((format!("cli {head:?}"), PageLayout::Cli(l)));
+        }
         out.push((
             "shortcuts".into(),
             PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         ));
         out
+    }
+
+    /// Header chips of the CLI page: folder and shell, running with Stop,
+    /// a result, and a folder far too long for the row.
+    fn cli_heads() -> Vec<CliHead> {
+        vec![
+            CliHead {
+                chips: vec![150.0, 76.0],
+                stop: None,
+            },
+            CliHead {
+                chips: vec![110.0],
+                stop: Some(56.0),
+            },
+            CliHead {
+                chips: vec![600.0, 76.0],
+                stop: None,
+            },
+            CliHead::default(),
+        ]
     }
 
     fn disjoint(a: Rect, b: Rect) -> bool {
@@ -2135,21 +2257,20 @@ mod tests {
         let mid = (bar.x + bar.w / 2.0, bar.y + bar.h / 2.0);
         assert!(!r.iter().any(|r| r.rect.contains(mid.0, mid.1)));
 
-        let l = cli_layout(s, false);
-        let r = regions(s, &PageLayout::Cli(l), false);
+        let idle = cli_layout(s, false, &cli_heads()[0]);
+        let r = regions(s, &PageLayout::Cli(idle.clone()), false);
+        let region = |rect, hit| Region { rect, hit };
         assert_eq!(
             r,
             [
-                Region {
-                    rect: l.card,
-                    hit: Hit::CliOpen
-                },
-                Region {
-                    rect: l.button,
-                    hit: Hit::CliOpen
-                }
+                region(idle.expand, Hit::CliExpand),
+                region(idle.term, Hit::CliInput)
             ]
         );
+        let running = cli_layout(s, false, &cli_heads()[1]);
+        let r = regions(s, &PageLayout::Cli(running.clone()), false);
+        assert_eq!(r[0], region(running.stop.unwrap(), Hit::CliStop));
+        assert_eq!(r.len(), 3);
 
         let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false)), false);
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
@@ -2187,29 +2308,83 @@ mod tests {
     }
 
     #[test]
-    fn cli_card_holds_the_prompt_and_four_lines_above_its_button() {
+    fn cli_terminal_follows_the_design_in_both_sizes() {
         for style in [Style::Pill, Style::Notch] {
-            let s = panel(style);
-            for strip in [false, true] {
-                let l = cli_layout(s, strip);
-                assert_eq!(l.lines.len(), 5);
-                for line in l.lines {
-                    assert!(line.x > l.card.x && line.right() < l.card.right());
-                    assert!(line.y >= l.card.y && line.bottom() <= l.card.bottom());
+            for kind in [ShapeKind::Panel, ShapeKind::PanelTall] {
+                let s = shape_for(style, kind);
+                let head = &cli_heads()[0];
+                let l = cli_layout(s, false, head);
+                // 16 px over the 28 px header, 8 under it, 24 under the
+                // terminal: 214 px small, 364 enlarged.
+                assert_eq!(l.header.y, s.y + 16.0);
+                assert_eq!(l.term.y, l.header.bottom() + 8.0);
+                assert_eq!(l.term.bottom(), s.y + s.h - 24.0);
+                let want = if kind == ShapeKind::Panel {
+                    214.0
+                } else {
+                    364.0
+                };
+                assert_eq!(l.term.h, want, "{style:?} {kind:?}");
+                assert_eq!((l.term.x, l.term.right()), (left(s), right(s)));
+                // The input line along the bottom, the output above it.
+                assert_eq!(l.input.h, 44.0);
+                assert_eq!(l.input.bottom(), l.term.bottom());
+                assert!(l.output.bottom() <= l.input.y);
+                assert!(l.output.y >= l.term.y + 10.0);
+                assert!(l.rows as f32 * CLI_LINE_H <= l.output.h);
+                assert!(l.rows >= if kind == ShapeKind::Panel { 8 } else { 17 });
+                assert!(l.prompt.right() <= l.field.x);
+                assert!(l.field.right() <= l.input.right() - 14.0);
+                // Chips and the button on the header row, right-aligned, in order.
+                assert_eq!(l.expand.right(), right(s));
+                assert_eq!(l.expand.w, 26.0);
+                let mut edge = l.header.right();
+                for c in &l.chips {
+                    assert!(c.x >= edge, "{c:?}");
+                    edge = c.right();
                 }
-                for pair in l.lines.windows(2) {
-                    assert!(pair[0].bottom() <= pair[1].y);
-                }
-                assert!(l.card.y >= l.header.bottom());
-                assert!(l.button.y >= l.card.bottom());
-                assert_eq!(l.button.right(), l.card.right(), "right-aligned");
-                assert!(l.header.right() < l.status.x);
-                assert_eq!(l.status.right(), right(s));
+                assert!(edge < l.expand.x);
+                assert_eq!(l.chips[0].w, head.chips[0]);
+                // The dots stay clear.
+                let (dots, _) = page_dots(s, Page::Cli);
+                assert!(l.term.bottom() < dots[0].y);
             }
-            let (a, b) = (cli_layout(s, false), cli_layout(s, true));
-            assert_eq!(b.header.y - a.header.y, 24.0);
-            assert!(b.card.y >= a.card.y);
+            let s = panel(style);
+            // The waiting strip pushes it all down.
+            let (a, b) = (
+                cli_layout(s, false, &cli_heads()[0]),
+                cli_layout(s, true, &cli_heads()[0]),
+            );
+            assert!(b.header.y >= waiting_strip(s).bottom());
+            assert!(b.header.y > a.header.y && b.term.bottom() == a.term.bottom());
+            // A long folder gives way to the shell chip and the button.
+            let long = cli_layout(s, false, &cli_heads()[2]);
+            assert!(long.chips[0].x >= long.header.right());
+            assert!(long.chips[0].w < 600.0 && long.chips[0].w > 100.0);
+            assert_eq!(long.chips[1].w, 76.0);
+            // Stop sits right of the state chip, before the button.
+            let run = cli_layout(s, false, &cli_heads()[1]);
+            let stop = run.stop.unwrap();
+            assert!(run.chips[0].right() < stop.x && stop.right() < run.expand.x);
         }
+    }
+
+    #[test]
+    fn cli_suggestions_sit_just_above_the_input() {
+        let s = panel(Style::Pill);
+        let l = cli_layout(s, false, &cli_heads()[0]);
+        let (boxed, rows) = cli_suggestions(&l, 3);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(boxed.bottom(), l.input.y - 6.0);
+        assert_eq!(
+            (boxed.x, boxed.right()),
+            (l.term.x + 10.0, l.term.right() - 10.0)
+        );
+        assert!(boxed.y >= l.term.y, "three rows fit the small terminal");
+        for r in &rows {
+            assert!(r.y >= boxed.y && r.bottom() <= boxed.bottom());
+        }
+        assert!(cli_suggestions(&l, 0).1.is_empty());
     }
 
     #[test]
@@ -2294,8 +2469,8 @@ mod tests {
                             drawn.extend([p.bar, p.elapsed, p.total]);
                         }
                         PageLayout::Cli(l) => {
-                            drawn.extend([l.header, l.status]);
-                            drawn.extend(l.lines);
+                            drawn.extend([l.header, l.output, l.prompt, l.field]);
+                            drawn.extend(l.chips.iter().filter(|c| c.w > 0.0));
                         }
                         PageLayout::Shortcuts(l) => {
                             drawn.push(l.header);

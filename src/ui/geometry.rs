@@ -11,6 +11,9 @@ use crate::theme::{Palette, radius};
 
 pub const WINDOW_W: f32 = 620.0;
 pub const WINDOW_H: f32 = 330.0;
+/// The window's height while the enlarged CLI panel shows or morphs: the
+/// Pill's top gap, 440 px and the morph's overshoot.
+pub const TALL_WINDOW_H: f32 = 460.0;
 pub const ANIM_MS: u64 = 240;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,6 +34,8 @@ pub enum ShapeKind {
     PomodoroCompact,
     Notice,
     Panel,
+    /// The CLI page enlarged: the panel 440 px tall.
+    PanelTall,
 }
 
 /// Pill floats this far below the top edge; Notch is flush with it.
@@ -45,11 +50,12 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
         ShapeKind::MediaLyric => (300.0, 34.0),
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::Panel => (560.0, 290.0),
+        ShapeKind::PanelTall => (560.0, 440.0),
     };
     // The panel and notices round the same in both styles; compact shapes
     // are a full pill floating, a gentler curve hanging from the edge.
     let radius = match kind {
-        ShapeKind::Panel => radius::PANEL,
+        ShapeKind::Panel | ShapeKind::PanelTall => radius::PANEL,
         ShapeKind::Notice => radius::NOTICE,
         _ if style == Style::Pill => h / 2.0,
         _ => NOTCH_COMPACT_RADIUS,
@@ -287,9 +293,16 @@ pub struct HitRegions {
     pub buttons: Option<[Rect; 3]>,
     /// Panel regions from `panel_layout::regions`; checked before `buttons`.
     pub regions: Vec<Region>,
+    /// The CLI page's output, where the wheel scrolls instead of paging.
+    pub cli_output: Option<Rect>,
 }
 
 impl HitRegions {
+    /// Whether the wheel at this point scrolls the CLI output.
+    pub fn over_cli_output(&self, x: f32, y: f32) -> bool {
+        self.cli_output.is_some_and(|r| r.contains(x, y))
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let (style, shape) = self.shape?;
         if !shape_contains(style, shape, x, y) {
@@ -424,6 +437,30 @@ mod tests {
         assert!(p.y + p.h <= WINDOW_H);
         assert_eq!(corner_radius(Style::Notch, n), 30.0);
         assert_eq!(corner_radius(Style::Pill, p), 30.0);
+    }
+
+    #[test]
+    fn tall_panel_fits_the_tall_window_even_overshooting() {
+        let peak = (0..=100)
+            .map(|i| ease_out_back(i as f32 / 100.0))
+            .fold(0.0, f32::max);
+        for style in [Style::Pill, Style::Notch] {
+            let tall = shape_for(style, ShapeKind::PanelTall);
+            assert_eq!(
+                (tall.x, tall.w, tall.h, tall.radius),
+                (30.0, 560.0, 440.0, 30.0)
+            );
+            assert!(tall.y + tall.h <= TALL_WINDOW_H);
+            // Growing from any shape eases a little past the target.
+            for from in [ShapeKind::Idle, ShapeKind::Panel, ShapeKind::Notice] {
+                let s = lerp_shape(shape_for(style, from), tall, peak);
+                assert!(s.y + s.h <= TALL_WINDOW_H, "{style:?} from {from:?}: {s:?}");
+            }
+            // The small window still holds the small panel's overshoot.
+            let idle = shape_for(style, ShapeKind::Idle);
+            let small = lerp_shape(idle, shape_for(style, ShapeKind::Panel), peak);
+            assert!(small.y + small.h <= WINDOW_H, "{style:?}: {small:?}");
+        }
     }
 
     #[test]

@@ -40,10 +40,17 @@ pub struct IslandState {
     hover: bool,
     /// An editor window is open; it keeps the panel open like hover.
     editor_open: bool,
-    /// The CLI window is active; it keeps the panel open like an editor.
+    /// The CLI page's input has the keyboard; it keeps the panel open like
+    /// an editor.
     cli_focused: bool,
+    /// The CLI page shows the enlarged panel; back to small when the panel
+    /// closes.
+    cli_tall: bool,
+    /// How many lines the CLI output is scrolled up from the newest; 0
+    /// follows new output. Reset when the panel closes.
+    cli_scroll: usize,
     /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
-    /// open (an editor, the CLI window), until the pointer leaves the island
+    /// open (an editor; the CLI input lets go), until the pointer leaves the island
     /// and comes back. Leaving alone is not enough: once the panel shrinks
     /// the pointer is over transparent pixels, so the leave arrives at the
     /// next small move, before the screen clip or picker is up.
@@ -77,6 +84,8 @@ impl IslandState {
             hover: false,
             editor_open: false,
             cli_focused: false,
+            cli_tall: false,
+            cli_scroll: 0,
             collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
@@ -141,6 +150,18 @@ impl IslandState {
             }
             Event::EditorOpen(on) => self.editor_open = on,
             Event::CliFocus(on) => self.cli_focused = on,
+            Event::CliScroll { lines, max } => {
+                if self.view() == View::Panel(Page::Cli) {
+                    let scrolled = self.cli_scroll as i64 + i64::from(lines);
+                    self.cli_scroll = scrolled.clamp(0, max as i64) as usize;
+                }
+            }
+            Event::CliOutput(n) => {
+                // A view scrolled up stays on what it shows; at 0 it follows.
+                if self.cli_scroll > 0 {
+                    self.cli_scroll = self.cli_scroll.saturating_add(n);
+                }
+            }
             Event::Wheel(delta) => self.wheel(delta),
             Event::Today(date) => self.set_today(date),
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
@@ -149,10 +170,18 @@ impl IslandState {
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
+        // The input lets go once its page is gone: another page, or the
+        // panel shut for a shortcut.
+        if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
+            self.cli_focused = false;
+            effects.push(Effect::ReleaseCliFocus);
+        }
         if panel_was_open && !self.panel_open() {
             self.wheel = 0;
             self.notes_page = 0;
             self.reminders_page = 0;
+            self.cli_tall = false;
+            self.cli_scroll = 0;
         }
         let calendar_shown = self.view() == View::Panel(Page::Calendar);
         // Any navigation, a view change, or the calendar leaving the screen
@@ -210,9 +239,19 @@ impl IslandState {
         self.lyrics_on
     }
 
-    /// The CLI window is active and holds the panel open.
+    /// The CLI input has the keyboard and holds the panel open.
     pub fn cli_focused(&self) -> bool {
         self.cli_focused
+    }
+
+    /// The CLI page shows the enlarged (560 × 440) panel.
+    pub fn cli_tall(&self) -> bool {
+        self.cli_tall
+    }
+
+    /// Lines the CLI output is scrolled up from the newest.
+    pub fn cli_scroll(&self) -> usize {
+        self.cli_scroll
     }
 
     pub fn lyrics_ready(&self) -> bool {
@@ -339,7 +378,11 @@ impl IslandState {
                     effects.push(Effect::RunShortcut(s));
                 }
             }
-            Hit::CliOpen => effects.push(Effect::OpenCli),
+            Hit::CliInput | Hit::CliStop | Hit::CliExpand
+                if self.view() != View::Panel(Page::Cli) => {}
+            Hit::CliInput => effects.push(Effect::FocusCliInput),
+            Hit::CliStop => effects.push(Effect::StopCli),
+            Hit::CliExpand => self.cli_tall = !self.cli_tall,
         }
     }
 
@@ -1057,46 +1100,42 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_collapse_beats_an_open_editor_or_cli() {
+    fn shortcut_collapse_beats_an_open_editor() {
         let t0 = Instant::now();
-        for keep in [Event::EditorOpen(true), Event::CliFocus(true)] {
-            let mut s = st();
-            open_on(&mut s, Page::Shortcuts, t0);
-            s.apply(keep.clone(), t0);
-            s.apply(Event::Click(Hit::Shortcut(Shortcut::Screenshot)), t0);
-            assert_eq!(s.view(), View::Idle, "{keep:?}");
-            // The shrunk panel leaves the pointer over transparent pixels:
-            // the leave comes at once and must not reopen it for the editor
-            // or CLI while the screen clip starts.
-            s.apply(Event::Hover(false), t0);
-            assert_eq!(s.view(), View::Idle, "{keep:?} after the leave");
-            s.apply(Event::Tick, t0 + secs(5));
-            assert_eq!(s.view(), View::Idle, "{keep:?} later");
-            // The user comes back: the panel opens, and the editor or CLI
-            // holds it open again once the pointer leaves.
-            s.apply(Event::Hover(true), t0 + secs(6));
-            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
-            s.apply(Event::Hover(false), t0 + secs(7));
-            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?} pinned");
-        }
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        s.apply(Event::EditorOpen(true), t0);
+        s.apply(Event::Click(Hit::Shortcut(Shortcut::Screenshot)), t0);
+        assert_eq!(s.view(), View::Idle);
+        // The shrunk panel leaves the pointer over transparent pixels: the
+        // leave comes at once and must not reopen it for the editor while
+        // the screen clip starts.
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle, "after the leave");
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Idle, "later");
+        // The user comes back: the panel opens, and the editor holds it open
+        // again once the pointer leaves.
+        s.apply(Event::Hover(true), t0 + secs(6));
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+        s.apply(Event::Hover(false), t0 + secs(7));
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts), "pinned");
     }
 
     #[test]
-    fn panel_pinned_by_editor_or_cli_closes_for_a_shortcut_without_hover() {
+    fn panel_pinned_by_an_editor_closes_for_a_shortcut_without_hover() {
         // Hovering ended before the click lands (the leave raced the click):
         // the shortcut still shuts the pinned panel until the next visit.
         let t0 = Instant::now();
-        for keep in [Event::EditorOpen(true), Event::CliFocus(true)] {
-            let mut s = st();
-            open_on(&mut s, Page::Shortcuts, t0);
-            s.apply(keep.clone(), t0);
-            s.apply(Event::Hover(false), t0);
-            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
-            s.apply(Event::Click(Hit::Shortcut(Shortcut::Emoji)), t0);
-            assert_eq!(s.view(), View::Idle, "{keep:?}");
-            s.apply(Event::Hover(true), t0);
-            assert_eq!(s.view(), View::Panel(Page::Shortcuts), "{keep:?}");
-        }
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        s.apply(Event::EditorOpen(true), t0);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+        s.apply(Event::Click(Hit::Shortcut(Shortcut::Emoji)), t0);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
     }
 
     #[test]
@@ -1112,18 +1151,22 @@ mod tests {
     }
 
     #[test]
-    fn cli_card_opens_the_cli_and_focus_keeps_the_panel_open() {
+    fn clicking_the_terminal_asks_for_the_keyboard_and_focus_locks_the_panel() {
         let t0 = Instant::now();
         let mut s = st();
         open_on(&mut s, Page::Cli, t0);
         assert_eq!(
-            s.apply(Event::Click(Hit::CliOpen), t0),
-            vec![Effect::OpenCli]
+            s.apply(Event::Click(Hit::CliInput), t0),
+            vec![Effect::FocusCliInput]
         );
         s.apply(Event::CliFocus(true), t0);
-        s.apply(Event::Hover(false), t0);
+        // The pointer leaves: the panel stays while the input is used.
+        assert_eq!(s.apply(Event::Hover(false), t0), vec![]);
         assert_eq!(s.view(), View::Panel(Page::Cli));
-        s.apply(Event::CliFocus(false), t0);
+        s.apply(Event::Tick, t0 + secs(30));
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        // Esc or a click elsewhere: the island lets go, the panel closes.
+        assert_eq!(s.apply(Event::CliFocus(false), t0), vec![]);
         assert_eq!(s.view(), View::Idle);
         // Output arriving changes nothing in the reducer.
         let output = crate::cli::CliEvent::Output {
@@ -1132,6 +1175,125 @@ mod tests {
         };
         assert_eq!(s.apply(Event::Cli(output), t0), vec![]);
         assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn cli_buttons_act_only_on_the_cli_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        for hit in [Hit::CliInput, Hit::CliStop, Hit::CliExpand] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), t0), vec![], "{hit:?}");
+        }
+        open_on(&mut s, Page::Notes, t0);
+        for hit in [Hit::CliInput, Hit::CliStop, Hit::CliExpand] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), t0), vec![], "{hit:?}");
+        }
+        assert!(!s.cli_tall());
+        open_on(&mut s, Page::Cli, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::CliStop), t0),
+            vec![Effect::StopCli]
+        );
+    }
+
+    #[test]
+    fn leaving_the_cli_page_releases_the_keyboard() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::CliFocus(true), t0);
+        // The wheel over anything but the output still pages.
+        let effects = s.apply(Event::Wheel(-120), t0);
+        assert_eq!(effects, vec![Effect::ReleaseCliFocus]);
+        assert!(!s.cli_focused());
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+    }
+
+    #[test]
+    fn a_shortcut_collapse_releases_the_keyboard() {
+        // The input only has the keyboard on the CLI page, so a collapse
+        // needs a stale focus flag; the reducer still lets go at once.
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        s.cli_focused = true;
+        let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Emoji)), t0);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::RunShortcut(Shortcut::Emoji),
+                Effect::ReleaseCliFocus
+            ]
+        );
+        assert_eq!(s.view(), View::Idle);
+        assert!(!s.cli_focused());
+    }
+
+    #[test]
+    fn cli_output_scrolls_and_clamps() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        let scroll = |s: &mut IslandState, lines| {
+            s.apply(Event::CliScroll { lines, max: 30 }, t0);
+            s.cli_scroll()
+        };
+        assert_eq!(scroll(&mut s, 3), 3, "wheel up over the output");
+        assert_eq!(s.view(), View::Panel(Page::Cli), "no page change");
+        assert_eq!(scroll(&mut s, -1), 2);
+        assert_eq!(scroll(&mut s, -10), 0, "never below the newest");
+        // PageUp / PageDown move a page of lines.
+        assert_eq!(scroll(&mut s, 8), 8);
+        assert_eq!(scroll(&mut s, 100), 30, "never past the oldest");
+        assert_eq!(scroll(&mut s, -8), 22);
+        // New output keeps a scrolled view on its lines...
+        s.apply(Event::CliOutput(4), t0);
+        assert_eq!(s.cli_scroll(), 26);
+        // ...and one at the bottom on the newest.
+        scroll(&mut s, -100);
+        s.apply(Event::CliOutput(4), t0);
+        assert_eq!(s.cli_scroll(), 0);
+        // Closing the panel starts it at the bottom again.
+        scroll(&mut s, 5);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.cli_scroll(), 0);
+        // Scrolling does nothing off the CLI page.
+        open_on(&mut s, Page::Notes, t0);
+        assert_eq!(scroll(&mut s, 5), 0);
+    }
+
+    #[test]
+    fn wheel_elsewhere_still_pages_on_the_cli_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Wheel(120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn the_enlarged_panel_goes_back_to_small_when_it_closes() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliExpand), t0);
+        assert!(s.cli_tall());
+        // Another page and back: still enlarged for the CLI.
+        s.apply(Event::Wheel(-120), t0);
+        s.apply(Event::Wheel(120), t0);
+        assert!(s.cli_tall());
+        s.apply(Event::Click(Hit::CliExpand), t0);
+        assert!(!s.cli_tall(), "the button shrinks it again");
+        s.apply(Event::Click(Hit::CliExpand), t0);
+        // Focused, the pointer leaving keeps it; letting go closes it.
+        s.apply(Event::CliFocus(true), t0);
+        s.apply(Event::Hover(false), t0);
+        assert!(s.cli_tall());
+        s.apply(Event::CliFocus(false), t0);
+        assert!(!s.cli_tall());
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert!(!s.cli_tall());
     }
 
     #[test]

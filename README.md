@@ -44,7 +44,7 @@ On first run, Windows asks for access to your notifications: allow it.
 - **Notifications:** every Windows toast shows in the island; click one to open its app. Turn on Windows *Do Not Disturb* to avoid seeing them twice (Settings → General → *Turn off Windows pop-ups* shows how).
 - **Claude Code:** "Claude finished" and "Claude needs you" notices through Claude Code hooks.
 - **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen.
-- **CLI:** run one command at a time in PowerShell or cmd from a small terminal window under the panel, with history and `cd`.
+- **CLI:** run one command at a time in PowerShell or cmd right on the panel's CLI page: click the terminal to type (the panel stays open until Esc or a click elsewhere), with history suggestions (Tab), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed.
 - **Themes and languages:** Pill or Notch shape, six accent colours, Black or Graphite island, light/dark windows; Indonesian (default) or English.
 
 ## Settings

@@ -35,16 +35,16 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::{
     ANTIALIASED_QUALITY, BeginPaint, CLIP_DEFAULT_PRECIS, ClientToScreen, CreateFontW,
     CreateSolidBrush, DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_WORDBREAK,
-    DeleteObject, DrawTextW, EndPaint, FONT_QUALITY, FW_NORMAL, GetDC, GetMonitorInfoW,
-    GetTextMetricsW, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_ERASE,
-    RDW_FRAME, RDW_INVALIDATE, RedrawWindow, ReleaseDC, ScreenToClient, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
+    DeleteObject, DrawTextW, EndPaint, GetDC, GetMonitorInfoW, GetTextMetricsW, HBRUSH, HDC, HFONT,
+    HGDIOBJ, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
+    RedrawWindow, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor,
+    TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     EM_GETRECT, EM_SETMARGINS, EM_SETSEL, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
-    InitCommonControlsEx, SetWindowTheme, WM_MOUSELEAVE,
+    InitCommonControlsEx, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -678,27 +678,6 @@ pub(super) fn brushes(p: &WindowPalette) -> (HBRUSH, HBRUSH) {
     })
 }
 
-/// Title bar and control styles of `hwnd` for `p`'s mode (the CLI window).
-pub(super) fn apply_mode(hwnd: HWND, themed: &[HWND], p: &WindowPalette) {
-    let dark = i32::from(!p.light);
-    let style = if p.light {
-        w!("Explorer")
-    } else {
-        w!("DarkMode_Explorer")
-    };
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE,
-            &dark as *const i32 as *const c_void,
-            size_of::<i32>() as u32,
-        );
-        for control in themed {
-            let _ = SetWindowTheme(*control, style, None);
-        }
-    }
-}
-
 /// A frameless editor or popover window: Windows 11 rounds its corners and
 /// draws a 1 px border in the palette's hairline (over the window's own
 /// fill, `popover` or `bg`). Older systems ignore both and keep square edges.
@@ -879,28 +858,6 @@ pub(super) fn monitor_at(pt: POINT) -> (f32, RECT) {
             dpi_x = 96;
         }
         (dpi_x as f32 / 96.0, info.rcWork)
-    }
-}
-
-/// The CLI window's 13 px UI font.
-pub(super) fn create_font(scale: f32, quality: FONT_QUALITY) -> HFONT {
-    unsafe {
-        CreateFontW(
-            -(13.0 * scale).round() as i32,
-            0,
-            0,
-            0,
-            FW_NORMAL.0 as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            quality,
-            0,
-            super::fonts::gdi_text_face(),
-        )
     }
 }
 
