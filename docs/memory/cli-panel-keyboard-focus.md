@@ -47,6 +47,9 @@ page, which it never did before. Same family of gotchas as
   the morph starts and back after it settles; `UpdateLayeredWindow` applies
   the size, so no `SetWindowPos`.
 
+- **Robot.** A running CLI command shows Bata's Think face, a finished one
+  Happy or Sad for 4 s, see [[bata-robot-expressions]].
+
 Related: [[studio-font-loading]], [[studio-icons]]
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

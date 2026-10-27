@@ -20,4 +20,4 @@ only and that a no-digit string measures the same as with no features.
 
 See [[studio-font-loading]].
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].

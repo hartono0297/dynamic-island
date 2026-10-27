@@ -1,6 +1,6 @@
 ---
 tags: [convention, logo, assets]
-date: 2026-10-26
+date: 2026-10-27
 ---
 
 # Bata logo lives in three places that must match
@@ -14,4 +14,9 @@ accent. The same numbers are in `assets/logo.svg`, `scripts/make-icon.ps1`
 The 16/20/24/32 px sizes use a hand-snapped table in `make-icon.ps1` so the pill
 and 2 px dot stay crisp; larger sizes are computed.
 
+The robot in the notch uses the same three brand colours, see
+[[bata-robot-expressions]].
+
 Related: [[studio-palette-accent-aliases]]
+
+Part of [[v3-studio-overview]].

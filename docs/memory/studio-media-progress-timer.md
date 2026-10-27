@@ -21,4 +21,4 @@ Settings `PREVIEW_BARS` is typed by `BAR_COUNT`.
 
 Related: [[studio-tabular-figures-word-gaps]].
 
-Listed in [[index]].
+Part of [[v3-studio-overview]]. Listed in [[index]].
