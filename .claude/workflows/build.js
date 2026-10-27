@@ -11,10 +11,10 @@ export const meta = {
   ],
 }
 
-// full = large or risky work, lite = small/medium low-risk work
+// full = large or risky work (review + check), lite = small/light work (build only; Ship still tests main)
 const MODES = {
-  full: { maxTasks: 4, fixRounds: 3, fixModel: 'opus', lowEffort: {} },
-  lite: { maxTasks: 3, fixRounds: 2, fixModel: 'sonnet', lowEffort: { effort: 'low' } },
+  full: { maxTasks: 4, fixRounds: 3, review: true, check: true, fixModel: 'opus', lowEffort: {} },
+  lite: { maxTasks: 3, fixRounds: 2, review: false, check: false, fixModel: 'sonnet', lowEffort: { effort: 'low' } },
 }
 
 const PLAN = {
@@ -88,8 +88,8 @@ phase('Plan')
 const plan = await agent(
   `Read the project memory (docs/memory/index.md and the notes it links that relate to this request), then the codebase, and plan this request. Do not write code.\n\n` +
   `First pick a mode:\n` +
-  `- "lite": small or medium change, low risk, few files, clear requirements.\n` +
-  `- "full": touches auth, payments, user data, migrations or security; many files or core architecture; or unclear requirements.\n` +
+  `- "lite": a small or light change: few files, low risk, clear requirements, nothing in the core event/render/data paths. Lite skips the blind review and the live check, so only the builder and the final test run on main guard it.\n` +
+  `- "full": anything else: medium or large changes, many files, core architecture (window/event/render pipeline, state, scheduling), user data or config formats, security, new features with UI, or unclear requirements. Full gets blind review and a live check.\n` +
   `When unsure, pick "full".\n\n` +
   `Then split the request into INDEPENDENT tasks that touch different files, so they can be built in parallel: ` +
   `at most ${MODES.lite.maxTasks} tasks for lite, ${MODES.full.maxTasks} for full. Prefer 1 task if the request is small.\n\n` +
@@ -114,6 +114,7 @@ const results = await pipeline(
 
   // Blind review <-> fix loop
   async (build, task) => {
+    if (!mode.review) return { ...build, verdict: 'SHIP', openFindings: [] }
     let review
     for (let round = 1; round <= mode.fixRounds; round++) {
       review = await agent(
@@ -132,6 +133,7 @@ const results = await pipeline(
 
   // Check — tests + live run in one agent
   async (reviewed, task) => {
+    if (!mode.check) return { id: task.id, ...reviewed, check: { passed: true, notes: 'skipped in lite mode: the builder ran the tests and Ship tests main' } }
     const check = await agent(
       `Check out branch "${reviewed.branch}". Run the full test suite, then start the app locally and use the feature like a real user. Report whether it works.\n\nBrief:\n${task.brief}` + TOOLS,
       { label: `check:${task.id}`, phase: 'Check', isolation: 'worktree', schema: CHECK, model: 'sonnet', ...mode.lowEffort }

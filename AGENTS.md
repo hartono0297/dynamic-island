@@ -9,6 +9,10 @@ yourself in the main session.
 
 - Do not pick the mode yourself. The workflow's Plan step (Opus) decides
   between `full` and `lite`.
+- `lite` (small or light tasks) skips the blind review and the live check: the
+  builder runs the tests, and Ship tests `main` before pushing. Only `full`
+  (medium or large, or core/risky work) gets review and check. The rule is in
+  `.claude/workflows/build.js` (`MODES.*.review` / `.check`).
 - The workflow merges passing tasks into `main` and pushes. This project uses a
   single branch (`main`), so that push is pre-approved. Deploy stays with me.
 - When it finishes, report: mode and why, which tasks were merged, whether
