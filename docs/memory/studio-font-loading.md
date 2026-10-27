@@ -16,3 +16,5 @@ Implemented in `src/ui/fonts.rs`; sources and subsetting in [[studio-font-source
 - Digits: [[studio-tabular-figures-word-gaps]].
 
 Part of [[v3-studio-overview]].
+- Tracking adds its spacing after every character, so centered display text (clock, lyric, big time) sits about `size * 0.025 / 2` px off center (0.6 px at 48 px). Accepted, not corrected.
+- `settings_layout::Estimate` has no special display factor any more: display fonts use the 0.66 em/char estimate for weight 500+, which is wider than real DM Sans 600. The sidebar brand rect was widened to the gutter so the estimate fits; keep that in mind before shrinking it.
