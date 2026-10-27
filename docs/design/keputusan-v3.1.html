@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keputusan v3.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713; --term: #0F0C0A;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --red: #FF8A73;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+    /* header font for every mock-up (the recommended option B) */
+    --hf: 'DM Sans', sans-serif; --hw: 600; --hs: normal; --hls: -.02em;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--hf); font-weight: 700; font-size: 28px; letter-spacing: -.02em; margin: 2px 0 12px; display: flex; align-items: center; gap: 12px; }
+  h1 .no { width: 34px; height: 34px; border-radius: 11px; background: var(--a); color: #FFFBF5; font-size: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  .ux li { list-style: none; position: relative; padding-left: 13px; font-size: 11px; line-height: 1.5; margin-bottom: 4px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 6.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .ux h3 { font-family: var(--hf); font-weight: 700; font-size: 15px; margin-bottom: 6px; letter-spacing: -.01em; }
+  code { font-family: var(--mono); font-size: 10px; background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  .opt { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 11px 13px; position: relative; }
+  .opt.rec { border: 2px solid var(--a); }
+  .opt .tag { position: absolute; top: -9px; right: 12px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 2px 8px; border-radius: 99px; }
+  .opt b { font-size: 12.5px; display: block; margin-bottom: 3px; }
+  .opt p { font-size: 10.8px; line-height: 1.45; color: #4A3D33; }
+  .opt .pc { font-size: 10px; color: var(--ink2); margin-top: 5px; line-height: 1.4; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* screens */
+  .scr { border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .scr.gray { background: linear-gradient(115deg, #3a3a3a, #6b6b6b); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx); border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 6px; height: 34px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; overflow: hidden; }
+  .nt.big { height: auto; min-height: 60px; border-radius: 24px; padding: 10px 12px; gap: 10px; align-items: center; }
+  .nt .t1 { font-size: 12.5px; font-weight: 600; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .lyr { font-family: var(--hf); font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  .fade { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); overflow: hidden; }
+  .act { font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--tx); white-space: nowrap; }
+  .act.pri { background: var(--a); color: var(--ai); font-weight: 600; }
+  .act.dng { background: rgba(255,138,115,.14); color: var(--red); }
+  .ruler { position: absolute; top: 50px; height: 14px; border-left: 1px solid rgba(255,255,255,.7); border-right: 1px solid rgba(255,255,255,.7); font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; }
+  .ruler::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; border-top: 1px dashed rgba(255,255,255,.7); }
+  .ruler span { background: rgba(0,0,0,.45); padding: 0 5px; border-radius: 4px; position: relative; }
+
+  /* panel */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--tx); border-radius: 0 0 30px 30px; position: relative; padding: 16px 20px 28px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 10px; gap: 8px; }
+  .ttl { font-family: var(--hf); font-weight: var(--hw); font-style: var(--hs); letter-spacing: var(--hls); font-size: 20px; white-space: nowrap; }
+  .hchip { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--tx2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .hchip.mono { font-family: var(--mono); }
+  .hchip.acc { background: rgba(226,104,60,.15); color: var(--a); }
+  .hchip.sage { background: rgba(157,181,154,.15); color: var(--sage); }
+  .hchip svg { width: 12px; height: 12px; }
+  .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); }
+  .term { background: var(--term); border-radius: 16px; height: 214px; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.62; color: #E6DED3; overflow: hidden; }
+  .term .out { padding: 10px 14px 0; height: 170px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .term .p { color: var(--a); } .term .m { color: var(--tx2); } .term .g { color: var(--sage); }
+  .term .inp { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid #221B16; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--a); vertical-align: -3px; }
+  .menu { position: absolute; right: 54px; top: 44px; width: 300px; background: #241D18; border: 1px solid #332A23; border-radius: 14px; padding: 6px; box-shadow: 0 14px 30px rgba(0,0,0,.45); z-index: 2; font-size: 11px; }
+  .menu .hd { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); padding: 6px 8px 4px; }
+  .menu div.it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+  .menu div.it.on { background: rgba(226,104,60,.16); }
+  .menu div.it span { font-family: var(--mono); font-size: 10.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu div.it small { font-size: 9.5px; color: var(--tx2); white-space: nowrap; }
+  .menu svg { width: 13px; height: 13px; color: var(--tx2); flex: none; }
+
+  /* system page */
+  .sys { display: grid; grid-template-columns: 170px 1fr; gap: 18px; height: 222px; }
+  .ringw { position: relative; width: 150px; height: 150px; margin: 4px auto 0; }
+  .ringw .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ringw b { font-size: 30px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ringw small { font-size: 10px; color: var(--tx2); letter-spacing: .1em; text-transform: uppercase; }
+  .spark { margin-top: 10px; }
+  .meter { margin-bottom: 11px; }
+  .meter .hd { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 5px; }
+  .meter .hd b { font-weight: 600; }
+  .meter .hd span { color: var(--tx2); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .bar { height: 7px; border-radius: 7px; background: var(--t); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 7px; }
+  .warn { color: var(--ochre) !important; }
+  .procs { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 12px; font-size: 10.5px; margin-top: 4px; }
+  .procs span:nth-child(3n+2), .procs span:nth-child(3n) { color: var(--tx2); text-align: right; font-variant-numeric: tabular-nums; }
+  .cbtn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 6px 12px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 600; }
+  .cbtn.ghost { background: var(--r); color: var(--tx); font-weight: 500; }
+  .cbtn svg { width: 13px; height: 13px; }
+
+  /* cleanup list */
+  .cl { display: grid; gap: 1px; }
+  .cl .row { display: grid; grid-template-columns: 18px 22px 1fr auto; align-items: center; gap: 9px; padding: 3px 8px; border-radius: 10px; font-size: 11.5px; }
+  .cl .row:nth-child(odd) { background: rgba(244,237,228,.03); }
+  .cl .row small { display: block; color: var(--tx2); font-size: 9.5px; }
+  .cl .row .csz { font-variant-numeric: tabular-nums; color: var(--tx); font-weight: 600; font-size: 11.5px; }
+  .ck { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--tx2); display: flex; align-items: center; justify-content: center; }
+  .ck.on { background: var(--a); border-color: var(--a); }
+  .ck.on::after { content: ""; width: 7px; height: 4px; border-left: 2px solid #17120F; border-bottom: 2px solid #17120F; transform: rotate(-45deg) translate(1px, -1px); }
+  .cl .ic { color: var(--tx2); }
+  .cl .ic svg { width: 17px; height: 17px; }
+  .lock { font-size: 9px; padding: 1px 6px; border-radius: 99px; background: rgba(217,164,65,.15); color: var(--ochre); margin-left: 6px; }
+
+  /* clipboard */
+  .search { display: flex; align-items: center; gap: 8px; background: var(--r); border-radius: 12px; padding: 7px 11px; font-size: 11.5px; color: var(--tx2); flex: 1; }
+  .search svg { width: 14px; height: 14px; }
+  .clips { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+  .clip { background: var(--r); border-radius: 13px; padding: 8px 10px; height: 64px; position: relative; overflow: hidden; font-size: 11px; display: flex; flex-direction: column; }
+  .clip .k { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--tx2); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .clip .k svg { width: 11px; height: 11px; }
+  .clip .v { line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .clip.sel { box-shadow: inset 0 0 0 1.5px var(--a); }
+  .clip .pin { position: absolute; right: 8px; top: 7px; color: var(--a); }
+  .clip .pin svg { width: 12px; height: 12px; }
+  .clip.img { padding: 0; flex-direction: row; }
+  .clip.img .th { width: 92px; height: 100%; background: linear-gradient(160deg, #E2683C, #5A2A1C); flex: none; position: relative; }
+  .clip.img .th::after { content: ""; position: absolute; left: 14px; right: 14px; top: 14px; bottom: 14px; border: 1.5px solid rgba(244,237,228,.55); border-radius: 4px; }
+  .clip.img .meta { padding: 8px 10px; }
+  .sw { width: 18px; height: 18px; border-radius: 6px; display: inline-block; vertical-align: -4px; margin-right: 6px; }
+
+  /* screenshot preview */
+  .shot { width: 170px; height: 100px; border-radius: 12px; flex: none; position: relative; overflow: hidden;
+          background: linear-gradient(180deg, #2B221C 0 18%, #F4EEE6 18% 100%); border: 1px solid #3A2F27; }
+  .shot::before { content: ""; position: absolute; left: 10px; top: 26px; width: 70px; height: 8px; border-radius: 3px; background: #C9542B; }
+  .shot::after { content: ""; position: absolute; left: 10px; top: 42px; right: 14px; height: 46px; border-radius: 6px; background: repeating-linear-gradient(180deg, #E6DCCF 0 6px, transparent 6px 12px); }
+  .shot.lg { width: 230px; height: 136px; }
+
+  .robot { flex: none; }
+  .note { font-size: 10.5px; color: var(--ink2); margin-top: 5px; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  th { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .sz { font-size: 9.5px; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; white-space: nowrap; }
+  .sz.l { background: rgba(226,104,60,.18); color: #A8431F; }
+
+  .st { font-size: 10px; font-weight: 600; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+  .st.ok { background: rgba(157,181,154,.22); color: #3F5A3C; }
+  .st.ds { background: rgba(217,164,65,.22); color: #8A5F12; }
+  .dark .st.ok { color: var(--sage); }
+  .dark .st.ds { color: var(--ochre); }
+  .win { background: #F4EEE6; border: 1px solid rgba(34,26,20,.10); border-radius: 14px; overflow: hidden; box-shadow: 0 12px 28px rgba(34,26,20,.14); }
+  .win .wt { font-family: var(--hf); font-weight: 700; font-size: 17px; letter-spacing: -.02em; padding: 12px 14px 8px; }
+  .wcard { background: #FFFBF5; border: 1px solid rgba(34,26,20,.10); border-radius: 12px; margin: 0 12px 12px; }
+  .wrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 11px; border-top: 1px solid rgba(34,26,20,.08); min-height: 40px; font-size: 11px; }
+  .wrow:first-child { border-top: 0; }
+  .wrow b { font-weight: 600; display: block; }
+  .wrow small { font-size: 9.5px; color: var(--ink2); }
+  .tog { width: 30px; height: 17px; border-radius: 99px; background: #C9542B; position: relative; flex: none; }
+  .tog::after { content: ""; position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFBF5; }
+  .tog.off { background: transparent; border: 1.5px solid var(--ink2); }
+  .tog.off::after { left: 2px; right: auto; top: 1.5px; width: 11px; height: 11px; background: var(--ink2); }
+  .wseg { display: flex; border: 1px solid rgba(34,26,20,.10); border-radius: 9px; padding: 2px; font-size: 9.5px; background: #F4EEE6; flex: none; }
+  .wseg span { padding: 2px 8px; border-radius: 7px; white-space: nowrap; }
+  .wseg span.on { background: #C9542B; color: #FFFBF5; }
+  .step { display: flex; align-items: center; gap: 7px; font-size: 10.5px; flex: none; }
+  .step i { width: 20px; height: 20px; border: 1px solid rgba(34,26,20,.12); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; background: #FFFBF5; }
+  .grip { color: var(--ink2); letter-spacing: -2px; margin-right: 8px; }
+  .fct { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 11px; line-height: 1.45; }
+  .fct .k { width: 22px; height: 22px; border-radius: 7px; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; }
+  .fct .k.bad { background: rgba(196,43,28,.12); color: #A3291B; }
+  .fct .k.good { background: rgba(157,181,154,.25); color: #3F5A3C; }
+  .fct .k.info { background: #E6DCCF; color: var(--ink2); }
+  .mini { width: 100%; border-radius: 0 0 22px 22px; background: var(--s); color: var(--tx); padding: 12px 14px 14px; }
+  .cmp td:first-child { font-weight: 600; width: 130px; }
+  .y { color: #3F5A3C; font-weight: 600; } .n { color: #A3291B; font-weight: 600; } .m { color: #8A5F12; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+
+const P = (d, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const I = {
+  folder: P('<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'),
+  star: P('<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  search: P('<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>'),
+  pin: P('<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>'),
+  link: P('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>'),
+  text: P('<path d="M5 6h14M5 11h14M5 16h9"/>'),
+  code: P('<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>'),
+  image: P('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>'),
+  color: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>'),
+  trash: P('<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13z"/>'),
+  temp: P('<path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/>'),
+  globe: P('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3.3 3 13.7 0 17M12 3.5c-3 3.3-3 13.7 0 17"/>'),
+  box: P('<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>'),
+  win: P('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>'),
+  dl: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  img2: P('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M8 12l2.5 2.5L16 9"/>'),
+  sparkle: P('<path d="M12 4l1.8 6.2L20 12l-6.2 1.8L12 20l-1.8-6.2L4 12l6.2-1.8z"/>'),
+  copy: P('<rect x="8" y="8" width="11" height="11" rx="2.5"/><path d="M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"/>'),
+  save: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  edit: P('<path d="M4 20h4l11-11-4-4L4 16z"/>'),
+  check: P('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2),
+};
+
+function robot(expr = 'idle', size = 26) {
+  const T = '#E2683C', D = '#17120F', C = '#F4EDE4', L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const note = `<path d="M57 9v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/><circle cx="55.4" cy="9" r="1.9" fill="${C}"/><circle cx="60.4" cy="7.5" r="1.9" fill="${C}"/>`;
+  const E = {
+    idle: eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3), happy,
+    sing: happy + `<ellipse cx="32" cy="${Y + 6.5}" rx="2.6" ry="2" fill="${C}"/>` + note,
+    alert: `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`,
+    think: eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
+    sad: eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8),
+  }[expr];
+  return `<svg class="robot" width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/><rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>${E}</svg>`;
+}
+const ring = (p, size, sw, color = 'var(--a)') => { const r = (size - sw) / 2 - 1, c = 2 * Math.PI * r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--t)" stroke-width="${sw}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`; };
+const dots = (on, n = 9) => `<div class="dots">${Array.from({ length: n }, (_, i) => `<i class="${i === on ? 'on' : ''}"></i>`).join('')}</div>`;
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Brainstorm v3.1</span><span>${r}</span></div>`;
+const ux = (t, items) => `<div class="ux">${t ? `<h3>${t}</h3>` : ''}<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+const opt = (k, t, p, pc, rec) => `<div class="opt${rec ? ' rec' : ''}">${rec ? '<span class="tag">Saran</span>' : ''}<b>${k} · ${t}</b><p>${p}</p>${pc ? `<div class="pc">${pc}</div>` : ''}</div>`;
+
+
+const spark = (pts, color) => { const w = 150, h = 34, max = 100; const d = pts.map((v, i) => `${i ? 'L' : 'M'}${(i / (pts.length - 1)) * w} ${h - (v / max) * h}`).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="${d} L${w} ${h} L0 ${h}Z" fill="${color}" fill-opacity=".14"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/></svg>`; };
+const meter = (name, val, p, color, warn) => `<div class="meter"><div class="hd"><b>${name}</b><span class="${warn ? 'warn' : ''}">${val}</span></div><div class="bar"><i style="width:${p}%;background:${color}"></i></div></div>`;
+
+// ================= cover =================
+const DEC = [
+  ['1', 'Lirik tidak terpotong', 'Notch melebar 220–560 px, bergeser kalau lebih', 'ok'],
+  ['2', 'CLI ikut folder', 'Ikuti Explorer terakhir + menu folder (favorit, riwayat)', 'ok'],
+  ['3', 'Judul tanpa italic', 'DM Sans Semibold', 'ok'],
+  ['4', 'Sistem: monitor', 'Ukur sendiri, halaman "Sistem"', 'ok'],
+  ['4', 'Sistem: deep clean', 'Mole atau buatan sendiri? Dibahas di hal. 9–11', 'ds'],
+  ['5', 'Clipboard sendiri', 'Halaman "Clipboard", 50 item, privasi aman', 'ok'],
+  ['6', 'Screenshot + preview', 'Alat potong Windows, preview di notch', 'ok'],
+];
+const cover = `<section class="page dark" style="display:flex;flex-direction:column;justify-content:space-between">
+  <div class="eyebrow">Dynamic Island · setelah brainstorm v3.1</div>
+  <div style="display:grid;grid-template-columns:1fr 540px;gap:40px;align-items:center">
+    <div style="display:flex;gap:24px;align-items:center">${robot('happy', 110)}<div>
+      <div style="font-family:var(--hf);font-weight:700;font-size:54px;letter-spacing:-.03em;line-height:1">Keputusan v3.1</div>
+      <div style="color:var(--tx2);font-size:14.5px;margin-top:12px;line-height:1.5;max-width:400px">Enam ide sudah disetujui dan digambar final di sini. Satu masih dibahas: deep clean pakai Mole atau buatan sendiri.</div></div></div>
+    <div>${DEC.map(([n, t, d, s]) => `<div style="display:grid;grid-template-columns:26px 1fr auto;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--t)">
+      <span style="width:24px;height:24px;border-radius:8px;background:var(--r);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--a)">${n}</span>
+      <div><div style="font-size:13px;font-weight:600">${t}</div><div style="font-size:10.5px;color:var(--tx2)">${d}</div></div>
+      <span class="st ${s}">${s === 'ok' ? 'Disetujui' : 'Diskusi'}</span></div>`).join('')}</div></div><div></div>
+  ${folio('27 Oktober 2026').replace('class="folio"', 'class="folio" style="color:var(--tx)"').replace('Brainstorm v3.1', 'Keputusan v3.1')}</section>`;
+
+const F = (r) => folio(r).replace('Brainstorm v3.1', 'Keputusan v3.1');
+const settingsWin = (title, rows) => `<div class="win"><div class="wt">${title}</div><div class="wcard">${rows.map(([t, s, c]) => `<div class="wrow"><div><b>${t}</b>${s ? `<small>${s}</small>` : ''}</div>${c}</div>`).join('')}</div></div>`;
+const wseg = (o, on) => `<div class="wseg">${o.map((x, i) => `<span class="${i === on ? 'on' : ''}">${x}</span>`).join('')}</div>`;
+const tog = (on = true) => `<div class="tog${on ? '' : ' off'}"></div>`;
+const step = (v) => `<div class="step"><i>−</i>${v}<i>+</i></div>`;
+
+// ================= 1 lyrics =================
+const strip = (label, text, w, cls = '', alt) => `<div><div class="lbl">${label}</div><div class="scr${alt ? ' alt' : ''}" style="height:58px">
+  <div class="nt" style="width:${w}px;justify-content:flex-start">${robot('sing', 24)}<span class="lyr${cls}" ${cls ? 'style="flex:1"' : ''}>${text}</span></div></div></div>`;
+const p1 = `<section class="page"><div class="eyebrow">Disetujui · ide 1</div><h1><span class="no">1</span>Lirik: notch mengikuti panjang baris</h1>
+  <div style="display:grid;grid-template-columns:600px 1fr;gap:26px">
+    <div style="display:grid;gap:9px">
+      ${strip('Baris instrumental · lebar minimum 220 px', '♪', 220)}
+      ${strip('Baris pendek', 'tanpa kata', 220, '', true)}
+      ${strip('Baris sedang · 330 px', 'di antara gedung dan cahaya sore', 330)}
+      ${strip('Baris panjang · 480 px', 'kita berjalan pulang lewat jalan yang sama setiap hari', 480, '', true)}
+      ${strip('Lebih dari 560 px · bergeser pelan, ujung memudar', '<span style="margin-left:-56px;display:inline-block">dan semua lampu kota menyala satu per satu ketika kita akhirnya sampai di rumah</span>', 560, ' fade')}
+    </div>
+    <div>${ux('Aturan', [
+      'Lebar = teks + robot + padding, dibatasi 220–560 px.',
+      'Perubahan lebar dianimasikan 180 ms, ikut pegas notch yang sudah ada.',
+      'Tidak menyusut kalau baris baru hanya &lt; 40 px lebih pendek, supaya tidak goyang tiap baris.',
+      'Lebih dari 560 px: diam 1 detik, lalu bergeser pelan sampai ujung baris; ujung kanan memudar.',
+      'Di layar kecil, batas atas = 45% lebar layar kalau itu lebih kecil dari 560.',
+      'Judul lagu biasa (lirik mati) tidak berubah.'])}
+      <div class="lbl" style="margin-top:14px">Yang diubah di kode</div>
+      ${ux('', ['<code>geometry.rs</code>: <code>MediaLyric</code> tidak lagi tetap 300 × 34; lebarnya dihitung dari layout DirectWrite baris aktif.', 'Test geometri diperbarui: batas 220/560, tanpa menyusut kecil.'])}</div></div>
+  ${F('Lirik')}</section>`;
+
+// ================= 2 CLI =================
+const cliP = (o) => `<div class="panel">
+  <div class="ph"><span class="ttl">CLI</span><div style="display:flex;gap:6px;align-items:center">${o.chips}</div></div>
+  <div class="term"><div class="out">${o.out}</div><div class="inp"><span style="color:var(--a)">›</span><span style="flex:1"><span class="caret"></span></span><span style="font-family:var(--body);font-size:9.5px;color:#6E6155">Enter jalankan · ↑ riwayat · Esc keluar</span></div></div>
+  ${o.menu || ''}${dots(7)}</div>`;
+const p2 = `<section class="page"><div class="eyebrow">Disetujui · ide 2</div><h1><span class="no">2</span>CLI: ikut folder Explorer + menu folder</h1>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:24px">
+    <div>${cliP({ chips: `<span class="hchip acc">${I.folder}dari Explorer</span><span class="hchip mono">D:\\github\\project-a</span><span class="hchip">PowerShell</span>`,
+        out: `<div><span class="p">›</span> git status</div><div class="m">On branch main · nothing to commit</div><div class="m" style="margin-top:6px;border-top:1px dashed #2A221C;padding-top:6px">↳ pindah ke D:\\github\\project-a (folder Explorer terakhir)</div>` })}
+      <div style="height:12px"></div>
+      ${cliP({ chips: `<span class="hchip mono">D:\\github\\project-a</span><span class="hchip">PowerShell</span>`, out: `<div class="m">…</div>`,
+        menu: `<div class="menu"><div class="hd">Jendela Explorer terbuka</div>
+          <div class="it on">${I.folder}<span>D:\\github\\project-a</span><small>aktif terakhir</small></div>
+          <div class="it">${I.folder}<span>D:\\Proyek\\rumah-kemang\\gambar</span><small>2 mnt lalu</small></div>
+          <div class="hd">Favorit</div><div class="it">${I.star}<span>D:\\github\\dynamic-island</span><small>klik kanan = lepas</small></div>
+          <div class="hd">Terakhir dipakai di CLI</div><div class="it">${I.clock}<span>C:\\Users\\hartono</span><small>kemarin</small></div></div>` })}</div>
+    <div>${ux('Perilaku', [
+      'Saat halaman CLI dibuka dan tidak ada perintah berjalan → pindah ke folder jendela File Explorer yang terakhir aktif.',
+      'Chip "dari Explorer" + satu baris info di output menjelaskan perpindahan.',
+      'Tidak ada Explorer terbuka → tetap di folder terakhir CLI (<code>cli-cwd.txt</code>).',
+      'Klik chip folder → menu: Explorer terbuka, Favorit (bintang), Terakhir dipakai (5).',
+      '<kbd>cd</kbd> manual tetap jalan dan menimpa folder sampai panel ditutup.'])}
+      <div style="height:10px"></div>
+      ${settingsWin('Umum', [['Folder awal CLI', 'Saat halaman CLI dibuka', wseg(['Ikuti Explorer', 'Folder terakhir'], 0)], ['Shell CLI', '', wseg(['PowerShell', 'cmd'], 0)]])}
+      <div class="lbl" style="margin-top:12px">Yang diubah di kode</div>
+      ${ux('', ['<code>cli.rs</code>: favorit & riwayat folder di <code>%APPDATA%\\DynamicIsland</code>.', 'Baca folder Explorer lewat <code>IShellWindows</code> (COM) saat halaman dibuka, bukan terus-menerus.'])}</div></div>
+  ${F('CLI')}</section>`;
+
+// ================= 3 heading font =================
+const head = (italic) => {
+  const f = italic ? "font-family:'Fraunces',serif;font-style:italic;font-weight:500;letter-spacing:-.01em" : "font-family:'DM Sans',sans-serif;font-weight:600;letter-spacing:-.025em";
+  const box = (inner) => `<div style="background:var(--s);color:var(--tx);border-radius:0 0 20px 20px;padding:12px 14px;height:118px">${inner}</div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+    ${box(`<div style="${f};font-size:19px">Oktober 2026</div><div style="font-size:10px;color:var(--tx2);margin-top:6px">Sen Sel Rab Kam Jum Sab Min</div><div style="font-size:11px;margin-top:4px;letter-spacing:7px">26 27 28 29 30</div>`)}
+    ${box(`<div style="font-size:9px;letter-spacing:.12em;color:var(--tx2)">SEDANG DIPUTAR</div><div style="${f};font-size:21px;margin-top:6px;line-height:1.05">Senja di Kemang</div><div style="font-size:10.5px;color:var(--tx2);margin-top:3px">Studio Ruang</div>`)}
+    ${box(`<div style="display:flex;align-items:center;gap:12px;height:100%"><div style="position:relative;width:86px;height:86px">${ring(.3, 86, 6)}<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;${f};font-size:24px;font-variant-numeric:tabular-nums">18:42</div></div><span style="font-size:9.5px;letter-spacing:.14em;color:var(--a);font-weight:600">FOKUS</span></div>`)}
+    <div style="background:#F4EEE6;border:1px solid var(--rule);border-radius:14px;padding:12px 14px;height:118px"><div style="${f};font-size:20px">Tampilan</div><div style="font-size:10.5px;color:var(--ink2);margin-top:6px">Bentuk island · Warna aksen · Mode jendela</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:12px;background:var(--s);color:var(--tx);border-radius:99px;padding:3px 10px 3px 3px;width:max-content">${robot('idle', 20)}<span style="${f};font-size:13px">14:32</span></div></div></div>`;
+};
+const p3 = `<section class="page"><div class="eyebrow">Disetujui · ide 3</div><h1><span class="no">3</span>Judul: DM Sans Semibold, tegak</h1>
+  <div class="lbl">Sebelum · Fraunces Italic</div>${head(true)}
+  <div class="lbl" style="margin-top:16px">Sesudah · DM Sans 600 (Semibold), rapat −2,5%</div>${head(false)}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:16px">
+    ${ux('Yang berganti', ['Judul halaman panel, judul lagu, jam besar Pomodoro, jam di notch, judul Pengaturan dan editor, teks lirik di notch.', 'Angka (jam, tanggal) memakai angka tabular, seperti sekarang.', 'Teks isi tetap DM Sans 400/500; CLI tetap DM Mono.'])}
+    ${ux('Yang diubah di kode', ['Font Fraunces dikeluarkan dari exe (RCDATA dan skrip subset), exe sedikit lebih kecil.', 'Semua tempat yang membuat format Fraunces Italic memakai DM Sans 600.', 'Logo dan robot tidak berubah; desain di <code>docs/design/</code> tetap sebagai arsip.'])}</div>
+  ${F('Font judul')}</section>`;
+
+// ================= 4 system monitor =================
+const sysPanel = `<div class="panel">
+  <div class="ph"><span class="ttl">Sistem</span><div style="display:flex;gap:6px"><span class="hchip">Uptime 6 j 1 m</span><span class="cbtn">${I.sparkle}Bersihkan</span></div></div>
+  <div class="sys"><div><div class="ringw">${ring(0.33, 150, 11)}<div class="c"><b>33%</b><small>CPU · 8 inti</small></div></div>
+      <div class="spark" style="display:flex;justify-content:center">${spark([22, 30, 25, 41, 38, 52, 35, 28, 33, 47, 31, 33], '#E2683C')}</div></div>
+    <div>${meter('RAM', '14,2 / 31,8 GB · 44%', 44, 'var(--sage)')}
+      ${meter('Disk C:', 'sisa 47,2 GB dari 338,4 GB', 86, 'var(--tx2)')}
+      ${meter('Disk D:', 'sisa 33,0 GB dari 137,0 GB', 76, 'var(--tx2)')}
+      <div class="lbl" style="color:var(--tx2);margin:10px 0 4px">Paling sibuk</div>
+      <div class="procs"><span>Chrome</span><span>12%</span><span>3,1 GB</span><span>Code</span><span>7%</span><span>1,4 GB</span><span>AutoCAD</span><span>5%</span><span>2,2 GB</span></div></div></div>
+  ${dots(6)}</div>`;
+const p4 = `<section class="page"><div class="eyebrow">Disetujui · ide 4 bagian 1</div><h1><span class="no">4</span>Sistem: pantau CPU, RAM dan disk</h1>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:24px">
+    <div>${sysPanel}<p class="note">Angka disk diambil dari PC ini (27 Okt). CPU, RAM dan proses adalah contoh.</p>
+      <div class="lbl" style="margin-top:12px">Peringatan di notch (contoh saat disk di bawah batas)</div>
+      <div class="scr" style="height:78px"><div class="nt big" style="top:9px">${robot('sad', 38)}<div><div class="t1">Disk C: tinggal 9,6 GB</div><div class="t2">Buka halaman Sistem untuk membersihkan</div></div><span class="act pri">Buka</span></div></div></div>
+    <div>${ux('Perilaku', ['Ukur sendiri: <code>GetSystemTimes</code>, <code>GlobalMemoryStatusEx</code>, <code>GetDiskFreeSpaceExW</code>, snapshot proses.', 'Update tiap 2 detik hanya saat halaman Sistem terlihat; saat tertutup cek disk & RAM tiap 5 menit untuk peringatan.', 'Grafik CPU = 60 detik terakhir.', 'Klik disk → Explorer di drive itu; klik proses → Task Manager.', 'Tombol "Bersihkan" mengikuti keputusan deep clean (hal. 9–11).'])}
+      <div style="height:10px"></div>
+      ${settingsWin('Umum', [['Peringatan disk', 'Saat sisa ruang di bawah', step('10 GB')], ['Peringatan RAM', 'Di atas, selama 1 menit', step('90%')]])}</div></div>
+  ${F('Sistem')}</section>`;
+
+// ================= 5 clipboard =================
+const CLIPS2 = [
+  ['text', 'Teks', 'Denah lantai 2 sudah saya revisi, tolong dicek bagian tangga', true], ['link', 'Tautan', 'github.com/tw93/mole/tree/windows'],
+  ['img', 'Gambar', 'Screenshot · 1280 × 720', false, true], ['code', 'Kode', 'cargo test --locked -- --nocapture'],
+  ['color', 'Warna', '<span class="sw" style="background:#E2683C"></span>#E2683C'], ['text', 'Teks', 'Jl. Kemang Raya No. 12, Jakarta Selatan'],
+];
+const clipPanel2 = `<div class="panel">
+  <div class="ph"><span class="ttl">Clipboard</span><div class="search" style="max-width:250px">${I.search}Cari di 48 item…</div></div>
+  <div class="clips">${CLIPS2.map(([ic, k, v, pin, img], i) => img
+    ? `<div class="clip img"><div class="th"></div><div class="meta"><div class="k">${I.image}${k}</div><div class="v">${v}</div><div style="font-size:9.5px;color:var(--tx2);margin-top:2px">2 mnt lalu</div></div></div>`
+    : `<div class="clip${i === 0 ? ' sel' : ''}">${pin ? `<span class="pin">${I.pin}</span>` : ''}<div class="k">${I[ic]}${k}</div><div class="v"${ic === 'code' || ic === 'link' ? ' style="font-family:var(--mono);font-size:10.5px"' : ''}>${v}</div></div>`).join('')}</div>
+  ${dots(5)}</div>`;
+const p5 = `<section class="page"><div class="eyebrow">Disetujui · ide 5</div><h1><span class="no">5</span>Clipboard sendiri</h1>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:24px">
+    <div>${clipPanel2}
+      <div class="lbl" style="margin-top:12px">Saat menyalin</div>
+      <div class="scr" style="height:56px"><div class="nt">${robot('happy', 24)}<span style="font-weight:600">Disalin</span><span style="color:var(--tx2)">Denah lantai 2 sudah saya revisi…</span></div></div></div>
+    <div>${ux('Perilaku', ['50 item terakhir; jenis dikenali: teks, tautan, kode, warna, gambar, file.', 'Klik = salin lagi; menu: sematkan, hapus, salin sebagai teks biasa.', 'Ketik untuk mencari; ↑↓ pilih; Enter salin dan tutup panel.', 'Tombol Clipboard di Shortcuts membuka halaman ini (bukan Win+V lagi).', 'Isi password manager dilewati (format "exclude from history").'])}
+      <div style="height:10px"></div>
+      ${settingsWin('Clipboard', [['Riwayat clipboard', 'Simpan yang kamu salin', tog()], ['Jumlah item', '', step('50')], ['Simpan setelah restart', 'Terenkripsi DPAPI, hanya akun ini', tog()], ['Hapus saat layar dikunci', '', tog(false)], ['Pintasan', 'Buka halaman Clipboard', '<span style="font-family:var(--mono);font-size:10px;background:#EFE6DA;padding:3px 8px;border-radius:6px">Ctrl+Shift+V</span>']])}
+      <p class="note">Default dipilih dari saran: simpan terenkripsi, 50 item, tidak dihapus saat dikunci.</p></div></div>
+  ${F('Clipboard')}</section>`;
+
+// ================= 6 screenshot =================
+const p6 = `<section class="page"><div class="eyebrow">Disetujui · ide 6</div><h1><span class="no">6</span>Screenshot dengan preview di notch</h1>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:24px">
+    <div><div class="scr alt" style="height:190px"><div class="nt big" style="top:10px;padding:10px;gap:12px;align-items:stretch;border-radius:26px">
+        <div class="shot lg"></div>
+        <div style="display:flex;flex-direction:column;justify-content:space-between;min-width:178px">
+          <div style="display:flex;gap:8px;align-items:center">${robot('happy', 26)}<div><div class="t1">Screenshot</div><div class="t2">1280 × 720 · sudah disalin</div></div></div>
+          <div style="display:grid;gap:6px">
+            <span class="act" style="display:flex;gap:6px;align-items:center"><span style="width:13px">${I.copy}</span>Salin lagi</span>
+            <span class="act pri" style="display:flex;gap:6px;align-items:center"><span style="width:13px">${I.save}</span>Simpan</span>
+            <span class="act dng" style="display:flex;gap:6px;align-items:center"><span style="width:13px">${I.trash}</span>Hapus</span></div></div></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+        <div class="scr" style="height:56px"><div class="nt">${robot('happy', 24)}<span style="font-weight:600">Disimpan</span><span style="color:var(--tx2)">Pictures\\Screenshots</span></div></div>
+        <div class="scr" style="height:56px"><div class="nt">${robot('idle', 24)}<span style="font-weight:600">Dihapus</span><span style="color:var(--tx2)">clipboard dikosongkan</span></div></div></div></div>
+    <div>${ux('Perilaku', ['Berlaku untuk tombol Screenshot, PrtSc dan Win+Shift+S.', 'Klik gambar = buka di Snipping Tool untuk diedit.', '<b>Simpan</b> = biarkan file di folder Screenshots; <b>Hapus</b> = hapus file + kosongkan clipboard kalau masih gambar yang sama.', 'Screenshot juga masuk riwayat Clipboard sebagai kartu gambar.'])}
+      <div style="height:10px"></div>
+      ${settingsWin('Screenshot', [['Preview di notch', '', tog()], ['Jika diabaikan', 'Setelah waktu tampil habis', wseg(['Simpan', 'Hapus'], 0)], ['Lama tampil', '', step('8 dtk')]])}
+      <p class="note">Default dipilih dari saran: kalau diabaikan, file tetap disimpan (tidak ada yang hilang tanpa sengaja).</p></div></div>
+  ${F('Screenshot')}</section>`;
+
+// ================= 7 page order =================
+const PG = ['Kalender', 'Pomodoro', 'Pengingat', 'Catatan', 'Musik', 'Clipboard', 'Sistem', 'CLI', 'Shortcuts'];
+const p7 = `<section class="page"><div class="eyebrow">Turunan dari ide 4 & 5</div><h1><span class="no">+</span>Sembilan halaman panel</h1>
+  <div style="display:grid;grid-template-columns:1fr 420px;gap:26px">
+    <div><div class="lbl">Urutan baru</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">${PG.map((p, i) => `<span style="font-size:11.5px;padding:6px 12px;border-radius:99px;${['Clipboard', 'Sistem'].includes(p) ? 'background:var(--a);color:#FFFBF5;font-weight:600' : 'background:#E6DCCF'}">${i + 1}. ${p}</span>`).join('')}</div>
+      ${ux('Kenapa ada pengaturan halaman', ['Sembilan halaman lebih lama digulir dengan roda mouse.', 'Default: semua aktif, urutan seperti di atas.', 'Halaman yang disembunyikan tetap bisa dibuka lewat tombolnya (mis. Clipboard dari Shortcuts).', 'Titik halaman di bawah panel hanya menghitung halaman yang aktif.'])}
+      <p class="note">Ini tidak kamu jawab di brainstorm; dibuat sebagai default yang bisa dimatikan.</p></div>
+    <div>${settingsWin('Tampilan · Halaman panel', PG.map((p, i) => [`<span class="grip">⋮⋮</span>${p}`, '', tog()]))}</div></div>
+  ${F('Halaman')}</section>`;
+
+// ================= 8-10 deep clean =================
+const TOP = [['Chrome CacheStorage', '922,6 MB'], ['Chrome Code Cache', '506,9 MB'], ['VS Code cache', '401,3 MB*'], ['Chrome Cache', '396,1 MB'], ['pip cache', '90,9 MB'], ['NuGet HTTP cache', '20,0 MB'], ['Thumbnail cache', '10,1 MB'], ['Error reports + memory dumps', '16,2 MB']];
+const p8 = `<section class="page"><div class="eyebrow">Diskusi · deep clean · 1/3</div><h1><span class="no">4</span>Apa yang Mole lakukan di PC ini</h1>
+  <div style="display:grid;grid-template-columns:400px 1fr;gap:26px">
+    <div><div class="lbl">Pratinjau <code>mo clean --dry-run</code> · 27 Okt, Mole Windows 1.30.0</div>
+      <table>${TOP.map(([n, s]) => `<tr><td>${n}</td><td style="text-align:right;font-variant-numeric:tabular-nums">${s}</td></tr>`).join('')}
+        <tr><td><b>Total 29 entri</b></td><td style="text-align:right"><b>± 2,8 GB</b></td></tr></table>
+      <p class="note">* Beberapa entri muncul dua kali di output, jadi total sebenarnya sedikit lebih kecil. Pratinjau tidak menghapus apa pun.</p>
+      <div class="lbl" style="margin-top:14px">Yang dibersihkan Mole secara default</div>
+      ${ux('', ['File sementara, log, prefetch, thumbnail, laporan error.', 'Cache browser (Chrome, Edge, Firefox, Brave, Opera) dan aplikasi (VS Code, Teams, Discord, Spotify, Zoom, Adobe, <b>Autodesk</b>, Steam).', 'Cache developer: npm, pip, NuGet, Go, <b>Cargo</b>, Docker, Git, IDE.', 'Opsional: <code>--system</code> (admin), <code>--game-media</code>.'])}</div>
+    <div><div class="lbl">Temuan</div>
+      ${[['good', '✓', '<b>Bisa dipanggil tanpa interaksi.</b> <code>mo clean</code> tidak bertanya apa-apa, jadi island bisa menjalankannya.'],
+         ['good', '✓', '<b>Lisensi MIT</b> untuk versi Windows: daftar lokasi boleh kita pakai dengan menyebut sumbernya. (Versi macOS GPL, tidak dipakai.)'],
+         ['bad', '!', '<b>Semua atau tidak sama sekali.</b> Tidak bisa memilih per kategori; hanya ada daftar pengecualian (whitelist) berupa file teks.'],
+         ['bad', '!', '<b>Hapus permanen.</b> <code>Remove-Item -Force</code>, tanpa Recycle Bin.'],
+         ['bad', '!', '<b>Ringkasannya salah.</b> Setelah menemukan ± 2,8 GB, Mole menulis "No significant reclaimable space detected".'],
+         ['bad', '!', '<b>Output tidak stabil.</b> Baris tabel internal (Size/Removed/Failed) ikut tercetak; daftar detail <code>clean-list.txt</code> kosong. Island harus menebak dari teks.'],
+         ['info', 'i', '<b>Ikut membersihkan cache Cargo & Autodesk.</b> Aman, tapi build Rust dan AutoCAD akan mengunduh / membangun ulang cache-nya.'],
+         ['info', 'i', 'README Mole Windows sendiri menyebut versinya <b>eksperimental, "not mature"</b>.']]
+        .map(([k, s, t]) => `<div class="fct"><span class="k ${k}">${s}</span><div>${t}</div></div>`).join('')}</div></div>
+  ${F('Deep clean')}</section>`;
+
+const p9 = `<section class="page"><div class="eyebrow">Diskusi · deep clean · 2/3</div><h1><span class="no">4</span>Tiga cara, dibandingkan</h1>
+  <table class="cmp"><tr><th></th><th>A · Buatan sendiri</th><th>B · Mole sebagai mesin</th><th style="background:rgba(226,104,60,.10)">C · Gabungan (saran)</th></tr>
+    <tr><td>Siapa yang menghapus</td><td>Kode island (Rust)</td><td>Island menjalankan <code>mo clean</code></td><td style="background:rgba(226,104,60,.06)">Kode island; Mole hanya dibuka untuk fitur lain</td></tr>
+    <tr><td>Fungsi Mole yang dipakai</td><td>Tidak ada</td><td>Seluruh <code>mo clean</code></td><td style="background:rgba(226,104,60,.06)"><b>Daftar lokasi</b> Mole Windows (MIT, dengan kredit) + tombol <b>Buka Mole</b> untuk uninstall, analyze, optimize</td></tr>
+    <tr><td>Pilih per kategori</td><td class="y">Ya</td><td class="n">Tidak</td><td class="y" style="background:rgba(226,104,60,.06)">Ya</td></tr>
+    <tr><td>Recycle Bin / permanen</td><td class="y">Bisa diatur</td><td class="n">Selalu permanen</td><td class="y" style="background:rgba(226,104,60,.06)">Cache permanen, file pengguna ke Recycle Bin</td></tr>
+    <tr><td>Angka ukuran</td><td class="y">Dari pemindaian sendiri</td><td class="n">Dari teks output (pernah salah)</td><td class="y" style="background:rgba(226,104,60,.06)">Dari pemindaian sendiri</td></tr>
+    <tr><td>Butuh program lain</td><td class="y">Tidak</td><td class="n">Mole + PowerShell</td><td class="y" style="background:rgba(226,104,60,.06)">Tidak (Mole opsional)</td></tr>
+    <tr><td>Kalau Mole update</td><td class="y">Tidak terpengaruh</td><td class="n">Parser bisa rusak</td><td class="y" style="background:rgba(226,104,60,.06)">Tidak terpengaruh</td></tr>
+    <tr><td>Kerja</td><td class="m">Besar</td><td class="y">Sedang (tapi rapuh)</td><td class="m" style="background:rgba(226,104,60,.06)">Besar, sedikit lebih dari A</td></tr>
+    <tr><td>Cocok kalau…</td><td>Tidak mau bergantung apa pun</td><td>Butuh cepat dan menerima risikonya</td><td style="background:rgba(226,104,60,.06)">Mau aman dan tetap bisa pakai kelebihan Mole</td></tr></table>
+  <div class="opt rec" style="margin-top:16px"><span class="tag">Jawaban singkat</span><b>Apakah fungsi Mole dipakai?</b><p>Ya, tapi tidak sebagai mesin hapusnya. Yang diambil dari Mole adalah <strong>daftar lokasi yang aman dibersihkan</strong> (data, berlisensi MIT, dengan kredit), dan Mole tetap bisa <strong>dibuka</strong> dari island untuk fitur yang tidak kita buat (uninstall aplikasi, analisis disk). Pemindaian, pilihan kategori, dan penghapusan dilakukan kode island sendiri, sehingga ukurannya benar, bisa memilih per kategori, dan file pengguna bisa masuk Recycle Bin.</p></div>
+  ${F('Deep clean')}</section>`;
+
+const CAT = [
+  ['temp', 'File sementara & log', 'Temp, log, prefetch > 7 hari', '0,1 GB', true],
+  ['globe', 'Cache browser', 'Chrome, Edge, Firefox, Brave · dilewati kalau browser terbuka', '1,8 GB', true],
+  ['box', 'Cache aplikasi', 'VS Code, Teams, Discord, Spotify, Zoom', '0,4 GB', true],
+  ['code', 'Cache developer', 'npm, pip, NuGet, Go, Cargo · diunduh ulang saat build', '0,1 GB', false],
+  ['image', 'Cache Autodesk & Adobe', 'Dibuat ulang saat aplikasi dibuka', '—', false],
+  ['dl', 'Installer lama di Downloads', '.exe/.msi > 30 hari · ke Recycle Bin', '—', false],
+  ['win', 'Sisa Windows Update', 'Perlu izin admin', '—', false, true],
+];
+const cleanPanel2 = `<div class="panel" style="height:352px">
+  <div class="ph"><span class="ttl">Bersihkan</span><div style="display:flex;gap:6px;align-items:center"><span class="hchip sage">Dipilih 2,3 GB</span><span class="cbtn">Bersihkan 2,3 GB</span></div></div>
+  <div class="cl">${CAT.map(([ic, t, s, sz, on, adm]) => `<div class="row"><span class="ck${on ? ' on' : ''}"></span><span class="ic">${I[ic]}</span><div>${t}${adm ? '<span class="lock">admin</span>' : ''}<small>${s}</small></div><span class="csz">${sz}</span></div>`).join('')}</div>
+  <div style="position:absolute;left:20px;right:20px;bottom:26px;display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--tx2)"><span>Ukuran dari pemindaian · daftar lokasi: Mole Windows (MIT)</span><span class="hchip" style="color:var(--tx)">Buka Mole ↗</span></div></div>`;
+const p10 = `<section class="page"><div class="eyebrow">Diskusi · deep clean · 3/3</div><h1><span class="no">4</span>Usulan C di island</h1>
+  <div style="display:grid;grid-template-columns:560px 1fr;gap:24px">
+    <div><div class="lbl">Dari tombol "Bersihkan" di halaman Sistem</div>${cleanPanel2}
+      <p class="note">Ukuran contoh dari pratinjau Mole di PC ini; "—" belum diukur.</p>
+      <div class="lbl" style="margin-top:10px">Selesai</div>
+      <div class="scr alt" style="height:70px"><div class="nt big" style="top:6px">${robot('happy', 36)}<div><div class="t1">2,3 GB dibebaskan</div><div class="t2">Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)</div></div><span class="act">Detail</span></div></div></div>
+    <div>${ux('Alurnya', ['Pindai (beberapa detik, di latar) → ukuran tiap kategori.', 'Centang default hanya untuk yang aman dan tidak merepotkan (tiga teratas).', 'Klik "Bersihkan" → konfirmasi singkat di tombol → hapus.', 'File yang sedang dipakai atau browser yang terbuka dilewati, dilaporkan di akhir.', '"Buka Mole" muncul hanya kalau <code>mo</code> terpasang; membuka Mole di Windows Terminal.'])}
+      <div class="lbl" style="margin-top:12px">Pertanyaan untukmu</div>
+      ${ux('', ['<b>A, B, atau C?</b> Saran: C.', '<b>Cache developer</b> (npm, pip, Cargo) dicentang default atau tidak? Saran: tidak, karena build berikutnya jadi lebih lama.', '<b>Cache Autodesk & Adobe</b>: tampilkan sebagai pilihan, atau sembunyikan sama sekali?', '<b>Recycle Bin</b>: perlu kategori "Kosongkan Recycle Bin"? Saran: tidak, biar kamu sendiri yang mengosongkan.', '<b>Bersihkan otomatis</b> (mis. tiap minggu)? Saran: tidak, hanya manual.'])}</div></div>
+  ${F('Deep clean')}</section>`;
+
+document.getElementById('doc').innerHTML = cover + p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10;
+
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>
