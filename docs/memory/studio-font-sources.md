@@ -5,13 +5,13 @@ date: 2026-10-27
 
 # Studio font sources and subsetting
 
-Fonts are built by `scripts/make-fonts.ps1` and embedded as RCDATA 201-207 (see [[studio-font-loading]]).
+Fonts are built by `scripts/make-fonts.ps1` and embedded as RCDATA 203-207: DM Sans 400/500/600 and DM Mono 400/500 (see [[studio-font-loading]]).
 
+- The italic serif display face of 3.0 (RCDATA 201-202) was dropped in v3.1 for upright DM Sans 600 titles and large clocks. Ids 201-202 stay unused.
 - DM Sans comes from upstream `googlefonts/dm-fonts`, not `google/fonts`: the google/fonts build (4.004) has no `tnum` feature, so tabular figures would not work.
-- Fraunces at wght 500 / opsz 20 swaps in non-wonky `.alt` glyphs through `rvrn`. Not every renderer applies `rvrn` to a static font, so the script writes those swaps into the cmap.
 - DM Sans 400/500/600 and DM Mono 400/500 share name ID1 = family and ID2 = Regular, so the loader tells them apart by `usWeightClass`.
-- Sources are pinned by commit and SHA-256; output is byte-identical across runs. Total font size is about 296 KB (budget 370 KB).
-- Still open at 3.0.0: the screenshots in `assets/screenshots` date from v2.2 and must be regenerated (`src/ui/demo.rs`) to show the new fonts, palette, icons and robot. See [[demo-data-time-of-day]] before capturing.
+- Sources are pinned by commit and SHA-256; output is byte-identical across runs. Total font size is about 189 KB (budget 370 KB).
+- The 3.0 screenshots in `assets/screenshots` still show the old italic titles; the v3.1 recapture (`src/ui/demo.rs`, `scripts/capture-screenshots.ps1`) replaces them. See [[demo-data-time-of-day]] before capturing.
 
 Related: [[studio-palette-accent-aliases]], [[studio-tabular-figures-word-gaps]]
 

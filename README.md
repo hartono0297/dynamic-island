@@ -47,7 +47,7 @@ On first run, Windows asks for access to your notifications: allow it.
 - **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed.
 - **Bata, the assistant:** a small robot beside the clock and on the island's own notices (reminders, pomodoro, Claude Code, battery, greeting). It has faces for idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving; it blinks, falls asleep after a while without activity and wakes when you point at the island. Other apps' notifications keep their own badge, and the open panel shows no robot.
 - **Morning greeting:** once a day, before noon, Bata says good morning with the number of today's events and reminders, at startup, after a wake or when you unlock the PC.
-- **Studio look:** the Bata palette (terracotta, espresso, cream) with six accent colours, Espresso or Graphite island fill, light/dark windows; Fraunces, DM Sans and DM Mono built into the exe; the island's own vector icons. Pill or Notch shape. Indonesian (default) or English.
+- **Studio look:** the Bata palette (terracotta, espresso, cream) with six accent colours, Espresso or Graphite island fill, light/dark windows; DM Sans and DM Mono built into the exe, with titles and the clocks in DM Sans Semibold; the island's own vector icons. Pill or Notch shape. Indonesian (default) or English.
 
 <p align="center">
   <img src="assets/screenshots/calendar-day.png" width="420" alt="Calendar day view: an hour timeline with two all-day events on top, a design review and a coordination meeting, and a terracotta line at the current time">
@@ -164,9 +164,8 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 
 ## Fonts / credits
 
-The exe embeds Latin subsets of three typefaces, all under the SIL Open Font License 1.1:
+The exe embeds Latin subsets of two typefaces, both under the SIL Open Font License 1.1:
 
-- **Fraunces** by Undercase Type, © 2018 The Fraunces Project Authors (italic, for titles and the large clock)
 - **DM Sans** by Colophon Foundry for Google Fonts, © 2014 The DM Sans Project Authors (text and numbers)
 - **DM Mono** by Colophon Foundry for Google Fonts, © 2020 The DM Mono Project Authors (the CLI)
 
