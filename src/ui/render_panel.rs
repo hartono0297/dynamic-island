@@ -9,18 +9,24 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
+    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_FIGURE_BEGIN_HOLLOW,
+    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
-    D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_ROUNDED_RECT,
-    D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Geometry,
+    D2D1_BITMAP_PROPERTIES, D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS,
+    D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap, ID2D1Brush, ID2D1Geometry,
 };
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
-use windows::core::Result;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use super::{ClipView, CliView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use crate::clipboard::image::Thumb;
+use crate::clipboard::kinds::hex_rgb;
+use crate::clipboard::store::ClipImage;
+use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
@@ -36,7 +42,8 @@ use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, sh
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
+    CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_THUMB_W, CalendarLayout, ClipButton,
+    ClipLayout, clipboard_layout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
     MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD,
     ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_folder_menu, cli_layout, cli_suggestions,
     media_panel_layout, media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
@@ -271,6 +278,9 @@ impl Renderer {
                     ..l.term
                 });
             }
+            if let PageLayout::Clipboard(l) = &layout {
+                self.regions.clip_list = Some(l.list);
+            }
         }
         Ok(())
     }
@@ -323,6 +333,23 @@ impl Renderer {
                 l.menu = frame.cli.menu.map(|m| cli_folder_menu(&l, &m.items));
                 PageLayout::Cli(l)
             }
+            Page::Clipboard => {
+                let clip = &frame.clip;
+                let ids: Vec<u64> = clip.items.iter().map(|c| c.id).collect();
+                let image = |id: u64| {
+                    clip.items
+                        .iter()
+                        .any(|c| c.id == id && c.kind == ClipKind::Image)
+                };
+                PageLayout::Clipboard(clipboard_layout(
+                    s,
+                    strip,
+                    &ids,
+                    clip.selected,
+                    clip.scroll,
+                    image,
+                ))
+            }
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         }
     }
@@ -346,6 +373,7 @@ impl Renderer {
                 self.paint_media(l, frame.media, frame.lyrics_on, frame.progress)
             }
             PageLayout::Cli(l) => self.paint_cli(l, frame),
+            PageLayout::Clipboard(l) => self.paint_clipboard(l, &frame.clip),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l);
                 Ok(())
@@ -925,6 +953,332 @@ impl Renderer {
             target.rt.DrawGeometry(&path, &target.brush, FOCUS_W, None);
         }
         Ok(())
+    }
+
+    /// The Clipboard page after keputusan-v3.1.html §5: the title, the
+    /// search field, and the cards (kind label with its icon, the value on
+    /// two lines, a swatch for a colour, the thumbnail strip for an image),
+    /// the selected one ringed in the accent with its buttons.
+    fn paint_clipboard(&self, l: &ClipLayout, clip: &ClipView) -> Result<()> {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.heading(text(lang, Key::ClipboardTitle), l.header);
+        self.paint_clip_search(l.search, clip);
+
+        if let Some(area) = l.empty.or((!clip.enabled).then_some(l.list)) {
+            let (title, hint) = if !clip.enabled {
+                (Key::ClipOff, Some(Key::ClipOffHint))
+            } else if clip.total == 0 {
+                (Key::ClipEmpty, Some(Key::ClipEmptyHint))
+            } else {
+                (Key::ClipNoMatch, None)
+            };
+            let mid = area.y + area.h / 2.0 - 12.0;
+            let line = |y: f32| Rect { y, h: 18.0, ..area };
+            self.text(text(lang, title), &self.fonts.body_center, line(mid), 1.0);
+            if let Some(hint) = hint {
+                self.text_colored(
+                    text(lang, hint),
+                    &self.fonts.small_center,
+                    line(mid + 20.0),
+                    p.secondary,
+                    1.0,
+                );
+            }
+            if !clip.enabled {
+                return Ok(());
+            }
+        }
+
+        let mut drawn_images = Vec::new();
+        for &(id, _, r) in &l.cards {
+            let Some(item) = clip.items.iter().find(|c| c.id == id) else {
+                continue;
+            };
+            self.set_color(p.raised, 1.0);
+            self.fill_round(r, CLIP_RADIUS);
+            let selected = clip.selected == Some(id);
+            match item.image() {
+                Some(img) => {
+                    drawn_images.push(id);
+                    self.paint_clip_image(r, item, img, clip.now, lang)?;
+                }
+                None => self.paint_clip_text(r, item, lang),
+            }
+            if item.pinned && !selected {
+                let pin = Rect {
+                    x: r.right() - 8.0 - 12.0,
+                    y: r.y + 7.0,
+                    w: 12.0,
+                    h: 12.0,
+                };
+                self.icon_colored(Icon::Pin, pin, 12.0, p.accent, 1.0, None);
+            }
+            if selected {
+                self.stroke_round_width(inset(r, 0.75, 0.75), CLIP_RADIUS - 0.75, p.accent, 1.5);
+            }
+        }
+        self.clip_thumbs
+            .borrow_mut()
+            .retain(|(id, _)| drawn_images.contains(id));
+
+        for &(button, id, r) in &l.buttons {
+            let pinned = clip.items.iter().any(|c| c.id == id && c.pinned);
+            self.set_color(p.raised_hi, 1.0);
+            self.fill_round(r, r.h / 2.0);
+            let (icon, ink) = match button {
+                ClipButton::Pin if pinned => (Icon::Pin, p.accent),
+                ClipButton::Pin => (Icon::Pin, p.text),
+                ClipButton::Plain => (Icon::Text, p.text),
+                ClipButton::Delete => (Icon::Trash, p.text),
+            };
+            self.icon_colored(icon, r, 12.0, ink, 1.0, None);
+        }
+        Ok(())
+    }
+
+    /// `.search`: the raised field, the glyph, the placeholder or the typed
+    /// text with its selection and caret, and the accent ring while focused.
+    fn paint_clip_search(&self, r: Rect, clip: &ClipView) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.set_color(p.raised, 1.0);
+        self.fill_round(r, 12.0);
+        if clip.focused {
+            self.stroke_round_width(inset(r, 0.75, 0.75), 11.25, p.accent, FOCUS_W);
+        }
+        let glyph = Rect {
+            x: r.x + 11.0,
+            w: 14.0,
+            ..r
+        };
+        self.icon_colored(Icon::Search, glyph, 14.0, p.secondary, 1.0, None);
+        let field = Rect {
+            x: glyph.right() + 8.0,
+            w: (r.right() - 11.0 - glyph.right() - 8.0).max(0.0),
+            ..r
+        };
+        let format = &self.fonts.clip_search;
+        let mid = field.y + field.h / 2.0;
+        if clip.query.is_empty() && !clip.focused {
+            let hint = i18n::clip_search_in(lang, clip.total);
+            self.text_colored(&hint, format, field, p.secondary, 1.0);
+            return;
+        }
+        let len = clip.query.encode_utf16().count();
+        let (a, b) = (clip.selection.0.min(len), clip.selection.1.min(len));
+        let x_of = |n: usize| self.text_width(utf16_prefix(clip.query, n), format);
+        let caret_x = x_of(b);
+        let shift = (caret_x + 2.0 - field.w).max(0.0);
+        let origin = field.x - shift;
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            target
+                .rt
+                .PushAxisAlignedClip(&d2d_rect(field), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
+        if clip.query.is_empty() {
+            let hint = i18n::clip_search_in(lang, clip.total);
+            self.text_colored(&hint, format, field, p.secondary, 0.6);
+        }
+        if a != b && clip.focused {
+            let xa = x_of(a);
+            self.set_color(p.accent, 0.32);
+            let sel = Rect {
+                x: origin + xa,
+                y: mid - CARET_H / 2.0,
+                w: caret_x - xa,
+                h: CARET_H,
+            };
+            self.fill_round(sel, 2.0);
+        }
+        let typed = Rect {
+            x: origin,
+            w: 4096.0,
+            ..field
+        };
+        self.text(clip.query, format, typed, 1.0);
+        if clip.focused {
+            let caret = Rect {
+                x: origin + caret_x - 0.75,
+                y: mid - CARET_H / 2.0,
+                w: 1.5,
+                h: CARET_H,
+            };
+            self.set_color(p.accent, 1.0);
+            self.fill_round(caret, 0.0);
+            self.clip_caret.set(Some(caret));
+        }
+        unsafe { target.rt.PopAxisAlignedClip() };
+    }
+
+    /// The kind label (`.k`: icon and uppercase name) at `at`.
+    fn paint_clip_kind(&self, at: Rect, kind: ClipKind, lang: Lang) {
+        let p = self.palette;
+        let glyph = Rect { w: 11.0, ..at };
+        self.icon_colored(clip_icon(kind), glyph, 11.0, p.secondary, 1.0, None);
+        let label = Rect {
+            x: glyph.right() + 5.0,
+            w: (at.right() - glyph.right() - 5.0).max(0.0),
+            ..at
+        };
+        let name = text(lang, i18n::clip_kind_key(kind)).to_uppercase();
+        self.text_colored(&name, &self.fonts.clip_kind, label, p.secondary, 1.0);
+    }
+
+    fn paint_clip_text(&self, r: Rect, item: &Clip, lang: Lang) {
+        let p = self.palette;
+        let inner = inset(r, 10.0, 8.0);
+        // Room for the pin or the selected card's buttons at the top right.
+        let kind_row = Rect {
+            h: 12.0,
+            w: (inner.w - 70.0).max(0.0),
+            ..inner
+        };
+        self.paint_clip_kind(kind_row, item.kind, lang);
+        let mut value = Rect {
+            y: kind_row.bottom() + 3.0,
+            h: (inner.bottom() - kind_row.bottom() - 3.0).max(0.0),
+            ..inner
+        };
+        let shown = card_value(item);
+        if item.kind == ClipKind::Color
+            && let Some(rgb) = hex_rgb(&shown)
+        {
+            let swatch = Rect {
+                x: value.x,
+                y: value.y,
+                w: 18.0,
+                h: 18.0,
+            };
+            self.set_color(rgb, 1.0);
+            self.fill_round(swatch, 6.0);
+            value = Rect {
+                x: swatch.right() + 6.0,
+                w: (value.right() - swatch.right() - 6.0).max(0.0),
+                h: 18.0,
+                ..value
+            };
+            self.text_colored(&shown, &self.fonts.eleven, value, p.text, 1.0);
+            return;
+        }
+        let format = if item.kind.mono() {
+            &self.fonts.clip_mono
+        } else {
+            &self.fonts.clip_value
+        };
+        self.text_colored(&shown, format, value, p.text, 1.0);
+    }
+
+    /// `.clip.img`: the thumbnail filling the card's left 92 px (its left
+    /// corners rounded with the card), then the label, size and age.
+    fn paint_clip_image(
+        &self,
+        r: Rect,
+        item: &Clip,
+        img: &ClipImage,
+        now: NaiveDateTime,
+        lang: Lang,
+    ) -> Result<()> {
+        let p = self.palette;
+        let strip = Rect {
+            w: CLIP_THUMB_W,
+            ..r
+        };
+        let target = self.target.as_ref().expect("target ensured by paint");
+        if let Some(bitmap) = self.clip_thumb(item.id, &img.thumb)? {
+            unsafe {
+                let D2D_SIZE_F { width, height } = bitmap.GetSize();
+                let k = (strip.w / width.max(1.0)).max(strip.h / height.max(1.0));
+                let transform = Matrix3x2 {
+                    M11: k,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: k,
+                    M31: strip.x + (strip.w - width * k) / 2.0,
+                    M32: strip.y + (strip.h - height * k) / 2.0,
+                };
+                let brush = target.rt.CreateBitmapBrush(&bitmap, None, None)?;
+                brush.SetTransform(&transform);
+                let brush: ID2D1Brush = brush.cast()?;
+                target
+                    .rt
+                    .PushAxisAlignedClip(&d2d_rect(strip), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                target.rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(r),
+                        radiusX: CLIP_RADIUS,
+                        radiusY: CLIP_RADIUS,
+                    },
+                    &brush,
+                );
+                target.rt.PopAxisAlignedClip();
+            }
+        }
+        let meta = inset(
+            Rect {
+                x: strip.right(),
+                w: r.right() - strip.right(),
+                ..r
+            },
+            10.0,
+            8.0,
+        );
+        let kind_row = Rect {
+            h: 12.0,
+            w: (meta.w - 48.0).max(0.0),
+            ..meta
+        };
+        self.paint_clip_kind(kind_row, ClipKind::Image, lang);
+        let size = i18n::clip_image_meta(lang, img.screenshot, img.width, img.height);
+        let value = Rect {
+            y: kind_row.bottom() + 3.0,
+            h: 16.0,
+            ..meta
+        };
+        self.text_colored(&size, &self.fonts.eleven, value, p.text, 1.0);
+        let when = crate::cli_folders::local_time(item.at)
+            .map(|then| i18n::folder_ago(lang, crate::cli_folders::ago(then, now)))
+            .unwrap_or_default();
+        let age = Rect {
+            y: value.bottom() + 2.0,
+            h: 13.0,
+            ..meta
+        };
+        self.text_colored(&when, &self.fonts.micro, age, p.secondary, 1.0);
+        Ok(())
+    }
+
+    /// The thumbnail of entry `id` as a bitmap of this target, made once.
+    fn clip_thumb(&self, id: u64, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
+        if let Some((_, b)) = self.clip_thumbs.borrow().iter().find(|(i, _)| *i == id) {
+            return Ok(Some(b.clone()));
+        }
+        if thumb.w == 0 || thumb.h == 0 || thumb.bgra.len() != (thumb.w * thumb.h * 4) as usize {
+            return Ok(None);
+        }
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let props = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        let bitmap = unsafe {
+            target.rt.CreateBitmap(
+                D2D_SIZE_U {
+                    width: thumb.w,
+                    height: thumb.h,
+                },
+                Some(thumb.bgra.as_ptr().cast()),
+                thumb.w * 4,
+                &props,
+            )?
+        };
+        self.clip_thumbs.borrow_mut().push((id, bitmap.clone()));
+        Ok(Some(bitmap))
     }
 
     /// Two rows of tiles: a duotone icon over its label.
@@ -1845,6 +2199,43 @@ fn calendar_title(lang: Lang, view: CalView, anchor: NaiveDate, selected: NaiveD
 fn event_color(ev: &CalEvent, p: &Palette) -> u32 {
     ev.color
         .unwrap_or(if ev.all_day() { p.sage } else { p.accent })
+}
+
+/// A Clipboard kind's icon on its card.
+fn clip_icon(kind: ClipKind) -> Icon {
+    match kind {
+        ClipKind::Text => Icon::Text,
+        ClipKind::Link => Icon::Link,
+        ClipKind::Code => Icon::Code,
+        ClipKind::Color => Icon::Swatch,
+        ClipKind::Image => Icon::Image,
+        ClipKind::Files => Icon::Folder,
+    }
+}
+
+/// What a text or files card shows: the text (its start: two lines is all
+/// that fits), or the files' names.
+fn card_value(item: &Clip) -> String {
+    match &item.data {
+        ClipData::Text(t) => {
+            let t = t.trim();
+            match t.char_indices().nth(400) {
+                Some((i, _)) => t[..i].to_owned(),
+                None => t.to_owned(),
+            }
+        }
+        ClipData::Files(paths) => paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or(p.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        ClipData::Image(_) => String::new(),
+    }
 }
 
 fn inset(r: Rect, dx: f32, dy: f32) -> Rect {

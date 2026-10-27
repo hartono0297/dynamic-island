@@ -43,7 +43,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use std::mem::ManuallyDrop;
 use std::time::Instant;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
@@ -56,6 +56,7 @@ use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::cli::{Output, Shell};
+use crate::clipboard::Clip;
 use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n;
@@ -125,6 +126,8 @@ pub struct Frame<'a> {
     pub lyrics_on: bool,
     /// The CLI page.
     pub cli: CliView<'a>,
+    /// The Clipboard page.
+    pub clip: ClipView<'a>,
     /// Where the playing track is: the notch's progress line and the Music
     /// page's bar. `None` without a timeline or a known length.
     pub progress: Option<Progress>,
@@ -240,6 +243,44 @@ pub struct CliView<'a> {
     pub menu: Option<&'a FolderMenuView>,
 }
 
+/// What the Clipboard page shows.
+pub struct ClipView<'a> {
+    /// "Riwayat clipboard" is on.
+    pub enabled: bool,
+    /// The entries matching the search, newest first.
+    pub items: Vec<&'a Clip>,
+    /// All entries, for "Cari di N item…".
+    pub total: usize,
+    /// The search field's text and selection (UTF-16 offsets).
+    pub query: &'a str,
+    pub selection: (usize, usize),
+    /// The search field has the keyboard: caret and focus ring.
+    pub focused: bool,
+    /// The selected card (an entry id): accent ring and its buttons.
+    pub selected: Option<u64>,
+    /// Rows of cards scrolled.
+    pub scroll: usize,
+    /// "Now" for the cards' "2 mnt lalu": the clock, or the demo's fixed time.
+    pub now: NaiveDateTime,
+}
+
+impl ClipView<'_> {
+    /// Nothing on the page: history on but empty, for frames without one.
+    pub fn empty(now: NaiveDateTime) -> ClipView<'static> {
+        ClipView {
+            enabled: true,
+            items: Vec::new(),
+            total: 0,
+            query: "",
+            selection: (0, 0),
+            focused: false,
+            selected: None,
+            scroll: 0,
+            now,
+        }
+    }
+}
+
 /// What the open folder menu lists, top to bottom (`cli_folders::menu_items`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FolderMenuView {
@@ -276,6 +317,11 @@ pub struct Renderer {
     /// Where the last frame drew the CLI input's caret, in logical px; the
     /// IME's composition window goes there.
     cli_caret: std::cell::Cell<Option<Rect>>,
+    /// The same for the Clipboard search field.
+    clip_caret: std::cell::Cell<Option<Rect>>,
+    /// Clipboard thumbnails as bitmaps of the current target, by entry id;
+    /// entries no longer drawn are dropped each frame.
+    clip_thumbs: std::cell::RefCell<Vec<(u64, ID2D1Bitmap)>>,
 }
 
 struct Fonts {
@@ -340,6 +386,14 @@ struct Fonts {
     mono_small: IDWriteTextFormat,
     /// The CLI's Stop button: DM Sans 10.5 medium.
     small_medium: IDWriteTextFormat,
+    /// A Clipboard card's value, two lines: DM Sans 11, links and code in
+    /// DM Mono 10.5.
+    clip_value: IDWriteTextFormat,
+    clip_mono: IDWriteTextFormat,
+    /// A Clipboard card's kind label (uppercase): DM Sans 9 medium.
+    clip_kind: IDWriteTextFormat,
+    /// The search field: DM Sans 11.5.
+    clip_search: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -457,6 +511,8 @@ impl Renderer {
                 epoch: Instant::now(),
                 palette: theme::island(Accent::default(), theme::Surface::default()),
                 cli_caret: std::cell::Cell::new(None),
+                clip_caret: std::cell::Cell::new(None),
+                clip_thumbs: std::cell::RefCell::new(Vec::new()),
             })
         }
     }
@@ -476,6 +532,7 @@ impl Renderer {
         self.scale = win.scale();
         self.regions = HitRegions::default();
         self.cli_caret.set(None);
+        self.clip_caret.set(None);
         self.ensure_surface(win.size())?;
         // A lost target is rebuilt once; a second failure is reported.
         if let Err(error) = self.paint(style, shape, frame, opacity) {
@@ -484,6 +541,7 @@ impl Renderer {
             }
             self.target = None;
             self.art.clear();
+            self.clip_thumbs.borrow_mut().clear();
             self.regions = HitRegions::default();
             self.paint(style, shape, frame, opacity)?;
         }
@@ -653,9 +711,25 @@ impl Renderer {
         self.regions.over_cli_output(x / self.scale, y / self.scale)
     }
 
+    /// Whether the wheel at this client point (physical pixels) scrolls the
+    /// Clipboard cards rather than the pages.
+    pub fn over_clip_list(&self, x: f32, y: f32) -> bool {
+        self.regions
+            .clip_list
+            .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
+    }
+
+    /// The Clipboard search caret the last frame drew, in client physical pixels.
+    pub fn clip_caret(&self) -> Option<RECT> {
+        self.caret_px(self.clip_caret.get()?)
+    }
+
     /// The CLI caret the last frame drew, in client physical pixels.
     pub fn cli_caret(&self) -> Option<RECT> {
-        let r = self.cli_caret.get()?;
+        self.caret_px(self.cli_caret.get()?)
+    }
+
+    fn caret_px(&self, r: Rect) -> Option<RECT> {
         let px = |v: f32| (v * self.scale).round() as i32;
         Some(RECT {
             left: px(r.x),
@@ -1416,6 +1490,29 @@ impl Fonts {
             };
             snippet.SetTrimming(&trimming, &ellipsis)?;
         }
+        // A Clipboard card's value: two lines at the design's 1.35, cut with "…".
+        let wrapped = |face: &Face, size: f32| -> Result<IDWriteTextFormat> {
+            let format = face.format(dwrite, normal, size)?;
+            unsafe {
+                format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                format.SetLineSpacing(
+                    windows::Win32::Graphics::DirectWrite::DWRITE_LINE_SPACING_METHOD_UNIFORM,
+                    (size * 1.35).round(),
+                    (size * 1.08).round(),
+                )?;
+                let ellipsis = dwrite.CreateEllipsisTrimmingSign(&format)?;
+                let trimming = DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                };
+                format.SetTrimming(&trimming, &ellipsis)?;
+            }
+            Ok(format)
+        };
+        let clip_value = wrapped(&text, 11.0)?;
+        let clip_mono = wrapped(&mono, 10.5)?;
         let chip_mono = line(&mono, normal, caption)?;
         unsafe {
             let ellipsis = dwrite.CreateEllipsisTrimmingSign(&chip_mono)?;
@@ -1464,6 +1561,10 @@ impl Fonts {
             chip_mono,
             mono_small: line(&mono, normal, caption)?,
             small_medium: line(&text, medium, caption)?,
+            clip_value,
+            clip_mono,
+            clip_kind: line(&text, medium, 9.0)?,
+            clip_search: line(&text, normal, 11.5)?,
         })
     }
 }

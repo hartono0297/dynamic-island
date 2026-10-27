@@ -441,6 +441,39 @@ keys! {
     ExprWave => "Menyapa", "Waving";
     ExprBlink => "Kedip", "Blink";
 
+    // The Clipboard page, its notice and Settings → Clipboard.
+    ClipboardTitle => "Clipboard", "Clipboard";
+    ClipKindText => "Teks", "Text";
+    ClipKindLink => "Tautan", "Link";
+    ClipKindCode => "Kode", "Code";
+    ClipKindColor => "Warna", "Color";
+    ClipKindImage => "Gambar", "Image";
+    ClipKindFiles => "File", "Files";
+    ClipEmpty => "Belum ada yang disalin", "Nothing copied yet";
+    ClipEmptyHint => "Salin sesuatu, nanti muncul di sini", "Copy something and it shows up here";
+    ClipNoMatch => "Tidak ada yang cocok", "No matches";
+    ClipOff => "Riwayat clipboard mati", "Clipboard history is off";
+    ClipOffHint => "Nyalakan di Pengaturan → Clipboard", "Turn it on in Settings → Clipboard";
+    ClipCopied => "Disalin", "Copied";
+    SecClipboard => "Clipboard", "Clipboard";
+    ClipHistory => "Riwayat clipboard", "Clipboard history";
+    ClipHistoryDesc => "Simpan yang kamu salin", "Keep what you copy";
+    ClipItems => "Jumlah item", "Items kept";
+    ClipItemsDesc => "Item tersemat tidak ikut terhapus", "Pinned items are never pushed out";
+    ClipPersist => "Simpan setelah restart", "Keep after restart";
+    ClipPersistDesc => "Terenkripsi DPAPI, hanya akun ini", "Encrypted with DPAPI, this account only";
+    ClipClearOnLock => "Hapus saat layar dikunci", "Clear when the screen locks";
+    ClipClearOnLockDesc => "Item tersemat tetap", "Pinned items stay";
+    ClipHotkey => "Pintasan", "Shortcut";
+    ClipHotkeyDesc => "Buka halaman Clipboard", "Open the Clipboard page";
+    ClipHotkeyTaken => "Dipakai aplikasi lain, pilih yang lain", "Taken by another app, pick another";
+    ClipHotkeyNone => "Tidak ada", "None";
+    ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
+    ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";
+    ClipClear => "Hapus riwayat", "Clear history";
+    ClipClearDesc => "Item tersemat tetap disimpan", "Pinned items are kept";
+    ClipClearButton => "Hapus", "Clear";
+
     // The demo's Claude notices (debug builds).
     DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";
     DemoClaudeAsks => "izin menjalankan perintah", "permission to run a command";
@@ -591,6 +624,47 @@ pub fn folder_ago(lang: Lang, ago: crate::cli_folders::Ago) -> String {
         },
         Ago::Yesterday => near_word(lang, Near::Yesterday, false).to_owned(),
         Ago::On(d) => short_date(lang, d),
+    }
+}
+
+/// A Clipboard kind's label ("Teks", "Tautan", …).
+pub fn clip_kind_key(kind: crate::clipboard::ClipKind) -> Key {
+    use crate::clipboard::ClipKind;
+    match kind {
+        ClipKind::Text => Key::ClipKindText,
+        ClipKind::Link => Key::ClipKindLink,
+        ClipKind::Code => Key::ClipKindCode,
+        ClipKind::Color => Key::ClipKindColor,
+        ClipKind::Image => Key::ClipKindImage,
+        ClipKind::Files => Key::ClipKindFiles,
+    }
+}
+
+/// The Clipboard search field's placeholder: "Cari di 48 item…".
+pub fn clip_search_in(lang: Lang, n: usize) -> String {
+    match lang {
+        Lang::Id => format!("Cari di {n} item…"),
+        Lang::En if n == 1 => "Search 1 item…".to_owned(),
+        Lang::En => format!("Search {n} items…"),
+    }
+}
+
+/// An image card's meta line: "Screenshot · 1280 × 720", "Gambar · 640 × 480".
+pub fn clip_image_meta(lang: Lang, screenshot: bool, w: u32, h: u32) -> String {
+    let what = if screenshot {
+        "Screenshot"
+    } else {
+        text(lang, Key::ClipKindImage)
+    };
+    format!("{what} · {w} × {h}")
+}
+
+/// Copied files in the "Disalin" notice: "laporan.pdf", "3 file".
+pub fn clip_files(lang: Lang, n: usize, first: &str) -> String {
+    match (lang, n) {
+        (_, 1) => first.to_owned(),
+        (Lang::Id, n) => format!("{n} file"),
+        (Lang::En, n) => format!("{n} files"),
     }
 }
 
@@ -1693,6 +1767,7 @@ mod tests {
         "pomodoro",
         "powershell",
         "readme",
+        "screenshot",
         "spotify",
         "stop",
         "windows",
@@ -1798,6 +1873,11 @@ mod tests {
                 cli_start_failed(lang, "0x80070002"),
                 cli_running(lang, Duration::from_secs(42)),
                 cli_moved_to(lang, r"D:\github\project-a"),
+                clip_search_in(lang, 48),
+                clip_search_in(lang, 1),
+                clip_image_meta(lang, true, 1280, 720),
+                clip_image_meta(lang, false, 640, 480),
+                clip_files(lang, 3, "a.pdf"),
                 save_failed_because(lang, text(lang, Key::ReasonOffline)),
                 google_refused(lang, "403"),
                 unreadable_reply(lang, 200),

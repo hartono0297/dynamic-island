@@ -520,6 +520,8 @@ pub enum NoticeSort {
     ClaudeDone,
     BatteryLow,
     Greeting,
+    /// "Disalin" after a copy.
+    Copied,
 }
 
 impl NoticeSort {
@@ -532,6 +534,7 @@ impl NoticeSort {
             NoticeKind::ClaudeDone { .. } => NoticeSort::ClaudeDone,
             NoticeKind::BatteryLow => NoticeSort::BatteryLow,
             NoticeKind::Greeting => NoticeSort::Greeting,
+            NoticeKind::Copied => NoticeSort::Copied,
         }
     }
 }
@@ -604,7 +607,7 @@ pub struct RobotInputs {
 ///
 /// 1. Hidden and the open panel: no robot.
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
-///    pomodoro phase done and Claude done → Happy, low battery → Sad,
+///    pomodoro phase done, Claude done and "Disalin" → Happy, low battery → Sad,
 ///    greeting → Wave. Other apps' notifications (`App`) → no robot: they
 ///    keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
@@ -619,7 +622,9 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
             return match sort {
                 NoticeSort::App => None,
                 NoticeSort::Reminder | NoticeSort::ClaudeWaiting => Some(Expr::Alert),
-                NoticeSort::PomodoroDone | NoticeSort::ClaudeDone => Some(Expr::Happy),
+                NoticeSort::PomodoroDone | NoticeSort::ClaudeDone | NoticeSort::Copied => {
+                    Some(Expr::Happy)
+                }
                 NoticeSort::BatteryLow => Some(Expr::Sad),
                 NoticeSort::Greeting => Some(Expr::Wave),
             };
@@ -1129,6 +1134,7 @@ mod tests {
             (NoticeSort::ClaudeDone, Expr::Happy),
             (NoticeSort::BatteryLow, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
+            (NoticeSort::Copied, Expr::Happy),
         ] {
             let spot = Spot::Notice(sort);
             assert_eq!(e(RobotInputs { spot, ..busy }), Some(expr), "{sort:?}");

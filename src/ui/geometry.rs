@@ -507,6 +507,8 @@ pub struct HitRegions {
     pub regions: Vec<Region>,
     /// The CLI page's output, where the wheel scrolls instead of paging.
     pub cli_output: Option<Rect>,
+    /// The Clipboard page's cards, where the wheel scrolls them.
+    pub clip_list: Option<Rect>,
 }
 
 impl HitRegions {
@@ -566,6 +568,8 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
         // Drawn by the robot; this badge only shows if it is turned off meanwhile.
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
+        // With the robot off: the Clipboard icon, as on the Pintasan tile.
+        NoticeKind::Copied => tint(p.accent, Icon::Clipboard),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
         NoticeKind::Reminder { .. } => BadgeStyle {
             fill: p.accent,

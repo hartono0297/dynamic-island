@@ -181,6 +181,50 @@ pub struct ShortcutsLayout {
     pub tiles: [(Shortcut, Rect); 8],
 }
 
+/// A button on the selected Clipboard card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipButton {
+    Pin,
+    /// "Salin sebagai teks biasa" (not on an image card).
+    Plain,
+    Delete,
+}
+
+/// The Clipboard page as in keputusan-v3.1.html (`.search`, `.clips`,
+/// `.clip`): the title and search field, then cards in two columns, a
+/// whole row of cards per scroll step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipLayout {
+    /// "Clipboard".
+    pub header: Rect,
+    /// "Cari di N item…", right of the title.
+    pub search: Rect,
+    /// Where the cards are; the wheel over it scrolls them.
+    pub list: Rect,
+    /// Rows of cards that fit.
+    pub rows: usize,
+    /// The scroll applied (rows), kept in range.
+    pub scroll: usize,
+    /// Entry id, its index in the list given, and the card.
+    pub cards: Vec<(u64, usize, Rect)>,
+    /// The selected card's buttons, right to left from its top-right corner.
+    pub buttons: Vec<(ClipButton, u64, Rect)>,
+    /// Nothing to show (empty, no match, history off): the message's area.
+    pub empty: Option<Rect>,
+}
+
+/// The Clipboard cards' height and gap (`.clip`, `.clips`).
+pub const CLIP_CARD_H: f32 = 64.0;
+pub const CLIP_GAP: f32 = 7.0;
+pub const CLIP_RADIUS: f32 = 13.0;
+/// An image card's thumbnail strip.
+pub const CLIP_THUMB_W: f32 = 92.0;
+pub const CLIP_BUTTON: f32 = 20.0;
+const CLIP_SEARCH_MAX_W: f32 = 250.0;
+const CLIP_SEARCH_H: f32 = 28.0;
+const CLIP_LIST_GAP: f32 = 9.0;
+const CLIP_BUTTON_GAP: f32 = 2.0;
+
 /// One page's layout, for `regions`.
 // Built on the stack for one frame and dropped; boxing the calendar would
 // only add an allocation per frame.
@@ -192,6 +236,7 @@ pub enum PageLayout {
     Reminders(ListLayout),
     Notes(ListLayout),
     Media(ExpandedLayout),
+    Clipboard(ClipLayout),
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
 }
@@ -1413,6 +1458,99 @@ pub fn cli_suggestions(l: &CliLayout, n: usize) -> (Rect, Vec<Rect>) {
 }
 
 /// Four equal tiles per row, two rows, centred under the header.
+/// The title row and the card area of the Clipboard page.
+fn clip_frame(s: ShapeRect, strip: bool) -> (Rect, Rect, Rect) {
+    let top = content_top(s, strip);
+    let (l, r) = (left(s), right(s));
+    let search_w = CLIP_SEARCH_MAX_W.min(r - l - 120.0);
+    let search = rect(
+        r - search_w,
+        top + (HEADER_H - CLIP_SEARCH_H) / 2.0,
+        search_w,
+        CLIP_SEARCH_H,
+    );
+    let header = rect(l, top, search.x - 12.0 - l, HEADER_H);
+    let list_y = search.bottom() + CLIP_LIST_GAP;
+    let list = rect(l, list_y, r - l, content_bottom(s) - list_y);
+    (header, search, list)
+}
+
+/// Rows of Clipboard cards the page shows at once.
+pub fn clip_rows(s: ShapeRect, strip: bool) -> usize {
+    let (_, _, list) = clip_frame(s, strip);
+    (((list.h + CLIP_GAP) / (CLIP_CARD_H + CLIP_GAP)).floor() as usize).max(1)
+}
+
+/// The furthest the cards scroll (rows) with `n` of them.
+pub fn clip_max_scroll(n: usize, rows: usize) -> usize {
+    n.div_ceil(2).saturating_sub(rows)
+}
+
+/// The scroll that keeps card `selected` in view: unchanged when it shows,
+/// else just enough rows to bring it in.
+pub fn clip_scroll_to(selected: usize, scroll: usize, rows: usize) -> usize {
+    let row = selected / 2;
+    if row < scroll {
+        row
+    } else if row >= scroll + rows.max(1) {
+        row + 1 - rows.max(1)
+    } else {
+        scroll
+    }
+}
+
+/// `ids` (the entries shown, newest first) as cards from row `scroll`, two
+/// per row; the selected one (`selected`, an id) gets its buttons, and
+/// `image(id)` says whether an entry is an image (no plain-text copy).
+pub fn clipboard_layout(
+    s: ShapeRect,
+    strip: bool,
+    ids: &[u64],
+    selected: Option<u64>,
+    scroll: usize,
+    image: impl Fn(u64) -> bool,
+) -> ClipLayout {
+    let (header, search, list) = clip_frame(s, strip);
+    let rows = clip_rows(s, strip);
+    let scroll = scroll.min(clip_max_scroll(ids.len(), rows));
+    let card_w = (list.w - CLIP_GAP) / 2.0;
+    let cards: Vec<(u64, usize, Rect)> = ids
+        .iter()
+        .enumerate()
+        .skip(scroll * 2)
+        .take(rows * 2)
+        .map(|(i, &id)| {
+            let (row, col) = ((i / 2 - scroll) as f32, (i % 2) as f32);
+            let x = list.x + col * (card_w + CLIP_GAP);
+            let y = list.y + row * (CLIP_CARD_H + CLIP_GAP);
+            (id, i, rect(x, y, card_w, CLIP_CARD_H))
+        })
+        .collect();
+    let mut buttons = Vec::new();
+    if let Some(&(id, _, card)) = cards.iter().find(|(id, _, _)| Some(*id) == selected) {
+        let kinds: &[ClipButton] = if image(id) {
+            &[ClipButton::Delete, ClipButton::Pin]
+        } else {
+            &[ClipButton::Delete, ClipButton::Plain, ClipButton::Pin]
+        };
+        let mut x = card.right() - 5.0 - CLIP_BUTTON;
+        for &b in kinds {
+            buttons.push((b, id, rect(x, card.y + 4.0, CLIP_BUTTON, CLIP_BUTTON)));
+            x -= CLIP_BUTTON + CLIP_BUTTON_GAP;
+        }
+    }
+    ClipLayout {
+        header,
+        search,
+        list,
+        rows,
+        scroll,
+        empty: ids.is_empty().then_some(list),
+        cards,
+        buttons,
+    }
+}
+
 pub fn shortcuts_layout(s: ShapeRect, strip: bool) -> ShortcutsLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
@@ -1555,6 +1693,21 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 }
                 add(l.expand, Hit::CliExpand);
                 add(l.term, Hit::CliInput);
+            }
+        }
+        PageLayout::Clipboard(l) => {
+            add(l.search, Hit::ClipSearch);
+            // The buttons sit on their card: they come first.
+            for &(b, id, r) in &l.buttons {
+                let hit = match b {
+                    ClipButton::Pin => Hit::ClipPin(id),
+                    ClipButton::Plain => Hit::ClipPlain(id),
+                    ClipButton::Delete => Hit::ClipDelete(id),
+                };
+                add(r, hit);
+            }
+            for &(id, _, r) in &l.cards {
+                add(r, Hit::ClipCard(id));
             }
         }
         PageLayout::Shortcuts(l) => {
@@ -3111,5 +3264,84 @@ mod media_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn clipboard_cards_two_columns_sixty_four_tall() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            let ids: Vec<u64> = (1..=48).collect();
+            let l = clipboard_layout(s, false, &ids, Some(1), 0, |id| id == 3);
+            assert_eq!(l.rows, 3);
+            assert_eq!(l.cards.len(), 6);
+            let (_, _, a) = l.cards[0];
+            let (_, _, b) = l.cards[1];
+            let (_, _, c) = l.cards[2];
+            assert_eq!(a.h, CLIP_CARD_H);
+            assert!((b.x - a.right() - CLIP_GAP).abs() < 0.01);
+            assert!((c.y - a.bottom() - CLIP_GAP).abs() < 0.01);
+            assert_eq!(a.x, l.list.x);
+            assert!((b.right() - l.list.right()).abs() < 0.01);
+            // All inside the panel, above the dots.
+            let (dots, _) = page_dots(s, Page::Clipboard);
+            for (_, _, r) in &l.cards {
+                assert!(r.bottom() <= dots[0].y - 6.0 + 0.01, "{r:?}");
+            }
+            // The search field sits right of the title, at most 250 wide.
+            assert!(l.search.w <= 250.0 && l.search.x > l.header.right());
+            assert!(l.search.bottom() < l.list.y);
+            // The selected card's three buttons sit inside its top-right.
+            assert_eq!(l.buttons.len(), 3);
+            for (_, id, r) in &l.buttons {
+                assert_eq!(*id, 1);
+                assert!(r.x >= a.x && r.right() <= a.right() && r.y >= a.y);
+            }
+            assert!(l.empty.is_none());
+        }
+    }
+
+    #[test]
+    fn clipboard_scrolls_by_rows_and_keeps_the_selection_in_view() {
+        let s = panel(Style::Pill);
+        let ids: Vec<u64> = (1..=11).collect();
+        // 11 cards: 6 rows, 3 shown, at most 3 rows down.
+        assert_eq!(clip_max_scroll(11, 3), 3);
+        let l = clipboard_layout(s, false, &ids, Some(3), 9, |_| false);
+        assert_eq!(l.scroll, 3, "clamped");
+        let shown: Vec<u64> = l.cards.iter().map(|c| c.0).collect();
+        assert_eq!(shown, [7, 8, 9, 10, 11]);
+        // Card 3 is scrolled away: no buttons.
+        assert!(l.buttons.is_empty());
+        assert_eq!(clip_scroll_to(0, 2, 3), 0);
+        assert_eq!(clip_scroll_to(7, 0, 3), 1);
+        assert_eq!(clip_scroll_to(10, 0, 3), 3);
+        assert_eq!(clip_scroll_to(3, 1, 3), 1);
+        // An image card has no plain-text button.
+        let l = clipboard_layout(s, false, &ids, Some(2), 0, |id| id == 2);
+        let kinds: Vec<ClipButton> = l.buttons.iter().map(|b| b.0).collect();
+        assert_eq!(kinds, [ClipButton::Delete, ClipButton::Pin]);
+    }
+
+    #[test]
+    fn clipboard_regions_and_empty_state() {
+        let s = panel(Style::Pill);
+        let l = clipboard_layout(s, true, &[5, 6], Some(5), 0, |_| false);
+        let r = regions(s, &PageLayout::Clipboard(l.clone()), true);
+        let first = |hit: Hit| r.iter().position(|x| x.hit == hit);
+        for hit in [
+            Hit::Strip,
+            Hit::ClipSearch,
+            Hit::ClipCard(5),
+            Hit::ClipCard(6),
+            Hit::ClipPin(5),
+            Hit::ClipPlain(5),
+            Hit::ClipDelete(5),
+        ] {
+            assert!(first(hit.clone()).is_some(), "{hit:?}");
+        }
+        // Buttons win over their card.
+        assert!(first(Hit::ClipPin(5)) < first(Hit::ClipCard(5)));
+        let empty = clipboard_layout(s, false, &[], None, 0, |_| false);
+        assert!(empty.empty.is_some() && empty.cards.is_empty());
     }
 }

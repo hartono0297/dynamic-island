@@ -38,7 +38,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE,
+    WM_CLIPBOARDUPDATE, WM_HOTKEY, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
+    WM_WTSSESSION_CHANGE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -80,6 +81,10 @@ use crate::ui::robot::{
 use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
+
+#[path = "app_clip.rs"]
+mod clip;
+use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
 
 /// Posted by background sources after queueing an event.
 const WM_APP_EVENT: u32 = WM_APP + 1;
@@ -165,6 +170,7 @@ thread_local! {
     static DEFERRED_SETTINGS: RefCell<Vec<SettingsAction>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_CLI: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_CLI_REDRAW: Cell<bool> = const { Cell::new(false) };
+    static DEFERRED_CLIP: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -188,6 +194,10 @@ pub fn run(media_log_flag: bool) {
     let cli_input = CliInput::create(hwnd, deliver_cli_key)
         .inspect_err(|e| eprintln!("dynamic-island: no CLI input: {e}"))
         .ok();
+    let clip_input =
+        CliInput::create_with(hwnd, cli_input::ID_CLIP_SEARCH, SEARCH_LIMIT, deliver_clip_key)
+            .inspect_err(|e| eprintln!("dynamic-island: no Clipboard search: {e}"))
+            .ok();
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
@@ -248,6 +258,8 @@ pub fn run(media_log_flag: bool) {
             cli_echoes: Echoes::default(),
             cli_input,
             cli_prev: None,
+            clip: ClipState::default(),
+            clip_input,
             cli_cursor: HistoryCursor::default(),
             cli_browsing: false,
             cli_pick: 0,
@@ -273,6 +285,7 @@ pub fn run(media_log_flag: bool) {
         app.apply(Event::LyricsSetting(lyrics_on), now);
         app.check_fullscreen();
         app.check_battery();
+        app.clip_start();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
         // An empty notes list would otherwise look like the notes were deleted.
@@ -413,9 +426,14 @@ struct App {
     cli_echoes: Echoes,
     /// The hidden EDIT behind the CLI page's input line.
     cli_input: Option<CliInput>,
-    /// The foreground window before the input took the keyboard; it gets
-    /// it back on Esc, a page change or the panel closing.
+    /// The foreground window before the input (the CLI's or the Clipboard
+    /// search) took the keyboard; it gets it back on Esc, a page change or
+    /// the panel closing.
     cli_prev: Option<HWND>,
+    /// The clipboard history and the Clipboard page's own state.
+    clip: ClipState,
+    /// The hidden EDIT behind the Clipboard page's search field.
+    clip_input: Option<CliInput>,
     /// Up / Down through the history while no suggestions show.
     cli_cursor: HistoryCursor,
     /// The input holds a history entry put there by Up / Down: no
@@ -593,6 +611,7 @@ impl App {
             }
             self.follow_page(page, now);
             self.follow_cli_page(cli_was);
+            self.follow_clip_page(cli_was.2);
         }
     }
 
@@ -736,6 +755,10 @@ impl App {
     /// A right-click on a favourite in the open menu unstars it (true);
     /// anywhere else the tray menu opens as always (false).
     fn on_right_click(&mut self, lparam: LPARAM) -> bool {
+        let hit = self.hit_at(lparam);
+        if self.clip_right_click(hit.as_ref()) {
+            return true;
+        }
         if !self.state.cli_menu() || self.state.view() != View::Panel(Page::Cli) {
             return false;
         }
@@ -965,6 +988,9 @@ impl App {
             Effect::StopCli => self.stop_cli(),
             Effect::CliChangeFolder(dir) => self.pick_cli_folder(dir),
             Effect::CliFavorite { path, on } => self.set_cli_favorite(&path, on),
+            Effect::FocusClipSearch => return self.focus_clip_search(),
+            Effect::ReleaseClipFocus => self.return_keyboard(),
+            Effect::Clip(action) => return self.perform_clip(action),
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
                 self.reminder_fired.retain(|f| *f != id);
@@ -1191,7 +1217,8 @@ impl App {
             {
                 return;
             }
-            if self.cli_input.as_ref().is_some_and(CliInput::has_focus) {
+            let input_has = |i: &Option<CliInput>| i.as_ref().is_some_and(CliInput::has_focus);
+            if input_has(&self.cli_input) || input_has(&self.clip_input) {
                 let _ = SetFocus(None);
             }
         }
@@ -1325,6 +1352,13 @@ impl App {
             self.cli_pick = 0;
         }
         self.redraw_cli();
+    }
+
+    /// A hidden EDIT's text or selection changed: the CLI page and the
+    /// Clipboard search each follow their own (and redraw only when shown).
+    fn on_input_changed(&mut self) {
+        self.on_cli_changed();
+        self.on_clip_changed();
     }
 
     fn redraw_cli(&mut self) {
@@ -1932,6 +1966,13 @@ impl App {
                     self.cli_prev = None;
                     self.apply_now(Event::CliFocus(false));
                 }
+                if self.state.clip_focused() && !self.clip_has_keyboard() {
+                    self.cli_prev = None;
+                    self.apply_now(Event::ClipFocus(false));
+                }
+            }
+            clip::TIMER_CLIP_RETRY | clip::TIMER_CLIP_SAVE | clip::TIMER_CLIP_HOLD => {
+                self.on_clip_timer(id)
             }
             TIMER_BATTERY => self.check_battery(),
             TIMER_DEADLINE => {
@@ -2152,7 +2193,10 @@ impl App {
         };
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
-        if over && self.state.view() == View::Panel(Page::Cli) {
+        let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
+        if over_clips && self.state.view() == View::Panel(Page::Clipboard) {
+            self.clip_wheel(delta);
+        } else if over && self.state.view() == View::Panel(Page::Cli) {
             // A notch away from the user scrolls up to older lines.
             let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);
             let lines = if lines == 0 { delta.signum() } else { lines };
@@ -2403,6 +2447,17 @@ impl App {
             cli_panel::suggestions(self.cli_history.items(), &typed, MAX_SUGGESTIONS)
         };
         let robot = self.robot_frame(&self.drawn, now);
+        let search = self.clip_input.as_ref();
+        let query = search.map(CliInput::text).unwrap_or_default();
+        let search_sel = search.map_or((0, 0), CliInput::selection);
+        let clip_focused = state.clip_focused();
+        let clip = clip::clip_view(
+            &self.clip,
+            self.config.clipboard.enabled,
+            &query,
+            search_sel,
+            clip_focused,
+        );
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -2448,6 +2503,7 @@ impl App {
                 from_explorer: self.cli_from_explorer,
                 menu: state.cli_menu().then_some(&self.cli_menu_view),
             },
+            clip,
             progress: track_progress(state, now),
             robot,
         };
@@ -2459,6 +2515,9 @@ impl App {
         }
         // The IME composes where the panel drew the caret.
         if focused && let (Some(input), Some(caret)) = (input, self.renderer.cli_caret()) {
+            input.set_ime_caret(caret);
+        }
+        if clip_focused && let (Some(input), Some(caret)) = (search, self.renderer.clip_caret()) {
             input.set_ime_caret(caret);
         }
     }
@@ -3307,8 +3366,24 @@ fn run_deferred() {
     for key in DEFERRED_CLI.take() {
         deliver_cli_key(key);
     }
+    for key in DEFERRED_CLIP.take() {
+        deliver_clip_key(key);
+    }
     if DEFERRED_CLI_REDRAW.take() {
-        with_app(App::on_cli_changed);
+        with_app(App::on_input_changed);
+    }
+}
+
+/// `deliver_cli_key` for the Clipboard search field.
+fn deliver_clip_key(key: InputKey) {
+    let mut pending = Some(key);
+    with_app(|app| {
+        if let Some(key) = pending.take() {
+            app.on_clip_key(key);
+        }
+    });
+    if let Some(key) = pending {
+        DEFERRED_CLIP.with_borrow_mut(|queue| queue.push(key));
     }
 }
 
@@ -3404,7 +3479,10 @@ unsafe extern "system" fn wnd_proc(
         WM_WTSSESSION_CHANGE => {
             match wparam.0 {
                 WTS_SESSION_LOCK => {
-                    with_app(|app| app.session_locked = true);
+                    with_app(|app| {
+                        app.session_locked = true;
+                        app.clip_on_lock();
+                    });
                 }
                 WTS_SESSION_UNLOCK => {
                     with_app(|app| {
@@ -3442,16 +3520,27 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_APP_CLI_REDRAW => {
-            if with_app(App::on_cli_changed).is_none() {
+            if with_app(App::on_input_changed).is_none() {
                 DEFERRED_CLI_REDRAW.set(true);
+            }
+            LRESULT(0)
+        }
+        WM_CLIPBOARDUPDATE => {
+            with_app(App::on_clipboard_update);
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            if wparam.0 as i32 == clip::HOTKEY_CLIP {
+                with_app(App::on_clip_hotkey);
             }
             LRESULT(0)
         }
         WM_ACTIVATE => {
             // The island lost activation (a click elsewhere, Alt+Tab): the
-            // CLI input lets go.
+            // CLI input or the Clipboard search lets go.
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 deliver_cli_key(InputKey::Blur);
+                deliver_clip_key(InputKey::Blur);
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
@@ -3520,6 +3609,7 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             drain_editor_results(hwnd);
             with_app(App::stop_sync);
+            with_app(App::clip_shutdown);
             unsafe {
                 let _ = WTSUnRegisterSessionNotification(hwnd);
             }

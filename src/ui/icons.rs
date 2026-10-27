@@ -84,11 +84,19 @@ pub enum Icon {
     /// The CLI folder menu's favourites (`star` in keputusan-v3.1.html):
     /// outline to star a folder, with the duotone fill once it is one.
     Star,
+    /// The Clipboard page (`search`, `pin`, `text`, `code`, `image`,
+    /// `color` in keputusan-v3.1.html): line only, no duotone.
+    Search,
+    Pin,
+    Text,
+    Code,
+    Image,
+    Swatch,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 44] = [
+    pub const ALL: [Icon; 50] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -133,6 +141,12 @@ impl Icon {
         Icon::Expand,
         Icon::Shrink,
         Icon::Star,
+        Icon::Search,
+        Icon::Pin,
+        Icon::Text,
+        Icon::Code,
+        Icon::Image,
+        Icon::Swatch,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -317,6 +331,16 @@ impl Icon {
                 Part::Fill("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
                 Part::Path("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
             ],
+            Icon::Search => &[Part::Circle(11.0, 11.0, 6.0), Part::Path("M16 16l4 4")],
+            Icon::Pin => &[Part::Path("M9 4h6l-1 6 3 3H7l3-3zM12 13v7")],
+            Icon::Text => &[Part::Path("M5 6h14M5 11h14M5 16h9")],
+            Icon::Code => &[Part::Path("M9 8l-4 4 4 4M15 8l4 4-4 4")],
+            Icon::Image => &[
+                Part::Rect(3.0, 5.0, 18.0, 14.0, 3.0),
+                Part::Circle(9.0, 10.0, 1.6),
+                Part::Path("M21 16l-5-5-8 8"),
+            ],
+            Icon::Swatch => &[Part::Circle(12.0, 12.0, 8.5), Part::Path("M12 3.5v17")],
         }
     }
 }

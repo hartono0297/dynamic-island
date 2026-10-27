@@ -7,8 +7,11 @@
 //! Keys the page handles itself come back through the callback given to
 //! `create` (`Key`); every other change posts `WM_APP_CLI_REDRAW` to the
 //! island, once until it is handled, so the panel redraws.
+//!
+//! The Clipboard page's search field is a second instance (`create_with`):
+//! each EDIT carries its own callback, so the two never share keys.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -53,14 +56,15 @@ pub enum Key {
 
 const SUBCLASS_ID: usize = 1;
 const ID_INPUT: isize = 201;
+/// The Clipboard search field's control id.
+pub const ID_CLIP_SEARCH: isize = 202;
 
 thread_local! {
-    static NOTIFY: Cell<Option<fn(Key)>> = const { Cell::new(None) };
     /// The island (where redraws are posted) and whether one is pending.
     static PARENT: Cell<isize> = const { Cell::new(0) };
     static REDRAW_POSTED: Cell<bool> = const { Cell::new(false) };
-    /// Where the composition window goes, in the EDIT's client pixels.
-    static IME_AT: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
+    /// Where each EDIT's composition window goes, in its client pixels.
+    static IME_AT: RefCell<Vec<(isize, (i32, i32))>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct CliInput {
@@ -71,6 +75,13 @@ impl CliInput {
     /// A 1 × 1 EDIT in the island's top-left corner (a transparent pixel):
     /// its client coordinates are the island's, which the IME position needs.
     pub fn create(parent: HWND, notify: fn(Key)) -> Result<Self> {
+        // A command line, not a document: 8K characters is plenty.
+        Self::create_with(parent, ID_INPUT, 8192, notify)
+    }
+
+    /// Another hidden EDIT like the CLI's: control `id`, at most `limit`
+    /// characters, its keys to `notify`.
+    pub fn create_with(parent: HWND, id: isize, limit: usize, notify: fn(Key)) -> Result<Self> {
         let instance = unsafe { GetModuleHandleW(None)? };
         let hwnd = unsafe {
             CreateWindowExW(
@@ -83,17 +94,16 @@ impl CliInput {
                 1,
                 1,
                 Some(parent),
-                Some(HMENU(ID_INPUT as *mut _)),
+                Some(HMENU(id as *mut _)),
                 Some(instance.into()),
                 None,
             )?
         };
-        NOTIFY.set(Some(notify));
         PARENT.set(parent.0 as isize);
         unsafe {
-            let _ = SetWindowSubclass(hwnd, Some(input_proc), SUBCLASS_ID, 0);
-            // A command line, not a document: 8K characters is plenty.
-            SendMessageW(hwnd, EM_LIMITTEXT, Some(WPARAM(8192)), Some(LPARAM(0)));
+            // The callback rides in the subclass's data, one per EDIT.
+            let _ = SetWindowSubclass(hwnd, Some(input_proc), SUBCLASS_ID, notify as usize);
+            SendMessageW(hwnd, EM_LIMITTEXT, Some(WPARAM(limit)), Some(LPARAM(0)));
         }
         Ok(Self { hwnd })
     }
@@ -142,7 +152,11 @@ impl CliInput {
     /// Puts the IME's composition window at the caret the panel drew
     /// (client pixels of the island, which are the EDIT's).
     pub fn set_ime_caret(&self, caret: RECT) {
-        IME_AT.set(Some((caret.left, caret.top)));
+        let key = self.hwnd.0 as isize;
+        IME_AT.with_borrow_mut(|at| {
+            at.retain(|(h, _)| *h != key);
+            at.push((key, (caret.left, caret.top)));
+        });
         place_ime(self.hwnd);
     }
 }
@@ -161,7 +175,9 @@ fn selection(hwnd: HWND) -> (usize, usize) {
 }
 
 fn place_ime(hwnd: HWND) {
-    let Some((x, y)) = IME_AT.get() else { return };
+    let key = hwnd.0 as isize;
+    let at = IME_AT.with_borrow(|at| at.iter().find(|(h, _)| *h == key).map(|(_, p)| *p));
+    let Some((x, y)) = at else { return };
     unsafe {
         let imc = ImmGetContext(hwnd);
         if imc.is_invalid() {
@@ -193,8 +209,11 @@ pub fn request_redraw() {
     }
 }
 
-fn notify(key: Key) {
-    if let Some(f) = NOTIFY.get() {
+/// The callback `create_with` stored in the subclass data.
+fn notify(data: usize, key: Key) {
+    if data != 0 {
+        // Set from a `fn(Key)` in `create_with`, never anything else.
+        let f: fn(Key) = unsafe { std::mem::transmute::<usize, fn(Key)>(data) };
         f(key);
     }
 }
@@ -210,7 +229,7 @@ unsafe extern "system" fn input_proc(
     wparam: WPARAM,
     lparam: LPARAM,
     _id: usize,
-    _data: usize,
+    data: usize,
 ) -> LRESULT {
     match msg {
         // Tab, Enter and Esc come to the EDIT, never to dialog navigation.
@@ -237,7 +256,7 @@ unsafe extern "system" fn input_proc(
                 _ => None,
             };
             if let Some(k) = ours {
-                notify(k);
+                notify(data, k);
                 return LRESULT(0);
             }
             if key == VK_A.0 && ctrl_down() {
@@ -286,7 +305,7 @@ unsafe extern "system" fn input_proc(
         }
         WM_KILLFOCUS => {
             let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-            notify(Key::Blur);
+            notify(data, Key::Blur);
             return result;
         }
         WM_NCDESTROY => unsafe {
