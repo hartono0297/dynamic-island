@@ -8,10 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_SHA256_ALG_HANDLE, BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom, BCryptHash,
-    CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
@@ -22,6 +20,7 @@ use windows::core::{HSTRING, w};
 
 use super::http::{Http, form_encode, url_decode};
 use crate::config::{self, Config};
+use crate::dpapi;
 use crate::i18n::{self, Key};
 
 /// Read the calendar list (to know which calendars are `selected`) and
@@ -503,7 +502,7 @@ pub fn clear_tokens() {
 
 fn load_tokens_from(path: &Path) -> Option<Tokens> {
     let sealed = std::fs::read(path).ok()?;
-    let plain = unprotect(&sealed).ok()?;
+    let plain = dpapi::unprotect(&sealed).ok()?;
     serde_json::from_slice(&plain).ok()
 }
 
@@ -513,78 +512,11 @@ fn save_tokens_to(path: &Path, tokens: &Tokens) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let plain = serde_json::to_vec(tokens).map_err(io::Error::other)?;
-    let sealed = protect(&plain)?;
+    // DPAPI, current-user scope: only this Windows account can decrypt it.
+    let sealed = dpapi::protect(&plain, w!("Dynamic Island Google token"))?;
     let tmp = path.with_extension("bin.tmp");
     std::fs::write(&tmp, sealed)?;
     std::fs::rename(&tmp, path)
-}
-
-/// DPAPI, current-user scope: only this Windows account can decrypt it.
-fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
-    let input = blob(plain)?;
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptProtectData(
-            &input,
-            w!("Dynamic Island Google token"),
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    }
-    .map_err(io::Error::other)?;
-    Ok(unsafe { take_blob(output, false) })
-}
-
-fn unprotect(sealed: &[u8]) -> io::Result<Vec<u8>> {
-    let input = blob(sealed)?;
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptUnprotectData(
-            &input,
-            None,
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    }
-    .map_err(io::Error::other)?;
-    Ok(unsafe { take_blob(output, true) })
-}
-
-fn blob(data: &[u8]) -> io::Result<CRYPT_INTEGER_BLOB> {
-    let len = u32::try_from(data.len()).map_err(io::Error::other)?;
-    // DPAPI only reads the input blob; `*mut` is just the C struct's field type.
-    Ok(CRYPT_INTEGER_BLOB {
-        cbData: len,
-        pbData: data.as_ptr().cast_mut(),
-    })
-}
-
-/// Copies a DPAPI output blob and frees it with `LocalFree`, zeroing it first
-/// when it holds plaintext.
-///
-/// # Safety
-/// `blob` must come from a successful `CryptProtectData`/`CryptUnprotectData`.
-unsafe fn take_blob(blob: CRYPT_INTEGER_BLOB, wipe: bool) -> Vec<u8> {
-    if blob.pbData.is_null() {
-        return Vec::new();
-    }
-    let len = blob.cbData as usize;
-    let bytes = unsafe { std::slice::from_raw_parts(blob.pbData, len) }.to_vec();
-    unsafe {
-        if wipe {
-            for i in 0..len {
-                std::ptr::write_volatile(blob.pbData.add(i), 0);
-            }
-        }
-        LocalFree(Some(HLOCAL(blob.pbData.cast())));
-    }
-    bytes
 }
 
 #[cfg(test)]
