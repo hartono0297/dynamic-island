@@ -48,6 +48,9 @@ pub struct MediaInfo {
     pub artist: String,
     pub playing: bool,
     pub art: Option<Vec<u8>>,
+    /// The session's AppUserModelId: transport commands go to the session
+    /// with this id, not to whichever one Windows calls current.
+    pub source_app: String,
 }
 
 /// Where the current track's playback was at a known moment, from the media
@@ -160,7 +163,9 @@ pub enum Hit {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MediaCommand {
     Prev,
-    PlayPause,
+    /// Explicit, from the state the island shows: never a blind toggle.
+    Play,
+    Pause,
     Next,
 }
 

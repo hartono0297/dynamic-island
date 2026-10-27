@@ -24,6 +24,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[bata-morning-greeting]]
 - [[settings-appearance-scroll]]
 - [[media-click-guards]]
+- [[media-diagnosis-log]]
 
 ## Gotchas
 
