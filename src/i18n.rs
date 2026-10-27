@@ -153,7 +153,7 @@ keys! {
     ClientIdMissing => "Isi Google client ID dulu", "Add a Google client ID first";
     SeeReadme => "Lihat README", "See the README";
     DndTitle => "Matiin popup Windows", "Turn off Windows pop-ups";
-    DndBody => "Nyalain Do Not Disturb: Settings → System → Notifications",
+    DndBody => "Nyalain Jangan Ganggu: Pengaturan → Sistem → Pemberitahuan",
         "Turn on Do Not Disturb: Settings → System → Notifications";
     UserProfileUnset => "USERPROFILE tidak diset", "USERPROFILE is not set";
 
@@ -253,7 +253,7 @@ keys! {
     ShortcutEmoji => "Emoji", "Emoji";
     ShortcutExplorer => "Explorer", "Explorer";
     ShortcutCalculator => "Kalkulator", "Calculator";
-    ShortcutTaskManager => "Task Manager", "Task Manager";
+    ShortcutTaskManager => "Pengelola Tugas", "Task Manager";
     ShortcutSettings => "Pengaturan Windows", "Windows Settings";
     ShortcutLock => "Kunci layar", "Lock screen";
 
@@ -262,11 +262,6 @@ keys! {
     EditorEvent => "Acara", "Event";
     EditorAddEvent => "Tambah acara", "Add event";
     EditorEditEvent => "Edit acara", "Edit event";
-    FieldTitle => "Judul", "Title";
-    FieldDate => "Tanggal", "Date";
-    FieldStart => "Mulai", "Start";
-    FieldEnd => "Selesai", "End";
-    FieldNotes => "Catatan", "Notes";
     Delete => "Hapus", "Delete";
     Save => "Simpan", "Save";
     Cancel => "Batal", "Cancel";
@@ -276,9 +271,6 @@ keys! {
     EndBeforeStart => "Jam selesai harus setelah jam mulai", "End time must be after start time";
     EditorNewReminder => "Pengingat baru", "New reminder";
     EditorEditReminder => "Edit pengingat", "Edit reminder";
-    FieldText => "Teks", "Text";
-    FieldTime => "Jam", "Time";
-    FieldRepeat => "Ulangi", "Repeat";
     TextRequired => "Teks wajib diisi", "Text is required";
     TimePassed => "Waktunya sudah lewat", "That time has passed";
     NextWeek => "Minggu depan", "Next week";
@@ -350,7 +342,7 @@ keys! {
     LanguageDesc => "Island dan semua jendela", "The island and every window";
     LangIndonesian => "Indonesia", "Indonesia";
     LangEnglish => "English", "English";
-    Autostart => "Jalan saat Windows start", "Start with Windows";
+    Autostart => "Jalan saat Windows mulai", "Start with Windows";
     AutostartDesc => "Buka island otomatis saat masuk", "Open the island when you sign in";
     BatteryAlert => "Peringatan baterai", "Battery alert";
     BatteryAlertDesc => "Kasih tahu saat baterai di bawah ini", "Warn when the charge drops below";
@@ -434,6 +426,11 @@ keys! {
     ExprSad => "Lesu", "Low";
     ExprWave => "Menyapa", "Waving";
     ExprBlink => "Kedip", "Blink";
+
+    // The demo's Claude notices (debug builds).
+    DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";
+    DemoClaudeAsks => "izin menjalankan perintah", "permission to run a command";
+    DemoFilesChanged => "3 file diubah", "3 files changed";
 }
 
 /// `key` in `lang`.
@@ -1493,6 +1490,181 @@ mod tests {
                 let s = text(lang, key);
                 assert!(!s.trim().is_empty(), "{key:?} {lang:?}");
                 assert_eq!(s, s.trim(), "{key:?} {lang:?} has stray blanks");
+            }
+        }
+    }
+
+    /// Common Indonesian words, never in English text.
+    const INDONESIAN: &[&str] = &[
+        "ada", "acara", "atau", "atas", "baru", "batal", "baterai", "belum", "berikutnya",
+        "berjalan", "besok", "bisa", "buka", "bulan", "catatan", "cek", "dan", "dari", "di",
+        "dengan", "dihentikan", "dtk", "dulu", "fokus", "gagal", "gaya", "hapus", "hari", "ini",
+        "istirahat", "itu", "izin", "jalankan", "jam", "jeda", "kalender", "ke", "keluar",
+        "kembali", "kemarin", "klik", "lagi", "lewat", "lihat", "lirik", "malam", "menit",
+        "minggu", "mnt", "mulai", "pagi", "pengaturan", "pengingat", "perintah", "pintasan",
+        "saat", "sekali", "selesai", "sesi", "setelah", "siap", "simpan", "sisa", "sore",
+        "sudah", "tambah", "tanggal", "tanpa", "terhubung", "tiap", "tidak", "tutup", "ulangi",
+        "untuk", "warna", "yang",
+    ];
+
+    /// Common English words, never in Indonesian text.
+    const ENGLISH: &[&str] = &[
+        "add", "and", "are", "at", "back", "break", "cancel", "check", "click", "close",
+        "connect", "date", "day", "delete", "done", "edit", "end", "event", "events", "failed",
+        "for", "from", "is", "minutes", "month", "more", "new", "next", "not", "note", "notes",
+        "of", "open", "ready", "reminder", "reminders", "repeat", "save", "saved", "settings",
+        "show", "start", "stop", "the", "time", "title", "to", "today", "tomorrow", "week",
+        "with", "yesterday", "you", "your",
+    ];
+
+    /// Words both languages use as they are: brand and product names, loans
+    /// the Indonesian UI keeps ("Edit acara", the "Notes" page, the CLI's
+    /// "Stop"), key names and units. "edit", "notes" and "stop" are also in
+    /// ENGLISH, so by design they are never flagged in either language.
+    const SHARED_WORDS: &[&str] = &[
+        "bata", "claude", "cli", "cmd", "edit", "github", "google", "notch", "notes", "ok",
+        "pill", "pomodoro", "powershell", "readme", "spotify", "stop", "windows",
+    ];
+
+    /// Brand names written the same in both languages.
+    const SHARED_PHRASES: &[&str] = &["Google Calendar"];
+
+    /// "notes.json.bak", "lrclib.net", "D:\proj\a.json": a dot with a letter
+    /// after it.
+    fn is_file_name(chunk: &str) -> bool {
+        chunk
+            .char_indices()
+            .any(|(i, c)| c == '.' && chunk[i + 1..].starts_with(char::is_alphabetic))
+    }
+
+    /// The words of `s` (HTML tags, file names and the shared phrases taken
+    /// out), lowercase, that are in `banned` and not shared.
+    fn leaked(s: &str, banned: &[&str]) -> Vec<String> {
+        let mut plain = String::new();
+        let mut in_tag = false;
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                // Only "<a" and "</" open a tag; a lone "<" ("< 5 mnt") is text.
+                '<' if chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '/') => {
+                    in_tag = true
+                }
+                '>' if in_tag => in_tag = false,
+                _ if !in_tag => plain.push(c),
+                _ => {}
+            }
+        }
+        for phrase in SHARED_PHRASES {
+            plain = plain.replace(phrase, " ");
+        }
+        plain
+            .split_whitespace()
+            .filter(|chunk| !is_file_name(chunk))
+            .flat_map(|chunk| chunk.split(|c: char| !c.is_alphanumeric()))
+            .map(str::to_lowercase)
+            .filter(|w| banned.contains(&w.as_str()) && !SHARED_WORDS.contains(&w.as_str()))
+            .collect()
+    }
+
+    fn assert_no_leak(lang: Lang, what: &str, s: &str) {
+        let banned = match lang {
+            Lang::Id => ENGLISH,
+            Lang::En => INDONESIAN,
+        };
+        let words = leaked(s, banned);
+        assert!(words.is_empty(), "{what} {lang:?} {s:?} has {words:?}");
+    }
+
+    #[test]
+    fn leak_check_finds_words_on_their_boundaries() {
+        assert_eq!(leaked("Save the note", ENGLISH), ["save", "the", "note"]);
+        assert_eq!(leaked("Tidak ada", INDONESIAN), ["tidak", "ada"]);
+        // Inside a longer word is no match; nor is a shared word or phrase,
+        // a file name or a tag.
+        assert_eq!(leaked("Theme · Saved?", ENGLISH), ["saved"]);
+        assert!(leaked("Sedia", INDONESIAN).is_empty());
+        // A lone "<" is text, not a tag: what follows it is still checked.
+        assert_eq!(leaked("< 5 menit the", ENGLISH), ["the"]);
+        assert!(leaked("Edit Notes · Pengaturan Windows", ENGLISH).is_empty());
+        assert!(leaked("Buka Google Calendar", ENGLISH).is_empty());
+        // An apostrophe ends a word, like any other mark.
+        assert_eq!(leaked("Today's", ENGLISH), ["today"]);
+        assert_eq!(leaked("don't Settings' isn't", ENGLISH), ["settings"]);
+        assert!(leaked("reminders.json tidak terbaca.", ENGLISH).is_empty());
+        assert!(leaked("<title>x</title>", ENGLISH).is_empty());
+    }
+
+    #[test]
+    fn no_key_leaks_the_other_language() {
+        for &key in Key::ALL {
+            for lang in [Lang::Id, Lang::En] {
+                assert_no_leak(lang, &format!("{key:?}"), text(lang, key));
+            }
+        }
+    }
+
+    #[test]
+    fn no_formatted_text_leaks_the_other_language() {
+        use std::time::Duration;
+        let today = date(2026, 10, 26);
+        let now = monday_noon();
+        let days = [Weekday::Mon, Weekday::Wed];
+        let path = r"D:\proj\a.json";
+        for lang in [Lang::Id, Lang::En] {
+            let mut all = vec![
+                focus_done_body(lang, 5),
+                break_done_body(lang, 2, 4),
+                session_of(lang, 1, 4),
+                pomo_durations(lang, 25, 5, 15),
+                phase_minutes(lang, text(lang, Key::Break), 5),
+                phase_minutes(lang, text(lang, Key::Focus), 25),
+                more_count(lang, 3),
+                battery_body(lang, 18),
+                config_copied_to(lang, "config.json.bak"),
+                version_label(lang, "2.1.0"),
+                cd_not_found(lang, r"D:\x"),
+                cli_start_failed(lang, "0x80070002"),
+                cli_running(lang, Duration::from_secs(42)),
+                save_failed_because(lang, text(lang, Key::ReasonOffline)),
+                google_refused(lang, "403"),
+                unreadable_reply(lang, 200),
+                not_valid_json(lang, path, "EOF"),
+                unknown_format(lang, path),
+                oauth_page(lang, Key::OauthConnected),
+                month_title(lang, today),
+                day_title_long(lang, today),
+                week_title(lang, today),
+                editor_date(lang, today),
+                day_date_short(lang, today),
+                time_label(lang, hm(9, 30)),
+            ];
+            for (events, reminders) in [(0, 0), (1, 1), (3, 2)] {
+                all.push(greeting_body(lang, events, reminders));
+            }
+            for ms in [2_100, 72_000, 3_900_000] {
+                all.push(run_duration(lang, Duration::from_millis(ms)));
+            }
+            for (code, killed) in [(Some(0), false), (Some(1), false), (None, true)] {
+                all.push(cli_result(lang, code, killed, Duration::from_millis(3_800)));
+            }
+            for minutes in [30, 60, 90] {
+                all.push(duration_label(lang, minutes));
+            }
+            for d in today.iter_days().take(7) {
+                all.push(day_long(lang, d).to_owned());
+                all.push(day_short(lang, d).to_owned());
+            }
+            for repeat in [Repeat::Once, Repeat::Daily, Repeat::Weekly] {
+                for d in [today - chrono::Days::new(1), today, date(2026, 10, 28)] {
+                    all.push(reminder_date_chip(lang, repeat, d, today));
+                    for t in [hm(9, 0), hm(13, 0), hm(16, 30)] {
+                        all.push(reminder_summary(lang, repeat, d, &[], t, now).plain());
+                        all.push(reminder_summary(lang, repeat, d, &days, t, now).plain());
+                    }
+                }
+            }
+            for s in &all {
+                assert_no_leak(lang, "formatted", s);
             }
         }
     }

@@ -480,7 +480,7 @@ impl IslandState {
         }
         self.queue.push_back(Notice {
             key: POMODORO_KEY.into(),
-            source: "Pomodoro".into(),
+            source: text(lang, Key::Pomodoro).into(),
             title: title.into(),
             body,
             kind: NoticeKind::Pomodoro,

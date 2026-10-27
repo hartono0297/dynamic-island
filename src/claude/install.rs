@@ -325,7 +325,7 @@ fn try_install_at(path: &Path, command: &str) -> Result<bool, String> {
 /// `%USERPROFILE%\.claude\settings.json`, used by the uninstall script.
 pub fn uninstall_hooks() {
     let Some(path) = user_settings_path() else {
-        eprintln!("USERPROFILE tidak diset");
+        eprintln!("{}", tr(Key::UserProfileUnset));
         return;
     };
     match uninstall_outcome_at(&path) {
