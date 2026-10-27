@@ -12,7 +12,9 @@ face; its priority, highest first:
 
 1. Panel or hidden: no robot. The panel stays clean.
 2. A notice decides by kind: reminder, Claude waiting → Alert; pomodoro
-   phase done, Claude done → Happy; low battery → Sad; greeting → Wave.
+   phase done, Claude done, "Disalin" (`NoticeKind::Copied`, see
+   [[clipboard-history]]) → Happy; low battery → Sad; greeting → Wave.
+   With the robot off, "Disalin" shows the Clipboard icon badge.
    `NoticeKind::App` → no robot: other apps keep their badge. The island's
    own messages (config invalid, DND hint) also use `App { app_id: None }`
    and so keep their badge too; they cannot be told apart.

@@ -11,3 +11,8 @@ date: 2026-10-27
 - Demo data depends on the clock, see [[demo-data-time-of-day]].
 - `lyric-long` freezes the long lyric line mid-scroll (`DI_LYRIC_SCROLL`), see [[lyric-notch-width]].
 - Demo titles (events, notes, reminders) stay Indonesian even with `DI_LANG=en`.
+- Clipboard shots: `clipboard` (the design's six cards of 48), `clipboard-search`
+  ("denah" typed), `clipboard-copied` (`notch:clipboard-copied`, Bata Happy) and
+  `settings-clipboard`. Their data and "now" are fixed (`demo_clips`), and the
+  demo never touches the real clipboard, see [[clipboard-privacy]]. The scenes
+  `clipboard-empty` and `clipboard-off` exist in `--demo` but are not shot.

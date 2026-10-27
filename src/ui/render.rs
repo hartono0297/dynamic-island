@@ -265,7 +265,8 @@ pub struct ClipView<'a> {
 }
 
 impl ClipView<'_> {
-    /// Nothing on the page: history on but empty, for frames without one.
+    /// Nothing on the page: history on but empty (the demo's base).
+    #[cfg(debug_assertions)]
     pub fn empty(now: NaiveDateTime) -> ClipView<'static> {
         ClipView {
             enabled: true,

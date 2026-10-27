@@ -33,6 +33,12 @@ Motion policy (`Motion`, config `robot_animation`):
 
 Robot off: nothing of this runs; widths, timers and drawing are as before.
 
+The clipboard history ([[clipboard-history]]) adds no repeating timer
+either: the listener costs nothing until a copy; `TIMER_CLIP_SAVE`,
+`TIMER_CLIP_RETRY` and `TIMER_CLIP_HOLD` are one-shots; a change while the
+Clipboard page is hidden draws nothing unless a notice shows; "Disalin"
+rides the notice deadline (1.5 s).
+
 Related: [[bata-robot-expressions]], [[studio-media-progress-timer]],
 [[lyric-notch-width]] (a long lyric line's one-shot scroll timer follows the same rule)
 
