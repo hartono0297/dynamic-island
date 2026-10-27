@@ -634,7 +634,14 @@ fn demo_notice(which: DemoNotice) -> Notice {
         DemoNotice::Reminder => notice(
             tr(Key::SourceReminder),
             "Kirim revisi denah ke klien",
-            format!("{} · {}", tr(Key::Missed), "16.30"),
+            format!(
+                "{} · {}",
+                tr(Key::Missed),
+                crate::i18n::time_label(
+                    crate::i18n::lang(),
+                    NaiveTime::from_hms_opt(16, 30, 0).expect("valid time"),
+                ),
+            ),
             NoticeKind::Reminder { id: "demo".into() },
         ),
         DemoNotice::Pomodoro => notice(

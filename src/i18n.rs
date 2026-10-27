@@ -1519,7 +1519,8 @@ mod tests {
 
     /// Words both languages use as they are: brand and product names, loans
     /// the Indonesian UI keeps ("Edit acara", the "Notes" page, the CLI's
-    /// "Stop"), key names and units.
+    /// "Stop"), key names and units. "edit", "notes" and "stop" are also in
+    /// ENGLISH, so by design they are never flagged in either language.
     const SHARED_WORDS: &[&str] = &[
         "bata", "claude", "cli", "cmd", "edit", "github", "google", "notch", "notes", "ok",
         "pill", "pomodoro", "powershell", "readme", "spotify", "stop", "windows",
@@ -1541,10 +1542,14 @@ mod tests {
     fn leaked(s: &str, banned: &[&str]) -> Vec<String> {
         let mut plain = String::new();
         let mut in_tag = false;
-        for c in s.chars() {
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
             match c {
-                '<' => in_tag = true,
-                '>' => in_tag = false,
+                // Only "<a" and "</" open a tag; a lone "<" ("< 5 mnt") is text.
+                '<' if chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '/') => {
+                    in_tag = true
+                }
+                '>' if in_tag => in_tag = false,
                 _ if !in_tag => plain.push(c),
                 _ => {}
             }
@@ -1578,6 +1583,8 @@ mod tests {
         // a file name or a tag.
         assert_eq!(leaked("Theme · Saved?", ENGLISH), ["saved"]);
         assert!(leaked("Sedia", INDONESIAN).is_empty());
+        // A lone "<" is text, not a tag: what follows it is still checked.
+        assert_eq!(leaked("< 5 menit the", ENGLISH), ["the"]);
         assert!(leaked("Edit Notes · Pengaturan Windows", ENGLISH).is_empty());
         assert!(leaked("Buka Google Calendar", ENGLISH).is_empty());
         // An apostrophe ends a word, like any other mark.
