@@ -268,10 +268,13 @@ impl CleanerView<'_> {
     /// could not be (or the preview failed), "memindai…" before.
     pub fn group(&self, g: MoleGroup) -> GroupShown {
         match self.mole.phase {
-            MolePhase::Previewed { .. } => match self.mole.summary.map(|s| s.groups[g.index()]) {
-                Some(GroupSize::Bytes(b)) => GroupShown::Bytes(b),
-                _ => GroupShown::SeeLog,
-            },
+            MolePhase::Previewed { ok: false, .. } => GroupShown::SeeLog,
+            MolePhase::Previewed { ok: true, .. } => {
+                match self.mole.summary.map(|s| s.groups[g.index()]) {
+                    Some(GroupSize::Bytes(b)) => GroupShown::Bytes(b),
+                    _ => GroupShown::SeeLog,
+                }
+            }
             _ => GroupShown::Scanning,
         }
     }
