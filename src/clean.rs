@@ -1543,8 +1543,16 @@ mod tests {
         let n = done_notice(Lang::Id, &report, &all);
         assert_eq!(n.kind, NoticeKind::CleanDone);
         assert_eq!(n.title, "2,3 GB dibebaskan");
-        assert_eq!(n.body, "C: sisa 49,5 GB · 3 item dilewati");
+        assert_eq!(
+            n.body,
+            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)"
+        );
         assert_eq!(n.source, "Bersihkan");
+        // The notice's 360 px decide (`Renderer::notice_text_fits`): here
+        // a stand-in of 40 characters takes the shorter wording.
+        let narrow = |s: &str| s.chars().count() <= 40;
+        let n = done_notice(Lang::Id, &report, &narrow);
+        assert_eq!(n.body, "C: sisa 49,5 GB · 3 item dilewati");
         let refused = CleanReport {
             skipped: 0,
             admin: AdminOutcome::Cancelled,
@@ -1553,7 +1561,10 @@ mod tests {
         };
         let n = done_notice(Lang::En, &refused, &all);
         assert_eq!(n.title, "2.3 GB freed");
-        assert_eq!(n.body, "C: 49.5 GB free · Edge open · Windows Update skipped");
+        assert_eq!(
+            n.body,
+            "Disk C: now 49.5 GB free · Edge open · Windows Update skipped"
+        );
     }
 
     #[test]

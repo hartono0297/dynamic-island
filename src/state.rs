@@ -7,11 +7,11 @@ use crate::calendar::range_for;
 use crate::clean::{CleanCat, CleanMode};
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
-use crate::mole::MoleOpts;
 use crate::model::{
     CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Shortcut,
     Timeline, View,
 };
+use crate::mole::MoleOpts;
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 use crate::ui::geometry::ANIM_MS;
 
@@ -90,11 +90,16 @@ pub enum MolePhase {
     Scanning(MoleOpts),
     /// The dry-run with these options ended; `ok`: it finished well, so
     /// "Jalankan Mole" may arm.
-    Previewed { opts: MoleOpts, ok: bool },
+    Previewed {
+        opts: MoleOpts,
+        ok: bool,
+    },
     /// The confirmed clean runs (the log shows).
     Running,
     /// It ended; the log and the result show.
-    Finished { ok: bool },
+    Finished {
+        ok: bool,
+    },
 }
 
 /// One mouse-wheel notch, as Windows reports it.
@@ -789,7 +794,10 @@ impl IslandState {
             }
             Hit::CleanMode(mode) => self.switch_mode(mode, effects),
             Hit::MoleOpt(opt) => {
-                if self.mole_shown() && self.mole != MolePhase::Running {
+                // Not on the install card, not while a clean runs.
+                if self.mole_shown()
+                    && !matches!(self.mole, MolePhase::Running | MolePhase::Missing)
+                {
                     self.mole_opts = self.mole_opts.toggled(opt);
                     if matches!(
                         self.mole,
@@ -1165,6 +1173,7 @@ fn sticky_key(notice: &Notice) -> Option<Sticky<'_>> {
 mod tests {
     use super::*;
     use crate::model::*;
+    use crate::mole::MoleOpt;
     use crate::pomodoro::{Phase, PomoSettings, PomoStatus};
     use chrono::NaiveDate;
     use std::time::{Duration, Instant};
@@ -2013,6 +2022,310 @@ mod tests {
             s.apply(Event::Click(Hit::CleanGo), ms(5200)),
             vec![Effect::CleanDelete(default_picks())]
         );
+    }
+
+    /// The cleaner switched to "Otomatis · Mole", Mole found: its dry-run
+    /// with the default options was asked for.
+    fn mole_scanning(now: Instant) -> IslandState {
+        let mut s = cleaner_open(now);
+        assert_eq!(
+            s.apply(Event::Click(Hit::CleanMode(CleanMode::Mole)), now),
+            vec![Effect::SaveCleanMode(CleanMode::Mole), Effect::MoleDetect]
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Detecting);
+        assert_eq!(
+            s.apply(Event::MoleFound(true), now),
+            vec![Effect::MolePreview(MoleOpts::default())]
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Scanning(MoleOpts::default()));
+        s
+    }
+
+    /// Every effect that would make Mole delete something.
+    fn cleans(effects: &[Effect]) -> usize {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::MoleClean(_) | Effect::CleanDelete(_)))
+            .count()
+    }
+
+    #[test]
+    fn mole_mode_is_remembered_and_looks_for_mole() {
+        let t0 = Instant::now();
+        let mut s = mole_scanning(t0);
+        assert_eq!(s.clean_mode(), CleanMode::Mole);
+        assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
+        // Own mode's clicks do nothing in Mole mode.
+        assert!(s.apply(Event::Click(Hit::CleanGo), t0).is_empty());
+        assert!(!s.cleaner().unwrap().armed());
+        // Back to the own mode: the dry-run stops, its scan runs again.
+        let effects = s.apply(Event::Click(Hit::CleanMode(CleanMode::Own)), t0);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveCleanMode(CleanMode::Own),
+                Effect::OpenCleaner,
+                Effect::MoleStopPreview
+            ]
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Unknown);
+        // The remembered mode at startup opens the cleaner in it.
+        let mut s = st();
+        s.apply(Event::CleanModeSetting(CleanMode::Mole), t0);
+        open_on(&mut s, Page::System, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::SystemClean), t0),
+            vec![Effect::MoleDetect]
+        );
+        // Not installed: the card; "Cara memasang" opens the README and
+        // gets the panel out of the way; nothing else takes a click.
+        assert!(s.apply(Event::MoleFound(false), t0).is_empty());
+        assert_eq!(s.mole_phase(), MolePhase::Missing);
+        for hit in [
+            Hit::MoleGo,
+            Hit::MoleProtect,
+            Hit::MoleOpt(MoleOpt::System),
+            Hit::MoleShowLog,
+        ] {
+            assert!(s.apply(Event::Click(hit.clone()), t0).is_empty(), "{hit:?}");
+        }
+        assert_eq!(s.mole_opts(), MoleOpts::default());
+        assert_eq!(
+            s.apply(Event::Click(Hit::MoleInstall), t0),
+            vec![Effect::OpenMoleInstall]
+        );
+        assert_eq!(s.view(), View::Idle);
+        // A late answer after the cleaner closed starts nothing.
+        let mut s = mole_scanning(t0);
+        s.apply(Event::Click(Hit::CleanBack), t0);
+        assert!(s.apply(Event::MoleFound(true), t0).is_empty());
+    }
+
+    #[test]
+    fn mole_never_cleans_without_a_preview_and_a_confirm() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut s = mole_scanning(t0);
+        let opts = MoleOpts::default();
+        // While the dry-run runs the button neither arms nor cleans.
+        for n in [1, 2, 3] {
+            assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(n))), 0);
+            assert!(!s.cleaner().unwrap().armed());
+        }
+        // A preview that failed, or one for other options: still nothing.
+        let system = MoleOpts {
+            system: true,
+            ..opts
+        };
+        s.apply(
+            Event::MolePreviewed {
+                opts: system,
+                ok: true,
+            },
+            ms(5),
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Scanning(opts), "not this run's");
+        s.apply(Event::MolePreviewed { opts, ok: false }, ms(6));
+        assert_eq!(s.mole_phase(), MolePhase::Previewed { opts, ok: false });
+        for n in [7, 8, 9] {
+            assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(n))), 0);
+            assert!(!s.cleaner().unwrap().armed());
+        }
+        // "Pratinjau lagi" is the way on: an option change previews again.
+        assert_eq!(
+            s.apply(Event::Click(Hit::MoleOpt(MoleOpt::GameMedia)), ms(10)),
+            vec![Effect::MolePreview(MoleOpts {
+                game_media: true,
+                ..opts
+            })]
+        );
+        let opts = s.mole_opts();
+        assert!(
+            opts.game_media && !opts.system,
+            "admin is never ticked by itself"
+        );
+        s.apply(Event::MolePreviewed { opts, ok: true }, ms(20));
+        // The first click arms ("Yakin? Hapus permanen"), never cleans.
+        assert!(s.apply(Event::Click(Hit::MoleGo), ms(30)).is_empty());
+        assert!(s.cleaner().unwrap().armed());
+        assert_eq!(s.next_deadline(), Some(ms(30) + CLEAN_CONFIRM));
+        assert_eq!(cleans(&s.apply(Event::Click(Hit::Body), ms(35))), 0);
+        assert!(!s.cleaner().unwrap().armed());
+        // Any other click disarms it; so does an option, which also
+        // throws the preview away.
+        for other in [Hit::Body, Hit::Strip, Hit::MoleProtect, Hit::MoleShowLog] {
+            s.apply(Event::Click(Hit::MoleGo), ms(40));
+            assert!(s.cleaner().unwrap().armed());
+            assert_eq!(cleans(&s.apply(Event::Click(other.clone()), ms(41))), 0);
+            assert!(!s.cleaner().unwrap().armed(), "{other:?}");
+            // The next click arms again; it never cleans.
+            assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(42))), 0);
+            s.apply(Event::Click(Hit::Body), ms(43));
+            if s.cleaner().unwrap().mole_log {
+                s.apply(Event::Click(Hit::MoleShowLog), ms(44));
+            }
+        }
+        // The timeout disarms it.
+        s.apply(Event::Click(Hit::MoleGo), ms(100));
+        s.apply(Event::Tick, ms(100) + CLEAN_CONFIRM);
+        assert!(!s.cleaner().unwrap().armed());
+        assert_eq!(
+            cleans(&s.apply(Event::Click(Hit::MoleGo), ms(100) + CLEAN_CONFIRM)),
+            0
+        );
+        s.apply(Event::Click(Hit::Body), ms(5000));
+        // An option ticked while armed: disarmed, a new dry-run, no clean.
+        s.apply(Event::Click(Hit::MoleGo), ms(5100));
+        let effects = s.apply(Event::Click(Hit::MoleOpt(MoleOpt::System)), ms(5200));
+        let both = MoleOpts {
+            system: true,
+            game_media: true,
+        };
+        assert_eq!(effects, vec![Effect::MolePreview(both)]);
+        assert!(!s.cleaner().unwrap().armed());
+        assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(5300))), 0);
+        assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(5400))), 0);
+        // Its preview done, two clicks inside CLEAN_CONFIRM clean once,
+        // with the previewed options.
+        s.apply(
+            Event::MolePreviewed {
+                opts: both,
+                ok: true,
+            },
+            ms(9000),
+        );
+        assert!(s.apply(Event::Click(Hit::MoleGo), ms(9100)).is_empty());
+        assert_eq!(
+            s.apply(Event::Click(Hit::MoleGo), ms(9200)),
+            vec![Effect::MoleClean(both)]
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Running);
+        // While it runs: no second clean, no options, no mode switch, and
+        // the own mode's button waits too.
+        for hit in [
+            Hit::MoleGo,
+            Hit::MoleGo,
+            Hit::MoleOpt(MoleOpt::GameMedia),
+            Hit::CleanMode(CleanMode::Own),
+            Hit::MoleProtect,
+        ] {
+            assert!(
+                s.apply(Event::Click(hit.clone()), ms(9300)).is_empty(),
+                "{hit:?}"
+            );
+        }
+        assert_eq!(s.mole_opts(), both);
+        // The panel may close: the clean goes on (no stop), and the
+        // cleaner reopens on it.
+        assert!(s.apply(Event::Hover(false), ms(9400)).is_empty());
+        assert_eq!(s.mole_phase(), MolePhase::Running);
+        s.apply(Event::Hover(true), ms(9500));
+        assert!(s.apply(Event::Click(Hit::SystemClean), ms(9600)).is_empty());
+        assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
+        s.apply(Event::MoleFinished { ok: true }, ms(20_000));
+        assert_eq!(s.mole_phase(), MolePhase::Finished { ok: true });
+        // Afterwards the button previews again; it never cleans from here.
+        assert_eq!(
+            s.apply(Event::Click(Hit::MoleGo), ms(20_100)),
+            vec![Effect::MolePreview(both)]
+        );
+        assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), ms(20_200))), 0);
+    }
+
+    #[test]
+    fn closing_the_cleaner_stops_a_mole_preview() {
+        let t0 = Instant::now();
+        let mut s = mole_scanning(t0);
+        assert_eq!(
+            s.apply(Event::Hover(false), t0),
+            vec![Effect::MoleStopPreview]
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Unknown);
+        // Its late answer is not a preview.
+        s.apply(
+            Event::MolePreviewed {
+                opts: MoleOpts::default(),
+                ok: true,
+            },
+            t0,
+        );
+        assert_eq!(s.mole_phase(), MolePhase::Unknown);
+        // Another page does the same; a finished preview is forgotten.
+        let mut s = mole_scanning(t0);
+        s.apply(
+            Event::MolePreviewed {
+                opts: MoleOpts::default(),
+                ok: true,
+            },
+            t0,
+        );
+        s.apply(Event::Click(Hit::MoleGo), t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.mole_phase(), MolePhase::Unknown);
+        // Back on the cleaner, Mole is looked for and previewed anew: the
+        // old arming is gone.
+        s.apply(Event::Wheel(120), t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::SystemClean), t0),
+            vec![Effect::MoleDetect]
+        );
+        assert!(!s.cleaner().unwrap().armed());
+        assert_eq!(cleans(&s.apply(Event::Click(Hit::MoleGo), t0)), 0);
+    }
+
+    fn mole_notice(kind: NoticeKind) -> Notice {
+        Notice {
+            key: "mole".into(),
+            source: "Bersihkan".into(),
+            title: "Mole".into(),
+            body: String::new(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn mole_notices_open_its_log() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // A finished clean with the panel shut: the notice is temporary.
+        let mut s = mole_scanning(t0);
+        s.apply(
+            Event::MolePreviewed {
+                opts: MoleOpts::default(),
+                ok: true,
+            },
+            t0,
+        );
+        s.apply(Event::Click(Hit::MoleGo), ms(1));
+        s.apply(Event::Click(Hit::MoleGo), ms(2));
+        s.apply(Event::Hover(false), ms(3));
+        s.apply(Event::MoleFinished { ok: true }, ms(4));
+        let done = mole_notice(NoticeKind::MoleDone);
+        s.apply(Event::Notice(done.clone()), ms(4));
+        assert_eq!(s.view(), View::Notice(done));
+        assert_eq!(s.next_deadline(), Some(ms(4) + NOTICE_DURATION));
+        // Its click opens the cleaner on Mole's log, the result kept.
+        assert!(s.apply(Event::Click(Hit::Body), ms(5)).is_empty());
+        assert!(s.apply(Event::Hover(true), ms(6)).is_empty());
+        assert_eq!(s.view(), View::Panel(Page::System));
+        assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
+        assert_eq!(s.mole_phase(), MolePhase::Finished { ok: true });
+        // A failed one stays until clicked (sticky), and opens the log too.
+        let mut s = st();
+        let failed = mole_notice(NoticeKind::MoleFailed);
+        s.apply(Event::Notice(failed.clone()), t0);
+        assert_eq!(s.view(), View::Notice(failed.clone()));
+        assert_eq!(s.next_deadline(), None);
+        s.apply(Event::Notice(failed.clone()), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.waiting_strip(), Some(&failed), "one at a time");
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::System));
+        assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
+        assert_eq!(s.waiting_strip(), None);
     }
 
     #[test]

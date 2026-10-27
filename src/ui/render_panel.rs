@@ -22,7 +22,7 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, FolderMenuView, Frame, GroupShown, Progress, RobotFrame, Renderer,
+    CleanerView, CliView, FolderMenuView, Frame, GroupShown, Progress, Renderer, RobotFrame,
     RowSize, SystemView, color, d2d_rect, mix,
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -36,13 +36,12 @@ use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
-use crate::state::MolePhase;
 use crate::shortcuts;
+use crate::state::MolePhase;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
-use crate::ui::robot::{Expr, Pose};
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CleanFoot, CleanHead,
@@ -54,6 +53,7 @@ use crate::ui::panel_layout::{
     page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
     reminders_layout, shortcuts_layout, system_layout, tile_parts, waiting_strip,
 };
+use crate::ui::robot::{Expr, Pose};
 
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
@@ -851,7 +851,14 @@ impl Renderer {
 
     /// Both modes' header: the back button, "Bersihkan" and the mode
     /// segment (`segMode`) with `mode` lit.
-    fn paint_clean_head(&self, back: Rect, header: Rect, seg: Rect, items: [Rect; 2], mode: CleanMode) {
+    fn paint_clean_head(
+        &self,
+        back: Rect,
+        header: Rect,
+        seg: Rect,
+        items: [Rect; 2],
+        mode: CleanMode,
+    ) {
         let lang = i18n::lang();
         let p = self.palette;
         self.set_color(p.raised, 1.0);
@@ -864,7 +871,10 @@ impl Renderer {
         self.set_color(p.raised_hi, 1.0);
         self.fill_round(items[on], SEG_ITEM_RADIUS);
         let center = &self.fonts.small_center;
-        for (i, key) in [Key::CleanModeOwn, Key::CleanModeMole].into_iter().enumerate() {
+        for (i, key) in [Key::CleanModeOwn, Key::CleanModeMole]
+            .into_iter()
+            .enumerate()
+        {
             let ink = if i == on { p.text } else { p.secondary };
             self.text_colored(text(lang, key), center, items[i], ink, 1.0);
         }
@@ -925,8 +935,20 @@ impl Renderer {
             let icon = mole_group_icon(row.group);
             self.icon_colored(icon, row.icon, ROW_ICON, p.secondary, 1.0, None);
             let (name, sub) = mole_group_keys(row.group);
-            self.text_colored(text(lang, name), &self.fonts.row_name, row.name, p.text, 1.0);
-            self.text_colored(text(lang, sub), &self.fonts.micro, row.sub, p.secondary, 1.0);
+            self.text_colored(
+                text(lang, name),
+                &self.fonts.row_name,
+                row.name,
+                p.text,
+                1.0,
+            );
+            self.text_colored(
+                text(lang, sub),
+                &self.fonts.micro,
+                row.sub,
+                p.secondary,
+                1.0,
+            );
             match view.group(row.group) {
                 GroupShown::Bytes(b) => {
                     let size = i18n::clean_size(lang, b);
@@ -950,7 +972,13 @@ impl Renderer {
                 MoleOpt::System => Key::MoleOptSystem,
                 MoleOpt::GameMedia => Key::MoleOptGame,
             };
-            self.text_colored(text(lang, key), &self.fonts.small, o.label, p.secondary, opt_alpha);
+            self.text_colored(
+                text(lang, key),
+                &self.fonts.small,
+                o.label,
+                p.secondary,
+                opt_alpha,
+            );
         }
         if let Some(r) = l.result {
             let (line, ok) = mole_result(lang, view);
@@ -1018,7 +1046,13 @@ impl Renderer {
         if log.is_empty() && running {
             let lang = i18n::lang();
             let line = text(lang, Key::MoleRunning);
-            self.text_colored(line, &self.fonts.mono_log, row(0), theme::TERMINAL_HINT, 1.0);
+            self.text_colored(
+                line,
+                &self.fonts.mono_log,
+                row(0),
+                theme::TERMINAL_HINT,
+                1.0,
+            );
             return;
         }
         for (k, line) in log.iter().rev().take(rows).enumerate() {
@@ -2850,14 +2884,20 @@ mod tests {
             assert_eq!(look.body, MoleBody::Rows);
             assert!(!look.go && look.opts_live && look.seg_live);
             assert_eq!(v.group(MoleGroup::Browser), GroupShown::Scanning);
-            assert_eq!(mole_footer(Lang::Id, &v), "Memindai dengan Mole… ± 30 detik");
+            assert_eq!(
+                mole_footer(Lang::Id, &v),
+                "Memindai dengan Mole… ± 30 detik"
+            );
         }
         // Previewed: sizes, "lihat log" where unreadable, the button live.
         let v = view(previewed, false);
         let look = v.mole_look();
         assert!(look.go && look.protect);
         assert_eq!(look.unreadable, [false, true, false, false]);
-        assert_eq!(v.group(MoleGroup::Browser), GroupShown::Bytes(18 * GIB / 10));
+        assert_eq!(
+            v.group(MoleGroup::Browser),
+            GroupShown::Bytes(18 * GIB / 10)
+        );
         assert_eq!(v.group(MoleGroup::Apps), GroupShown::SeeLog);
         assert_eq!(mole_footer(Lang::Id, &v), "Pratinjau: ± 2,4 GB");
         assert_eq!(mole_go_label(Lang::Id, &v), "Jalankan Mole");
@@ -3001,11 +3041,9 @@ mod tests {
             for style in [Style::Pill, Style::Notch] {
                 let s = shape_for(style, ShapeKind::Notice);
                 assert_eq!((s.w, s.h), (360.0, 76.0));
-                let chip = crate::ui::geometry::notice_action(
-                    &n.kind,
-                    crate::pomodoro::PomoStatus::Idle,
-                )
-                .map(|_| notice_action_w(&n.kind));
+                let chip =
+                    crate::ui::geometry::notice_action(&n.kind, crate::pomodoro::PomoStatus::Idle)
+                        .map(|_| notice_action_w(&n.kind));
                 let l = notice_layout(s, chip);
                 let tw = r.text_width(&n.title, &r.fonts.title);
                 assert!(tw <= l.title.w, "{:?}: {tw} px in {}", n.title, l.title.w);
@@ -3014,7 +3052,9 @@ mod tests {
             }
         };
         // The old body was cut off: the test can tell.
-        let body_w = notice_layout(shape_for(Style::Pill, ShapeKind::Notice), None).body.w;
+        let body_w = notice_layout(shape_for(Style::Pill, ShapeKind::Notice), None)
+            .body
+            .w;
         let old = "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)";
         assert!(r.text_width(old, &r.fonts.small) > body_w);
 
@@ -3041,7 +3081,7 @@ mod tests {
                             check(&n);
                             // The drive and what was skipped always stay.
                             let free = i18n::format_size(lang, gb(drive));
-                            assert!(n.body.starts_with("C: "), "{:?}", n.body);
+                            assert!(n.body.contains("C: "), "{:?}", n.body);
                             assert!(n.body.contains(&free), "{:?}", n.body);
                             assert!(n.body.contains(&skipped.to_string()), "{:?}", n.body);
                         }
@@ -3057,15 +3097,19 @@ mod tests {
                 admin: AdminOutcome::NotAsked,
             };
             let n = crate::clean::done_notice(lang, &design, &fits);
-            let want = match lang {
-                Lang::Id => "C: sisa 49,5 GB · 3 item dilewati",
-                Lang::En => "C: 49.5 GB free · 3 items skipped",
-            };
-            assert_eq!(n.body, want);
+            match lang {
+                // The Indonesian wording that was cut off now takes its
+                // shorter form, both parts kept.
+                Lang::Id => assert_eq!(n.body, "C: sisa 49,5 GB · 3 item dilewati"),
+                Lang::En => {
+                    assert!(n.body.contains("49.5 GB free"), "{:?}", n.body);
+                    assert!(n.body.contains("3 items skipped"), "{:?}", n.body);
+                }
+            }
 
             // Mole: done (two-digit GB, the system part skipped), failed
             // with a code (an NTSTATUS one too) or stopped.
-            for freed in [gb(2.4), gb(12.4), gb(99.9)] {
+            for freed in [gb(2.4), gb(12.4), gb(99.9), gb(123.4), gb(1500.0)] {
                 for (exit, admin) in [
                     (Some(0), AdminOutcome::NotAsked),
                     (Some(0), AdminOutcome::Cancelled),
@@ -3084,12 +3128,33 @@ mod tests {
                     } else {
                         NoticeKind::MoleFailed
                     };
-                    let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+                    let fits = |title: bool, s: &str| r.notice_text_fits(&kind, title, s);
                     let n = crate::mole::done_notice(lang, &report, &fits);
                     assert_eq!(n.kind, kind);
                     check(&n);
                 }
             }
+            // The design's notice (d2) keeps its full wording in both
+            // languages beside the "Log" chip.
+            let design = MoleReport {
+                run: CleanRun {
+                    exit: Some(0),
+                    admin: AdminOutcome::NotAsked,
+                },
+                freed: gb(2.4),
+                drive: Some(('C', gb(47.2), gb(49.6))),
+            };
+            let kind = NoticeKind::MoleDone;
+            let fits = |title: bool, s: &str| r.notice_text_fits(&kind, title, s);
+            let n = crate::mole::done_notice(lang, &design, &fits);
+            let (title, body) = match lang {
+                Lang::Id => (
+                    "Mole selesai · 2,4 GB dibebaskan",
+                    "Diukur dari sisa disk C:",
+                ),
+                Lang::En => ("Mole done · 2.4 GB freed", "Measured from free space on C:"),
+            };
+            assert_eq!((n.title.as_str(), n.body.as_str()), (title, body));
         }
     }
 

@@ -66,8 +66,8 @@ use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
-use crate::mole::{CleanRun, GroupSize, MoleOpts, MoleReport, PreviewSummary};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
+use crate::mole::{CleanRun, GroupSize, MoleOpts, MoleReport, PreviewSummary};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
@@ -132,7 +132,7 @@ enum CleanDemo {
     Ticks,
     /// The button armed: "Yakin? Hapus 2,3 GB".
     Armed,
-    /// Mole mode, its preview done: 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB.
+    /// Mole mode, its preview done: 1,8 / 0,4 / 0,1 / 0,1 GB, Â± 2,4 GB.
     MolePreview,
     /// Mole mode while the dry-run runs.
     MoleScanning,
@@ -586,7 +586,7 @@ fn demo_system(low: bool) -> SystemSample {
 }
 
 /// The cleaner's sizes in the design: 0,1 / 1,8 / 0,4 / 0,1 GB, the rest
-/// not measured ("—").
+/// not measured ("â€”").
 fn demo_scan() -> ScanResult {
     let gb = |x: f64| CatSize {
         bytes: (x * GIB as f64) as u64,
@@ -608,7 +608,7 @@ fn demo_scan() -> ScanResult {
     }
 }
 
-/// Mole's preview in the design (`MG`): 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB
+/// Mole's preview in the design (`MG`): 1,8 / 0,4 / 0,1 / 0,1 GB, Â± 2,4 GB
 /// in 29 entries; `unreadable` leaves the app caches as "lihat log".
 fn demo_mole_summary(unreadable: bool) -> PreviewSummary {
     let gb = |x: f64| (x * GIB as f64) as u64;
@@ -962,6 +962,8 @@ fn run_scenes(scenes: &[Scene]) {
 /// fitted to the notice by `renderer` as the island does.
 fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
     let fits = |kind: NoticeKind| move |s: &str| renderer.notice_text_fits(&kind, false, s);
+    let fits_either =
+        |kind: NoticeKind| move |title: bool, s: &str| renderer.notice_text_fits(&kind, title, s);
     let notice = |source: &str, title: &str, body: String, kind| Notice {
         key: "demo".into(),
         source: source.into(),
@@ -974,7 +976,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             tr(Key::SourceReminder),
             "Kirim revisi denah ke klien",
             format!(
-                "{} · {}",
+                "{} Â· {}",
                 tr(Key::Missed),
                 crate::i18n::time_label(
                     crate::i18n::lang(),
@@ -992,7 +994,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::Claude => notice(
             "Claude",
             tr(Key::ClaudeWaiting),
-            format!("dynamic-island · {}", tr(Key::DemoClaudeAsks)),
+            format!("dynamic-island Â· {}", tr(Key::DemoClaudeAsks)),
             NoticeKind::ClaudeWaiting {
                 session_id: "demo".into(),
             },
@@ -1005,7 +1007,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         ),
         DemoNotice::App => notice(
             "Mail",
-            "Rani · Mail",
+            "Rani Â· Mail",
             "Denah lantai 2 sudah saya kirim, cek ya".into(),
             NoticeKind::App { app_id: None },
         ),
@@ -1018,7 +1020,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::ClaudeWorking => notice(
             "Claude",
             tr(Key::DemoClaudeWorking),
-            format!("dynamic-island · {}", tr(Key::DemoFilesChanged)),
+            format!("dynamic-island Â· {}", tr(Key::DemoFilesChanged)),
             NoticeKind::ClaudeDone {
                 session_id: "demo".into(),
             },
@@ -1038,12 +1040,12 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::MoleDone => crate::mole::done_notice(
             crate::i18n::lang(),
             &demo_mole_report(false),
-            &fits(NoticeKind::MoleDone),
+            &fits_either(NoticeKind::MoleDone),
         ),
         DemoNotice::MoleFailed => crate::mole::done_notice(
             crate::i18n::lang(),
             &demo_mole_report(true),
-            &fits(NoticeKind::MoleFailed),
+            &fits_either(NoticeKind::MoleFailed),
         ),
     }
 }
@@ -1132,7 +1134,7 @@ fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
         command(
             output,
             "git status",
-            &["On branch main · nothing to commit, working tree clean"],
+            &["On branch main Â· nothing to commit, working tree clean"],
         );
         command(
             output,
@@ -1320,12 +1322,12 @@ fn demo_pomodoro(which: Pomo, now: Instant) -> Pomodoro {
         return p;
     }
     if which == Pomo::Break {
-        // Focus 1 → short break, 1:40 in.
+        // Focus 1 â†’ short break, 1:40 in.
         p.skip(now);
         p.start_pause(now.checked_sub(Duration::from_secs(100)).unwrap_or(now));
         return p;
     }
-    // Focus 1 → short break → focus 2.
+    // Focus 1 â†’ short break â†’ focus 2.
     p.skip(now);
     p.skip(now);
     let started = now.checked_sub(Duration::from_secs(378)).unwrap_or(now);
@@ -1500,7 +1502,7 @@ fn demo_notes(today: NaiveDate) -> Vec<Note> {
         ),
         note(
             "n2",
-            "Daftar material\nBata ekspos, terakota lantai 30×30, kaca low-e, baja ringan.",
+            "Daftar material\nBata ekspos, terakota lantai 30Ã—30, kaca low-e, baja ringan.",
             now - 3600,
         ),
         note(
@@ -1610,7 +1612,7 @@ fn many_reminders(today: NaiveDate) -> Vec<Reminder> {
         .collect()
 }
 
-/// A 240×192 cover like the design's: a terracotta sky darkening downwards,
+/// A 240Ã—192 cover like the design's: a terracotta sky darkening downwards,
 /// a pale sun, a thin horizon. Not square, to exercise the crop.
 fn test_art() -> Vec<u8> {
     const W: u32 = 240;

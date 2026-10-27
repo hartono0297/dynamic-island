@@ -151,9 +151,14 @@ pub enum Event {
     MoleFound(bool),
     /// A dry-run with these options ended; `ok` when it finished well (a
     /// `mole::Preview` exists for them).
-    MolePreviewed { opts: MoleOpts, ok: bool },
+    MolePreviewed {
+        opts: MoleOpts,
+        ok: bool,
+    },
     /// The confirmed Mole clean ended (`ok`: everything ran well).
-    MoleFinished { ok: bool },
+    MoleFinished {
+        ok: bool,
+    },
     /// The cleaner's remembered mode (`clean_mode`), at startup.
     CleanModeSetting(CleanMode),
     Tick,

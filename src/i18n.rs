@@ -771,46 +771,78 @@ pub struct CleanNote<'a> {
     pub admin_skipped: bool,
 }
 
-/// Joins `parts` (each a list of ways to say it, longest first) with
-/// " · " in their order of importance: each part takes the first way that
-/// still `fits`, and a part none of whose ways fit is left out.
+/// The first of `ways` (longest first) that `fits`, else the shortest.
+pub fn fit_one(ways: &[String], fits: &dyn Fn(&str) -> bool) -> String {
+    ways.iter()
+        .find(|w| fits(w))
+        .or(ways.last())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Joins `parts` (in their order of importance, each a list of ways to say
+/// it, longest first) with " · " into the fullest line that `fits`: every
+/// part in its longest wording, then every part shorter, and only when even
+/// the shortest wording does not fit, the least important part left out
+/// (and so on). One part that never fits is still shown in its shortest
+/// wording, never dropped.
 fn fit_parts(parts: &[Vec<String>], fits: &dyn Fn(&str) -> bool) -> String {
-    let mut line = String::new();
-    for ways in parts {
-        for way in ways {
-            let next = if line.is_empty() {
-                way.clone()
-            } else {
-                format!("{line} · {way}")
-            };
-            if fits(&next) {
-                line = next;
-                break;
+    let levels = parts.iter().map(Vec::len).max().unwrap_or(0);
+    let line = |keep: usize, level: usize| {
+        parts[..keep]
+            .iter()
+            .filter_map(|ways| ways.get(level.min(ways.len().saturating_sub(1))))
+            .cloned()
+            .collect::<Vec<String>>()
+            .join(" · ")
+    };
+    for keep in (1..=parts.len()).rev() {
+        for level in 0..levels {
+            let l = line(keep, level);
+            if fits(&l) {
+                return l;
             }
         }
     }
-    line
+    if parts.is_empty() {
+        String::new()
+    } else {
+        line(1, levels.saturating_sub(1))
+    }
 }
 
-/// "C: sisa 49,5 GB · 3 item dilewati", "C: 49.5 GB free · 3 items
-/// skipped", then the open browsers and a skipped Windows Update, as far
-/// as `fits` allows (the notice is 360 px wide).
+/// "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)", or
+/// as short as "C: sisa 49,5 GB · 3 item dilewati", then the open browsers
+/// and a skipped Windows Update, as far as `fits` allows (the notice is
+/// 360 px wide; its shape stays).
 pub fn clean_done_body(lang: Lang, note: &CleanNote, fits: &dyn Fn(&str) -> bool) -> String {
     let mut parts = Vec::new();
     if let Some((letter, free)) = note.drive {
-        let f = format_size(lang, free);
-        parts.push(vec![match lang {
-            Lang::Id => format!("{letter}: sisa {f}"),
-            Lang::En => format!("{letter}: {f} free"),
-        }]);
+        let (name, f) = (disk_name(letter), format_size(lang, free));
+        parts.push(match lang {
+            Lang::Id => vec![
+                format!("{name} sekarang sisa {f}"),
+                format!("{letter}: sisa {f}"),
+            ],
+            Lang::En => vec![
+                format!("{name} now {f} free"),
+                format!("{letter}: {f} free"),
+            ],
+        });
     }
     if note.skipped > 0 {
         let n = note.skipped;
-        parts.push(vec![match lang {
-            Lang::Id => format!("{n} item dilewati"),
-            Lang::En if n == 1 => "1 item skipped".to_string(),
-            Lang::En => format!("{n} items skipped"),
-        }]);
+        parts.push(match lang {
+            Lang::Id => vec![
+                format!("{n} item dilewati (sedang dipakai)"),
+                format!("{n} item dilewati"),
+            ],
+            Lang::En if n == 1 => vec!["1 item skipped (in use)".into(), "1 item skipped".into()],
+            Lang::En => vec![
+                format!("{n} items skipped (in use)"),
+                format!("{n} items skipped"),
+            ],
+        });
     }
     if !note.browsers.is_empty() {
         let names = note.browsers.join(", ");
@@ -839,13 +871,24 @@ pub fn clean_done_body(lang: Lang, note: &CleanNote, fits: &dyn Fn(&str) -> bool
     fit_parts(&parts, fits)
 }
 
-/// The Mole notice's title: "Mole selesai · 2,4 GB dibebaskan".
-pub fn mole_done_title(lang: Lang, freed: u64) -> String {
+/// The Mole notice's title: "Mole selesai · 2,4 GB dibebaskan", shorter
+/// ("Mole · 2,4 GB dibebaskan", "2,4 GB dibebaskan") when `fits` says the
+/// full one would not fit beside the "Log" chip.
+pub fn mole_done_title(lang: Lang, freed: u64, fits: &dyn Fn(&str) -> bool) -> String {
     let size = clean_size(lang, freed);
-    match lang {
-        Lang::Id => format!("Mole selesai · {size} dibebaskan"),
-        Lang::En => format!("Mole done · {size} freed"),
-    }
+    let ways = match lang {
+        Lang::Id => [
+            format!("Mole selesai · {size} dibebaskan"),
+            format!("Mole · {size} dibebaskan"),
+            format!("{size} dibebaskan"),
+        ],
+        Lang::En => [
+            format!("Mole done · {size} freed"),
+            format!("Mole · {size} freed"),
+            format!("{size} freed"),
+        ],
+    };
+    fit_one(&ways, fits)
 }
 
 /// "Diukur dari sisa disk C:", and that the system part was skipped (UAC
@@ -856,18 +899,21 @@ pub fn mole_done_body(
     admin_skipped: bool,
     fits: &dyn Fn(&str) -> bool,
 ) -> String {
-    let mut parts = vec![vec![match lang {
-        Lang::Id => format!("Diukur dari sisa disk {letter}:"),
-        Lang::En => format!("Measured from free space on {letter}:"),
-    }]];
+    let mut parts = vec![match lang {
+        Lang::Id => vec![
+            format!("Diukur dari sisa disk {letter}:"),
+            format!("Diukur di {letter}:"),
+        ],
+        Lang::En => vec![
+            format!("Measured from free space on {letter}:"),
+            format!("Measured on {letter}:"),
+        ],
+    }];
     if admin_skipped {
-        parts.push(vec![
-            match lang {
-                Lang::Id => "Sistem dilewati",
-                Lang::En => "System part skipped",
-            }
-            .to_string(),
-        ]);
+        parts.push(match lang {
+            Lang::Id => vec!["Sistem (admin) dilewati".into(), "Sistem dilewati".into()],
+            Lang::En => vec!["System (admin) skipped".into(), "System skipped".into()],
+        });
     }
     fit_parts(&parts, fits)
 }
@@ -2271,13 +2317,26 @@ mod tests {
                 };
                 all.push(clean_done_body(lang, &note, &all_fit));
                 all.push(clean_done_body(lang, &note, &|s| s.len() < 40));
-                all.push(mole_done_title(lang, 2 * GIB));
-                all.push(mole_done_body(lang, 'C', true, &all_fit));
+                // Every wording, the shortest ones too.
+                let none_fit = |_: &str| false;
+                for fit in [
+                    &all_fit as &dyn Fn(&str) -> bool,
+                    &|s: &str| s.len() < 26,
+                    &none_fit,
+                ] {
+                    all.push(mole_done_title(lang, 2 * GIB, fit));
+                    all.push(mole_done_body(lang, 'C', true, fit));
+                    all.push(clean_done_body(lang, &note, fit));
+                }
                 all.push(mole_failed_title(lang, Some(1)));
                 all.push(mole_failed_title(lang, None));
                 all.push(mole_failed_body(lang, 0));
                 all.push(mole_failed_body(lang, GIB));
-                for (v, tested) in [(Some("1.30.0"), true), (Some("1.31.0"), false), (None, false)] {
+                for (v, tested) in [
+                    (Some("1.30.0"), true),
+                    (Some("1.31.0"), false),
+                    (None, false),
+                ] {
                     all.push(mole_intro(lang, v, tested));
                 }
                 all.push(mole_preview(lang, Some(GIB)));
@@ -2338,12 +2397,23 @@ mod tests {
             ..CleanNote::default()
         };
         let all = |_: &str| true;
+        // Room enough: the full wording.
         assert_eq!(
             clean_done_body(Lang::Id, &note, &all),
-            "C: sisa 49,5 GB · 3 item dilewati"
+            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)"
         );
         assert_eq!(
             clean_done_body(Lang::En, &note, &all),
+            "Disk C: now 49.5 GB free · 3 items skipped (in use)"
+        );
+        // Less room: every part shorter before any part goes.
+        let short = |s: &str| s.chars().count() <= 40;
+        assert_eq!(
+            clean_done_body(Lang::Id, &note, &short),
+            "C: sisa 49,5 GB · 3 item dilewati"
+        );
+        assert_eq!(
+            clean_done_body(Lang::En, &note, &short),
             "C: 49.5 GB free · 3 items skipped"
         );
         let more = CleanNote {
@@ -2354,12 +2424,16 @@ mod tests {
         };
         assert_eq!(
             clean_done_body(Lang::En, &more, &all),
-            "1 item skipped · Chrome, Edge open · Windows Update skipped"
+            "1 item skipped (in use) · Chrome, Edge open · Windows Update skipped"
         );
         assert_eq!(clean_done_body(Lang::Id, &CleanNote::default(), &all), "");
+        // Nothing fits: the first part, shortest, never an empty body.
+        assert_eq!(
+            clean_done_body(Lang::Id, &note, &|_| false),
+            "C: sisa 49,5 GB"
+        );
         // What does not fit goes, the least important first; a long list
         // of browsers becomes a count.
-        let short = |s: &str| s.chars().count() <= 40;
         let many = CleanNote {
             drive: Some(('C', gb(49.5))),
             skipped: 123,
@@ -2376,12 +2450,34 @@ mod tests {
             "C: sisa 49,5 GB · 123 item dilewati · 3 browser terbuka"
         );
         // Mole's texts.
-        assert_eq!(mole_done_title(Lang::Id, gb(2.4)), "Mole selesai · 2,4 GB dibebaskan");
-        assert_eq!(mole_done_title(Lang::En, gb(2.4)), "Mole done · 2.4 GB freed");
-        assert_eq!(mole_done_body(Lang::Id, 'C', false, &all), "Diukur dari sisa disk C:");
+        assert_eq!(
+            mole_done_title(Lang::Id, gb(2.4), &all),
+            "Mole selesai · 2,4 GB dibebaskan"
+        );
+        assert_eq!(
+            mole_done_title(Lang::En, gb(2.4), &all),
+            "Mole done · 2.4 GB freed"
+        );
+        let title_room = |s: &str| s.chars().count() <= 24;
+        assert_eq!(
+            mole_done_title(Lang::Id, gb(2.4), &title_room),
+            "Mole · 2,4 GB dibebaskan"
+        );
+        assert_eq!(
+            mole_done_title(Lang::En, gb(2.4), &|_| false),
+            "2.4 GB freed"
+        );
+        assert_eq!(
+            mole_done_body(Lang::Id, 'C', false, &all),
+            "Diukur dari sisa disk C:"
+        );
         assert_eq!(
             mole_done_body(Lang::En, 'C', true, &all),
-            "Measured from free space on C: · System part skipped"
+            "Measured from free space on C: · System (admin) skipped"
+        );
+        assert_eq!(
+            mole_done_body(Lang::Id, 'C', true, &|s| s.chars().count() <= 30),
+            "Diukur di C: · Sistem dilewati"
         );
         assert_eq!(mole_failed_title(Lang::Id, Some(1)), "Mole gagal · kode 1");
         assert_eq!(mole_failed_title(Lang::En, None), "Mole stopped");
@@ -2396,7 +2492,10 @@ mod tests {
         );
         assert_eq!(mole_preview(Lang::Id, Some(gb(2.4))), "Pratinjau: ± 2,4 GB");
         assert_eq!(mole_preview(Lang::En, None), "Preview: see log");
-        assert_eq!(mole_total_items(Lang::Id, gb(2.4), 29), "± 2,4 GB · 29 item");
+        assert_eq!(
+            mole_total_items(Lang::Id, gb(2.4), 29),
+            "± 2,4 GB · 29 item"
+        );
         assert_eq!(
             mole_result(Lang::Id, gb(2.4), Some(('C', gb(47.2), gb(49.6)))),
             "2,4 GB dibebaskan · C: 47,2 GB \u{2192} 49,6 GB"

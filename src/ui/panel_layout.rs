@@ -1958,9 +1958,15 @@ pub fn mole_layout(
     let body_top = chip.bottom() + MOLE_BODY_GAP;
 
     let foot_y = s.y + s.h - CLEAN_FOOT_BOTTOM - CLEAN_FOOT_H;
-    let go = (look.body != MoleBody::Card).then(|| rect(r - foot.go_w, foot_y, foot.go_w, CLEAN_FOOT_H));
+    let go =
+        (look.body != MoleBody::Card).then(|| rect(r - foot.go_w, foot_y, foot.go_w, CLEAN_FOOT_H));
     let label_right = go.map_or(r, |g| g.x - CLEAN_FOOT_GAP);
-    let label = rect(label_right - foot.label_w, foot_y, foot.label_w, CLEAN_FOOT_H);
+    let label = rect(
+        label_right - foot.label_w,
+        foot_y,
+        foot.label_w,
+        CLEAN_FOOT_H,
+    );
     let protect = look
         .protect
         .then(|| rect(l, foot_y, foot.protect_w, CLEAN_FOOT_H));
@@ -1999,7 +2005,10 @@ pub fn mole_layout(
                 });
             }
             let mut x = l + CLEAN_ROW_PAD_X;
-            for (i, opt) in [MoleOpt::System, MoleOpt::GameMedia].into_iter().enumerate() {
+            for (i, opt) in [MoleOpt::System, MoleOpt::GameMedia]
+                .into_iter()
+                .enumerate()
+            {
                 let check = rect(
                     x,
                     opt_y + (MOLE_OPT_H - CLEAN_CHECK) / 2.0,

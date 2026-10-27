@@ -333,7 +333,10 @@ pub fn strip_ansi(line: &str) -> String {
                 }
                 // ESC, intermediates (0x20–0x2F), a final byte.
                 Some(c) if ('\u{20}'..='\u{2f}').contains(&c) => {
-                    while chars.next_if(|c| ('\u{20}'..='\u{2f}').contains(c)).is_some() {}
+                    while chars
+                        .next_if(|c| ('\u{20}'..='\u{2f}').contains(c))
+                        .is_some()
+                    {}
                     chars.next();
                 }
                 _ => {}
@@ -635,7 +638,10 @@ pub enum Elevated {
     Refused,
     Failed,
     /// It ran: its exit code and the lines it wrote to its log file.
-    Done { code: u32, lines: Vec<String> },
+    Done {
+        code: u32,
+        lines: Vec<String>,
+    },
 }
 
 /// Starts Mole. The real one runs it hidden; the fake one in the tests
@@ -826,18 +832,19 @@ pub fn report(run: CleanRun, drives: &[(char, u64, u64)]) -> MoleReport {
 // ---- Notices ----
 
 /// "Mole selesai · 2,4 GB dibebaskan" (Bata happy) or, failed or stopped,
-/// "Mole gagal · kode 1" (Bata low, stays until clicked). `fits` says
-/// whether a body fits the notice; lower-priority parts are left out
-/// when they would not.
-pub fn done_notice(lang: Lang, report: &MoleReport, fits: &dyn Fn(&str) -> bool) -> Notice {
+/// "Mole gagal · kode 1" (Bata low, stays until clicked). `fits(title,
+/// text)` says whether a title (`true`) or a body fits the notice as drawn
+/// (`Renderer::notice_text_fits`); a shorter wording is chosen, or a
+/// lower-priority part left out, when it would not.
+pub fn done_notice(lang: Lang, report: &MoleReport, fits: &dyn Fn(bool, &str) -> bool) -> Notice {
     let letter = report.drive.map_or('C', |d| d.0);
     let admin_skipped = report.run.admin == AdminOutcome::Cancelled;
     if report.run.ok() {
         Notice {
             key: "mole-done".into(),
             source: text(lang, Key::SystemClean).into(),
-            title: i18n::mole_done_title(lang, report.freed),
-            body: i18n::mole_done_body(lang, letter, admin_skipped, fits),
+            title: i18n::mole_done_title(lang, report.freed, &|s| fits(true, s)),
+            body: i18n::mole_done_body(lang, letter, admin_skipped, &|s| fits(false, s)),
             kind: NoticeKind::MoleDone,
         }
     } else {
@@ -910,7 +917,9 @@ pub fn append_defaults(path: &Path, wanted: &[String]) -> io::Result<usize> {
     if missing.is_empty() {
         return Ok(0);
     }
-    let mut out = existing.clone().unwrap_or_else(|| "\u{feff}".as_bytes().to_vec());
+    let mut out = existing
+        .clone()
+        .unwrap_or_else(|| "\u{feff}".as_bytes().to_vec());
     if out.last().is_some_and(|b| *b != b'\n') && !out.ends_with("\u{feff}".as_bytes()) {
         out.extend_from_slice(b"\r\n");
     }
@@ -986,9 +995,8 @@ impl MoleRunner for RealRunner {
         let mut child = command.spawn()?;
         drop(command);
         let process = child.as_handle().try_clone_to_owned()?;
-        let job = crate::cli::kill_on_close_job().filter(|job| unsafe {
-            AssignProcessToJobObject(raw(job), raw(&process)).is_ok()
-        });
+        let job = crate::cli::kill_on_close_job()
+            .filter(|job| unsafe { AssignProcessToJobObject(raw(job), raw(&process)).is_ok() });
         let job = job.map(Arc::new);
         if let Some(job) = &job
             && let Ok(mut slot) = self.current.lock()
@@ -1149,13 +1157,19 @@ pub enum MoleEvent {
     /// already): never add them again.
     DefaultsAdded,
     /// Log lines of run `run` (a preview or a clean), as the panel shows them.
-    Lines { run: u64, lines: Vec<String> },
+    Lines {
+        run: u64,
+        lines: Vec<String>,
+    },
     Previewed {
         run: u64,
         opts: MoleOpts,
         result: Result<Preview, RunFailure>,
     },
-    Cleaned { run: u64, report: MoleReport },
+    Cleaned {
+        run: u64,
+        report: MoleReport,
+    },
 }
 
 /// The Mole thread, parked until the first request, like `clean::Cleaner`.
@@ -1267,9 +1281,16 @@ fn serve(rx: &Receiver<Request>, mut runner: RealRunner, tx: &Sender<Event>, wak
                     .iter()
                     .filter_map(|l| clean::drive_free(*l).map(|f| (*l, f)))
                     .collect();
-                let outcome = run_clean(&mut runner, &install, &preview, opts, confirmed, &mut |lines| {
-                    send(MoleEvent::Lines { run, lines });
-                });
+                let outcome = run_clean(
+                    &mut runner,
+                    &install,
+                    &preview,
+                    opts,
+                    confirmed,
+                    &mut |lines| {
+                        send(MoleEvent::Lines { run, lines });
+                    },
+                );
                 let run_result = outcome.unwrap_or(CleanRun {
                     exit: None,
                     admin: AdminOutcome::NotAsked,
@@ -1489,7 +1510,10 @@ mod tests {
         // A garbled mark still opens its section.
         let garbled = ["? Browser caches", "  Edge (1 item, 2 MB dry)"];
         let s = parse_preview(&garbled, MoleOpts::default());
-        assert_eq!(s.groups[MoleGroup::Browser.index()], GroupSize::Bytes(2 * MIB));
+        assert_eq!(
+            s.groups[MoleGroup::Browser.index()],
+            GroupSize::Bytes(2 * MIB)
+        );
     }
 
     #[test]
@@ -1507,7 +1531,10 @@ mod tests {
         assert_eq!(strip_ansi("Scanning 10%\rScanning 55%\rDone"), "Done");
         assert_eq!(strip_ansi("Scanning 10%\rScanning 100%\r"), "Scanning 100%");
         assert_eq!(strip_ansi("text\r\n"), "text");
-        assert_eq!(strip_ansi("\u{feff}\u{25B8} User essentials"), "\u{25B8} User essentials");
+        assert_eq!(
+            strip_ansi("\u{feff}\u{25B8} User essentials"),
+            "\u{25B8} User essentials"
+        );
     }
 
     #[test]
@@ -1585,7 +1612,13 @@ mod tests {
         assert_eq!(found.version.as_deref(), Some("1.30.0"));
         assert!(found.tested());
         // Without it, `mo` on PATH (empty entries passed over).
-        let env = env_with(Some(r"C:\nope"), Some(r";D:\bin;E:\tools"), None, &exists, &read);
+        let env = env_with(
+            Some(r"C:\nope"),
+            Some(r";D:\bin;E:\tools"),
+            None,
+            &exists,
+            &read,
+        );
         let found = detect(&env).expect("on path");
         assert_eq!(found.path, PathBuf::from(r"D:\bin\mo.cmd"));
         assert_eq!(found.launcher, Launcher::Direct);
@@ -1604,7 +1637,8 @@ mod tests {
         let env = env_with(None, None, None, &exists, &read);
         assert_eq!(detect(&env), None);
         // mo.ps1 on PATH runs through PowerShell.
-        let ps: HashMap<PathBuf, &str> = [(PathBuf::from(r"G:\m\mo.ps1"), "")].into_iter().collect();
+        let ps: HashMap<PathBuf, &str> =
+            [(PathBuf::from(r"G:\m\mo.ps1"), "")].into_iter().collect();
         let exists = |p: &Path| ps.contains_key(p);
         let env = env_with(None, Some(r"G:\m"), None, &exists, &read);
         assert_eq!(detect(&env).expect("ps1").launcher, Launcher::Script);
@@ -1693,7 +1727,10 @@ mod tests {
         let mut log = Vec::new();
         let p = run_preview(&mut runner, &install, opts, &mut |l| log.extend(l)).expect("preview");
         assert_eq!(p.opts(), opts);
-        assert!(log.iter().all(|l| !l.contains('\u{1b}') && !l.trim().is_empty()));
+        assert!(
+            log.iter()
+                .all(|l| !l.contains('\u{1b}') && !l.trim().is_empty())
+        );
         assert!(!log.iter().any(|l| l.contains("Removed")));
         assert_eq!(runner.argv.len(), 1, "a preview only runs the dry-run");
 
@@ -1761,7 +1798,10 @@ mod tests {
         let mut runner = FakeRunner {
             elevated_answer: Some(Elevated::Done {
                 code: 0,
-                lines: vec!["\u{25B8} System".into(), "  Windows temp (1 item, 1 MB)".into()],
+                lines: vec![
+                    "\u{25B8} System".into(),
+                    "  Windows temp (1 item, 1 MB)".into(),
+                ],
             }),
             ..sample_ok()
         };
@@ -1830,10 +1870,15 @@ mod tests {
             freed: gib * 24 / 10,
             drive: Some(('C', gib * 472 / 10, gib * 496 / 10)),
         };
-        let n = done_notice(Lang::Id, &ok, &|_| true);
+        let n = done_notice(Lang::Id, &ok, &|_, _| true);
         assert_eq!(n.kind, NoticeKind::MoleDone);
         assert_eq!(n.title, "Mole selesai · 2,4 GB dibebaskan");
         assert_eq!(n.body, "Diukur dari sisa disk C:");
+        // A narrow notice gets the shorter wordings, never a cut.
+        let narrow = |title: bool, s: &str| s.chars().count() <= if title { 20 } else { 12 };
+        let n = done_notice(Lang::Id, &ok, &narrow);
+        assert_eq!(n.title, "2,4 GB dibebaskan");
+        assert_eq!(n.body, "Diukur di C:");
         let failed = MoleReport {
             run: CleanRun {
                 exit: Some(1),
@@ -1841,7 +1886,7 @@ mod tests {
             },
             ..ok.clone()
         };
-        let n = done_notice(Lang::En, &failed, &|_| true);
+        let n = done_notice(Lang::En, &failed, &|_, _| true);
         assert_eq!(n.kind, NoticeKind::MoleFailed);
         assert_eq!(n.title, "Mole failed · code 1");
         let stopped = MoleReport {
@@ -1851,7 +1896,10 @@ mod tests {
             },
             ..ok
         };
-        assert_eq!(done_notice(Lang::Id, &stopped, &|_| true).title, "Mole berhenti");
+        assert_eq!(
+            done_notice(Lang::Id, &stopped, &|_, _| true).title,
+            "Mole berhenti"
+        );
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1921,7 +1969,11 @@ mod tests {
     fn elevated_logs_are_read_in_either_encoding() {
         let utf16: Vec<u8> = [0xFF, 0xFE]
             .into_iter()
-            .chain("a\r\n\u{25B8} b\r\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .chain(
+                "a\r\n\u{25B8} b\r\n"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes),
+            )
             .collect();
         assert_eq!(decode_log(&utf16), ["a", "\u{25B8} b"]);
         assert_eq!(decode_log(b"\xEF\xBB\xBFx\ny"), ["x", "y"]);

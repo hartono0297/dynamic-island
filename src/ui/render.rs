@@ -247,9 +247,8 @@ impl CleanerView<'_> {
                 opts: m.opts,
                 ok: true,
             };
-        let unreadable = MoleGroup::ALL.map(|g| {
-            previewed && body == MoleBody::Rows && self.group(g) == GroupShown::SeeLog
-        });
+        let unreadable = MoleGroup::ALL
+            .map(|g| previewed && body == MoleBody::Rows && self.group(g) == GroupShown::SeeLog);
         MoleLook {
             body,
             seg_live: !self.busy && !running,
@@ -1728,34 +1727,6 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn zz_probe_widths() {
-        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        let r = Renderer::new().expect("renderer");
-        eprintln!("embedded: {}", fonts::embedded(&r.dwrite).loaded.dm_sans);
-        for s in [
-            "Mole selesai · 2,4 GB dibebaskan",
-            "Mole selesai · 12,4 GB dibebaskan",
-            "Mole done · 12.4 GB freed",
-            "Mole gagal · kode 1",
-            "2,3 GB dibebaskan",
-        ] {
-            eprintln!("title {s:?} {}", r.text_width(s, &r.fonts.title));
-        }
-        for s in [
-            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)",
-            "C: sisa 49,5 GB · 3 item dilewati",
-            "C: sisa 49,5 GB · 123 item dilewati · Chrome, Edge terbuka",
-            "C: 49.5 GB free · 123 items skipped · Windows Update skipped",
-            "Diukur dari sisa disk C:",
-            "Measured from free space on C:",
-        ] {
-            eprintln!("body {s:?} {}", r.text_width(s, &r.fonts.small));
-        }
-        eprintln!("Log {}", r.text_width("Log", &r.fonts.button_center));
-    }
 
     #[test]
     fn mix_blends_each_channel() {

@@ -566,7 +566,10 @@ mod tests {
         let mole = parse(r#"{"clean_mode":"mole","mole_defaults_added":true}"#);
         assert_eq!(mole.clean_mode, CleanMode::Mole);
         assert!(mole.mole_defaults_added);
-        assert_eq!(parse(r#"{"clean_mode":"Robot"}"#).clean_mode, CleanMode::Own);
+        assert_eq!(
+            parse(r#"{"clean_mode":"Robot"}"#).clean_mode,
+            CleanMode::Own
+        );
         let json = serde_json::to_string(&mole).unwrap();
         assert!(json.contains(r#""clean_mode":"Mole""#), "{json}");
         // The island's own: a save keeps them over what the file says.

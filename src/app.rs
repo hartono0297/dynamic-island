@@ -53,8 +53,8 @@ use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::media_log;
-use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
+use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
@@ -1425,7 +1425,7 @@ impl App {
                     } else {
                         NoticeKind::MoleFailed
                     };
-                    let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+                    let fits = |title: bool, s: &str| r.notice_text_fits(&kind, title, s);
                     mole::done_notice(i18n::lang(), &report, &fits)
                 };
                 if run == self.mole.run {
@@ -2861,8 +2861,16 @@ impl App {
                 phase: state.mole_phase(),
                 opts: state.mole_opts(),
                 show_log: c.mole_log,
-                version: self.mole.install.as_ref().and_then(|i| i.version.as_deref()),
-                tested: self.mole.install.as_ref().is_some_and(mole::Install::tested),
+                version: self
+                    .mole
+                    .install
+                    .as_ref()
+                    .and_then(|i| i.version.as_deref()),
+                tested: self
+                    .mole
+                    .install
+                    .as_ref()
+                    .is_some_and(mole::Install::tested),
                 summary: self.mole.preview.as_ref().map(mole::Preview::summary),
                 log: &self.mole.log,
                 report: self.mole.report.as_ref(),
