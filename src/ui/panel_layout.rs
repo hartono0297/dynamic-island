@@ -1261,6 +1261,17 @@ pub fn pomodoro_compact_layout(s: ShapeRect) -> ((f32, f32), f32, Rect) {
     (center, RADIUS, text)
 }
 
+/// With the robot (`shape_with_robot`): its square at the left, then the
+/// ring and the text as without it, moved past the robot.
+pub fn pomodoro_compact_layout_robot(s: ShapeRect) -> (Rect, (f32, f32), f32, Rect) {
+    const RADIUS: f32 = 8.0;
+    let robot = crate::ui::geometry::robot_slot(s);
+    let center = (robot.right() + 8.0 + RADIUS, s.y + s.h / 2.0);
+    let text_x = center.0 + RADIUS + 10.0;
+    let text = rect(text_x, s.y, s.x + s.w - 18.0 - text_x, s.h);
+    (robot, center, RADIUS, text)
+}
+
 /// Clickable regions of a page, plus the waiting strip when it is shown.
 /// Clicks inside the panel that miss every region count as `Hit::Body`.
 pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {

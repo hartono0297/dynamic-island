@@ -9,6 +9,8 @@ const PERCENT_UNKNOWN: u8 = 255;
 const FLAG_NO_BATTERY: u8 = 128;
 /// `ACLineStatus` value meaning the charger is connected.
 const AC_ONLINE: u8 = 1;
+/// `SystemStatusFlag` value meaning Energy Saver (battery saver) is on.
+const SAVER_ON: u8 = 1;
 
 /// Decides when to raise the low-battery notice: once per discharge below the
 /// threshold, re-armed by charging or by rising back above the threshold.
@@ -54,6 +56,21 @@ pub fn read_battery() -> Option<(u8, bool)> {
         return None;
     }
     Some((status.BatteryLifePercent, status.ACLineStatus == AC_ONLINE))
+}
+
+/// Windows' Energy Saver is on: the robot stops blinking and moving.
+pub fn energy_saver_on() -> bool {
+    let mut status = SYSTEM_POWER_STATUS::default();
+    unsafe { GetSystemPowerStatus(&mut status) }.is_ok() && saver_flag(status.SystemStatusFlag)
+}
+
+fn saver_flag(flag: u8) -> bool {
+    flag == SAVER_ON
+}
+
+/// At or below `threshold` and not charging: the idle robot looks low.
+pub fn battery_low_now(reading: Option<(u8, bool)>, threshold: u8) -> bool {
+    reading.is_some_and(|(percent, charging)| !charging && percent <= threshold)
 }
 
 pub fn battery_notice(percent: u8) -> Notice {
@@ -107,6 +124,16 @@ mod tests {
         assert!(b.update(19, false));
         assert!(!b.update(30, false));
         assert!(b.update(20, false));
+    }
+
+    #[test]
+    fn low_only_while_discharging_at_the_threshold() {
+        assert!(battery_low_now(Some((20, false)), 20));
+        assert!(battery_low_now(Some((5, false)), 20));
+        assert!(!battery_low_now(Some((21, false)), 20));
+        assert!(!battery_low_now(Some((5, true)), 20), "charging");
+        assert!(!battery_low_now(None, 20), "no battery");
+        assert!(saver_flag(1) && !saver_flag(0));
     }
 
     #[test]

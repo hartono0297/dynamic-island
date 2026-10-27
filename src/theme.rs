@@ -34,11 +34,13 @@ macro_rules! named_enum {
             pub const ALL: &[$name] = &[$name::$default $(, $name::$other)*];
 
             /// Position in `ALL`.
+            #[allow(dead_code)]
             fn index(self) -> u32 {
                 Self::ALL.iter().position(|v| *v == self).unwrap_or(0) as u32
             }
 
             /// `ALL[i]`, or the default past its end.
+            #[allow(dead_code)]
             fn from_index(i: u32) -> Self {
                 Self::ALL.get(i as usize).copied().unwrap_or_default()
             }
@@ -83,6 +85,9 @@ macro_rules! named_enum {
         }
     };
 }
+
+/// For settings enums elsewhere (the robot's motion policy).
+pub(crate) use named_enum;
 
 named_enum! {
     /// Accent colour of the island and the windows.

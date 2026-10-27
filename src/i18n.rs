@@ -403,6 +403,37 @@ keys! {
     SeeReleases => "Lihat rilis", "See releases";
     DataFolder => "Folder data", "Data folder";
     OpenDataFolder => "Buka folder data", "Open data folder";
+
+    // Bata, the notch assistant (Settings → Tampilan).
+    RobotInNotch => "Asisten di notch", "Assistant in notch";
+    RobotInNotchDesc => "Tampilkan Bata di samping jam dan notice",
+        "Show Bata beside the clock and notices";
+    RobotMotion => "Animasi", "Animation";
+    // The design's "Hemat: tanpa kedip dan gerak, ekspresi tetap" is too
+    // long beside the three segments; blinking is motion too.
+    RobotMotionDesc => "Hemat: tanpa gerak, ekspresi tetap",
+        "Saver: no motion, faces still change";
+    MotionFull => "Penuh", "Full";
+    MotionSaver => "Hemat", "Saver";
+    MotionOff => "Mati", "Off";
+    RobotSleep => "Tidur setelah", "Sleep after";
+    RobotSleepDesc => "Tanpa aktivitas", "Without activity";
+    MorningGreeting => "Sapaan pagi", "Morning greeting";
+    MorningGreetingDesc => "Ringkasan acara dan pengingat hari ini",
+        "Today's events and reminders";
+    GoodMorning => "Selamat pagi", "Good morning";
+    SourceBata => "Bata", "Bata";
+    // The robot's faces, as the demo sheet labels them.
+    ExprIdle => "Diam", "Idle";
+    ExprHappy => "Senang", "Happy";
+    ExprFocus => "Fokus", "Focus";
+    ExprMusic => "Mendengar", "Listening";
+    ExprSing => "Bernyanyi", "Singing";
+    ExprAlert => "Waspada", "Alert";
+    ExprThink => "Berpikir", "Thinking";
+    ExprSleep => "Tidur", "Asleep";
+    ExprSad => "Lesu", "Low";
+    ExprWave => "Menyapa", "Waving";
 }
 
 /// `key` in `lang`.
@@ -462,6 +493,26 @@ pub fn more_count(lang: Lang, n: usize) -> String {
     match lang {
         Lang::Id => format!("+{n} lagi"),
         Lang::En => format!("+{n} more"),
+    }
+}
+
+/// The morning greeting's line: "3 acara dan 2 pengingat hari ini",
+/// "1 event and 2 reminders today"; a free day says so.
+pub fn greeting_body(lang: Lang, events: usize, reminders: usize) -> String {
+    match lang {
+        Lang::Id if events == 0 && reminders == 0 => "Hari ini belum ada acara".into(),
+        Lang::Id => format!("{events} acara dan {reminders} pengingat hari ini"),
+        Lang::En if events == 0 && reminders == 0 => "Nothing planned today".into(),
+        Lang::En => {
+            let plural = |n: usize, one: &str, many: &str| {
+                format!("{n} {}", if n == 1 { one } else { many })
+            };
+            format!(
+                "{} and {} today",
+                plural(events, "event", "events"),
+                plural(reminders, "reminder", "reminders")
+            )
+        }
     }
 }
 
@@ -1444,6 +1495,39 @@ mod tests {
                 assert_eq!(s, s.trim(), "{key:?} {lang:?} has stray blanks");
             }
         }
+    }
+
+    #[test]
+    fn greeting_in_both_languages() {
+        assert_eq!(text(Lang::Id, Key::GoodMorning), "Selamat pagi");
+        assert_eq!(text(Lang::En, Key::GoodMorning), "Good morning");
+        assert_eq!(
+            greeting_body(Lang::Id, 3, 2),
+            "3 acara dan 2 pengingat hari ini"
+        );
+        assert_eq!(
+            greeting_body(Lang::En, 3, 2),
+            "3 events and 2 reminders today"
+        );
+        assert_eq!(
+            greeting_body(Lang::En, 1, 1),
+            "1 event and 1 reminder today"
+        );
+        assert_eq!(
+            greeting_body(Lang::En, 0, 2),
+            "0 events and 2 reminders today"
+        );
+        assert_eq!(greeting_body(Lang::Id, 0, 0), "Hari ini belum ada acara");
+        assert_eq!(greeting_body(Lang::En, 0, 0), "Nothing planned today");
+        // The settings rows, as in the design.
+        assert_eq!(
+            text(Lang::Id, Key::RobotInNotchDesc),
+            "Tampilkan Bata di samping jam dan notice"
+        );
+        assert_eq!(
+            [Key::MotionFull, Key::MotionSaver, Key::MotionOff].map(|k| text(Lang::Id, k)),
+            ["Penuh", "Hemat", "Mati"]
+        );
     }
 
     #[test]

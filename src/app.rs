@@ -22,6 +22,9 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::System::RemoteDesktop::{
+    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
@@ -33,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -50,7 +53,9 @@ use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
 use crate::shortcuts;
-use crate::sources::battery::{BatteryMonitor, battery_notice, read_battery};
+use crate::sources::battery::{
+    BatteryMonitor, battery_low_now, battery_notice, energy_saver_on, read_battery,
+};
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
 use crate::state::IslandState;
@@ -58,9 +63,14 @@ use crate::theme::{self, Theme};
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
-use crate::ui::geometry::{ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for};
+use crate::ui::geometry::{
+    ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for, shape_with_robot,
+};
 use crate::ui::panel_layout::{CliHead, cli_layout};
-use crate::ui::render::{CliView, Frame, Progress, Renderer};
+use crate::ui::render::{CliView, Frame, Progress, Renderer, RobotFrame};
+use crate::ui::robot::{
+    self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
+};
 use crate::ui::settings::{self, Action as SettingsAction, WM_APP_SETTINGS_ACTION};
 use crate::ui::tray::{self, MenuCmd, WM_APP_TRAY};
 use crate::ui::window::IslandWindow;
@@ -78,6 +88,10 @@ const WM_POWERBROADCAST: u32 = 0x0218;
 /// `WM_POWERBROADCAST` codes for waking from sleep (with or without a user).
 const PBT_APMRESUMESUSPEND: usize = 0x0007;
 const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
+/// The power source or battery state changed (Energy Saver too).
+const PBT_APMPOWERSTATUSCHANGE: usize = 0x000A;
+/// `WM_WTSSESSION_CHANGE`: the user unlocked the session.
+const WTS_SESSION_UNLOCK: usize = 0x8;
 /// How long the pointer must rest on the island before it expands. Long
 /// enough that a pointer crossing the notch on its way elsewhere doesn't
 /// open it, short enough that a deliberate hover feels immediate.
@@ -106,6 +120,12 @@ const TIMER_PROGRESS: usize = 12;
 /// The CLI chip's running time, each second, only while the CLI page shows
 /// a running command.
 const TIMER_CLI: usize = 13;
+/// Bata's blink: one-shot at a random 4–7 s, then 120 ms with the eyes shut.
+/// Only while a robot shows and motion is Full; never while animating.
+const TIMER_BLINK: usize = 14;
+/// One-shot to the next moment Bata's face changes by itself (falling
+/// asleep, a Claude session going quiet, a CLI face ending).
+const TIMER_ROBOT: usize = 15;
 const CLI_MS: u32 = 1000;
 /// Output lines one wheel notch scrolls (Windows' default of three).
 const WHEEL_LINES: i32 = 3;
@@ -218,6 +238,9 @@ pub fn run() {
             cli_timer: false,
             cli_wake: Arc::new(AtomicBool::new(false)),
             shortcut: None,
+            bata: Bata::new(Instant::now()),
+            greet_pending: true,
+            greet_ready: false,
         });
     });
     with_app(|app| {
@@ -241,6 +264,8 @@ pub fn run() {
             SetTimer(Some(hwnd), TIMER_SYSTEM, SYSTEM_MS, None);
             SetTimer(Some(hwnd), TIMER_BATTERY, BATTERY_MS, None);
             SetTimer(Some(hwnd), TIMER_DAY, DAY_MS, None);
+            // Unlocking the session may greet; without it, startup and wake still do.
+            let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
         }
     });
 
@@ -372,6 +397,42 @@ struct App {
     cli_wake: Arc<AtomicBool>,
     /// A clicked shortcut waiting for `TIMER_SHORTCUT`.
     shortcut: Option<shortcuts::Action>,
+    /// Bata, the robot: its state, blink and timers.
+    bata: Bata,
+    /// The startup greeting waits for the first calendar data (the cache,
+    /// sent at once), so it can count today's events.
+    greet_pending: bool,
+    /// That data arrived: greet after this drain.
+    greet_ready: bool,
+}
+
+/// What the island keeps for the robot besides its `Brain`.
+struct Bata {
+    brain: Brain,
+    rng: Rng,
+    /// The eyes are shut (between the blink timer's two halves).
+    blinking: bool,
+    /// `TIMER_BLINK` / `TIMER_ROBOT` are set.
+    blink_timer: bool,
+    change_timer: bool,
+    /// Windows' Energy Saver is on: Full motion runs as Saver.
+    energy_saver: bool,
+}
+
+impl Bata {
+    fn new(now: Instant) -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_nanos() as u64);
+        Self {
+            brain: Brain::new(now),
+            rng: Rng::new(seed),
+            blinking: false,
+            blink_timer: false,
+            change_timer: false,
+            energy_saver: false,
+        }
+    }
 }
 
 impl App {
@@ -385,6 +446,9 @@ impl App {
         // Once per burst of command output, not per chunk.
         self.note_cli_output(now);
         self.refresh(now);
+        if std::mem::take(&mut self.greet_ready) {
+            self.maybe_greet();
+        }
     }
 
     /// Tells the reducer how many output lines arrived since last time, so a
@@ -403,12 +467,16 @@ impl App {
     fn apply(&mut self, event: Event, now: Instant) {
         let mut queue = VecDeque::from([event]);
         while let Some(event) = queue.pop_front() {
+            self.robot_hears(&event, now);
             let event = match event {
                 // A session without metadata yet has nothing to show.
                 Event::Media(Some(m)) if m.title.is_empty() => Event::Media(None),
                 // Only `App` keeps the calendar; the reducer has no use for it.
                 Event::Calendar(snapshot) => {
                     self.calendar = snapshot;
+                    if std::mem::take(&mut self.greet_pending) {
+                        self.greet_ready = true;
+                    }
                     continue;
                 }
                 // Lyrics are `App`'s too; `refresh` tells the reducer they exist.
@@ -428,6 +496,148 @@ impl App {
             }
             self.follow_page(page, now);
         }
+    }
+
+    /// Bata's side of an event: activity resets its sleep clock, Claude
+    /// sessions start or stop working.
+    fn robot_hears(&mut self, event: &Event, now: Instant) {
+        let brain = &mut self.bata.brain;
+        if is_activity(event) {
+            brain.activity(now);
+        }
+        match event {
+            Event::ClaudeActivity { session_id } => brain.claude_activity(session_id, now),
+            Event::Notice(n) => match &n.kind {
+                NoticeKind::ClaudeDone { session_id }
+                | NoticeKind::ClaudeWaiting { session_id } => brain.claude_ended(session_id),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// The robot's motion policy in effect (Energy Saver turns Full into Saver).
+    fn motion(&self) -> Motion {
+        self.config
+            .robot_animation
+            .effective(self.bata.energy_saver)
+    }
+
+    fn sleep_after(&self) -> Duration {
+        Duration::from_secs(u64::from(robot::clamp_sleep(self.config.robot_sleep_minutes)) * 60)
+    }
+
+    /// Bata's face and pose in `view` at `now`; `None` when it is off or the
+    /// view has none.
+    fn robot_frame(&self, view: &View, now: Instant) -> Option<RobotFrame> {
+        if !self.config.robot {
+            return None;
+        }
+        let motion = self.motion();
+        let inputs = self
+            .bata
+            .brain
+            .inputs(Spot::of(view), now, self.sleep_after(), motion);
+        let expr = choose_expr(&inputs)?;
+        let pose = self
+            .bata
+            .brain
+            .pose(now, motion.moves(), self.bata.blinking);
+        Some(RobotFrame { expr, pose })
+    }
+
+    /// A lift or bounce is moving: the frame clock runs for it.
+    fn robot_moving(&self, now: Instant) -> bool {
+        self.config.robot && self.bata.brain.moving(now, self.motion().moves())
+    }
+
+    /// Arms or stops Bata's one-shot timers for what shows now.
+    fn sync_robot_timers(&mut self, now: Instant) {
+        let face = self.robot_frame(&self.state.view(), now).map(|r| r.expr);
+        let plan = plan_timers(face, self.motion(), self.animating_at(now));
+        if plan.blink != self.bata.blink_timer {
+            self.bata.blink_timer = plan.blink;
+            self.bata.blinking = false;
+            unsafe {
+                if plan.blink {
+                    let wait = robot::blink_delay_ms(&mut self.bata.rng);
+                    SetTimer(Some(self.hwnd), TIMER_BLINK, wait, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_BLINK);
+                }
+            }
+        }
+        let next = plan
+            .change
+            .then(|| self.bata.brain.next_change(now, self.sleep_after()))
+            .flatten();
+        unsafe {
+            match next {
+                // `SetTimer` on the same id replaces the pending one.
+                Some(at) => {
+                    let wait = at.saturating_duration_since(now) + Duration::from_millis(1);
+                    let ms = wait.as_millis().min(u32::MAX as u128) as u32;
+                    SetTimer(Some(self.hwnd), TIMER_ROBOT, ms, None);
+                }
+                None if self.bata.change_timer => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_ROBOT);
+                }
+                None => {}
+            }
+        }
+        self.bata.change_timer = next.is_some();
+    }
+
+    /// `TIMER_BLINK`: shut the eyes for `BLINK_MS`, then open them and wait
+    /// 4–7 s for the next blink.
+    fn on_blink(&mut self) {
+        if !self.bata.blink_timer {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_BLINK);
+            }
+            return;
+        }
+        self.bata.blinking = !self.bata.blinking;
+        let wait = if self.bata.blinking {
+            robot::BLINK_MS
+        } else {
+            robot::blink_delay_ms(&mut self.bata.rng)
+        };
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_BLINK, wait, None);
+        }
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// Once a day before noon, at startup, wake or unlock: "Selamat pagi"
+    /// with today's events and reminders, for 4 s. Not over a fullscreen
+    /// app: then it waits for the next chance. The day is saved when it shows.
+    fn maybe_greet(&mut self) {
+        let local = Local::now();
+        let today = local.date_naive();
+        let settings = GreetSettings {
+            robot: self.config.robot,
+            greeting: self.config.morning_greeting,
+        };
+        if !should_greet(self.config.last_greeting, today, local.time(), settings)
+            || self.state.fullscreen()
+        {
+            return;
+        }
+        let (events, reminders) =
+            greeting_counts(&self.calendar.events, self.reminders.upcoming(), today);
+        let notice = Notice {
+            key: "bata-greeting".into(),
+            source: tr(Key::SourceBata).into(),
+            title: tr(Key::GoodMorning).into(),
+            body: i18n::greeting_body(i18n::lang(), events, reminders),
+            kind: NoticeKind::Greeting,
+        };
+        self.apply_now(Event::Notice(notice));
+        self.config.last_greeting = Some(today);
+        self.save_config();
     }
 
     fn perform(&mut self, effect: Effect, now: Instant) -> Option<Event> {
@@ -872,6 +1082,7 @@ impl App {
                         self.cli.started(id);
                         self.cli_run = Some(run);
                         self.cli_clock.start(now);
+                        self.bata.brain.cli_started();
                     }
                     Err(error) => {
                         let line = i18n::cli_start_failed(i18n::lang(), &error.to_string());
@@ -911,8 +1122,12 @@ impl App {
             CliEvent::Exit { run, code, killed } => {
                 if self.cli.exit(run, code, killed) {
                     // The command is over; what it started may go on.
+                    let now = Instant::now();
                     self.cli_run = None;
-                    self.cli_clock.end(code, killed, Instant::now());
+                    self.cli_clock.end(code, killed, now);
+                    self.bata
+                        .brain
+                        .cli_finished(code == Some(0) && !killed, now);
                 }
             }
         }
@@ -1049,6 +1264,13 @@ impl App {
         self.sync_lyrics(now);
         self.sync_lyric_line(now);
         let view = self.state.view();
+        // Bata: an alert that just appeared bounces; a lift or bounce needs frames.
+        let face = self.robot_frame(&view, now).map(|r| r.expr);
+        let moves = self.motion().moves();
+        self.bata.brain.observe(face, now, moves);
+        if self.robot_moving(now) {
+            self.ensure_clock();
+        }
         let kind = match &view {
             View::Hidden => None,
             View::Idle => Some(ShapeKind::Idle),
@@ -1058,7 +1280,9 @@ impl App {
             View::Panel(_) => Some(self.panel_kind()),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
-        let target = kind.map(|kind| shape_for(self.config.style, kind));
+        // Compact shapes widen to hold the robot at their left.
+        let robot = self.config.robot;
+        let target = kind.map(|kind| shape_with_robot(self.config.style, kind, robot));
         let retarget = match target {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
             None => self.anim.to_opacity != 0.0,
@@ -1092,7 +1316,12 @@ impl App {
     }
 
     fn animating(&self) -> bool {
-        self.anim.running || self.slide.is_some() || self.lyric_fading
+        self.animating_at(Instant::now())
+    }
+
+    /// A morph, page slide, lyric crossfade or robot lift/bounce runs at `now`.
+    fn animating_at(&self, now: Instant) -> bool {
+        self.anim.running || self.slide.is_some() || self.lyric_fading || self.robot_moving(now)
     }
 
     /// The window is `TALL_WINDOW_H` tall while the enlarged CLI panel shows
@@ -1229,6 +1458,7 @@ impl App {
             }
         }
         self.sync_progress_timer(now);
+        self.sync_robot_timers(now);
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -1373,6 +1603,15 @@ impl App {
                 self.sync_progress_timer(now);
             }
             TIMER_CLI => self.redraw_cli(),
+            TIMER_BLINK => self.on_blink(),
+            TIMER_ROBOT => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_ROBOT);
+                }
+                self.bata.change_timer = false;
+                // The face may have changed (asleep, done thinking); re-arms.
+                self.refresh(Instant::now());
+            }
             _ => {}
         }
     }
@@ -1407,9 +1646,12 @@ impl App {
         if slide_done {
             self.slide = None;
         }
-        if !self.animating() {
+        // At the drawn frame's time, so a lift or bounce ends on its rest frame.
+        if !self.animating_at(now) {
             // Dropping joins the frame thread, which wakes within one frame.
             self.clock = None;
+            // The blink waited for the animation to end.
+            self.sync_robot_timers(now);
         }
     }
 
@@ -1422,10 +1664,19 @@ impl App {
     }
 
     fn check_battery(&mut self) {
-        if let Some((percent, charging)) = read_battery()
+        let reading = read_battery();
+        if let Some((percent, charging)) = reading
             && self.battery.update(percent, charging)
         {
             self.apply_now(Event::Notice(battery_notice(percent)));
+        }
+        // The idle robot looks low below the threshold; Energy Saver stills it.
+        let low = battery_low_now(reading, self.config.battery_threshold);
+        let saver = energy_saver_on();
+        if low != self.bata.brain.battery_low || saver != self.bata.energy_saver {
+            self.bata.brain.battery_low = low;
+            self.bata.energy_saver = saver;
+            self.refresh(Instant::now());
         }
     }
 
@@ -1435,6 +1686,11 @@ impl App {
         if !self.hover.needs_arming() {
             return;
         }
+        // The pointer's first move over the island: Bata wakes, looks happy
+        // and lifts before the dwell opens the panel.
+        let now = Instant::now();
+        self.bata.brain.hover(true, now);
+        self.refresh(now);
         let mut track = TRACKMOUSEEVENT {
             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
             dwFlags: TME_HOVER | TME_LEAVE,
@@ -1453,8 +1709,10 @@ impl App {
     }
 
     fn on_mouse_leave(&mut self) {
-        if let Some(event) = self.hover.on_leave() {
-            self.apply_now(event);
+        self.bata.brain.hover(false, Instant::now());
+        match self.hover.on_leave() {
+            Some(event) => self.apply_now(event),
+            None => self.refresh(Instant::now()),
         }
     }
 
@@ -1638,6 +1896,26 @@ impl App {
                 // Looks the track up and switches the view now.
                 self.apply_now(Event::LyricsSetting(on));
             }
+            SettingsAction::Robot(on) => {
+                self.config.robot = on;
+                self.save_config();
+                // The compact shapes widen or narrow; its timers start or stop.
+                self.refresh(now);
+            }
+            SettingsAction::RobotMotion(motion) => {
+                self.config.robot_animation = motion;
+                self.save_config();
+                self.refresh(now);
+            }
+            SettingsAction::RobotSleep(minutes) => {
+                self.config.robot_sleep_minutes = robot::clamp_sleep(minutes);
+                self.save_config();
+                self.refresh(now);
+            }
+            SettingsAction::Greeting(on) => {
+                self.config.morning_greeting = on;
+                self.save_config();
+            }
             SettingsAction::Shell(shell) => {
                 // The next command runs in it; one running goes on as it is.
                 self.config.cli_shell = shell;
@@ -1702,6 +1980,7 @@ impl App {
         } else {
             cli_panel::suggestions(self.cli_history.items(), &typed, MAX_SUGGESTIONS)
         };
+        let robot = self.robot_frame(&self.drawn, now);
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -1740,6 +2019,7 @@ impl App {
                 tall: state.cli_tall(),
             },
             progress: track_progress(state, now),
+            robot,
         };
         if let Err(error) = self
             .renderer
@@ -1900,6 +2180,55 @@ fn is_clock_jump(msg: u32, wparam: WPARAM) -> bool {
         WM_POWERBROADCAST => matches!(wparam.0, PBT_APMRESUMESUSPEND | PBT_APMRESUMEAUTOMATIC),
         _ => false,
     }
+}
+
+/// Events that count as activity for Bata's sleep clock: anything the user
+/// or a source changed (media, notices, Claude, the CLI, clicks, the wheel,
+/// the pointer arriving, editors). Timers, timelines and data refreshes do not.
+fn is_activity(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Media(_)
+            | Event::Notice(_)
+            | Event::ClaudeActivity { .. }
+            | Event::Click(_)
+            | Event::Wheel(_)
+            | Event::Hover(true)
+            | Event::EditorOpen(_)
+            | Event::CliFocus(_)
+            | Event::CliScroll { .. }
+            | Event::Cli(_)
+            | Event::LyricsSetting(_)
+    )
+}
+
+/// The face a quiet robot shows in `view` with the robot `on` (for tests of
+/// which timers run).
+#[cfg(test)]
+fn quiet_face(view: &View, on: bool) -> Option<robot::Expr> {
+    let inputs = robot::RobotInputs {
+        spot: Spot::of(view),
+        hover: false,
+        asleep: false,
+        claude_working: false,
+        cli: robot::Cli::None,
+        battery_low: false,
+    };
+    choose_expr(&inputs).filter(|_| on)
+}
+
+/// Today's events and today's reminders not yet done, for the greeting.
+fn greeting_counts(
+    events: &[CalEvent],
+    reminders: &[Reminder],
+    today: NaiveDate,
+) -> (usize, usize) {
+    let events = crate::calendar::events_on(events, today).len();
+    let reminders = reminders
+        .iter()
+        .filter(|r| !r.done && reminders::local_time(r.due_unix).is_some_and(|t| t.date() == today))
+        .count();
+    (events, reminders)
 }
 
 /// The idle clock's minute timer runs only while the idle island shows it.
@@ -2463,7 +2792,26 @@ unsafe extern "system" fn wnd_proc(
             if is_clock_jump(msg, wparam) {
                 with_app(App::on_clock_jump);
             }
+            if msg == WM_POWERBROADCAST {
+                match wparam.0 {
+                    // Back from sleep: the first screen of the day may greet.
+                    PBT_APMRESUMESUSPEND | PBT_APMRESUMEAUTOMATIC => {
+                        with_app(App::maybe_greet);
+                    }
+                    // Charger or Energy Saver changed: the robot follows now.
+                    PBT_APMPOWERSTATUSCHANGE => {
+                        with_app(App::check_battery);
+                    }
+                    _ => {}
+                }
+            }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_WTSSESSION_CHANGE => {
+            if wparam.0 == WTS_SESSION_UNLOCK {
+                with_app(App::maybe_greet);
+            }
+            LRESULT(0)
         }
         WM_MOUSEMOVE => {
             with_app(App::on_mouse_move);
@@ -2561,6 +2909,9 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             drain_editor_results(hwnd);
             with_app(App::stop_sync);
+            unsafe {
+                let _ = WTSUnRegisterSessionNotification(hwnd);
+            }
             tray::remove_tray(hwnd);
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
@@ -2814,6 +3165,119 @@ mod tests {
         for view in others {
             assert!(!clock_timer_wanted(&view, true), "{view:?}");
         }
+    }
+
+    #[test]
+    fn robot_timers_run_only_while_a_robot_shows() {
+        let plan = |view: &View, on, motion, animating| {
+            plan_timers(quiet_face(view, on), motion, animating)
+        };
+        let both = robot::TimerPlan {
+            blink: true,
+            change: true,
+        };
+        let none = robot::TimerPlan {
+            blink: false,
+            change: false,
+        };
+        let reminder = Notice {
+            kind: NoticeKind::Reminder { id: "r".into() },
+            ..island_notice("r", "t", "b")
+        };
+        // Compact views and the island's own notices: the one-shot, and a
+        // blink where the face has open eyes (not the happy music faces).
+        for (view, blinks) in [
+            (View::Idle, true),
+            (View::PomodoroCompact, true),
+            (View::Notice(reminder), true),
+            (View::MediaCompact, false),
+            (View::MediaLyric, false),
+        ] {
+            let full = robot::TimerPlan {
+                blink: blinks,
+                ..both
+            };
+            assert_eq!(plan(&view, true, Motion::Full, false), full, "{view:?}");
+            // Saver: no blink, sleep still counts. Off: nothing at all.
+            let saver = plan(&view, true, Motion::Saver, false);
+            assert_eq!((saver.blink, saver.change), (false, true));
+            assert_eq!(plan(&view, true, Motion::Off, false), none);
+            // Robot off: as before, no robot timers.
+            assert_eq!(plan(&view, false, Motion::Full, false), none);
+            // The frame clock draws anyway: no blink meanwhile.
+            assert!(!plan(&view, true, Motion::Full, true).blink);
+        }
+        // Asleep (or happy): one-shot only, no blink; an idle island then
+        // runs no timer at all until something happens.
+        let asleep = plan_timers(Some(robot::Expr::Sleep), Motion::Full, false);
+        assert_eq!((asleep.blink, asleep.change), (false, true));
+        // No robot: the panel, fullscreen, other apps' notifications.
+        for view in [
+            View::Hidden,
+            View::Panel(Page::Calendar),
+            View::Notice(island_notice("t", "title", "body")),
+        ] {
+            assert_eq!(plan(&view, true, Motion::Full, false), none, "{view:?}");
+        }
+    }
+
+    #[test]
+    fn activity_is_what_changes_something() {
+        for event in [
+            Event::Media(None),
+            Event::Notice(island_notice("t", "title", "body")),
+            Event::ClaudeActivity {
+                session_id: "s".into(),
+            },
+            Event::Click(Hit::Body),
+            Event::Wheel(-120),
+            Event::Hover(true),
+        ] {
+            assert!(is_activity(&event), "{event:?}");
+        }
+        for event in [
+            Event::Tick,
+            Event::Hover(false),
+            Event::Fullscreen(true),
+            Event::MediaTimeline(None),
+            Event::LyricsReady(true),
+            Event::Today(date(27)),
+        ] {
+            assert!(!is_activity(&event), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn greeting_counts_today_only() {
+        use crate::calendar::EventTime;
+        let event = |id: &str, d: u32| CalEvent {
+            id: id.into(),
+            calendar_id: "c".into(),
+            title: id.into(),
+            start: EventTime::AllDay(date(d)),
+            end: EventTime::AllDay(date(d + 1)),
+            description: String::new(),
+            color: None,
+            editable: true,
+        };
+        let events = [event("a", 27), event("b", 27), event("c", 28)];
+        let at = |d: u32, h: u32| local_unix(date(d), h, 0);
+        let reminder = |id: &str, due: i64, done: bool| Reminder {
+            id: id.into(),
+            text: id.into(),
+            due_unix: due,
+            repeat: reminders::Repeat::Once,
+            done,
+            days: Vec::new(),
+        };
+        let list = [
+            reminder("early", at(27, 7), false),
+            reminder("later", at(27, 16), false),
+            reminder("done", at(27, 9), true),
+            reminder("tomorrow", at(28, 9), false),
+        ];
+        assert_eq!(greeting_counts(&events, &list, date(27)), (2, 2));
+        assert_eq!(greeting_counts(&[], &[], date(27)), (0, 0));
     }
 
     #[test]
