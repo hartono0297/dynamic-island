@@ -564,6 +564,8 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
             tint(p.accent, Icon::Sparkle)
         }
         NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
+        // Drawn by the robot (low); the badge shows when it is off.
+        NoticeKind::SystemLow => tint(p.ochre, Icon::Activity),
         // Drawn by the robot; this badge only shows if it is turned off meanwhile.
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
@@ -594,6 +596,8 @@ pub fn notice_action(kind: &NoticeKind, pomo: PomoStatus) -> Option<Key> {
     match kind {
         NoticeKind::Reminder { .. } => Some(Key::MarkDone),
         NoticeKind::Pomodoro if pomo == PomoStatus::Ready => Some(Key::Start),
+        // The click opens the panel on the System page.
+        NoticeKind::SystemLow => Some(Key::Open),
         _ => None,
     }
 }
@@ -968,6 +972,8 @@ mod tests {
         let battery = notice("Baterai", NoticeKind::BatteryLow);
         assert_eq!(fill(&battery), (0xD9A441, 0xD9A441, Some(Icon::Battery)));
         assert!(style(&battery).alpha < 0.5, "a tint");
+        let system = notice("Sistem", NoticeKind::SystemLow);
+        assert_eq!(fill(&system), (0xD9A441, 0xD9A441, Some(Icon::Activity)));
         // Pomodoro: the colour of the phase a click starts.
         let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
         assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
@@ -1016,6 +1022,11 @@ mod tests {
         assert_eq!(
             notice_action(&NoticeKind::BatteryLow, PomoStatus::Ready),
             None
+        );
+        // Disk or RAM low: "Buka" opens the System page.
+        assert_eq!(
+            notice_action(&NoticeKind::SystemLow, PomoStatus::Idle),
+            Some(Key::Open)
         );
     }
 

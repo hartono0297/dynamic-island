@@ -7,6 +7,7 @@ use crate::calendar::CalendarSnapshot;
 use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::pomodoro::PomoSettings;
+use crate::system::SystemSample;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
@@ -41,6 +42,10 @@ pub enum NoticeKind {
     /// The morning greeting: today's events and reminders, from Bata. Shows
     /// `GREETING_DURATION`, never in fullscreen.
     Greeting,
+    /// A fixed drive below the disk limit, or RAM above its limit for a
+    /// minute (`system::WarnMonitor`). Clicking it opens the panel on the
+    /// System page.
+    SystemLow,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +125,9 @@ pub enum Event {
         request: u64,
         folders: Vec<PathBuf>,
     },
+    /// A reading from the system sampler (`system::Sampler`); `App` keeps
+    /// it, the reducer ignores it.
+    SystemSample(SystemSample),
     Tick,
 }
 
@@ -181,6 +189,13 @@ pub enum Hit {
     },
     /// Anywhere on the page outside the open menu: it closes.
     CliMenuDismiss,
+    /// A drive's meter on the System page: Explorer opens on it.
+    SystemDrive(char),
+    /// A busiest-process row on the System page: Task Manager opens.
+    SystemProcess,
+    /// The System page's "Bersihkan" button (no region until the cleaner
+    /// exists, Run 5).
+    SystemClean,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +249,10 @@ pub enum Effect {
         path: PathBuf,
         on: bool,
     },
+    /// Explorer on this drive's root, once the panel has collapsed.
+    OpenDrive(char),
+    /// The cleaner (Run 5); nothing yet.
+    OpenCleaner,
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
@@ -253,18 +272,22 @@ pub enum Page {
     Reminders,
     Notes,
     Media,
+    /// Sistem: CPU, RAM, disks and the busiest processes.
+    System,
     Cli,
     /// Pintasan, the right-most page.
     Shortcuts,
 }
 
 impl Page {
-    pub const ALL: [Page; 7] = [
+    /// Clipboard (Run 7) is not here yet; Run 9 sets the final order.
+    pub const ALL: [Page; 8] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
         Page::Notes,
         Page::Media,
+        Page::System,
         Page::Cli,
         Page::Shortcuts,
     ];

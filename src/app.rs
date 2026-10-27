@@ -63,6 +63,7 @@ use crate::sources::battery::{
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{explorer, media, notifications};
 use crate::state::{IslandState, is_media_hit};
+use crate::system::{CpuHistory, SampleKind, Sampler, SystemSample, WarnMonitor, alert_notice};
 use crate::theme::{self, Theme};
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
@@ -73,7 +74,9 @@ use crate::ui::geometry::{
     lyric_shape, lyric_target_w, lyric_width, shape_for, shape_with_robot,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
-use crate::ui::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
+use crate::ui::render::{
+    CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
+};
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
 };
@@ -136,6 +139,15 @@ const TIMER_ROBOT: usize = 15;
 /// One-shot: a lyric line too long for the notch starts scrolling
 /// (`LYRIC_HOLD_MS` after it showed); the frame clock then runs until its end.
 const TIMER_LYRIC_SCROLL: usize = 16;
+/// One-shot: the next System page sample, `SYSTEM_PAGE_MS` after the last
+/// one arrived. Only while that page shows (`system_sample_wanted`).
+const TIMER_SYSTEM_PAGE: usize = 17;
+/// One-shot: the background disk and RAM check, every `SYSTEM_WARN_MS`
+/// (sooner to confirm RAM's minute above its limit). It reads memory and
+/// drives on the sampler thread and draws nothing unless a notice is raised.
+const TIMER_SYSTEM_WARN: usize = 18;
+const SYSTEM_PAGE_MS: u32 = 2_000;
+const SYSTEM_WARN_MS: u32 = 300_000;
 const CLI_MS: u32 = 1000;
 /// Output lines one wheel notch scrolls (Windows' default of three).
 const WHEEL_LINES: i32 = 3;
@@ -191,6 +203,7 @@ pub fn run(media_log_flag: bool) {
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
+    let warn = WarnMonitor::new(config.disk_warn_gb, config.ram_warn_percent);
     let _ = tray::set_autostart(config.start_with_windows);
 
     let rest = shape_for(config.style, ShapeKind::Idle);
@@ -223,6 +236,7 @@ pub fn run(media_log_flag: bool) {
             drawn: View::Hidden,
             fullscreen: false,
             battery,
+            system: SystemState::new(warn),
             hover: HoverTracking::default(),
             click: ClickPair::default(),
             media_click: None,
@@ -288,6 +302,7 @@ pub fn run(media_log_flag: bool) {
             SetTimer(Some(hwnd), TIMER_SYSTEM, SYSTEM_MS, None);
             SetTimer(Some(hwnd), TIMER_BATTERY, BATTERY_MS, None);
             SetTimer(Some(hwnd), TIMER_DAY, DAY_MS, None);
+            SetTimer(Some(hwnd), TIMER_SYSTEM_WARN, SYSTEM_WARN_MS, None);
             // Unlocking the session may greet; without it, startup and wake still do.
             let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
         }
@@ -367,6 +382,8 @@ struct App {
     drawn: View,
     fullscreen: bool,
     battery: BatteryMonitor,
+    /// The System page's readings and the disk / RAM warnings.
+    system: SystemState,
     hover: HoverTracking,
     /// A left press on the island waiting for its release.
     click: ClickPair,
@@ -474,6 +491,39 @@ struct ExplorerReads {
     queued: Option<bool>,
 }
 
+/// The System page and the warnings: the sampler thread (started on the
+/// first request), what it last read, and which one-shots are set.
+struct SystemState {
+    sampler: Option<Sampler>,
+    /// The last page sample; the page draws dashes without one.
+    sample: Option<SystemSample>,
+    history: CpuHistory,
+    monitor: WarnMonitor,
+    /// A page sample was asked for and has not come back.
+    page_pending: bool,
+    /// `TIMER_SYSTEM_PAGE` is set.
+    page_timer: bool,
+    /// A warning check was asked for and has not come back.
+    warn_pending: bool,
+    /// A reading raised a notice during this drain: the island refreshes.
+    raised: bool,
+}
+
+impl SystemState {
+    fn new(monitor: WarnMonitor) -> Self {
+        Self {
+            sampler: None,
+            sample: None,
+            history: CpuHistory::default(),
+            monitor,
+            page_pending: false,
+            page_timer: false,
+            warn_pending: false,
+            raised: false,
+        }
+    }
+}
+
 /// What the island keeps for the robot besides its `Brain`.
 struct Bata {
     brain: Brain,
@@ -508,12 +558,21 @@ impl App {
         let now = Instant::now();
         // Before reading: output queued after this posts a new wake.
         self.cli_wake.store(false, Ordering::SeqCst);
+        let (mut received, mut samples) = (0usize, 0usize);
         while let Ok(event) = self.rx.try_recv() {
+            received += 1;
+            samples += usize::from(matches!(event, Event::SystemSample(_)));
             self.apply(event, now);
         }
         // Once per burst of command output, not per chunk.
         self.note_cli_output(now);
-        self.refresh(now);
+        // Only system readings: they drew what they changed (the open
+        // System page); a background check must not redraw the island,
+        // unless it raised a notice.
+        let raised = std::mem::take(&mut self.system.raised);
+        if drain_refreshes(received, samples, raised) {
+            self.refresh(now);
+        }
         if std::mem::take(&mut self.greet_ready) {
             self.maybe_greet(GreetTrigger::Startup);
         }
@@ -558,6 +617,10 @@ impl App {
                 }
                 Event::ExplorerFolders { request, folders } => {
                     self.on_explorer_folders(request, folders);
+                    continue;
+                }
+                Event::SystemSample(sample) => {
+                    self.on_system_sample(sample, now);
                     continue;
                 }
                 other => other,
@@ -947,19 +1010,11 @@ impl App {
                 self.config.lyrics = on;
                 self.save_config();
             }
-            Effect::RunShortcut(s) => {
-                let action = shortcuts::shortcut_action(s);
-                self.shortcut = Some(action);
-                // Replaces a pending one: only the last click runs.
-                unsafe {
-                    SetTimer(
-                        Some(self.hwnd),
-                        TIMER_SHORTCUT,
-                        shortcuts::delay_ms(action),
-                        None,
-                    );
-                }
-            }
+            Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)),
+            Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
+            // The cleaner comes in Run 5; until then "Bersihkan" registers no
+            // region (`panel_layout::CLEANER_READY`), so this never arrives.
+            Effect::OpenCleaner => {}
             Effect::FocusCliInput => return self.focus_cli_input(),
             Effect::ReleaseCliFocus => self.return_keyboard(),
             Effect::StopCli => self.stop_cli(),
@@ -1426,6 +1481,116 @@ impl App {
         }
     }
 
+    /// Runs `action` on `TIMER_SHORTCUT`, once the panel has collapsed;
+    /// replaces a pending one, so only the last click runs.
+    fn queue_shortcut(&mut self, action: shortcuts::Action) {
+        self.shortcut = Some(action);
+        unsafe {
+            SetTimer(
+                Some(self.hwnd),
+                TIMER_SHORTCUT,
+                shortcuts::delay_ms(action),
+                None,
+            );
+        }
+    }
+
+    /// Asks the sampler thread (started on the first request) for a
+    /// reading. False when it cannot run; the next request starts it again.
+    fn request_system(&mut self, kind: SampleKind) -> bool {
+        if self.system.sampler.is_none() {
+            self.system.sampler = Sampler::spawn(self.tx.clone(), poster(self.hwnd, WM_APP_EVENT));
+        }
+        let sent = self
+            .system
+            .sampler
+            .as_ref()
+            .is_some_and(|s| s.request(kind));
+        if !sent {
+            self.system.sampler = None;
+        }
+        sent
+    }
+
+    /// The System page just showed: a sample at once; it left: the 2 s
+    /// one-shot goes (a sample still on its way is kept but re-arms nothing).
+    fn sync_system_page(&mut self) {
+        let wanted = system_sample_wanted(&self.state.view());
+        match system_page_plan(wanted, self.system.page_timer, self.system.page_pending) {
+            PagePlan::Request => {
+                self.system.page_pending = self.request_system(SampleKind::Page);
+            }
+            PagePlan::Stop => {
+                self.system.page_timer = false;
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_SYSTEM_PAGE);
+                }
+            }
+            PagePlan::Keep => {}
+        }
+    }
+
+    /// `TIMER_SYSTEM_WARN`: the cheap disk and RAM read for the warnings.
+    fn on_system_warn_timer(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SYSTEM_WARN);
+        }
+        // One already on its way re-arms the timer when it arrives.
+        if self.system.warn_pending {
+            return;
+        }
+        self.system.warn_pending = self.request_system(SampleKind::Warn);
+        if !self.system.warn_pending {
+            self.arm_system_warn(SYSTEM_WARN_MS);
+        }
+    }
+
+    fn arm_system_warn(&self, ms: u32) {
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SYSTEM_WARN, ms, None);
+        }
+    }
+
+    /// A reading came back. Every reading feeds the warnings (a notice for
+    /// each new crossing). A page sample is kept for the page, which redraws
+    /// and asks again in `SYSTEM_PAGE_MS` while it shows; a warning check
+    /// re-arms its timer, sooner while RAM's minute is being confirmed.
+    fn on_system_sample(&mut self, sample: SystemSample, now: Instant) {
+        let check = self
+            .system
+            .monitor
+            .update(&sample.drives, sample.ram_percent(), now);
+        match sample.kind {
+            SampleKind::Page => {
+                self.system.page_pending = false;
+                self.system.history.push(sample.cpu, now);
+                self.system.sample = Some(sample);
+                if system_sample_wanted(&self.state.view()) {
+                    if !self.animating() {
+                        self.draw(now);
+                    }
+                    self.system.page_timer = true;
+                    unsafe {
+                        SetTimer(Some(self.hwnd), TIMER_SYSTEM_PAGE, SYSTEM_PAGE_MS, None);
+                    }
+                }
+                // The page may close before the minute is up: the warning
+                // timer confirms it then.
+                if check.recheck.is_some() && !self.system.warn_pending {
+                    self.arm_system_warn(warn_wait_ms(check.recheck));
+                }
+            }
+            SampleKind::Warn => {
+                self.system.warn_pending = false;
+                self.arm_system_warn(warn_wait_ms(check.recheck));
+            }
+        }
+        for alert in &check.alerts {
+            self.system.raised = true;
+            self.apply(Event::Notice(alert_notice(i18n::lang(), alert)), now);
+        }
+    }
+
     /// The shortcut `TIMER_SHORTCUT` was waiting for, taken once.
     fn take_shortcut(&mut self) -> Option<shortcuts::Action> {
         unsafe {
@@ -1842,6 +2007,7 @@ impl App {
         }
         self.sync_progress_timer(now);
         self.sync_robot_timers(now);
+        self.sync_system_page();
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -1995,6 +2161,15 @@ impl App {
                 self.sync_progress_timer(now);
             }
             TIMER_CLI => self.redraw_cli(),
+            TIMER_SYSTEM_PAGE => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_SYSTEM_PAGE);
+                }
+                self.system.page_timer = false;
+                // Asks for the next sample while the page still shows.
+                self.sync_system_page();
+            }
+            TIMER_SYSTEM_WARN => self.on_system_warn_timer(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
                 unsafe {
@@ -2216,6 +2391,10 @@ impl App {
         let changed = google(&cfg) != google(&self.config);
         self.config = cfg;
         i18n::set_lang(self.config.language);
+        // New limits (the settings window or a hand edit) apply at once.
+        self.system
+            .monitor
+            .set_limits(self.config.disk_warn_gb, self.config.ram_warn_percent);
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -2348,6 +2527,16 @@ impl App {
                 self.save_config_with(|c| c.battery_threshold = threshold);
                 self.battery.set_threshold(self.config.battery_threshold);
             }
+            // `adopt_config` hands the new limits to the warnings; the open
+            // System page redraws its meters (ochre or not).
+            SettingsAction::DiskWarn(gb) => {
+                self.save_config_with(|c| c.disk_warn_gb = gb);
+                self.redraw_system_page();
+            }
+            SettingsAction::RamWarn(percent) => {
+                self.save_config_with(|c| c.ram_warn_percent = percent);
+                self.redraw_system_page();
+            }
             SettingsAction::Pomo(field, dir) => {
                 // Through the reducer like a click: state, then config.
                 self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
@@ -2368,6 +2557,12 @@ impl App {
             SettingsAction::DndHelp | SettingsAction::Closed => {}
         }
         self.sync_settings();
+    }
+
+    fn redraw_system_page(&mut self) {
+        if system_sample_wanted(&self.state.view()) && !self.animating() {
+            self.draw(Instant::now());
+        }
     }
 
     /// Forgets the Google login; the calendar asks to connect again.
@@ -2403,6 +2598,12 @@ impl App {
             cli_panel::suggestions(self.cli_history.items(), &typed, MAX_SUGGESTIONS)
         };
         let robot = self.robot_frame(&self.drawn, now);
+        let system = SystemView {
+            sample: self.system.sample.as_ref(),
+            history: self.system.history.points(),
+            disk_warn_gb: self.config.disk_warn_gb,
+            ram_warn_percent: self.config.ram_warn_percent,
+        };
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -2450,6 +2651,7 @@ impl App {
             },
             progress: track_progress(state, now),
             robot,
+            system: Some(&system),
         };
         if let Err(error) = self
             .renderer
@@ -2705,6 +2907,47 @@ fn track_progress(state: &IslandState, now: Instant) -> Option<Progress> {
 fn progress_wait(view: &View, progress: Option<Progress>, playing: bool) -> Option<u32> {
     let p = progress.filter(|p| p.position_ms < p.end_ms)?;
     (*view == View::Panel(Page::Media) && playing).then(|| 1001 - (p.position_ms % 1000) as u32)
+}
+
+/// Whether a drain of `received` events, `samples` of them system
+/// readings, refreshes (and so redraws) the island: not when it held only
+/// readings, which draw the open System page themselves, unless one
+/// `raised` a notice.
+fn drain_refreshes(received: usize, samples: usize, raised: bool) -> bool {
+    received == 0 || samples < received || raised
+}
+
+/// The System page samples (and redraws) only while it shows.
+fn system_sample_wanted(view: &View) -> bool {
+    *view == View::Panel(Page::System)
+}
+
+/// What the System page's sampling does after a change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PagePlan {
+    /// Ask for a sample now (the page just showed, or its 2 s are up).
+    Request,
+    /// The page is gone: kill the one-shot.
+    Stop,
+    Keep,
+}
+
+/// `wanted`: the page shows; `timer`: the 2 s one-shot is set; `pending`:
+/// a sample is on its way (its arrival sets the timer).
+fn system_page_plan(wanted: bool, timer: bool, pending: bool) -> PagePlan {
+    match (wanted, timer, pending) {
+        (true, false, false) => PagePlan::Request,
+        (false, true, _) => PagePlan::Stop,
+        _ => PagePlan::Keep,
+    }
+}
+
+/// The next warning check: `SYSTEM_WARN_MS`, or sooner to confirm RAM's
+/// minute above the limit (a little after it ends, at least 1 s).
+fn warn_wait_ms(recheck: Option<Duration>) -> u32 {
+    recheck.map_or(SYSTEM_WARN_MS, |d| {
+        (d.as_millis() as u64 + 250).clamp(1_000, u64::from(SYSTEM_WARN_MS)) as u32
+    })
 }
 
 /// When the island tries the morning greeting.
@@ -3924,6 +4167,49 @@ mod tests {
         ] {
             assert_eq!(progress_wait(&view, at(102_000), true), None, "{view:?}");
         }
+    }
+
+    #[test]
+    fn system_page_samples_only_while_it_shows() {
+        // Only the System page of the open panel wants samples.
+        assert!(system_sample_wanted(&View::Panel(Page::System)));
+        for view in [
+            View::Idle,
+            View::Hidden,
+            View::MediaCompact,
+            View::PomodoroCompact,
+            View::Panel(Page::Media),
+            View::Panel(Page::Cli),
+        ] {
+            assert!(!system_sample_wanted(&view), "{view:?}");
+        }
+        use PagePlan::*;
+        // Just shown: ask at once. Waiting on a sample or the 2 s: nothing.
+        assert_eq!(system_page_plan(true, false, false), Request);
+        assert_eq!(system_page_plan(true, false, true), Keep);
+        assert_eq!(system_page_plan(true, true, false), Keep);
+        // Gone: the one-shot dies; a sample still coming re-arms nothing.
+        assert_eq!(system_page_plan(false, true, false), Stop);
+        assert_eq!(system_page_plan(false, true, true), Stop);
+        assert_eq!(system_page_plan(false, false, true), Keep);
+        assert_eq!(system_page_plan(false, false, false), Keep);
+        // The warning check: every 5 min, sooner to confirm RAM's minute.
+        assert_eq!(warn_wait_ms(None), 300_000);
+        assert_eq!(warn_wait_ms(Some(Duration::from_secs(60))), 60_250);
+        assert_eq!(warn_wait_ms(Some(Duration::ZERO)), 1_000);
+        assert_eq!(warn_wait_ms(Some(Duration::from_secs(900))), 300_000);
+        assert!(SYSTEM_PAGE_MS == 2_000 && TIMER_SYSTEM_PAGE != TIMER_SYSTEM_WARN);
+    }
+
+    #[test]
+    fn background_readings_do_not_redraw_a_closed_island() {
+        // A drain of only system readings draws nothing more.
+        assert!(!drain_refreshes(1, 1, false));
+        assert!(!drain_refreshes(2, 2, false));
+        // Unless one raised a notice, or other events came too.
+        assert!(drain_refreshes(1, 1, true));
+        assert!(drain_refreshes(3, 1, false));
+        assert!(drain_refreshes(0, 0, false), "a plain wake still refreshes");
     }
 
     #[test]

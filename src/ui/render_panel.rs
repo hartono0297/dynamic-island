@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
+    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
+    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
@@ -20,7 +21,9 @@ use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use super::{
+    CliView, FolderMenuView, Frame, Progress, Renderer, SystemView, color, d2d_rect, mix,
+};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
@@ -31,17 +34,19 @@ use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
 use crate::shortcuts;
+use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
-    MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD,
-    ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_folder_menu, cli_layout, cli_suggestions,
-    media_panel_layout, media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
+    CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER,
+    ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, MeterLayout, PageLayout, PomodoroLayout,
+    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H,
+    calendar_layout, cli_folder_menu, cli_layout, cli_suggestions, media_panel_layout,
+    media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
     pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
-    tile_parts, waiting_strip,
+    system_layout, tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -97,6 +102,28 @@ const MENU_IN_X: f32 = 8.0;
 const MENU_GAP: f32 = 8.0;
 /// The first Explorer row's accent tint (`.it.on`).
 const MENU_ON_TINT: f32 = 0.16;
+/// The System page: what stands for a figure before the first sample.
+const DASH: &str = "\u{2013}";
+/// The CPU line (`spark()`): 1.6 px over a 0.14 fill.
+const SPARK_STROKE: f32 = 1.6;
+const SPARK_FILL: f32 = 0.14;
+/// "Bersihkan" (`.cbtn`): 12 px in, a 13 px sparkle and 6 px to the label;
+/// dimmed while the cleaner does not exist, with its "segera" tag.
+const CLEAN_PAD_X: f32 = 12.0;
+const CLEAN_ICON: f32 = 13.0;
+const CLEAN_ICON_GAP: f32 = 6.0;
+const CLEAN_DIM: f32 = 0.55;
+const SOON_GAP: f32 = 6.0;
+const SOON_PAD_X: f32 = 6.0;
+const SOON_H: f32 = 14.0;
+
+/// The uptime chip's text; "Uptime –" before the first sample.
+fn system_uptime(lang: Lang, sample: Option<&SystemSample>) -> String {
+    sample.map_or_else(
+        || format!("Uptime {DASH}"),
+        |s| i18n::uptime(lang, s.uptime),
+    )
+}
 
 /// How a CLI header chip looks: the folder (path ellipsis) and the shell in
 /// mono on the raised fill; the run's state tinted; "dari Explorer" in the
@@ -316,6 +343,15 @@ impl Renderer {
             )),
             Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
             Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
+            Page::System => {
+                let sample = frame.system.and_then(|v| v.sample);
+                let head = self.system_head(&system_uptime(i18n::lang(), sample));
+                let drives: Vec<char> = sample
+                    .map(|s| s.drives.iter().map(|d| d.letter).collect())
+                    .unwrap_or_default();
+                let procs = sample.map_or(0, |s| s.procs.len());
+                PageLayout::System(system_layout(s, strip, &head, &drives, procs))
+            }
             Page::Cli => {
                 let chips = cli_chips(i18n::lang(), &frame.cli, frame.now);
                 let head = self.cli_head(&chips, frame.cli.run.running());
@@ -345,12 +381,220 @@ impl Renderer {
             PageLayout::Media(l) => {
                 self.paint_media(l, frame.media, frame.lyrics_on, frame.progress)
             }
+            PageLayout::System(l) => self.paint_system(l, frame.system),
             PageLayout::Cli(l) => self.paint_cli(l, frame),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l);
                 Ok(())
             }
         }
+    }
+
+    /// The System page's header widths: the uptime chip and "Bersihkan"
+    /// (with its "segera" tag until the cleaner exists).
+    fn system_head(&self, uptime: &str) -> SystemHead {
+        let lang = i18n::lang();
+        let uptime_w = self.text_width(uptime, &self.fonts.small).ceil() + 2.0 * CHIP_PAD_X;
+        let label = self
+            .text_width(text(lang, Key::SystemClean), &self.fonts.button)
+            .ceil();
+        let tag = if CLEANER_READY {
+            0.0
+        } else {
+            SOON_GAP + self.soon_tag_w(lang)
+        };
+        let clean_w = 2.0 * CLEAN_PAD_X + CLEAN_ICON + CLEAN_ICON_GAP + label + tag;
+        SystemHead { uptime_w, clean_w }
+    }
+
+    fn soon_tag_w(&self, lang: Lang) -> f32 {
+        self.text_width(text(lang, Key::SystemSoon), &self.fonts.micro)
+            .ceil()
+            + 2.0 * SOON_PAD_X
+    }
+
+    /// keputusan-v3.1.html `sysPanel`: the title, uptime chip and
+    /// "Bersihkan"; the CPU ring with the figure and core count, its 60 s
+    /// line; RAM (sage) and each drive's meter (ochre past a warning limit,
+    /// figures too); "Paling sibuk" and the process rows. Before the first
+    /// sample: dashes, empty bars, no rows.
+    fn paint_system(&mut self, l: &SystemLayout, view: Option<&SystemView>) -> Result<()> {
+        let lang = i18n::lang();
+        let p = self.palette;
+        let sample = view.and_then(|v| v.sample);
+        self.heading(text(lang, Key::System), l.header);
+
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.uptime, l.uptime.h / 2.0);
+        let uptime = system_uptime(lang, sample);
+        self.text_colored(&uptime, &self.fonts.small_center, l.uptime, p.secondary, 1.0);
+        self.paint_clean_button(l.clean, lang);
+
+        let cpu = sample.map(|s| s.cpu);
+        self.ring(
+            l.ring_center,
+            l.ring_radius,
+            SYS_RING_STROKE,
+            cpu.unwrap_or(0.0) / 100.0,
+            p.accent,
+        )?;
+        let figure = cpu.map_or_else(|| DASH.to_owned(), |c| format!("{c:.0}%"));
+        self.text(&figure, &self.fonts.sys_big, l.percent, 1.0);
+        let caption = match sample {
+            Some(s) => i18n::cpu_cores(lang, s.cores),
+            None => "CPU".to_owned(),
+        };
+        let caption = caption.to_uppercase();
+        let ink = p.secondary;
+        self.text_colored(&caption, &self.fonts.micro_center, l.caption, ink, 1.0);
+        self.paint_spark(l.spark, view.map_or(&[], |v| v.history))?;
+
+        let (disk_limit, ram_limit) = view.map_or((0, 100), |v| (v.disk_warn_gb, v.ram_warn_percent));
+        let ram = sample.and_then(|s| s.ram_percent().map(|pct| (s, pct)));
+        let (value, fraction, warn) = match ram {
+            Some((s, pct)) => (
+                i18n::ram_usage(lang, s.ram_used, s.ram_total, pct),
+                Some(f32::from(pct) / 100.0),
+                system::ram_high(pct, ram_limit),
+            ),
+            None => (DASH.to_owned(), None, false),
+        };
+        let name = text(lang, Key::SystemRam);
+        self.paint_meter(&l.ram, name, &value, fraction, p.sage, warn);
+        for (letter, m) in &l.drives {
+            let Some(d) = sample.and_then(|s| s.drives.iter().find(|d| d.letter == *letter)) else {
+                continue;
+            };
+            let value = i18n::disk_free(lang, d.free, d.total);
+            let fraction = f32::from(d.used_percent()) / 100.0;
+            let warn = system::disk_low(d.free, disk_limit);
+            let name = i18n::disk_name(*letter);
+            self.paint_meter(m, &name, &value, Some(fraction), p.secondary, warn);
+        }
+
+        let label = text(lang, Key::SystemBusiest).to_uppercase();
+        self.text2(&label, &self.fonts.micro, l.busiest);
+        let procs = sample.map_or(&[][..], |s| &s.procs);
+        for (row, proc) in l.procs.iter().zip(procs) {
+            self.text(&proc.name, &self.fonts.small, row.name, 1.0);
+            let cpu = format!("{:.0}%", proc.cpu);
+            self.text2(&cpu, &self.fonts.small_right, row.cpu);
+            let mem = i18n::format_size(lang, proc.mem);
+            self.text2(&mem, &self.fonts.small_right, row.mem);
+        }
+        Ok(())
+    }
+
+    /// `.meter`: the name, the figures right-aligned, the bar on its track
+    /// filled `fraction` in `fill`; past a limit the fill and figures go
+    /// ochre.
+    fn paint_meter(
+        &self,
+        m: &MeterLayout,
+        name: &str,
+        value: &str,
+        fraction: Option<f32>,
+        fill: u32,
+        warn: bool,
+    ) {
+        let p = self.palette;
+        self.text(name, &self.fonts.meter_name, m.name, 1.0);
+        let ink = if warn { p.ochre } else { p.secondary };
+        self.text_colored(value, &self.fonts.eleven_right, m.value, ink, 1.0);
+        self.set_color(p.track, 1.0);
+        self.fill_round(m.bar, m.bar.h / 2.0);
+        if let Some(f) = fraction.filter(|f| *f > 0.0) {
+            let bar = Rect {
+                w: (m.bar.w * f.min(1.0)).max(m.bar.h),
+                ..m.bar
+            };
+            self.set_color(if warn { p.ochre } else { fill }, 1.0);
+            self.fill_round(bar, bar.h / 2.0);
+        }
+    }
+
+    /// The CPU line: one point per sample, `HISTORY_LEN` across, the newest
+    /// at the right; the accent line over a faint fill down to the base.
+    fn paint_spark(&self, r: Rect, points: &[f32]) -> Result<()> {
+        if points.len() < 2 {
+            return Ok(());
+        }
+        let p = self.palette;
+        let step = r.w / (system::HISTORY_LEN - 1) as f32;
+        let at = |i: usize, v: f32| {
+            let x = r.right() - (points.len() - 1 - i) as f32 * step;
+            Vector2::new(x, r.bottom() - v.clamp(0.0, 100.0) / 100.0 * r.h)
+        };
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            let area = self.d2d.CreatePathGeometry()?;
+            let sink = area.Open()?;
+            let first = at(0, points[0]);
+            sink.BeginFigure(Vector2::new(first.X, r.bottom()), D2D1_FIGURE_BEGIN_FILLED);
+            for (i, v) in points.iter().enumerate() {
+                sink.AddLine(at(i, *v));
+            }
+            sink.AddLine(Vector2::new(r.right(), r.bottom()));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink.Close()?;
+            target.brush.SetColor(&color(p.accent, SPARK_FILL));
+            target.rt.FillGeometry(&area, &target.brush, None);
+
+            let line = self.d2d.CreatePathGeometry()?;
+            let sink = line.Open()?;
+            sink.BeginFigure(first, D2D1_FIGURE_BEGIN_HOLLOW);
+            for (i, v) in points.iter().enumerate().skip(1) {
+                sink.AddLine(at(i, *v));
+            }
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            sink.Close()?;
+            target.brush.SetColor(&color(p.accent, 1.0));
+            target
+                .rt
+                .DrawGeometry(&line, &target.brush, SPARK_STROKE, &self.round_cap);
+        }
+        Ok(())
+    }
+
+    /// "Bersihkan" (`.cbtn` with the sparkle). Until the cleaner exists it
+    /// is the ghost style, dimmed, with a small "segera" tag, and takes no
+    /// click (`CLEANER_READY`).
+    fn paint_clean_button(&self, r: Rect, lang: Lang) {
+        let p = self.palette;
+        let (fill, ink, alpha) = if CLEANER_READY {
+            (p.accent, p.on_accent, 1.0)
+        } else {
+            (p.raised, p.text, CLEAN_DIM)
+        };
+        self.set_color(fill, alpha);
+        self.fill_round(r, r.h / 2.0);
+        let icon = Rect {
+            x: r.x + CLEAN_PAD_X,
+            w: CLEAN_ICON,
+            ..r
+        };
+        self.icon_colored(Icon::Sparkle, icon, CLEAN_ICON, ink, alpha, None);
+        let label = text(lang, Key::SystemClean);
+        let label_w = self.text_width(label, &self.fonts.button).ceil();
+        let area = Rect {
+            x: icon.right() + CLEAN_ICON_GAP,
+            w: label_w + 1.0,
+            ..r
+        };
+        self.text_colored(label, &self.fonts.button, area, ink, alpha);
+        if CLEANER_READY {
+            return;
+        }
+        let tag = Rect {
+            x: area.x + label_w + SOON_GAP,
+            y: r.y + (r.h - SOON_H) / 2.0,
+            w: self.soon_tag_w(lang),
+            h: SOON_H,
+        };
+        self.set_color(p.secondary, TAG_TINT);
+        self.fill_round(tag, tag.h / 2.0);
+        let soon = text(lang, Key::SystemSoon);
+        self.text_colored(soon, &self.fonts.micro_center, tag, p.secondary, 1.0);
     }
 
     /// The measured header of the CLI page: each chip's full width and,

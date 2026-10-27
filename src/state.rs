@@ -7,7 +7,8 @@ use crate::calendar::range_for;
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
-    CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Timeline, View,
+    CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Shortcut,
+    Timeline, View,
 };
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 use crate::ui::geometry::ANIM_MS;
@@ -160,9 +161,10 @@ impl IslandState {
                     self.clear_sticky(Sticky::Session(session_id));
                     self.queue.push_back(notice);
                 }
-                NoticeKind::App { .. } | NoticeKind::BatteryLow | NoticeKind::Pomodoro => {
-                    self.queue.push_back(notice)
-                }
+                NoticeKind::App { .. }
+                | NoticeKind::BatteryLow
+                | NoticeKind::SystemLow
+                | NoticeKind::Pomodoro => self.queue.push_back(notice),
                 // Never over a fullscreen app (`App` checks first and tries
                 // again later; this only guards a race).
                 NoticeKind::Greeting => {
@@ -204,6 +206,7 @@ impl IslandState {
             | Event::Lyrics(_)
             | Event::Cli(_)
             | Event::ExplorerFolders { .. }
+            | Event::SystemSample(_)
             | Event::Tick => {}
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
@@ -459,16 +462,16 @@ impl IslandState {
             }
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
-            Hit::Shortcut(s) => {
-                if matches!(self.view(), View::Panel(_)) {
-                    // Without hover (an editor or the CLI pins the panel) the
-                    // pointer is already away: its next visit reopens it.
-                    self.collapsed = if self.hover {
-                        Collapse::Shut
-                    } else {
-                        Collapse::Left
-                    };
-                    effects.push(Effect::RunShortcut(s));
+            Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
+            // A process row opens Task Manager the way its tile does; a
+            // drive opens Explorer there. Both get the panel out of the way.
+            Hit::SystemProcess => {
+                self.collapse_for(Effect::RunShortcut(Shortcut::TaskManager), effects)
+            }
+            Hit::SystemDrive(letter) => self.collapse_for(Effect::OpenDrive(letter), effects),
+            Hit::SystemClean => {
+                if self.view() == View::Panel(Page::System) {
+                    effects.push(Effect::OpenCleaner);
                 }
             }
             Hit::CliInput
@@ -499,6 +502,22 @@ impl IslandState {
                 }
             }
             Hit::CliMenuDismiss => self.cli_menu = false,
+        }
+    }
+
+    /// Shuts the open panel and asks for `effect` (a shortcut, Explorer on
+    /// a drive), which `App` runs once it is out of the way. Nothing while
+    /// the panel is not showing.
+    fn collapse_for(&mut self, effect: Effect, effects: &mut Vec<Effect>) {
+        if matches!(self.view(), View::Panel(_)) {
+            // Without hover (an editor or the CLI pins the panel) the
+            // pointer is already away: its next visit reopens it.
+            self.collapsed = if self.hover {
+                Collapse::Shut
+            } else {
+                Collapse::Left
+            };
+            effects.push(effect);
         }
     }
 
@@ -637,6 +656,11 @@ impl IslandState {
                 if self.pomodoro.status() == PomoStatus::Ready {
                     self.pomodoro.start_pause(now);
                 }
+                None
+            }
+            // The panel the pointer opens next is the System page.
+            NoticeKind::SystemLow => {
+                self.page = Page::System;
                 None
             }
             _ => None,
@@ -1321,7 +1345,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 6), t0);
+        s.apply(Event::Wheel(-120 * 7), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
@@ -1331,7 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_end_with_cli_then_shortcuts() {
+    fn pages_end_with_system_cli_then_shortcuts() {
         assert_eq!(
             Page::ALL,
             [
@@ -1340,10 +1364,92 @@ mod tests {
                 Page::Reminders,
                 Page::Notes,
                 Page::Media,
+                Page::System,
                 Page::Cli,
                 Page::Shortcuts,
             ]
         );
+    }
+
+    fn system_notice() -> Notice {
+        Notice {
+            key: "system-disk-C".into(),
+            source: "Sistem".into(),
+            title: "Disk C: tinggal 9,6 GB".into(),
+            body: "Buka halaman Sistem untuk detailnya".into(),
+            kind: NoticeKind::SystemLow,
+        }
+    }
+
+    #[test]
+    fn system_notice_queues_and_its_click_opens_the_system_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(system_notice()), t0);
+        assert_eq!(s.view(), View::Notice(system_notice()));
+        // Temporary like the battery's.
+        assert_eq!(s.next_deadline(), Some(t0 + NOTICE_DURATION));
+        // The pointer is on it: the click dismisses it and the panel opens
+        // on Sistem, not on the page it was left on.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(system_notice()));
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert!(effects.is_empty());
+        assert_eq!(s.view(), View::Panel(Page::System));
+        // Without hover the next visit opens there.
+        let mut s = st();
+        s.apply(Event::Notice(system_notice()), t0);
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::System));
+        // A sample means nothing to the reducer.
+        let before = s.view();
+        let sample = crate::system::SystemSample {
+            kind: crate::system::SampleKind::Warn,
+            cpu: 0.0,
+            cores: 0,
+            ram_used: 1,
+            ram_total: 2,
+            drives: vec![],
+            procs: vec![],
+            uptime: Duration::ZERO,
+        };
+        assert!(s.apply(Event::SystemSample(sample), t0).is_empty());
+        assert_eq!(s.view(), before);
+    }
+
+    #[test]
+    fn system_page_clicks() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::System, t0);
+        // A process row runs Task Manager like its tile: the panel shuts.
+        let effects = s.apply(Event::Click(Hit::SystemProcess), t0);
+        assert_eq!(effects, vec![Effect::RunShortcut(Shortcut::TaskManager)]);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::System));
+        // A drive opens Explorer there, the same way.
+        let effects = s.apply(Event::Click(Hit::SystemDrive('D')), t0);
+        assert_eq!(effects, vec![Effect::OpenDrive('D')]);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0);
+        // "Bersihkan" asks for the cleaner (no region draws it yet).
+        assert_eq!(
+            s.apply(Event::Click(Hit::SystemClean), t0),
+            vec![Effect::OpenCleaner]
+        );
+        assert_eq!(s.view(), View::Panel(Page::System));
+        // Off the page, or with the panel shut, nothing.
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert!(s.apply(Event::Click(Hit::SystemClean), t0).is_empty());
+        s.apply(Event::Hover(false), t0);
+        assert!(s.apply(Event::Click(Hit::SystemProcess), t0).is_empty());
+        assert!(s.apply(Event::Click(Hit::SystemDrive('C')), t0).is_empty());
     }
 
     #[test]

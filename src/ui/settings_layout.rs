@@ -11,7 +11,7 @@ use crate::calendar::CalStatus;
 use crate::claude::install::HookState;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::Style;
+use crate::config::{DISK_WARN_RANGE, RAM_WARN_RANGE, Style};
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
 use crate::pomodoro::{self, PomoSettings};
@@ -282,6 +282,9 @@ pub enum Hit {
     /// "Sapaan pagi".
     Greeting,
     Battery(i32),
+    /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
+    DiskWarn(i32),
+    RamWarn(i32),
     DndHelp,
     Pomo(PomoField, i32),
     GoogleSave,
@@ -603,6 +606,9 @@ pub struct State<'a> {
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
+    /// The System page's warnings: GB free and percent used.
+    pub disk_warn_gb: u32,
+    pub ram_warn_percent: u8,
     pub pomodoro: PomoSettings,
     /// A phase runs or is paused: the steppers are off.
     pub pomodoro_locked: bool,
@@ -664,6 +670,38 @@ pub fn battery_step(threshold: u8, dir: i32) -> u8 {
     };
     // A hand-edited value off the 5 % grid snaps onto it.
     (stepped / step * step).clamp(min, max)
+}
+
+/// One step of `(min, max, step)` up (`dir > 0`) or down, snapped onto the
+/// step's grid (from `min`) and kept in range.
+fn grid_step(v: u32, dir: i32, (min, max, step): (u32, u32, u32)) -> u32 {
+    let v = v.clamp(min, max);
+    let on_grid = min + (v - min) / step * step;
+    let stepped = if dir > 0 {
+        on_grid + step
+    } else if on_grid < v {
+        on_grid
+    } else {
+        on_grid.saturating_sub(step)
+    };
+    stepped.clamp(min, max)
+}
+
+/// The disk warning one step up or down: 5–100 GB by 5.
+pub fn disk_warn_step(gb: u32, dir: i32) -> u32 {
+    grid_step(gb, dir, DISK_WARN_RANGE)
+}
+
+/// The RAM warning one step up or down: 70–98 %.
+pub fn ram_warn_step(percent: u8, dir: i32) -> u8 {
+    let (min, max, step) = RAM_WARN_RANGE;
+    let range = (u32::from(min), u32::from(max), u32::from(step));
+    grid_step(u32::from(percent), dir, range) as u8
+}
+
+/// "10 GB": the disk warning stepper's value.
+pub fn disk_warn_value(gb: u32) -> String {
+    format!("{gb} GB")
 }
 
 /// The scroll after `wheel` (raw delta, +120 per notch away from the user,
@@ -1483,6 +1521,45 @@ fn general(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
     b.row_text(card, rows[6], b.t(Key::ShellCli), desc, false, x);
     b.divider(card, rows[6]);
+
+    warnings_card(b, s);
+}
+
+/// The System page's warnings (keputusan-v3.1.html p4), in a second card
+/// under Umum's seven rows; the section scrolls to reach it, like Tampilan.
+fn warnings_card(b: &mut Builder, s: &State) {
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let (min, max, _) = DISK_WARN_RANGE;
+    let gb = s.disk_warn_gb;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[0]),
+        disk_warn_value(gb),
+        Hit::DiskWarn(-1),
+        Hit::DiskWarn(1),
+        (gb > min, gb < max),
+        true,
+    );
+    let desc = Some((b.t(Key::DiskAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::DiskAlert), desc, false, x);
+
+    let (min, max, _) = RAM_WARN_RANGE;
+    let pct = s.ram_warn_percent;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[1]),
+        format!("{pct}%"),
+        Hit::RamWarn(-1),
+        Hit::RamWarn(1),
+        (pct > min, pct < max),
+        true,
+    );
+    let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::RamAlert), desc, false, x);
+    b.divider(card, rows[1]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1818,6 +1895,8 @@ mod tests {
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
+                        disk_warn_gb: if locked { 100 } else { 5 },
+                        ram_warn_percent: if locked { 98 } else { 70 },
                         pomodoro: PomoSettings {
                             focus_min: 120,
                             short_break_min: 30,
@@ -2050,8 +2129,9 @@ mod tests {
         }
     }
 
-    /// Every section fits the window's height; Appearance, which has Bata's
-    /// rows too, scrolls by exactly what it lacks and then fits.
+    /// Every section fits the window's height; Appearance (with Bata's
+    /// rows) and General (with the System warnings) scroll by exactly what
+    /// they lack and then fit.
     #[test]
     fn everything_fits_in_the_window_height() {
         for (section, lang, l) in all_layouts() {
@@ -2066,7 +2146,7 @@ mod tests {
                 unscrolled - l.scroll_max <= CLIENT_H - PAD + 0.01,
                 "{section:?} {lang:?}: {bottom}"
             );
-            if section == Section::Appearance {
+            if matches!(section, Section::Appearance | Section::General) {
                 assert!(l.scroll_max > 0.0 && l.viewport.is_some());
                 // Scrolled to the end, the last card ends at the margin.
                 if l.scroll == l.scroll_max {
@@ -2146,8 +2226,103 @@ mod tests {
         assert_eq!(scroll_by(0.0, 120, 100.0), 0.0);
         assert_eq!(scroll_by(90.0, -240, 100.0), 100.0);
         assert!(l.scrollbar().is_some() && top.scrollbar().is_some());
-        let general = layout(Section::General, &base, &Estimate);
-        assert!(general.scrollbar().is_none());
+        let pomodoro = layout(Section::Pomodoro, &base, &Estimate);
+        assert!(pomodoro.scrollbar().is_none());
+    }
+
+    #[test]
+    fn general_scrolls_to_the_system_warnings() {
+        let warn_hits = |l: &Layout| -> Vec<Hit> {
+            l.hits()
+                .into_iter()
+                .map(|(h, _)| h)
+                .filter(|h| matches!(h, Hit::DiskWarn(_) | Hit::RamWarn(_)))
+                .collect()
+        };
+        for lang in [Lang::Id, Lang::En] {
+            let base = State {
+                lang,
+                disk_warn_gb: 10,
+                ram_warn_percent: 90,
+                ..states()[0].clone()
+            };
+            let top = layout(Section::General, &base, &Estimate);
+            assert!(top.viewport.is_some() && top.scrollbar().is_some());
+            assert_eq!(top.cards.len(), 2, "the warnings have their own card");
+            // At the top the warning card runs past the window: what is
+            // below it takes no click.
+            assert!(top.cards[1].bottom() > CLIENT_H);
+            for (_, r) in top.hits() {
+                assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
+            }
+            // Scrolled to the end: both steppers, the last card on the margin.
+            let end = State {
+                scroll: 1e6,
+                ..base.clone()
+            };
+            let l = layout(Section::General, &end, &Estimate);
+            assert_eq!(l.scroll, l.scroll_max);
+            assert!((l.cards[1].bottom() - (CLIENT_H - PAD)).abs() < 0.01);
+            assert_eq!(
+                warn_hits(&l),
+                [
+                    Hit::DiskWarn(-1),
+                    Hit::DiskWarn(1),
+                    Hit::RamWarn(-1),
+                    Hit::RamWarn(1)
+                ]
+            );
+            let values: Vec<&str> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Stepper { minus, value, .. }
+                        if matches!(minus.1, Some(Hit::DiskWarn(_) | Hit::RamWarn(_))) =>
+                    {
+                        Some(value.text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(values, ["10 GB", "90%"]);
+            for key in [
+                Key::DiskAlert,
+                Key::DiskAlertDesc,
+                Key::RamAlert,
+                Key::RamAlertDesc,
+            ] {
+                assert!(
+                    l.texts.iter().any(|t| t.text == text(lang, key)),
+                    "{lang:?} {key:?}"
+                );
+            }
+            // At the ends of their ranges a side goes.
+            let ends = State {
+                disk_warn_gb: 100,
+                ram_warn_percent: 70,
+                ..end
+            };
+            let l = layout(Section::General, &ends, &Estimate);
+            assert_eq!(warn_hits(&l), [Hit::DiskWarn(-1), Hit::RamWarn(1)]);
+        }
+    }
+
+    #[test]
+    fn warning_steps_stay_on_their_grid() {
+        assert_eq!(disk_warn_step(10, 1), 15);
+        assert_eq!(disk_warn_step(10, -1), 5);
+        assert_eq!(disk_warn_step(5, -1), 5);
+        assert_eq!(disk_warn_step(100, 1), 100);
+        // A hand-set value off the grid snaps onto it.
+        assert_eq!(disk_warn_step(12, 1), 15);
+        assert_eq!(disk_warn_step(12, -1), 10);
+        assert_eq!(disk_warn_step(500, -1), 95);
+        assert_eq!(ram_warn_step(90, 1), 91);
+        assert_eq!(ram_warn_step(90, -1), 89);
+        assert_eq!(ram_warn_step(98, 1), 98);
+        assert_eq!(ram_warn_step(70, -1), 70);
+        assert_eq!(ram_warn_step(40, 1), 71);
+        assert_eq!(disk_warn_value(10), "10 GB");
     }
 
     #[test]
@@ -2549,18 +2724,24 @@ mod tests {
                     l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
                     Some(Hit::Shell(Shell::Cmd))
                 );
-                // Below every other control of the card.
+                // Below every other control of the first card (the
+                // warnings have a card of their own under it).
+                let first = l.cards[0];
                 for c in &l.controls {
-                    if !matches!(
-                        c,
-                        Control::Segmented {
-                            group: Group::Shell,
-                            ..
-                        }
-                    ) {
+                    let in_first = c.bounds().bottom() <= first.bottom();
+                    if in_first
+                        && !matches!(
+                            c,
+                            Control::Segmented {
+                                group: Group::Shell,
+                                ..
+                            }
+                        )
+                    {
                         assert!(c.bounds().bottom() <= track.y, "{c:?}");
                     }
                 }
+                assert!(track.bottom() <= first.bottom());
                 for key in [Key::ShellCli, Key::ShellCliDesc] {
                     assert!(l.texts.iter().any(|t| t.text == text(lang, key)));
                 }

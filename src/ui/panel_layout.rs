@@ -192,8 +192,64 @@ pub enum PageLayout {
     Reminders(ListLayout),
     Notes(ListLayout),
     Media(ExpandedLayout),
+    System(SystemLayout),
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
+}
+
+/// The cleaner behind "Bersihkan" exists (Run 5). Until then the button is
+/// drawn dimmed with a "segera" tag and takes no click.
+pub const CLEANER_READY: bool = false;
+
+/// The System page's header as the renderer measured it: the uptime chip
+/// and the "Bersihkan" button, full widths.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SystemHead {
+    pub uptime_w: f32,
+    pub clean_w: f32,
+}
+
+/// A labelled bar: the name on the left, the figures on the right, the bar
+/// under them. `row` is the whole meter (a drive's click area).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeterLayout {
+    pub row: Rect,
+    pub name: Rect,
+    pub value: Rect,
+    pub bar: Rect,
+}
+
+/// A busiest-process row: name, CPU and memory (both right-aligned).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProcRow {
+    pub row: Rect,
+    pub name: Rect,
+    pub cpu: Rect,
+    pub mem: Rect,
+}
+
+/// The System page after keputusan-v3.1.html `sysPanel`: the title with the
+/// uptime chip and "Bersihkan" on the header row; a 170 px column with the
+/// CPU ring and its 60 s line; beside it the RAM meter, a meter per fixed
+/// drive that fits, "Paling sibuk" and three process rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemLayout {
+    pub header: Rect,
+    pub uptime: Rect,
+    pub clean: Rect,
+    pub ring_center: (f32, f32),
+    /// The stroke's centre line.
+    pub ring_radius: f32,
+    /// The big percentage and "CPU · 8 INTI" inside the ring.
+    pub percent: Rect,
+    pub caption: Rect,
+    pub spark: Rect,
+    pub ram: MeterLayout,
+    /// The drives that fit, in the order given.
+    pub drives: Vec<(char, MeterLayout)>,
+    /// "Paling sibuk".
+    pub busiest: Rect,
+    pub procs: Vec<ProcRow>,
 }
 
 /// Side padding of the panel content.
@@ -362,6 +418,41 @@ const TILE_MAX_H: f32 = 98.0;
 const TILE_GLYPH_H: f32 = 28.0;
 const TILE_LABEL_H: f32 = 16.0;
 const TILE_INNER_GAP: f32 = 8.0;
+
+/// The System page, after keputusan-v3.1.html `.sys`, `.ringw`, `.spark`,
+/// `.meter`, `.bar`, `.procs` and `.cbtn`.
+const SYS_HEAD_H: f32 = 28.0;
+const SYS_HEAD_GAP: f32 = 8.0;
+const SYS_CHIP_H: f32 = 20.0;
+const SYS_CLEAN_H: f32 = 24.0;
+const SYS_CHIP_GAP: f32 = 6.0;
+const SYS_LEFT_W: f32 = 170.0;
+const SYS_COL_GAP: f32 = 18.0;
+/// The ring's box (150 px), its stroke and the room above it.
+const SYS_RING_D: f32 = 150.0;
+pub const SYS_RING_STROKE: f32 = 11.0;
+const SYS_RING_TOP: f32 = 4.0;
+const SYS_PERCENT_H: f32 = 38.0;
+const SYS_CAPTION_H: f32 = 14.0;
+/// The CPU line: 150 × 34, 10 px under the ring.
+const SYS_SPARK_W: f32 = 150.0;
+const SYS_SPARK_H: f32 = 34.0;
+const SYS_SPARK_GAP: f32 = 10.0;
+/// A meter: its 15 px heading, 5 px, the 7 px bar; 11 px to the next.
+const METER_HEAD_H: f32 = 15.0;
+const METER_BAR_GAP: f32 = 5.0;
+pub const METER_BAR_H: f32 = 7.0;
+const METER_H: f32 = METER_HEAD_H + METER_BAR_GAP + METER_BAR_H;
+const METER_GAP: f32 = 11.0;
+const METER_NAME_W: f32 = 70.0;
+/// "Paling sibuk" (10 above, 4 under) and the process rows.
+const BUSIEST_GAP: f32 = 10.0;
+const BUSIEST_H: f32 = 14.0;
+const BUSIEST_ROWS_GAP: f32 = 4.0;
+const PROC_H: f32 = 16.0;
+const PROC_CPU_W: f32 = 40.0;
+const PROC_MEM_W: f32 = 56.0;
+const PROC_COL_GAP: f32 = 12.0;
 
 const COVER: f32 = 196.0;
 const COVER_GAP: f32 = 24.0;
@@ -1430,6 +1521,107 @@ pub fn shortcuts_layout(s: ShapeRect, strip: bool) -> ShortcutsLayout {
     ShortcutsLayout { header, tiles }
 }
 
+/// The System page for `drives` (fixed drives, in order; as many as fit
+/// are shown, fewer under the waiting strip) and `procs` process rows (at
+/// most `TOP_PROCESSES`). Room for three rows is kept either way, so the
+/// meters do not jump when the first sample arrives.
+pub fn system_layout(
+    s: ShapeRect,
+    strip: bool,
+    head: &SystemHead,
+    drives: &[char],
+    procs: usize,
+) -> SystemLayout {
+    use crate::system::TOP_PROCESSES;
+    let top = content_top(s, strip);
+    let bottom = content_bottom(s);
+    let (l, r) = (left(s), right(s));
+
+    let clean = rect(
+        r - head.clean_w,
+        top + (SYS_HEAD_H - SYS_CLEAN_H) / 2.0,
+        head.clean_w,
+        SYS_CLEAN_H,
+    );
+    let uptime = rect(
+        clean.x - SYS_CHIP_GAP - head.uptime_w,
+        top + (SYS_HEAD_H - SYS_CHIP_H) / 2.0,
+        head.uptime_w,
+        SYS_CHIP_H,
+    );
+    let header = rect(l, top, uptime.x - 8.0 - l, SYS_HEAD_H);
+    let body = top + SYS_HEAD_H + SYS_HEAD_GAP;
+
+    // Left: the ring as large as the design allows above its line.
+    let ring_d = SYS_RING_D.min(bottom - body - SYS_RING_TOP - SYS_SPARK_GAP - SYS_SPARK_H);
+    let cx = l + SYS_LEFT_W / 2.0;
+    let cy = body + SYS_RING_TOP + ring_d / 2.0;
+    let ring_radius = (ring_d - SYS_RING_STROKE) / 2.0 - 1.0;
+    let inner = ring_radius - SYS_RING_STROKE / 2.0 - 4.0;
+    let percent = rect(cx - inner, cy - 26.0, 2.0 * inner, SYS_PERCENT_H);
+    let caption = rect(cx - inner, cy + 12.0, 2.0 * inner, SYS_CAPTION_H);
+    let spark = rect(
+        cx - SYS_SPARK_W / 2.0,
+        cy + ring_d / 2.0 + SYS_SPARK_GAP,
+        SYS_SPARK_W,
+        SYS_SPARK_H,
+    );
+
+    // Right: meters, then "Paling sibuk" and its rows.
+    let x = l + SYS_LEFT_W + SYS_COL_GAP;
+    let w = r - x;
+    let tail = BUSIEST_GAP + BUSIEST_H + BUSIEST_ROWS_GAP + TOP_PROCESSES as f32 * PROC_H;
+    let meters_h = |k: usize| k as f32 * METER_H + (k as f32 - 1.0) * METER_GAP;
+    let shown = (0..=drives.len())
+        .rev()
+        .find(|n| body + meters_h(n + 1) + tail <= bottom + 0.01)
+        .unwrap_or(0);
+    let meter = |y: f32| MeterLayout {
+        row: rect(x, y, w, METER_H),
+        name: rect(x, y, METER_NAME_W, METER_HEAD_H),
+        value: rect(x + METER_NAME_W, y, w - METER_NAME_W, METER_HEAD_H),
+        bar: rect(x, y + METER_HEAD_H + METER_BAR_GAP, w, METER_BAR_H),
+    };
+    let ram = meter(body);
+    let drives: Vec<(char, MeterLayout)> = drives
+        .iter()
+        .take(shown)
+        .enumerate()
+        .map(|(i, letter)| (*letter, meter(body + (i + 1) as f32 * (METER_H + METER_GAP))))
+        .collect();
+    let meters_bottom = body + meters_h(shown + 1);
+    let busiest = rect(x, meters_bottom + BUSIEST_GAP, w, BUSIEST_H);
+    let rows_y = busiest.bottom() + BUSIEST_ROWS_GAP;
+    let procs = (0..procs.min(TOP_PROCESSES))
+        .map(|i| {
+            let row = rect(x, rows_y + i as f32 * PROC_H, w, PROC_H);
+            let mem = rect(r - PROC_MEM_W, row.y, PROC_MEM_W, PROC_H);
+            let cpu = rect(mem.x - PROC_COL_GAP - PROC_CPU_W, row.y, PROC_CPU_W, PROC_H);
+            let name = rect(x, row.y, cpu.x - PROC_COL_GAP - x, PROC_H);
+            ProcRow {
+                row,
+                name,
+                cpu,
+                mem,
+            }
+        })
+        .collect();
+    SystemLayout {
+        header,
+        uptime,
+        clean,
+        ring_center: (cx, cy),
+        ring_radius,
+        percent,
+        caption,
+        spark,
+        ram,
+        drives,
+        busiest,
+        procs,
+    }
+}
+
 /// A tile's icon and, under it, its label; the two centred in the tile.
 pub fn tile_parts(tile: Rect) -> (Rect, Rect) {
     let h = TILE_GLYPH_H + TILE_INNER_GAP + TILE_LABEL_H;
@@ -1560,6 +1752,17 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
         PageLayout::Shortcuts(l) => {
             for (s, r) in l.tiles {
                 add(r, Hit::Shortcut(s));
+            }
+        }
+        PageLayout::System(l) => {
+            if CLEANER_READY {
+                add(l.clean, Hit::SystemClean);
+            }
+            for (letter, m) in &l.drives {
+                add(m.row, Hit::SystemDrive(*letter));
+            }
+            for p in &l.procs {
+                add(p.row, Hit::SystemProcess);
             }
         }
     }
@@ -1752,7 +1955,106 @@ mod tests {
             "shortcuts".into(),
             PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         ));
+        for (drives, procs) in [(&[][..], 0), (&['C', 'D'][..], 3), (&SIX_DRIVES[..], 3)] {
+            let l = system_layout(s, strip, &SYS_HEAD, drives, procs);
+            out.push((format!("system {drives:?}"), PageLayout::System(l)));
+        }
         out
+    }
+
+    const SIX_DRIVES: [char; 6] = ['C', 'D', 'E', 'F', 'G', 'H'];
+    /// "Uptime 6 j 1 m" and the ghost "Bersihkan · segera", measured.
+    const SYS_HEAD: SystemHead = SystemHead {
+        uptime_w: 96.0,
+        clean_w: 140.0,
+    };
+
+    #[test]
+    fn system_page_fits_drives_and_keeps_clear_of_the_dots() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            let (dots, _) = page_dots(s, Page::System);
+            for (strip, most) in [(false, 3), (true, 2)] {
+                let l = system_layout(s, strip, &SYS_HEAD, &SIX_DRIVES, 3);
+                // As many drives as fit, in order; fewer under the strip.
+                let letters: Vec<char> = l.drives.iter().map(|(c, _)| *c).collect();
+                assert_eq!(letters, SIX_DRIVES[..most], "{style:?} strip={strip}");
+                let few = system_layout(s, strip, &SYS_HEAD, &['C'], 3);
+                assert_eq!(few.drives.len(), 1);
+                // Nothing reaches the dots.
+                let last = l.procs.last().expect("three rows").row;
+                assert_eq!(l.procs.len(), 3);
+                assert!(last.bottom() <= dots[0].y - 6.0 + 0.01, "{last:?}");
+                assert!(l.spark.bottom() <= dots[0].y - 6.0 + 0.01);
+                if strip {
+                    assert!(l.header.y >= waiting_strip(s).bottom());
+                }
+                // Header: title, then the chip and the button, right-aligned.
+                assert!(l.header.right() < l.uptime.x);
+                assert!(l.uptime.right() < l.clean.x);
+                assert_eq!(l.clean.right(), right(s));
+                assert_eq!((l.uptime.w, l.clean.w), (96.0, 140.0));
+                // The 170 px column: the ring (150 px, less under the strip)
+                // over its 150 × 34 line; the meters 18 px to its right.
+                let (cx, cy) = l.ring_center;
+                assert_eq!(cx, left(s) + 85.0);
+                let outer = l.ring_radius + SYS_RING_STROKE / 2.0;
+                assert!(outer * 2.0 <= 150.0 && outer * 2.0 >= 140.0, "{outer}");
+                assert!(cy - outer >= l.header.bottom());
+                assert!(l.spark.y >= cy + outer);
+                assert_eq!((l.spark.w, l.spark.h), (150.0, 34.0));
+                assert!(l.percent.bottom() <= l.caption.y + 0.01);
+                assert!(l.percent.w <= 2.0 * (l.ring_radius - SYS_RING_STROKE / 2.0));
+                assert_eq!(l.ram.row.x, left(s) + 188.0);
+                assert_eq!(l.ram.row.right(), right(s));
+                assert_eq!(l.ram.bar.h, 7.0);
+                for (_, m) in &l.drives {
+                    assert!(m.row.y >= l.ram.row.bottom() + 11.0 - 0.01);
+                    assert!(m.name.right() <= m.value.x);
+                }
+                assert!(l.busiest.y >= l.drives.last().unwrap().1.row.bottom());
+                for p in &l.procs {
+                    assert!(p.name.right() < p.cpu.x && p.cpu.right() < p.mem.x);
+                    assert_eq!(p.mem.right(), right(s));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn system_regions_per_drive_and_process_and_no_clean_button_yet() {
+        let s = panel(Style::Pill);
+        let l = system_layout(s, false, &SYS_HEAD, &['C', 'D'], 3);
+        let hits = regions(s, &PageLayout::System(l.clone()), false);
+        let drives: Vec<(Hit, Rect)> = hits
+            .iter()
+            .filter(|r| matches!(r.hit, Hit::SystemDrive(_)))
+            .map(|r| (r.hit.clone(), r.rect))
+            .collect();
+        assert_eq!(
+            drives,
+            [
+                (Hit::SystemDrive('C'), l.drives[0].1.row),
+                (Hit::SystemDrive('D'), l.drives[1].1.row)
+            ]
+        );
+        let procs: Vec<Rect> = hits
+            .iter()
+            .filter(|r| r.hit == Hit::SystemProcess)
+            .map(|r| r.rect)
+            .collect();
+        assert_eq!(procs, l.procs.iter().map(|p| p.row).collect::<Vec<_>>());
+        // "Bersihkan" takes no click until the cleaner exists (Run 5).
+        assert!(!CLEANER_READY);
+        assert!(!hits.iter().any(|r| r.hit == Hit::SystemClean));
+        // Before the first sample: no drives, no rows, nothing clickable.
+        let empty = system_layout(s, false, &SYS_HEAD, &[], 0);
+        assert!(regions(s, &PageLayout::System(empty), false).is_empty());
+        // With the strip: the strip, then the page's own regions.
+        let l = system_layout(s, true, &SYS_HEAD, &['C', 'D', 'E'], 3);
+        let hits = regions(s, &PageLayout::System(l), true);
+        assert_eq!(hits[0].hit, Hit::Strip);
+        assert_eq!(hits.len(), 1 + 2 + 3);
     }
 
     /// Header chips of the CLI page: folder and shell, running with Stop,
@@ -2926,6 +3228,20 @@ mod tests {
                                 h: 2.0 * r,
                             });
                             drawn.extend([l.time, l.phase, l.session, l.durations, l.next_up]);
+                        }
+                        PageLayout::System(l) => {
+                            let (cx, cy) = l.ring_center;
+                            let r = l.ring_radius + SYS_RING_STROKE / 2.0;
+                            drawn.push(Rect {
+                                x: cx - r,
+                                y: cy - r,
+                                w: 2.0 * r,
+                                h: 2.0 * r,
+                            });
+                            drawn.extend([l.header, l.uptime, l.clean, l.spark, l.busiest]);
+                            drawn.extend([l.percent, l.caption, l.ram.row]);
+                            drawn.extend(l.drives.iter().map(|(_, m)| m.row));
+                            drawn.extend(l.procs.iter().map(|p| p.row));
                         }
                         PageLayout::Notes(l) | PageLayout::Reminders(l) => {
                             drawn.push(l.header);
