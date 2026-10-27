@@ -7,9 +7,10 @@ use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
-use crate::clean::CleanCat;
+use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, Section};
 use crate::model::{CalView, Hit, Page, Shortcut};
+use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::reminders::{Reminder, local_time};
 
@@ -196,6 +197,8 @@ pub enum PageLayout {
     System(SystemLayout),
     /// The cleaner over the System page.
     Cleaner(CleanerLayout),
+    /// The cleaner in its "Otomatis · Mole" mode.
+    Mole(MoleLayout),
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
 }
@@ -254,6 +257,107 @@ pub struct CleanerLayout {
     /// The button takes clicks (something ticked; no scan or clean
     /// running).
     pub go_live: bool,
+}
+
+/// What the Mole mode's body shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoleBody {
+    /// Not installed: the "Cara memasang" card.
+    Card,
+    /// The four groups and the two options.
+    Rows,
+    /// Mole's log (`result`: the measured result above it).
+    Log { result: bool },
+}
+
+/// What the Mole mode shows and what takes a click (`render::CleanerView::
+/// mole_look` decides from the reducer's phase).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MoleLook {
+    pub body: MoleBody,
+    /// The mode segment (not while a clean runs).
+    pub seg_live: bool,
+    /// The two options (a new preview runs).
+    pub opts_live: bool,
+    /// "Lindungi folder…" shows and takes clicks (Mole found).
+    pub protect: bool,
+    /// The main button takes clicks: after a preview that finished well
+    /// with these options, or after a run ("Pratinjau lagi").
+    pub go: bool,
+    /// By `MoleGroup::index`: the row's size says "lihat log" and shows
+    /// the log when clicked.
+    pub unreadable: [bool; 4],
+    /// The preview's log shows: a click on it goes back to the groups.
+    pub log_toggle: bool,
+}
+
+/// The Mole mode's text as the renderer measured it: the "Eksperimental"
+/// chip, the options' labels, "Lindungi folder…", the footer label, the
+/// main button and "Cara memasang ↗", full widths.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoleFoot {
+    pub chip_w: f32,
+    pub opt_w: [f32; 2],
+    pub protect_w: f32,
+    pub label_w: f32,
+    pub go_w: f32,
+    pub howto_w: f32,
+}
+
+/// One group row (`MG` in deepclean-opsi-d.html): icon, name over its
+/// subtitle, the size at the right.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoleRow {
+    pub group: MoleGroup,
+    pub row: Rect,
+    pub icon: Rect,
+    pub name: Rect,
+    pub sub: Rect,
+    pub size: Rect,
+}
+
+/// An option: its checkbox and label; `hit` covers both.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoleOptRow {
+    pub opt: MoleOpt,
+    pub check: Rect,
+    pub label: Rect,
+    pub hit: Rect,
+}
+
+/// "Kalau Mole belum terpasang": Bata thinking, the title and line, the
+/// ghost button at the right.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoleCard {
+    pub boxed: Rect,
+    pub robot: Rect,
+    pub title: Rect,
+    pub sub: Rect,
+    pub button: Rect,
+}
+
+/// The cleaner in Mole mode after deepclean-opsi-d.html `molePanel`: the
+/// header as in the own mode; the ochre "Eksperimental" chip and its line;
+/// the body (groups and options, the log, or the install card); the footer
+/// with "Lindungi folder…" at the left, the preview's total and the button
+/// at the right.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoleLayout {
+    pub back: Rect,
+    pub header: Rect,
+    pub seg: Rect,
+    pub seg_items: [Rect; 2],
+    pub chip: Rect,
+    pub intro: Rect,
+    pub rows: Vec<MoleRow>,
+    pub opts: Vec<MoleOptRow>,
+    pub log: Option<Rect>,
+    pub result: Option<Rect>,
+    pub card: Option<MoleCard>,
+    pub protect: Option<Rect>,
+    pub label: Rect,
+    pub go: Option<Rect>,
+    pub look: MoleLook,
 }
 
 /// The System page's header as the renderer measured it: the uptime chip
@@ -501,6 +605,27 @@ const CLEAN_FOOT_BOTTOM: f32 = 26.0;
 const CLEAN_FOOT_GAP: f32 = 8.0;
 /// Clear space between the last row and the footer.
 const CLEAN_ROWS_FOOT_GAP: f32 = 6.0;
+/// Mole mode (`molePanel`): the chip row under the header, the gaps
+/// around the body, the options row (8 px over it, 14 px between them),
+/// the result line over the log, the install card.
+const MOLE_CHIP_GAP: f32 = 6.0;
+const MOLE_CHIP_H: f32 = 20.0;
+const MOLE_CHIP_TEXT_GAP: f32 = 8.0;
+const MOLE_BODY_GAP: f32 = 8.0;
+const MOLE_OPT_H: f32 = 18.0;
+const MOLE_OPT_GAP: f32 = 14.0;
+const MOLE_OPT_CHECK_GAP: f32 = 6.0;
+const MOLE_RESULT_H: f32 = 20.0;
+const MOLE_RESULT_GAP: f32 = 4.0;
+const MOLE_CARD_TOP: f32 = 16.0;
+const MOLE_CARD_H: f32 = 64.0;
+const MOLE_CARD_PAD: f32 = 14.0;
+pub const MOLE_CARD_ROBOT: f32 = 30.0;
+const MOLE_CARD_GAP: f32 = 10.0;
+/// The log's line pitch: DM Mono 9.5 at the design's 1.5.
+pub const MOLE_LOG_LINE_H: f32 = 14.5;
+/// The log's text inset inside its dark box.
+pub const MOLE_LOG_PAD: f32 = 10.0;
 
 /// The System page, after keputusan-v3.1.html `.sys`, `.ringw`, `.spark`,
 /// `.meter`, `.bar`, `.procs` and `.cbtn`.
@@ -1720,31 +1845,8 @@ pub fn cleaner_layout(
     rows_live: bool,
     go_live: bool,
 ) -> CleanerLayout {
-    let top = s.y + CLEAN_TOP + if strip { STRIP_H } else { 0.0 };
+    let (top, back, header, seg, [first, second]) = clean_head(s, strip, head);
     let (l, r) = (left(s), right(s));
-    let back = rect(
-        l,
-        top + (CLEAN_HEAD_H - CLEAN_BACK) / 2.0,
-        CLEAN_BACK,
-        CLEAN_BACK,
-    );
-    let seg_w = head.seg[0] + head.seg[1] + 2.0 * CLEAN_SEG_PAD;
-    let seg = rect(
-        r - seg_w,
-        top + (CLEAN_HEAD_H - CLEAN_SEG_H) / 2.0,
-        seg_w,
-        CLEAN_SEG_H,
-    );
-    let item_h = CLEAN_SEG_H - 2.0 * CLEAN_SEG_PAD;
-    let first = rect(
-        seg.x + CLEAN_SEG_PAD,
-        seg.y + CLEAN_SEG_PAD,
-        head.seg[0],
-        item_h,
-    );
-    let second = rect(first.right(), first.y, head.seg[1], item_h);
-    let title_x = back.right() + CLEAN_BACK_GAP;
-    let header = rect(title_x, top, seg.x - 8.0 - title_x, CLEAN_HEAD_H);
 
     let foot_y = s.y + s.h - CLEAN_FOOT_BOTTOM - CLEAN_FOOT_H;
     let go = rect(r - foot.go_w, foot_y, foot.go_w, CLEAN_FOOT_H);
@@ -1803,6 +1905,188 @@ pub fn cleaner_layout(
         go,
         rows_live,
         go_live,
+    }
+}
+
+/// The cleaner's header, either mode: its top, the back button, the
+/// title, the segment's track and its two items.
+fn clean_head(s: ShapeRect, strip: bool, head: &CleanHead) -> (f32, Rect, Rect, Rect, [Rect; 2]) {
+    let top = s.y + CLEAN_TOP + if strip { STRIP_H } else { 0.0 };
+    let (l, r) = (left(s), right(s));
+    let back = rect(
+        l,
+        top + (CLEAN_HEAD_H - CLEAN_BACK) / 2.0,
+        CLEAN_BACK,
+        CLEAN_BACK,
+    );
+    let seg_w = head.seg[0] + head.seg[1] + 2.0 * CLEAN_SEG_PAD;
+    let seg = rect(
+        r - seg_w,
+        top + (CLEAN_HEAD_H - CLEAN_SEG_H) / 2.0,
+        seg_w,
+        CLEAN_SEG_H,
+    );
+    let item_h = CLEAN_SEG_H - 2.0 * CLEAN_SEG_PAD;
+    let first = rect(
+        seg.x + CLEAN_SEG_PAD,
+        seg.y + CLEAN_SEG_PAD,
+        head.seg[0],
+        item_h,
+    );
+    let second = rect(first.right(), first.y, head.seg[1], item_h);
+    let title_x = back.right() + CLEAN_BACK_GAP;
+    let header = rect(title_x, top, seg.x - 8.0 - title_x, CLEAN_HEAD_H);
+    (top, back, header, seg, [first, second])
+}
+
+/// The cleaner in Mole mode in `s` (`ShapeKind::PanelClean`, as the own
+/// mode, so switching does not morph): `head` and `foot` as measured,
+/// `look` what shows and takes clicks.
+pub fn mole_layout(
+    s: ShapeRect,
+    strip: bool,
+    head: &CleanHead,
+    foot: &MoleFoot,
+    look: MoleLook,
+) -> MoleLayout {
+    let (top, back, header, seg, seg_items) = clean_head(s, strip, head);
+    let (l, r) = (left(s), right(s));
+    let chip_y = top + CLEAN_HEAD_H + MOLE_CHIP_GAP;
+    let chip = rect(l, chip_y, foot.chip_w, MOLE_CHIP_H);
+    let intro_x = chip.right() + MOLE_CHIP_TEXT_GAP;
+    let intro = rect(intro_x, chip_y, r - intro_x, MOLE_CHIP_H);
+    let body_top = chip.bottom() + MOLE_BODY_GAP;
+
+    let foot_y = s.y + s.h - CLEAN_FOOT_BOTTOM - CLEAN_FOOT_H;
+    let go =
+        (look.body != MoleBody::Card).then(|| rect(r - foot.go_w, foot_y, foot.go_w, CLEAN_FOOT_H));
+    let label_right = go.map_or(r, |g| g.x - CLEAN_FOOT_GAP);
+    let label = rect(
+        label_right - foot.label_w,
+        foot_y,
+        foot.label_w,
+        CLEAN_FOOT_H,
+    );
+    let protect = look
+        .protect
+        .then(|| rect(l, foot_y, foot.protect_w, CLEAN_FOOT_H));
+    let body_bottom = foot_y - MOLE_BODY_GAP;
+
+    let (mut rows, mut opts, mut log, mut result, mut card) =
+        (Vec::new(), Vec::new(), None, None, None);
+    match look.body {
+        MoleBody::Rows => {
+            // The options sit 8 px under the rows (`margin: 8px 8px 0`),
+            // as high as the footer leaves room for.
+            let lowest_opt = body_bottom - MOLE_OPT_H;
+            let n = MoleGroup::ALL.len() as f32;
+            let room = lowest_opt - MOLE_BODY_GAP - body_top + CLEAN_ROW_GAP;
+            let pitch = CLEAN_ROW_PITCH.min(room / n);
+            let rows_bottom = body_top + n * pitch - CLEAN_ROW_GAP;
+            let opt_y = (rows_bottom + MOLE_BODY_GAP).min(lowest_opt);
+            for (i, group) in MoleGroup::ALL.into_iter().enumerate() {
+                let row = rect(l, body_top + i as f32 * pitch, r - l, pitch - CLEAN_ROW_GAP);
+                let mid = row.y + row.h / 2.0;
+                let icon = rect(row.x + CLEAN_ROW_PAD_X, row.y, CLEAN_ICON_COL, row.h);
+                let size = rect(
+                    row.right() - CLEAN_ROW_PAD_X - CLEAN_SIZE_W,
+                    row.y,
+                    CLEAN_SIZE_W,
+                    row.h,
+                );
+                let text_x = icon.right() + CLEAN_COL_GAP;
+                let text_w = size.x - CLEAN_COL_GAP - text_x;
+                let lines = CLEAN_NAME_H + CLEAN_SUB_H;
+                let name = rect(text_x, mid - lines / 2.0, text_w, CLEAN_NAME_H);
+                let sub = rect(text_x, name.bottom(), text_w, CLEAN_SUB_H);
+                rows.push(MoleRow {
+                    group,
+                    row,
+                    icon,
+                    name,
+                    sub,
+                    size,
+                });
+            }
+            let mut x = l + CLEAN_ROW_PAD_X;
+            for (i, opt) in [MoleOpt::System, MoleOpt::GameMedia]
+                .into_iter()
+                .enumerate()
+            {
+                let check = rect(
+                    x,
+                    opt_y + (MOLE_OPT_H - CLEAN_CHECK) / 2.0,
+                    CLEAN_CHECK,
+                    CLEAN_CHECK,
+                );
+                let label = rect(
+                    check.right() + MOLE_OPT_CHECK_GAP,
+                    opt_y,
+                    foot.opt_w[i],
+                    MOLE_OPT_H,
+                );
+                let hit = rect(check.x, opt_y, label.right() - check.x, MOLE_OPT_H);
+                opts.push(MoleOptRow {
+                    opt,
+                    check,
+                    label,
+                    hit,
+                });
+                x = label.right() + MOLE_OPT_GAP;
+            }
+        }
+        MoleBody::Log { result: with } => {
+            let mut y = body_top;
+            if with {
+                result = Some(rect(l, y, r - l, MOLE_RESULT_H));
+                y += MOLE_RESULT_H + MOLE_RESULT_GAP;
+            }
+            log = Some(rect(l, y, r - l, body_bottom - y));
+        }
+        MoleBody::Card => {
+            let boxed = rect(l, body_top + MOLE_CARD_TOP, r - l, MOLE_CARD_H);
+            let mid = boxed.y + boxed.h / 2.0;
+            let robot = rect(
+                boxed.x + MOLE_CARD_PAD,
+                mid - MOLE_CARD_ROBOT / 2.0,
+                MOLE_CARD_ROBOT,
+                MOLE_CARD_ROBOT,
+            );
+            let button = rect(
+                boxed.right() - MOLE_CARD_PAD - foot.howto_w,
+                mid - CLEAN_FOOT_H / 2.0,
+                foot.howto_w,
+                CLEAN_FOOT_H,
+            );
+            let text_x = robot.right() + MOLE_CARD_GAP;
+            let text_w = button.x - MOLE_CARD_GAP - text_x;
+            let title = rect(text_x, mid - CLEAN_NAME_H - 1.0, text_w, CLEAN_NAME_H + 2.0);
+            let sub = rect(text_x, mid + 1.0, text_w, CLEAN_SUB_H + 2.0);
+            card = Some(MoleCard {
+                boxed,
+                robot,
+                title,
+                sub,
+                button,
+            });
+        }
+    }
+    MoleLayout {
+        back,
+        header,
+        seg,
+        seg_items,
+        chip,
+        intro,
+        rows,
+        opts,
+        log,
+        result,
+        card,
+        protect,
+        label,
+        go,
+        look,
     }
 }
 
@@ -1939,8 +2223,12 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             }
         }
         PageLayout::Cleaner(l) => {
-            // The segment's second mode comes in Run 6: no region yet.
             add(l.back, Hit::CleanBack);
+            // The mode segment, like the rows, not while a clean runs.
+            if l.rows_live {
+                add(l.seg_items[0], Hit::CleanMode(CleanMode::Own));
+                add(l.seg_items[1], Hit::CleanMode(CleanMode::Mole));
+            }
             if l.rows_live {
                 for row in &l.rows {
                     add(row.row, Hit::CleanToggle(row.cat));
@@ -1948,6 +2236,40 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             }
             if l.go_live {
                 add(l.go, Hit::CleanGo);
+            }
+        }
+        PageLayout::Mole(l) => {
+            add(l.back, Hit::CleanBack);
+            let look = l.look;
+            if look.seg_live {
+                add(l.seg_items[0], Hit::CleanMode(CleanMode::Own));
+                add(l.seg_items[1], Hit::CleanMode(CleanMode::Mole));
+            }
+            if let Some(card) = &l.card {
+                add(card.button, Hit::MoleInstall);
+            }
+            for row in &l.rows {
+                if look.unreadable[row.group.index()] {
+                    add(row.size, Hit::MoleShowLog);
+                }
+            }
+            if let Some(log) = l.log
+                && look.log_toggle
+            {
+                add(log, Hit::MoleShowLog);
+            }
+            if look.opts_live {
+                for o in &l.opts {
+                    add(o.hit, Hit::MoleOpt(o.opt));
+                }
+            }
+            if let Some(p) = l.protect {
+                add(p, Hit::MoleProtect);
+            }
+            if let Some(go) = l.go
+                && look.go
+            {
+                add(go, Hit::MoleGo);
             }
         }
         PageLayout::System(l) => {
@@ -2289,12 +2611,16 @@ mod tests {
                 .map(|r| r.hit)
                 .collect::<Vec<Hit>>()
         };
-        let mut want = vec![Hit::CleanBack];
+        let mut want = vec![
+            Hit::CleanBack,
+            Hit::CleanMode(CleanMode::Own),
+            Hit::CleanMode(CleanMode::Mole),
+        ];
         want.extend(CleanCat::ALL.map(Hit::CleanToggle));
         want.push(Hit::CleanGo);
         assert_eq!(hits(true, true), want);
-        // While a clean runs only the way back takes a click; the mode
-        // segment never does yet (Run 6).
+        // While a clean runs only the way back takes a click, not the
+        // mode segment either.
         assert_eq!(hits(false, false), [Hit::CleanBack]);
         assert!(!hits(true, false).contains(&Hit::CleanGo));
         let l = cleaner_layout(s, false, &CLEAN_HEAD, &CLEAN_FOOT, true, true);
@@ -2304,10 +2630,177 @@ mod tests {
                 assert!(disjoint(a.rect, b.rect), "{a:?} overlaps {b:?}");
             }
         }
-        assert!(
-            !r.iter()
-                .any(|x| x.rect == l.seg || l.seg_items.contains(&x.rect))
+        let seg: Vec<&Region> = r.iter().filter(|x| l.seg_items.contains(&x.rect)).collect();
+        assert_eq!(seg.len(), 2);
+        assert_eq!(seg[1].hit, Hit::CleanMode(CleanMode::Mole));
+    }
+
+    const MOLE_FOOT: MoleFoot = MoleFoot {
+        chip_w: 84.0,
+        opt_w: [92.0, 128.0],
+        protect_w: 110.0,
+        label_w: 104.0,
+        go_w: 110.0,
+        howto_w: 124.0,
+    };
+
+    fn look(body: MoleBody) -> MoleLook {
+        MoleLook {
+            body,
+            seg_live: true,
+            opts_live: true,
+            protect: true,
+            go: true,
+            unreadable: [false; 4],
+            log_toggle: false,
+        }
+    }
+
+    #[test]
+    fn mole_mode_fits_the_same_panel() {
+        use crate::ui::geometry::ShapeKind;
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::PanelClean);
+            for strip in [false, true] {
+                let tag = format!("{style:?} strip={strip}");
+                let own = cleaner_layout(s, strip, &CLEAN_HEAD, &CLEAN_FOOT, true, true);
+                let l = mole_layout(s, strip, &CLEAN_HEAD, &MOLE_FOOT, look(MoleBody::Rows));
+                // The header does not move between the modes.
+                assert_eq!((l.back, l.header, l.seg), (own.back, own.header, own.seg));
+                assert_eq!(l.seg_items, own.seg_items);
+                // The chip line under it, then four rows and the options,
+                // clear of the footer.
+                assert!(l.chip.y >= l.header.bottom() && l.intro.x > l.chip.right());
+                let groups: Vec<MoleGroup> = l.rows.iter().map(|r| r.group).collect();
+                assert_eq!(groups, MoleGroup::ALL);
+                assert!(l.rows[0].row.y >= l.chip.bottom() + 7.99, "{tag}");
+                for pair in l.rows.windows(2) {
+                    assert!(pair[0].row.bottom() <= pair[1].row.y, "{tag}");
+                }
+                let go = l.go.expect("button");
+                let last = l.rows.last().unwrap().row;
+                assert_eq!(l.opts.len(), 2);
+                assert!(last.bottom() <= l.opts[0].hit.y, "{tag}");
+                assert!(l.opts[0].hit.right() < l.opts[1].hit.x);
+                assert!(l.opts[1].hit.bottom() + 7.99 <= go.y, "{tag}");
+                for r in &l.rows {
+                    assert!(r.icon.right() < r.name.x && r.name.right() < r.size.x);
+                    assert!(r.size.right() <= r.row.right());
+                }
+                // Footer: protect at the left, the label and the button at
+                // the right, where the own mode's button is.
+                assert_eq!(go.right(), right(s));
+                assert_eq!(go.bottom(), s.y + s.h - 26.0);
+                let protect = l.protect.expect("protect");
+                assert!(protect.x == left(s) && protect.right() < l.label.x);
+                assert!(l.label.right() < go.x);
+                for body in [
+                    MoleBody::Rows,
+                    MoleBody::Log { result: true },
+                    MoleBody::Log { result: false },
+                    MoleBody::Card,
+                ] {
+                    let l = mole_layout(s, strip, &CLEAN_HEAD, &MOLE_FOOT, look(body));
+                    for r in regions(s, &PageLayout::Mole(l.clone()), strip) {
+                        assert!(rect_inside(style, s, r.rect), "{tag} {body:?}: {r:?}");
+                    }
+                    if let Some(log) = l.log {
+                        assert!(log.y >= l.chip.bottom() && log.bottom() < l.label.y);
+                        assert!(log.h >= 150.0, "{tag}: room for ten lines");
+                    }
+                    if let (Some(res), Some(log)) = (l.result, l.log) {
+                        assert!(res.bottom() <= log.y);
+                    }
+                    if let Some(card) = l.card {
+                        assert!(card.robot.right() < card.title.x);
+                        assert!(card.title.right() < card.button.x);
+                        assert!(card.button.right() <= card.boxed.right());
+                        assert_eq!(l.go, None, "nothing to run without Mole");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mole_regions_follow_what_is_live() {
+        use crate::ui::geometry::ShapeKind;
+        let s = shape_for(Style::Pill, ShapeKind::PanelClean);
+        let hits = |look: MoleLook| {
+            let l = mole_layout(s, false, &CLEAN_HEAD, &MOLE_FOOT, look);
+            regions(s, &PageLayout::Mole(l), false)
+                .into_iter()
+                .map(|r| r.hit)
+                .collect::<Vec<Hit>>()
+        };
+        let seg = [
+            Hit::CleanMode(CleanMode::Own),
+            Hit::CleanMode(CleanMode::Mole),
+        ];
+        let opts = [
+            Hit::MoleOpt(MoleOpt::System),
+            Hit::MoleOpt(MoleOpt::GameMedia),
+        ];
+        // Previewed: the segment, the options, protect and the button.
+        let mut want = vec![Hit::CleanBack];
+        want.extend(seg.clone());
+        want.extend(opts.clone());
+        want.extend([Hit::MoleProtect, Hit::MoleGo]);
+        assert_eq!(hits(look(MoleBody::Rows)), want);
+        // Scanning: no button yet.
+        let scanning = MoleLook {
+            go: false,
+            ..look(MoleBody::Rows)
+        };
+        assert!(!hits(scanning).contains(&Hit::MoleGo));
+        // An unreadable group's "lihat log" opens the log; the log goes back.
+        let unreadable = MoleLook {
+            unreadable: [false, true, false, false],
+            ..look(MoleBody::Rows)
+        };
+        assert_eq!(
+            hits(unreadable)
+                .iter()
+                .filter(|h| **h == Hit::MoleShowLog)
+                .count(),
+            1
         );
+        let shown = MoleLook {
+            log_toggle: true,
+            ..look(MoleBody::Log { result: false })
+        };
+        assert!(hits(shown).contains(&Hit::MoleShowLog));
+        // Running: only the way back.
+        let running = MoleLook {
+            body: MoleBody::Log { result: false },
+            seg_live: false,
+            opts_live: false,
+            protect: false,
+            go: false,
+            unreadable: [false; 4],
+            log_toggle: false,
+        };
+        assert_eq!(hits(running), [Hit::CleanBack]);
+        // Not installed: the segment and "Cara memasang", nothing to run.
+        let missing = MoleLook {
+            body: MoleBody::Card,
+            opts_live: false,
+            protect: false,
+            go: false,
+            ..look(MoleBody::Card)
+        };
+        let mut want = vec![Hit::CleanBack];
+        want.extend(seg);
+        want.push(Hit::MoleInstall);
+        assert_eq!(hits(missing), want);
+        // Regions never overlap.
+        let l = mole_layout(s, false, &CLEAN_HEAD, &MOLE_FOOT, unreadable);
+        let r = regions(s, &PageLayout::Mole(l), false);
+        for (i, a) in r.iter().enumerate() {
+            for b in &r[i + 1..] {
+                assert!(disjoint(a.rect, b.rect), "{a:?} overlaps {b:?}");
+            }
+        }
     }
 
     #[test]
@@ -3506,6 +3999,7 @@ mod tests {
                 let mut drawn = Vec::new();
                 for (_, layout) in all_layouts(s, strip) {
                     match layout {
+                        PageLayout::Mole(_) => {}
                         PageLayout::Calendar(l) => {
                             drawn.extend([l.header, l.list]);
                             drawn.extend(l.weekday_labels.iter().copied());

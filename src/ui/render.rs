@@ -49,22 +49,25 @@ use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
     compact_layout, compact_layout_robot, corner_radius, equalizer_heights, idle_layout,
-    lyric_layout, lyric_layout_robot, lyric_overflow, notice_action, notice_layout,
+    lyric_layout, lyric_layout_robot, lyric_overflow, notice_action, notice_action_w,
+    notice_layout,
 };
 use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
-use crate::clean::{CleanCat, ScanResult};
+use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n;
 use crate::lyrics::{self, ShownLine};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, Timeline, View};
+use crate::mole::{GroupSize, MoleGroup, MoleOpts, MoleReport, PreviewSummary};
 use crate::notes::Note;
-use crate::pomodoro::Pomodoro;
+use crate::pomodoro::{PomoStatus, Pomodoro};
 use crate::reminders::Reminder;
+use crate::state::MolePhase;
 use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
 
@@ -139,19 +142,50 @@ pub struct Frame<'a> {
     pub cleaner: Option<&'a CleanerView<'a>>,
 }
 
-/// What the cleaner shows: the ticks and the armed button (the reducer's),
-/// the last scan and what runs (the app's).
+/// What the cleaner shows: its mode, the ticks and the armed button (the
+/// reducer's), the last scan and what runs (the app's).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CleanerView<'a> {
+    pub mode: CleanMode,
     /// By `CleanCat::index`.
     pub checked: [bool; 7],
-    /// The button says "Yakin? Hapus …".
+    /// The button (either mode's) is armed: "Yakin? Hapus …".
     pub armed: bool,
     /// The last scan; `None` before the first one ends.
     pub scan: Option<&'a ScanResult>,
     pub scanning: bool,
-    /// A clean runs: rows and button take no clicks.
+    /// The own mode's clean runs: rows and button take no clicks.
     pub busy: bool,
+    pub mole: MoleView<'a>,
+}
+
+/// The Mole mode: where it stands and its options (the reducer's), what
+/// was found, read and measured (the app's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MoleView<'a> {
+    pub phase: MolePhase,
+    pub opts: MoleOpts,
+    /// The preview's log shows in place of the groups.
+    pub show_log: bool,
+    /// The Mole found: its version, and whether it is the tested 1.30.x.
+    pub version: Option<&'a str>,
+    pub tested: bool,
+    /// The last dry-run that finished well, read into groups.
+    pub summary: Option<&'a PreviewSummary>,
+    /// Mole's log, newest last.
+    pub log: &'a std::collections::VecDeque<String>,
+    /// The last clean's measured result.
+    pub report: Option<&'a MoleReport>,
+}
+
+/// A Mole group's size column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupShown {
+    /// "memindai…": Mole looks or previews.
+    Scanning,
+    Bytes(u64),
+    /// "lihat log": nothing readable (never a guess).
+    SeeLog,
 }
 
 /// A row's size column.
@@ -189,7 +223,59 @@ impl CleanerView<'_> {
 
     /// The button takes a click: something ticked, nothing running.
     pub fn go_live(&self) -> bool {
-        !self.scanning && !self.busy && self.checked.iter().any(|c| *c)
+        !self.scanning
+            && !self.busy
+            && self.mole.phase != MolePhase::Running
+            && self.checked.iter().any(|c| *c)
+    }
+
+    /// Mole mode: what shows and what takes a click, by the phase.
+    pub fn mole_look(&self) -> crate::ui::panel_layout::MoleLook {
+        use crate::ui::panel_layout::{MoleBody, MoleLook};
+        let m = &self.mole;
+        let running = m.phase == MolePhase::Running;
+        let body = match m.phase {
+            MolePhase::Missing => MoleBody::Card,
+            MolePhase::Running => MoleBody::Log { result: false },
+            MolePhase::Finished { .. } => MoleBody::Log { result: true },
+            MolePhase::Previewed { .. } if m.show_log => MoleBody::Log { result: false },
+            _ => MoleBody::Rows,
+        };
+        let previewed = matches!(m.phase, MolePhase::Previewed { .. });
+        let ready = m.phase
+            == MolePhase::Previewed {
+                opts: m.opts,
+                ok: true,
+            };
+        let unreadable = MoleGroup::ALL
+            .map(|g| previewed && body == MoleBody::Rows && self.group(g) == GroupShown::SeeLog);
+        MoleLook {
+            body,
+            seg_live: !self.busy && !running,
+            opts_live: !running && body != MoleBody::Card,
+            protect: matches!(
+                m.phase,
+                MolePhase::Scanning(_) | MolePhase::Previewed { .. } | MolePhase::Finished { .. }
+            ),
+            go: (ready && !self.busy) || matches!(m.phase, MolePhase::Finished { .. }),
+            unreadable,
+            log_toggle: previewed && m.show_log,
+        }
+    }
+
+    /// A Mole group's size: read from the preview, "lihat log" when it
+    /// could not be (or the preview failed), "memindai…" before.
+    pub fn group(&self, g: MoleGroup) -> GroupShown {
+        match self.mole.phase {
+            MolePhase::Previewed { ok: false, .. } => GroupShown::SeeLog,
+            MolePhase::Previewed { ok: true, .. } => {
+                match self.mole.summary.map(|s| s.groups[g.index()]) {
+                    Some(GroupSize::Bytes(b)) => GroupShown::Bytes(b),
+                    _ => GroupShown::SeeLog,
+                }
+            }
+            _ => GroupShown::Scanning,
+        }
     }
 }
 
@@ -424,6 +510,8 @@ struct Fonts {
     row_name: IDWriteTextFormat,
     /// A cleaner row's size: DM Sans 600 11.5, right-aligned.
     row_size: IDWriteTextFormat,
+    /// Mole's log: DM Mono 9.5.
+    mono_log: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -1144,7 +1232,7 @@ impl Renderer {
             };
             (key, fill, p.on_accent)
         });
-        let layout = notice_layout(shape, action.is_some());
+        let layout = notice_layout(shape, action.map(|_| notice_action_w(&notice.kind)));
         let badge = badge_style(notice, &p, next);
         match robot {
             // The island's own notices: Bata (40 px) instead of the badge.
@@ -1401,6 +1489,20 @@ impl Renderer {
         Ok(layout)
     }
 
+    /// `text` fits on one line of a notice of `kind` (with its chip, if
+    /// any): its title (`title`) or its body, measured as it is drawn.
+    pub fn notice_text_fits(&self, kind: &NoticeKind, title: bool, text: &str) -> bool {
+        let s = super::geometry::shape_for(Style::Pill, super::geometry::ShapeKind::Notice);
+        let chip = notice_action(kind, PomoStatus::Idle).map(|_| notice_action_w(kind));
+        let l = notice_layout(s, chip);
+        let (format, area) = if title {
+            (&self.fonts.title, l.title)
+        } else {
+            (&self.fonts.small, l.body)
+        };
+        self.text_width(text, format) <= area.w
+    }
+
     /// How wide `text` is drawn in `format` on one line, in logical px.
     fn text_width(&self, text: &str, format: &IDWriteTextFormat) -> f32 {
         if text.is_empty() {
@@ -1555,6 +1657,7 @@ impl Fonts {
             small_right: aligned(&text, normal, caption, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
             row_name: line(&text, normal, 11.5)?,
             row_size: aligned(&text, semi, 11.5, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            mono_log: line(&mono, normal, 9.5)?,
         })
     }
 }

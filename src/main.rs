@@ -13,6 +13,7 @@ mod i18n;
 mod lyrics;
 mod media_log;
 mod model;
+mod mole;
 mod notes;
 mod pomodoro;
 mod reminders;

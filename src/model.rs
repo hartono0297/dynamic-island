@@ -4,9 +4,10 @@ use std::time::Instant;
 use chrono::NaiveDate;
 
 use crate::calendar::CalendarSnapshot;
-use crate::clean::{CleanCat, CleanEvent};
+use crate::clean::{CleanCat, CleanEvent, CleanMode};
 use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
+use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pomodoro::PomoSettings;
 use crate::system::SystemSample;
 
@@ -50,6 +51,12 @@ pub enum NoticeKind {
     /// The cleaner finished: what it freed, measured on the drive (Bata
     /// happy). Temporary; a click only dismisses it.
     CleanDone,
+    /// A Mole clean finished: the free space the island measured (Bata
+    /// happy, a "Log" chip). A click opens the cleaner on Mole's log.
+    MoleDone,
+    /// A Mole clean failed or stopped (Bata low, "Log"). Sticky like a
+    /// reminder: it stays until clicked, which opens Mole's log.
+    MoleFailed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -137,6 +144,23 @@ pub enum Event {
     Clean(CleanEvent),
     /// The clean the panel asked for is over: its rows take clicks again.
     CleanFinished,
+    /// From the Mole thread (`mole::MoleWorker`); `App` keeps it and tells
+    /// the reducer what it needs below.
+    Mole(MoleEvent),
+    /// Mole was looked for after `Effect::MoleDetect`: found or not.
+    MoleFound(bool),
+    /// A dry-run with these options ended; `ok` when it finished well (a
+    /// `mole::Preview` exists for them).
+    MolePreviewed {
+        opts: MoleOpts,
+        ok: bool,
+    },
+    /// The confirmed Mole clean ended (`ok`: everything ran well).
+    MoleFinished {
+        ok: bool,
+    },
+    /// The cleaner's remembered mode (`clean_mode`), at startup.
+    CleanModeSetting(CleanMode),
     Tick,
 }
 
@@ -212,6 +236,21 @@ pub enum Hit {
     /// The cleaner's main button: the first click arms it ("Yakin?"), a
     /// second one within `CLEAN_CONFIRM` cleans.
     CleanGo,
+    /// The cleaner's mode segment: "Pilih sendiri" or "Otomatis · Mole".
+    CleanMode(CleanMode),
+    /// "+ Sistem (admin)" or "+ Media game > 90 hari": a new preview runs.
+    MoleOpt(MoleOpt),
+    /// "Jalankan Mole": arms ("Yakin? Hapus permanen"); a second click
+    /// within `CLEAN_CONFIRM`, after a preview with these options, cleans.
+    /// After a run: "Pratinjau lagi".
+    MoleGo,
+    /// "Lindungi folder…": Mole's whitelist in a visible window.
+    MoleProtect,
+    /// "Cara memasang ↗": Mole's README in the browser.
+    MoleInstall,
+    /// "lihat log" (an unreadable group) or the log shown: the preview's
+    /// log in place of the groups, and back.
+    MoleShowLog,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +310,21 @@ pub enum Effect {
     OpenCleaner,
     /// Clean these categories. Only after a confirmed second click.
     CleanDelete(Vec<CleanCat>),
+    /// Remember the cleaner's mode (`clean_mode`).
+    SaveCleanMode(CleanMode),
+    /// Look for Mole (`Event::MoleFound` answers).
+    MoleDetect,
+    /// Mole's dry-run with these options; one running stops first.
+    MolePreview(MoleOpts),
+    /// Stop a running dry-run (the cleaner closed or its mode changed).
+    MoleStopPreview,
+    /// The confirmed Mole clean, with the options of the finished preview.
+    /// Only on the armed button's second click.
+    MoleClean(MoleOpts),
+    /// `clean --whitelist` in a visible window.
+    MoleWhitelist,
+    /// Mole's README in the browser.
+    OpenMoleInstall,
 }
 
 /// A Pomodoro setting the settings window's steppers can change.

@@ -13,3 +13,4 @@ date: 2026-10-27
 - `system` and `system-warning` (`notch:bata-sistem`) use fixed figures, never this machine's; see [[system-page]].
 - Demo titles (events, notes, reminders) stay Indonesian even with `DI_LANG=en`.
 - `cleaner`, `cleaner-confirm` and `cleaner-done` show the cleaner with the design's fixed sizes; the demo never scans or deletes, see [[cleaner]].
+- `cleaner-mole`, `-confirm`, `-log`, `-result`, `-missing` and `cleaner-mole-done` (`notch:mole-done`) show the Mole mode with fixed data; Mole is never looked for or run, see [[mole-mode]].

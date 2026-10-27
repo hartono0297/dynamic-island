@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::clean::CleanMode;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::i18n::Lang;
@@ -70,6 +71,15 @@ pub struct Config {
     /// (`RAM_WARN_RANGE`).
     #[serde(deserialize_with = "ram_warn")]
     pub ram_warn_percent: u8,
+    /// The cleaner's mode last used: "Own" (Pilih sendiri, the default) or
+    /// "Mole" (by name; a typo is Own).
+    pub clean_mode: CleanMode,
+    /// Before Mole's first preview, add the Cargo and Autodesk caches to
+    /// Mole's whitelist (Settings → Umum).
+    pub mole_protect_defaults: bool,
+    /// That was done once: an entry the user removes later is never added
+    /// back.
+    pub mole_defaults_added: bool,
 }
 
 /// The disk limit's (min, max, step) in GB.
@@ -142,6 +152,9 @@ impl Default for Config {
             media_log: false,
             disk_warn_gb: 10,
             ram_warn_percent: 90,
+            clean_mode: CleanMode::Own,
+            mole_protect_defaults: true,
+            mole_defaults_added: false,
         }
     }
 }
@@ -190,7 +203,8 @@ pub fn read_at(path: &Path) -> OnDisk {
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
 /// language, theme, idle clock, lyrics, CLI shell and start folder, the robot, its greeting
-/// and the day it last greeted) over everything else as it
+/// and the day it last greeted, the cleaner's mode and Mole's whitelist
+/// flags) over everything else as it
 /// is on disk (Google client, muted apps, battery threshold, the disk and RAM
 /// limits), which the owner may have edited by hand while the island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
@@ -212,6 +226,9 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         robot_sleep_minutes: mem.robot_sleep_minutes,
         morning_greeting: mem.morning_greeting,
         last_greeting: mem.last_greeting,
+        clean_mode: mem.clean_mode,
+        mole_protect_defaults: mem.mole_protect_defaults,
+        mole_defaults_added: mem.mole_defaults_added,
         ..disk
     }
 }
@@ -528,8 +545,43 @@ mod tests {
             media_log: true,
             disk_warn_gb: 25,
             ram_warn_percent: 85,
+            clean_mode: CleanMode::Mole,
+            mole_protect_defaults: false,
+            mole_defaults_added: true,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn cleaner_settings_default_and_belong_to_the_island() {
+        let c = Config::default();
+        assert_eq!(c.clean_mode, CleanMode::Own);
+        assert!(c.mole_protect_defaults && !c.mole_defaults_added);
+        // An older config without them loads the defaults.
+        let old = parse(r#"{"style":"Notch","disk_warn_gb":20}"#);
+        assert_eq!(old.clean_mode, CleanMode::Own);
+        assert!(old.mole_protect_defaults && !old.mole_defaults_added);
+        assert_eq!(old.disk_warn_gb, 20);
+        // By name, any case; a typo is the default.
+        let mole = parse(r#"{"clean_mode":"mole","mole_defaults_added":true}"#);
+        assert_eq!(mole.clean_mode, CleanMode::Mole);
+        assert!(mole.mole_defaults_added);
+        assert_eq!(
+            parse(r#"{"clean_mode":"Robot"}"#).clean_mode,
+            CleanMode::Own
+        );
+        let json = serde_json::to_string(&mole).unwrap();
+        assert!(json.contains(r#""clean_mode":"Mole""#), "{json}");
+        // The island's own: a save keeps them over what the file says.
+        let mem = Config {
+            clean_mode: CleanMode::Mole,
+            mole_protect_defaults: false,
+            mole_defaults_added: true,
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert_eq!(merged.clean_mode, CleanMode::Mole);
+        assert!(!merged.mole_protect_defaults && merged.mole_defaults_added);
     }
 
     #[test]

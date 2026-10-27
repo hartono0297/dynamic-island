@@ -54,8 +54,12 @@ Run 5 of the v3.1 plan (keputusan-v3.1 decision 4b, option D;
   static "memindai…", no spinner. A clean keeps running when the panel
   closes; its notice still comes.
 - **Not here (by decision)**: no Recycle Bin category, no automatic or
-  scheduled cleaning. The "Otomatis · Mole" segment is drawn but takes no
-  click until Run 6.
+  scheduled cleaning.
+- **Two modes** (Run 6): the header segment switches to "Otomatis · Mole"
+  (not while either mode cleans); the mode last used is remembered
+  (`clean_mode`). See [[mole-mode]].
+- **Done-notice body** is fitted to the 360 px notice by measure
+  (`fits`), shorter wordings before dropping parts; see [[mole-mode]].
 
 ## Mole: data only, and which licence
 
@@ -68,7 +72,7 @@ the island's own. `NOTICE` carries the MIT text with its copyright line
 macOS code. Where the island is narrower than Mole (Teams databases, Zoom
 settings, NuGet packages, no system temp) the table says so.
 
-Related: [[system-page]], [[bata-robot-expressions]],
+Related: [[mole-mode]], [[system-page]], [[bata-robot-expressions]],
 [[bata-idle-power-budget]], [[studio-icons]], [[screenshot-capture-script]],
 [[studio-tabular-figures-word-gaps]]
 

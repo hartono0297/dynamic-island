@@ -45,6 +45,7 @@ On first run, Windows asks for access to your notifications: allow it.
 - **Claude Code:** "Claude finished" and "Claude needs you" notices through Claude Code hooks.
 - **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen.
 - **Clean up:** from the System page, measure and clean temp files and logs, browser and app caches, developer caches, Autodesk and Adobe caches, old installers in Downloads (to the Recycle Bin) and Windows Update leftovers (asks for admin through UAC). You tick what goes, and the button asks once more before anything is deleted. Open browsers and files in use are skipped and reported; the island reports the free space it measured afterwards.
+- **Clean up with Mole (experimental):** the cleaner's second mode, *Automatic · Mole*, hands the clean to [Mole for Windows](https://github.com/tw93/Mole/tree/windows) if you installed it yourself (see [Mole](#mole) below).
 - **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed.
 - **Bata, the assistant:** a small robot beside the clock and on the island's own notices (reminders, pomodoro, Claude Code, battery, greeting). It has faces for idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving; it blinks, falls asleep after a while without activity and wakes when you point at the island. Other apps' notifications keep their own badge, and the open panel shows no robot.
 - **Morning greeting:** once a day, before noon, Bata says good morning with the number of today's events and reminders, at startup, after a wake or when you unlock the PC.
@@ -89,12 +90,25 @@ Open **Settings…** from the tray icon.
 | Section | What's in it |
 |---|---|
 | Appearance | A live preview of the island; island style (Pill / Notch), accent colour (Terracotta, Sage, Ochre, Clay, Olive, Plum), island fill (Espresso / Graphite), window mode (Follow Windows / Dark / Light), clock when idle. Then the assistant: assistant in notch (Bata on or off), animation (Full / Saver / Off), sleep after 1–60 minutes without activity, morning greeting |
-| General | Language (Indonesia / English), start with Windows, battery alert threshold, how to turn off Windows pop-ups, lyrics in notch, CLI shell (PowerShell / cmd) |
+| General | Language (Indonesia / English), start with Windows, battery alert threshold, how to turn off Windows pop-ups, lyrics in notch, CLI shell (PowerShell / cmd), protect Cargo & Autodesk caches in Mole |
 | Pomodoro | Focus, break and long break length; sessions before a long break (locked while a pomodoro runs) |
 | Integrations | Google Calendar: status, client ID / secret, Save, Connect / Disconnect, setup guide. Claude Code: install or remove hooks |
 | About | Version, source code, releases, data folder |
 
 **Animation:** *Full* blinks, lifts Bata when you point at it and bounces on alerts. *Saver* drops the blinking and motion but keeps the faces; Full also behaves like Saver while Windows Energy Saver is on. *Off* runs no robot timers at all: the faces still follow what happens, but Bata does not fall asleep. With the assistant off, the island looks and works as without Bata.
+
+## Mole
+
+The cleaner's *Automatic · Mole* mode runs **Mole for Windows** by tw93, a separate cleaning tool you install yourself. The island never installs, downloads, copies or links Mole: it only starts the `mole.ps1` (in `%LOCALAPPDATA%\Mole\`) or `mo` (on PATH) you already have, as a hidden process, and reads what it prints. Without Mole the mode shows a *How to install* link to Mole's Windows README.
+
+- **Preview first:** the mode always starts with `mo clean --dry-run`, which deletes nothing. Its lines are read into four groups (browser, app, developer caches, temp files and logs); a group the island cannot read says *see log* instead of guessing a number. Mole's own summary line is never used.
+- **Confirm:** *Run Mole* turns into *Sure? Delete for good* for 4 seconds; only a second click runs `mo clean`, and only with the options of the finished preview. Any other click, an option change or closing the panel disarms it. What Mole deletes is gone for good (no Recycle Bin).
+- **While it runs:** Mole's log shows in the panel (colours stripped, its internal tables left out). The panel may close; Bata thinks in the notch and a notice comes at the end: happy with the free space the island measured itself (before and after, per drive), or low with a *Log* button if Mole failed.
+- **Options:** *+ System (admin)* (not ticked) runs `mo clean --system` through a UAC prompt in a separate PowerShell; the island itself never runs as admin. *+ Game media > 90 days* adds `--game-media`. *Protect folders…* opens `mo clean --whitelist`.
+- **Protected by default:** before Mole's first preview the island adds the Cargo caches (`.cargo\registry`, `.cargo\git`) and the Autodesk folders under AppData to Mole's whitelist (`%USERPROFILE%\.config\mole\whitelist.txt`), appending only what is missing and never changing your lines. Settings → General → *Protect Cargo & Autodesk caches in Mole* turns this off.
+- **Versions:** the island was tested with Mole 1.30.x; another version shows a warning and may still run.
+
+**Licence:** Mole's `windows` branch was relicensed from MIT to **GPL-3.0** on 2026-10-11. Because the island only runs the Mole you installed as its own process, and contains no Mole code, Mole's licence applies to Mole, not to the island.
 
 **Claude Code hooks:** Settings → Integrations → *Install hooks* adds `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse` and `SessionEnd` hooks to `%USERPROFILE%\.claude\settings.json`. Other hooks are left alone, and a backup is kept as `settings.json.bak-dynamic-island`. Also available as `dynamic-island.exe --install-hooks` / `--uninstall-hooks`.
 
@@ -172,6 +186,8 @@ The exe embeds Latin subsets of two typefaces, both under the SIL Open Font Lice
 
 Licence texts and copyright lines are in [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt). [`scripts/make-fonts.ps1`](scripts/make-fonts.ps1) rebuilds the files from pinned upstream sources.
 
-The cleaner's list of locations (which cache, temp and download folders are safe to clean, and after how many days) follows **Mole for Windows** by tw93 ([github.com/tw93/mole](https://github.com/tw93/mole), branch `windows`, version 1.30.0), © 2025 tw93, under the MIT licence. Only that data is used; the island scans and deletes with its own code. The full licence text is in [`NOTICE`](NOTICE).
+The cleaner's list of locations (which cache, temp and download folders are safe to clean, and after how many days) follows **Mole for Windows** by tw93 ([github.com/tw93/mole](https://github.com/tw93/mole), branch `windows`, version 1.30.0), © 2025 tw93, under the MIT licence. Only that data is used; the island scans and deletes with its own code. The full licence text is in [`NOTICE`](NOTICE). That data comes from the last MIT commit; the `windows` branch is GPL-3.0 since 2026-10-11, and nothing from it after that is used.
+
+The cleaner's *Automatic · Mole* mode runs **Mole for Windows** (GPL-3.0 since 2026-10-11) as a separate program that you install; no Mole code is copied into or linked with the island (see [Mole](#mole)).
 
 Design notes and plans: [`docs/superpowers/`](docs/superpowers/).
