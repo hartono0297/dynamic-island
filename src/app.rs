@@ -974,8 +974,9 @@ impl App {
                 self.config.lyrics = on;
                 self.save_config();
             }
+            // The Clipboard tile has no action: the reducer opened its page.
             Effect::RunShortcut(s) => {
-                let action = shortcuts::shortcut_action(s);
+                let action = shortcuts::shortcut_action(s)?;
                 self.shortcut = Some(action);
                 // Replaces a pending one: only the last click runs.
                 unsafe {
@@ -2264,6 +2265,7 @@ impl App {
         let changed = google(&cfg) != google(&self.config);
         self.config = cfg;
         i18n::set_lang(self.config.language);
+        self.clip_follow_config();
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -3608,6 +3610,8 @@ unsafe extern "system" fn wnd_proc(
         WM_ENDSESSION => {
             if wparam.0 != 0 {
                 flush_editor();
+                // A history change still waiting for its save is written now.
+                with_app(App::clip_shutdown);
             }
             LRESULT(0)
         }

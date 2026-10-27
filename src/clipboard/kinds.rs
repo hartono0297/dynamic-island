@@ -139,7 +139,7 @@ pub fn hex_rgb(t: &str) -> Option<u32> {
     match hex.len() {
         3 | 4 => {
             let (r, g, b) = (digit(0)?, digit(1)?, digit(2)?);
-            Some((r * 17) << 16 | (g * 17) << 8 | b * 17)
+            Some(((r * 17) << 16) | ((g * 17) << 8) | (b * 17))
         }
         _ => u32::from_str_radix(&hex[..6], 16).ok(),
     }

@@ -150,8 +150,10 @@ fn read_text() -> Option<String> {
     // UTF-16 takes at most twice the UTF-8 cap for the text the history keeps.
     let bytes = read_global(CF_UNICODETEXT, 2 * MAX_TEXT_BYTES + 2)?;
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .take_while(|&u| u != 0)
         .collect();
     Some(String::from_utf16_lossy(&units))
@@ -306,8 +308,10 @@ mod tests {
         assert_eq!(&d[16..20], &1u32.to_le_bytes());
         // "C:\a" NUL, then the closing NUL.
         let names: Vec<u16> = d[20..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         assert_eq!(names, [67, 58, 92, 97, 0, 0]);
     }

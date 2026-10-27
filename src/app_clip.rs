@@ -146,6 +146,17 @@ impl App {
         self.sync_clip_hotkey();
     }
 
+    /// config.json changed (a save, or a hand edit picked up): the cap, the
+    /// listener and the hotkey follow. Nothing before `clip_start`.
+    pub(super) fn clip_follow_config(&mut self) {
+        if self.clip.hotkey.is_none() {
+            return;
+        }
+        self.clip.history.set_cap(self.config.clipboard.max_items);
+        self.sync_clip_listener();
+        self.sync_clip_hotkey();
+    }
+
     /// The listener runs while "Riwayat clipboard" is on.
     fn sync_clip_listener(&mut self) {
         let want = self.config.clipboard.enabled;
@@ -290,11 +301,7 @@ impl App {
                     persist::write_in_background(persist::path(), Write::Save(items));
                 }
             }
-            TIMER_CLIP_HOLD => {
-                if self.state.clip_held() {
-                    self.apply_now(Event::ClipHoldEnd);
-                }
-            }
+            TIMER_CLIP_HOLD if self.state.clip_held() => self.apply_now(Event::ClipHoldEnd),
             _ => {}
         }
     }
@@ -480,13 +487,15 @@ impl App {
                 let Some(id) = effective(&items, self.clip.selected) else {
                     return;
                 };
-                let notice = self.copy_clip(id, false);
+                // Not written (another app holds the clipboard): the page
+                // stays, so Enter can be tried again.
+                let Some(notice) = self.copy_clip(id, false) else {
+                    return;
+                };
                 // The panel closes and the keyboard goes back (the reducer
                 // lets go), then "Disalin".
                 self.apply_now(Event::ClipCommit);
-                if let Some(event) = notice {
-                    self.apply_now(event);
-                }
+                self.apply_now(notice);
             }
             InputKey::Up | InputKey::Down => {
                 let items = shown(&self.clip.history, &self.clip.query);

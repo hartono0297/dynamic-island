@@ -1,11 +1,12 @@
 //! What the Pintasan page's tiles do. The island collapses first, then the
 //! action runs a moment later, once the window the user was in is in front
-//! again: Win+V and Win+. open at its caret, and a screen clip must not
-//! catch the panel.
+//! again: Win+. opens at its caret, and a screen clip must not catch the
+//! panel. The Clipboard tile is the exception: it opens the island's own
+//! Clipboard page (the reducer does that), not Win+V.
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
-    VIRTUAL_KEY, VK_LWIN, VK_OEM_PERIOD, VK_V,
+    VIRTUAL_KEY, VK_LWIN, VK_OEM_PERIOD,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -30,17 +31,18 @@ pub enum Action {
     Lock,
 }
 
-pub fn shortcut_action(s: Shortcut) -> Action {
-    match s {
+/// `None` for the Clipboard tile: it opens the Clipboard page in the panel.
+pub fn shortcut_action(s: Shortcut) -> Option<Action> {
+    Some(match s {
         Shortcut::Screenshot => Action::Open("ms-screenclip:"),
-        Shortcut::Clipboard => Action::WinKey(VK_V),
+        Shortcut::Clipboard => return None,
         Shortcut::Emoji => Action::WinKey(VK_OEM_PERIOD),
         Shortcut::Explorer => Action::System("explorer.exe"),
         Shortcut::Calculator => Action::System(r"System32\calc.exe"),
         Shortcut::TaskManager => Action::System(r"System32\taskmgr.exe"),
         Shortcut::WindowsSettings => Action::Open("ms-settings:"),
         Shortcut::Lock => Action::Lock,
-    }
+    })
 }
 
 /// The tile's label.
@@ -148,24 +150,31 @@ mod tests {
 
     #[test]
     fn every_tile_maps_to_its_pinned_action() {
-        let got: Vec<(Shortcut, Action)> = Shortcut::ALL
+        let got: Vec<(Shortcut, Option<Action>)> = Shortcut::ALL
             .into_iter()
             .map(|s| (s, shortcut_action(s)))
             .collect();
         assert_eq!(
             got,
             [
-                (Shortcut::Screenshot, Action::Open("ms-screenclip:")),
-                (Shortcut::Clipboard, Action::WinKey(VK_V)),
-                (Shortcut::Emoji, Action::WinKey(VK_OEM_PERIOD)),
-                (Shortcut::Explorer, Action::System("explorer.exe")),
-                (Shortcut::Calculator, Action::System(r"System32\calc.exe")),
+                (Shortcut::Screenshot, Some(Action::Open("ms-screenclip:"))),
+                // The island's own Clipboard page, not Win+V.
+                (Shortcut::Clipboard, None),
+                (Shortcut::Emoji, Some(Action::WinKey(VK_OEM_PERIOD))),
+                (Shortcut::Explorer, Some(Action::System("explorer.exe"))),
+                (
+                    Shortcut::Calculator,
+                    Some(Action::System(r"System32\calc.exe"))
+                ),
                 (
                     Shortcut::TaskManager,
-                    Action::System(r"System32\taskmgr.exe")
+                    Some(Action::System(r"System32\taskmgr.exe"))
                 ),
-                (Shortcut::WindowsSettings, Action::Open("ms-settings:")),
-                (Shortcut::Lock, Action::Lock),
+                (
+                    Shortcut::WindowsSettings,
+                    Some(Action::Open("ms-settings:"))
+                ),
+                (Shortcut::Lock, Some(Action::Lock)),
             ]
         );
     }
@@ -182,10 +191,13 @@ mod tests {
 
     #[test]
     fn actions_wait_for_the_collapse() {
-        let screenshot = shortcut_action(Shortcut::Screenshot);
+        let screenshot = shortcut_action(Shortcut::Screenshot).expect("an action");
         assert!(u64::from(delay_ms(screenshot)) > ANIM_MS, "after the morph");
         for s in Shortcut::ALL {
-            let ms = delay_ms(shortcut_action(s));
+            let Some(action) = shortcut_action(s) else {
+                continue;
+            };
+            let ms = delay_ms(action);
             assert!((100..=400).contains(&ms), "{s:?}: {ms}");
         }
     }

@@ -168,6 +168,11 @@ $shots = @(
     @{ name = 'notes'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notes-4' } }
     @{ name = 'music'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }
+    # The Clipboard page (fixed data, never the real clipboard), a search,
+    # and "Copied" in the notch.
+    @{ name = 'clipboard'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard' } }
+    @{ name = 'clipboard-search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard-search' } }
+    @{ name = 'clipboard-copied'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:clipboard-copied' } }
     # A lyric line too long for the notch, mid-scroll with its right edge faded.
     @{ name = 'lyric-long'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-lirik-long'; DI_LYRIC_SCROLL = '4000' } }
     @{ name = 'cli'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-done' } }
@@ -180,6 +185,7 @@ $shots = @(
     @{ name = 'reminder-editor'; args = '--demo-editor reminder-weekly'; env = @{ DI_WINDOW = $Window } }
     # Appearance scrolled to its end: the assistant (Bata) rows.
     @{ name = 'settings'; args = "--settings appearance $Window en"; env = @{}; wheel = 6 }
+    @{ name = 'settings-clipboard'; args = "--settings clipboard $Window en"; env = @{} }
 )
 
 $backdrop = New-Object System.Windows.Forms.Form
