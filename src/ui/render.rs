@@ -19,7 +19,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
     DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -265,13 +265,13 @@ struct Fonts {
     body_medium: IDWriteTextFormat,
     /// A notice badge's letter.
     badge: IDWriteTextFormat,
-    /// The idle clock: Fraunces It 16.
+    /// The idle clock: DM Sans 600 16.
     clock: IDWriteTextFormat,
-    /// The lyric line in the notch: Fraunces It 16.
+    /// The lyric line in the notch: DM Sans 600 16.
     lyric: IDWriteTextFormat,
     /// The rest sign of an instrumental gap, larger than the words.
     lyric_rest: IDWriteTextFormat,
-    /// Page titles ("Oktober 2026", "Pomodoro", "Notes"): Fraunces It 20.
+    /// Page titles ("Oktober 2026", "Pomodoro", "Notes"): DM Sans 600 20.
     heading: IDWriteTextFormat,
     /// Captions: DM Sans 10.5.
     small: IDWriteTextFormat,
@@ -302,9 +302,9 @@ struct Fonts {
     snippet: IDWriteTextFormat,
     body_center: IDWriteTextFormat,
     body_right: IDWriteTextFormat,
-    /// The pomodoro countdown: Fraunces It 48.
+    /// The pomodoro countdown: DM Sans 600 48.
     big_time: IDWriteTextFormat,
-    /// The media page's title (Fraunces It 28) and artist.
+    /// The media page's title (DM Sans 600 28) and artist.
     song: IDWriteTextFormat,
     artist: IDWriteTextFormat,
     /// The CLI's output and input: DM Mono 11, else Cascadia Mono or Consolas.
@@ -1162,15 +1162,32 @@ impl Renderer {
         unsafe { target.brush.SetColor(&color(rgb, alpha)) };
     }
 
+    /// `text` in `format` laid out in a `w` × `h` box: tabular figures on its
+    /// digits and, for a display format, the display tracking. Both
+    /// `text_width` and `text_colored` go through here, so what is measured
+    /// is what is drawn.
+    fn layout(
+        &self,
+        text: &[u16],
+        format: &IDWriteTextFormat,
+        w: f32,
+        h: f32,
+    ) -> Result<IDWriteTextLayout> {
+        let layout = fonts::text_layout(&self.dwrite, text, format, w, h, &self.tabular)?;
+        if self.fonts.is_display(format) {
+            let size = unsafe { format.GetFontSize() };
+            fonts::apply_tracking(&layout, text.len() as u32, size)?;
+        }
+        Ok(layout)
+    }
+
     /// How wide `text` is drawn in `format` on one line, in logical px.
     fn text_width(&self, text: &str, format: &IDWriteTextFormat) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
         let wide: Vec<u16> = text.encode_utf16().collect();
-        let Ok(layout) =
-            fonts::text_layout(&self.dwrite, &wide, format, 4096.0, 64.0, &self.tabular)
-        else {
+        let Ok(layout) = self.layout(&wide, format, 4096.0, 64.0) else {
             return 0.0;
         };
         let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -1196,8 +1213,9 @@ impl Renderer {
         }
         let target = self.target.as_ref().expect("target ensured by paint");
         let wide: Vec<u16> = text.encode_utf16().collect();
-        let layout = fonts::text_layout(&self.dwrite, &wide, format, area.w, area.h, &self.tabular);
-        let Ok(layout) = layout else { return };
+        let Ok(layout) = self.layout(&wide, format, area.w, area.h) else {
+            return;
+        };
         unsafe {
             target.brush.SetColor(&color(rgb, alpha));
             target.rt.DrawTextLayout(
@@ -1211,9 +1229,22 @@ impl Renderer {
 }
 
 impl Fonts {
+    /// `format` is one of the display formats (DM Sans 600), which are
+    /// tracked by `fonts::DISPLAY_TRACKING_EM`.
+    fn is_display(&self, format: &IDWriteTextFormat) -> bool {
+        [
+            &self.clock,
+            &self.lyric,
+            &self.heading,
+            &self.big_time,
+            &self.song,
+        ]
+        .contains(&format)
+    }
+
     fn new(dwrite: &IDWriteFactory) -> Result<Self> {
-        // DM Sans, Fraunces Italic and DM Mono when embedded, else Segoe UI
-        // Variable and Cascadia Mono / Consolas.
+        // DM Sans (display: 600, tracked) and DM Mono when embedded, else
+        // Segoe UI Variable and Cascadia Mono / Consolas.
         let text = Face::for_role(dwrite, Role::Text);
         let display = Face::for_role(dwrite, Role::Display);
         let mono = Face::for_role(dwrite, Role::Mono);
@@ -1230,7 +1261,7 @@ impl Fonts {
             DWRITE_FONT_WEIGHT_MEDIUM,
             DWRITE_FONT_WEIGHT_SEMI_BOLD,
         );
-        // Studio scale: body 12, captions 10.5, code 11; Fraunces only from 16 px.
+        // Studio scale: body 12, captions 10.5, code 11; display only from 16 px.
         let (body, caption) = (12.0, 10.5);
         let snippet = text.format(dwrite, normal, caption)?;
         unsafe {
@@ -1265,10 +1296,10 @@ impl Fonts {
             secondary: line(&text, normal, body)?,
             body_medium: line(&text, medium, body)?,
             badge: centered(&text, semi, 16.0)?,
-            clock: centered(&display, normal, 16.0)?,
-            lyric: centered(&display, normal, 16.0)?,
+            clock: centered(&display, semi, 16.0)?,
+            lyric: centered(&display, semi, 16.0)?,
             lyric_rest: centered(&text, normal, 19.0)?,
-            heading: line(&display, medium, 20.0)?,
+            heading: line(&display, semi, 20.0)?,
             small: line(&text, normal, caption)?,
             small_center: centered(&text, normal, caption)?,
             small_center_bold: centered(&text, semi, caption)?,
@@ -1289,8 +1320,8 @@ impl Fonts {
             snippet,
             body_center: centered(&text, normal, body)?,
             body_right: aligned(&text, normal, body, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-            big_time: centered(&display, normal, 48.0)?,
-            song: line(&display, medium, 28.0)?,
+            big_time: centered(&display, semi, 48.0)?,
+            song: line(&display, semi, 28.0)?,
             artist: line(&text, normal, 12.5)?,
             mono: line(&mono, normal, 11.0)?,
             mono_medium: line(&mono, medium, 11.0)?,

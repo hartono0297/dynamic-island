@@ -251,15 +251,15 @@ const MIN_BLOCK_H: f32 = 18.0;
 const DAY_START_H: u32 = 8;
 const MIN_HOURS: u32 = 2;
 
-/// Big enough that the widest countdown (Fraunces It 48) clears the stroke;
-/// the design's r = 100 does not fit under the waiting strip.
+/// Big enough that the widest countdown (DM Sans 600 48, "100:00") clears
+/// the stroke; the design's r = 100 does not fit under the waiting strip.
 const RING_RADIUS: f32 = 92.0;
 /// The ring's stroke, centred on `RING_RADIUS`.
 pub const RING_STROKE: f32 = 8.0;
-/// The countdown's box: one Fraunces It 48 line (59.2 px).
-const TIME_H: f32 = 60.0;
+/// The countdown's box: one DM Sans 600 48 line (62.5 px).
+const TIME_H: f32 = 63.0;
 /// The digits' ink reaches this far above and below the box's centre
-/// (Fraunces It 48 measures cy - 17 to cy + 18).
+/// (DM Sans 600 48 measures cy - 17.8 to cy + 16.9).
 const TIME_INK_HALF: f32 = 18.0;
 /// The countdown sits this far above the ring's centre, the phase under it.
 const TIME_LIFT: f32 = 9.0;
@@ -1400,8 +1400,9 @@ mod tests {
         }
     }
 
-    /// The title width the tests assume ("Oktober 2026" in Fraunces It 20).
-    const TITLE_W: f32 = 130.0;
+    /// The title width the tests assume: "Oktober 2026" in DM Sans 600 20,
+    /// tracked (127 px), plus the renderer's 1 px of slack.
+    const TITLE_W: f32 = 128.0;
 
     /// The layout without a title width or a clock: tests that only page
     /// or count need neither.
@@ -2516,11 +2517,12 @@ mod tests {
                 assert!(cy - outer >= l.header.bottom() - 0.01);
                 // The countdown box is centred on the ring's axis, a little
                 // above its centre, and wide enough for the widest countdown
-                // in Fraunces It 48 ("100:00", 157.7 px).
+                // in DM Sans 600 48, tracked ("100:00", 148.6 px).
                 assert!((l.time.x + l.time.w / 2.0 - cx).abs() < 0.01);
                 let time_cy = l.time.y + l.time.h / 2.0;
                 assert!(time_cy < cy && cy - time_cy <= 12.0);
-                assert!(l.time.w >= 158.0, "time box {}", l.time.w);
+                assert!(l.time.w >= 149.0, "time box {}", l.time.w);
+                assert!(l.time.h >= 62.5, "one line tall: {}", l.time.h);
                 // The digits' ink band across the box stays inside the
                 // stroke's inner edge.
                 let inner = l.ring_radius - RING_STROKE / 2.0;

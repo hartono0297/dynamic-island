@@ -44,8 +44,9 @@ use crate::ui::panel_layout::{
 
 /// Height of the compact shapes the panel grows from.
 const COMPACT_H: f32 = 34.0;
-/// A heading's line (Fraunces 20) is taller than the 22 px header row: its
-/// box grows by this much above and below so descenders are not clipped.
+/// A heading's line (DM Sans 600 20, 26 px) is taller than the 22 px header
+/// row: its box grows by this much above and below so the line, descenders
+/// included, is not clipped.
 const HEADING_BLEED: f32 = 4.0;
 /// Tints over the island: an all-day band, a day view block, a week chip.
 const BAND_TINT: f32 = 0.16;
@@ -250,6 +251,12 @@ impl Renderer {
         Ok(())
     }
 
+    /// The room the calendar title takes in the header: its tracked width
+    /// plus 1 px of slack (upright DM Sans has no ink past its advance).
+    fn calendar_title_w(&self, title: &str) -> f32 {
+        self.text_width(title, &self.fonts.heading).ceil() + 1.0
+    }
+
     /// The layout of `page`; the calendar's arrows follow its title, so the
     /// title is measured first.
     fn page_layout(&self, s: ShapeRect, frame: &Frame, page: Page, strip: bool) -> PageLayout {
@@ -261,8 +268,7 @@ impl Renderer {
                     frame.cal_anchor,
                     frame.cal_selected,
                 );
-                // Italic overhang past the advance width.
-                let title_w = self.text_width(&title, &self.fonts.heading).ceil() + 3.0;
+                let title_w = self.calendar_title_w(&title);
                 PageLayout::Calendar(calendar_layout(
                     s,
                     frame.cal_view,
@@ -1378,7 +1384,7 @@ impl Renderer {
         }
     }
 
-    /// The big cover; "SEDANG DIPUTAR", the title in Fraunces, the artist;
+    /// The big cover; "SEDANG DIPUTAR", the title in DM Sans 600, the artist;
     /// the progress bar with its times; prev, the round play/pause, next,
     /// and "Lirik".
     fn paint_media(
@@ -2229,5 +2235,109 @@ mod tests {
         p.skip(t0);
         assert_eq!(compact_label(l, &p), "Ready · click");
         assert_eq!(phase_label(l, &p), "Break ready");
+    }
+
+    /// Display text measured with the real embedded DM Sans 600 and its
+    /// tracking, through the renderer's own layout path, fits the boxes the
+    /// layouts keep for it: no ellipsis, no ink clipped. When a font file,
+    /// size or the tracking changes and this fails, re-measure the constants
+    /// (`CLOCK_W`, the pomodoro ring's `TIME_*`, `CLI_TITLE_W`, the panel
+    /// layout tests' `TITLE_W`).
+    #[test]
+    fn display_text_fits_its_boxes() {
+        use crate::ui::fonts;
+        use crate::ui::geometry::{CLOCK_W, idle_layout, shape_with_robot};
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+
+        // WIC, made by the renderer, needs COM on this thread.
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let r = Renderer::new().expect("renderer");
+        if !fonts::embedded(&r.dwrite).loaded.dm_sans {
+            eprintln!("skipped: the embedded fonts are not in this binary");
+            return;
+        }
+        let f = &r.fonts;
+        // `s` drawn in `format` in `area` fits on one line and its ink
+        // (left, top, right, bottom) stays inside `area`, so the clip cuts
+        // nothing.
+        let fits = |s: &str, format: &IDWriteTextFormat, area: Rect| {
+            let w = r.text_width(s, format);
+            assert!(w <= area.w, "{s:?}: {w} px in a {} px box", area.w);
+            let wide: Vec<u16> = s.encode_utf16().collect();
+            let layout = r.layout(&wide, format, area.w, area.h).expect("layout");
+            let o = unsafe { layout.GetOverhangMetrics() }.expect("overhang");
+            let ink = (
+                area.x - o.left,
+                area.y - o.top,
+                area.right() + o.right,
+                area.bottom() + o.bottom,
+            );
+            assert!(
+                o.left <= 0.0 && o.top <= 0.0 && o.right <= 0.0 && o.bottom <= 0.0,
+                "{s:?} ink {ink:?} outside {area:?}"
+            );
+            ink
+        };
+
+        for style in [Style::Pill, Style::Notch] {
+            // The idle clock, beside Bata (`CLOCK_W`) and alone.
+            for robot in [false, true] {
+                let s = shape_with_robot(style, ShapeKind::Idle, robot);
+                let clock = idle_layout(s, robot, true).clock.expect("clock box");
+                if robot {
+                    assert_eq!(clock.w, CLOCK_W);
+                }
+                for time in ["00:00", "23:59", "12:00"] {
+                    fits(time, &f.clock, clock);
+                }
+            }
+
+            let s = shape_for(style, ShapeKind::Panel);
+            for strip in [false, true] {
+                // The pomodoro countdown: inside the ring's stroke, over the
+                // phase line.
+                let l = pomodoro_layout(s, strip);
+                let (cx, cy) = l.ring_center;
+                let inner = l.ring_radius - RING_STROKE / 2.0;
+                for time in ["100:00", "25:00", "60:00", "0:00"] {
+                    let (left, top, right, bottom) = fits(time, &f.big_time, l.time);
+                    for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
+                        let d = (x - cx).hypot(y - cy);
+                        assert!(
+                            d <= inner,
+                            "{time:?} ink corner {d} past the ring's {inner}"
+                        );
+                    }
+                    assert!(bottom <= l.phase.y, "{time:?} ink over the phase");
+                }
+
+                // Headings draw in the header row grown by `HEADING_BLEED`.
+                let bleed = |header: Rect| Rect {
+                    y: header.y - HEADING_BLEED,
+                    h: header.h + 2.0 * HEADING_BLEED,
+                    ..header
+                };
+                let head = CliHead {
+                    chips: Vec::new(),
+                    stop: None,
+                };
+                let cli = cli_layout(s, strip, &head);
+                for lang in [Lang::Id, Lang::En] {
+                    fits(text(lang, Key::Cli), &f.heading, bleed(cli.header));
+                    // The calendar title's box is its measured width.
+                    let anchor = NaiveDate::from_ymd_opt(2026, 9, 30).expect("date");
+                    for view in [CalView::Day, CalView::Week, CalView::Month] {
+                        let title = calendar_title(lang, view, anchor, anchor);
+                        let header = Rect {
+                            w: r.calendar_title_w(&title),
+                            ..l.header
+                        };
+                        fits(&title, &f.heading, bleed(header));
+                    }
+                }
+            }
+        }
+        // The panel layout tests' `TITLE_W` is this title's width.
+        assert_eq!(r.calendar_title_w("Oktober 2026"), 128.0);
     }
 }

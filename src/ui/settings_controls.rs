@@ -114,7 +114,8 @@ impl Gfx {
         unsafe {
             let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            // DM Sans and Fraunces Italic when embedded, else Segoe UI Variable.
+            // DM Sans (display: 600, tracked) when embedded, else Segoe UI
+            // Variable.
             let text = Face::for_role(&dwrite, Role::Text);
             let display = Face::for_role(&dwrite, Role::Display);
             let mut formats = HashMap::new();
@@ -152,18 +153,16 @@ impl Gfx {
         }
     }
 
-    /// One line of `text` in a `w` × `h` box; with `tabular`, its digits
-    /// take tabular figures.
-    fn line(
-        &self,
-        text: &[u16],
-        format: &IDWriteTextFormat,
-        w: f32,
-        h: f32,
-        tabular: bool,
-    ) -> Result<IDWriteTextLayout> {
-        let layout = fonts::text_layout(&self.dwrite, text, format, w, h, &self.plain)?;
-        if tabular {
+    /// One line of `text` in a `w` × `h` box in `style`: with `tabular`, its
+    /// digits take tabular figures; a display style is tracked. Both the
+    /// width cache and `draw_str` lay lines out here, so measured widths
+    /// match what is drawn.
+    fn line(&self, text: &[u16], style: TextStyle, w: f32, h: f32) -> Result<IDWriteTextLayout> {
+        let layout = fonts::text_layout(&self.dwrite, text, style.format, w, h, &self.plain)?;
+        if let Some(size) = style.tracked {
+            fonts::apply_tracking(&layout, text.len() as u32, size)?;
+        }
+        if style.tabular {
             for (start, len) in digit_runs(text) {
                 let range = DWRITE_TEXT_RANGE {
                     startPosition: start,
@@ -265,9 +264,8 @@ impl Measure for Gfx {
             .formats
             .get(&(font, Align::Left))
             .and_then(|format| unsafe {
-                let layout = self
-                    .line(&wide, format, 4096.0, 64.0, font.tabular())
-                    .ok()?;
+                let style = TextStyle::of(format, font);
+                let layout = self.line(&wide, style, 4096.0, 64.0).ok()?;
                 let mut m = DWRITE_TEXT_METRICS::default();
                 layout.GetMetrics(&mut m).ok()?;
                 Some(m.widthIncludingTrailingWhitespace.ceil())
@@ -288,11 +286,25 @@ struct Painter<'a> {
     alpha: f32,
 }
 
-/// A text format with the OpenType features its lines carry.
+/// A text format with the OpenType features and spacing its lines carry.
 #[derive(Clone, Copy)]
 struct TextStyle<'a> {
     format: &'a IDWriteTextFormat,
     tabular: bool,
+    /// The font size to track by (`fonts::DISPLAY_TRACKING_EM`): display
+    /// fonts only.
+    tracked: Option<f32>,
+}
+
+impl<'a> TextStyle<'a> {
+    /// `format`, made for `font`, with that font's features and tracking.
+    fn of(format: &'a IDWriteTextFormat, font: Font) -> Self {
+        TextStyle {
+            format,
+            tabular: font.tabular(),
+            tracked: font.display().then(|| font.size()),
+        }
+    }
 }
 
 impl Painter<'_> {
@@ -371,7 +383,7 @@ impl Painter<'_> {
         let wide: Vec<u16> = s.encode_utf16().collect();
         // A layout rather than `DrawText`, to carry OpenType features; same
         // box, trimming and clip.
-        let Ok(layout) = self.gfx.line(&wide, style.format, r.w, r.h, style.tabular) else {
+        let Ok(layout) = self.gfx.line(&wide, style, r.w, r.h) else {
             return;
         };
         self.set(rgb, a);
@@ -397,10 +409,7 @@ impl Painter<'_> {
     }
 
     fn style(&self, font: Font, align: Align) -> TextStyle<'_> {
-        TextStyle {
-            format: &self.gfx.formats[&(font, align)],
-            tabular: font.tabular(),
-        }
+        TextStyle::of(&self.gfx.formats[&(font, align)], font)
     }
 
     fn text(&self, t: &Text) {
@@ -920,6 +929,7 @@ impl Painter<'_> {
         let style = TextStyle {
             format: &self.gfx.island_text,
             tabular: false,
+            tracked: None,
         };
         self.draw_str(label, style, l.text, pal.text, 0.7);
         for (i, h) in PREVIEW_BARS.into_iter().enumerate() {

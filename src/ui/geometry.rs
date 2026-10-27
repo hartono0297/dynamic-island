@@ -79,7 +79,8 @@ pub const ROBOT_COMPACT: f32 = 26.0;
 pub const ROBOT_NOTICE: f32 = 40.0;
 const ROBOT_INSET: f32 = 6.0;
 const ROBOT_GAP: f32 = 8.0;
-/// The idle clock's box beside the robot: "00:00" in Fraunces It 16 fits.
+/// The idle clock's box beside the robot: "00:00" in DM Sans 600 16,
+/// tracked (40.3 px), fits.
 pub const CLOCK_W: f32 = 44.0;
 
 /// How much wider a compact shape is with the robot at its left, so its
