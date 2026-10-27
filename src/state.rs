@@ -8,8 +8,8 @@ use crate::clean::{CleanCat, CleanMode};
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
-    CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Shortcut,
-    Timeline, View,
+    CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page,
+    Shortcut, Timeline, View,
 };
 use crate::mole::MoleOpts;
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
@@ -19,11 +19,14 @@ use crate::ui::geometry::ANIM_MS;
 pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
 /// The morning greeting goes a little sooner.
 pub const GREETING_DURATION: Duration = Duration::from_secs(4);
+/// "Disalin" is only a confirmation.
+pub const COPIED_DURATION: Duration = Duration::from_millis(1500);
 
 /// How long `notice` stays once it is current.
 fn duration_of(notice: &Notice) -> Duration {
     match notice.kind {
         NoticeKind::Greeting => GREETING_DURATION,
+        NoticeKind::Copied => COPIED_DURATION,
         _ => NOTICE_DURATION,
     }
 }
@@ -144,6 +147,13 @@ pub struct IslandState {
     /// closed by a pick, a click beside it, Esc, a page change or the
     /// panel closing.
     cli_menu: bool,
+    /// The Clipboard search field has the keyboard; it keeps the panel open
+    /// like the CLI input.
+    clip_focused: bool,
+    /// The hotkey opened the panel: it stays open (no hover, no keyboard)
+    /// until the pointer comes (then hover holds it), the hotkey again, a
+    /// copy, or `ClipHoldEnd`.
+    clip_held: bool,
     /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
     /// open (an editor; the CLI input lets go), until the pointer leaves the island
     /// and comes back. Leaving alone is not enough: once the panel shrinks
@@ -196,6 +206,8 @@ impl IslandState {
             cli_tall: false,
             cli_scroll: 0,
             cli_menu: false,
+            clip_focused: false,
+            clip_held: false,
             collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
@@ -267,11 +279,26 @@ impl IslandState {
                         self.queue.push_back(notice);
                     }
                 }
+                // Only the latest copy is worth saying; none over a game.
+                NoticeKind::Copied => {
+                    if !self.fullscreen {
+                        self.queue.retain(|n| n.kind != NoticeKind::Copied);
+                        if matches!(&self.current, Some((n, _)) if n.kind == NoticeKind::Copied) {
+                            self.current = None;
+                        }
+                        self.queue.push_back(notice);
+                    }
+                }
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => self.fullscreen = on,
             Event::Hover(on) => {
                 self.hover = on;
+                // The pointer arrived: hover holds the hotkey's panel now,
+                // and leaving closes it as usual.
+                if on {
+                    self.clip_held = false;
+                }
                 self.collapsed = match (self.collapsed, on) {
                     (Collapse::Shut, false) => Collapse::Left,
                     // A new visit: the user came back for the panel.
@@ -281,6 +308,14 @@ impl IslandState {
             }
             Event::EditorOpen(on) => self.editor_open = on,
             Event::CliFocus(on) => self.cli_focused = on,
+            Event::ClipFocus(on) => self.clip_focused = on,
+            Event::ClipHotkey => self.clip_hotkey(),
+            Event::ClipHoldEnd => self.clip_held = false,
+            Event::ClipCommit => {
+                if self.view() == View::Panel(Page::Clipboard) {
+                    self.collapse();
+                }
+            }
             Event::CliScroll { lines, max } => {
                 if self.view() == View::Panel(Page::Cli) {
                     let scrolled = self.cli_scroll as i64 + i64::from(lines);
@@ -340,6 +375,13 @@ impl IslandState {
         let mole_now = self.cleaner.map(|c| c.mode);
         if cleaner_was == Some(CleanMode::Mole) && mole_now != Some(CleanMode::Mole) {
             self.leave_mole(&mut effects);
+        }
+        if self.clip_focused && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
+            self.clip_focused = false;
+            effects.push(Effect::ReleaseClipFocus);
+        }
+        if self.clip_held && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
+            self.clip_held = false;
         }
         // The menu belongs to the CLI page of an open panel.
         if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
@@ -658,7 +700,53 @@ impl IslandState {
     }
 
     fn panel_open(&self) -> bool {
-        self.collapsed == Collapse::No && (self.hover || self.editor_open || self.cli_focused)
+        self.collapsed == Collapse::No
+            && (self.hover
+                || self.editor_open
+                || self.cli_focused
+                || self.clip_focused
+                || self.clip_held)
+    }
+
+    /// The panel gets out of the way (a shortcut, a copy with Enter): shut
+    /// whatever holds it until the pointer leaves and comes back. Without
+    /// hover the pointer is already away: its next visit reopens it.
+    fn collapse(&mut self) {
+        self.collapsed = if self.hover {
+            Collapse::Shut
+        } else {
+            Collapse::Left
+        };
+        self.clip_held = false;
+    }
+
+    /// The hotkey: the Clipboard page opens (a new visit, whatever closed
+    /// the panel before), or, when it shows already, the panel closes.
+    fn clip_hotkey(&mut self) {
+        if self.fullscreen {
+            return;
+        }
+        if self.view() == View::Panel(Page::Clipboard) {
+            if self.hover || self.editor_open || self.cli_focused || self.clip_focused {
+                self.collapse();
+            }
+            self.clip_held = false;
+            return;
+        }
+        self.page = Page::Clipboard;
+        self.collapsed = Collapse::No;
+        // Under the pointer already: hover holds it, as for any visit.
+        self.clip_held = !self.hover;
+    }
+
+    /// The Clipboard search field has the keyboard.
+    pub fn clip_focused(&self) -> bool {
+        self.clip_focused
+    }
+
+    /// The hotkey holds the panel open.
+    pub fn clip_held(&self) -> bool {
+        self.clip_held
     }
 
     /// How long ago hover opened the panel; `None` when it is closed or held
@@ -768,6 +856,12 @@ impl IslandState {
                     effects.extend(self.dismiss_newest_sticky());
                 }
             }
+            // The island's own history, not Win+V: its page opens.
+            Hit::Shortcut(Shortcut::Clipboard) => {
+                if matches!(self.view(), View::Panel(_)) {
+                    self.page = Page::Clipboard;
+                }
+            }
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
@@ -850,6 +944,17 @@ impl IslandState {
                 }
             }
             Hit::CleanGo => self.clean_go(now, effects),
+            Hit::ClipSearch
+            | Hit::ClipCard(_)
+            | Hit::ClipPin(_)
+            | Hit::ClipPlain(_)
+            | Hit::ClipDelete(_)
+                if self.view() != View::Panel(Page::Clipboard) => {}
+            Hit::ClipSearch => effects.push(Effect::FocusClipSearch),
+            Hit::ClipCard(id) => effects.push(Effect::Clip(ClipAction::Copy(id))),
+            Hit::ClipPin(id) => effects.push(Effect::Clip(ClipAction::TogglePin(id))),
+            Hit::ClipPlain(id) => effects.push(Effect::Clip(ClipAction::CopyPlain(id))),
+            Hit::ClipDelete(id) => effects.push(Effect::Clip(ClipAction::Delete(id))),
             Hit::CliInput
             | Hit::CliStop
             | Hit::CliExpand
@@ -888,11 +993,7 @@ impl IslandState {
         if matches!(self.view(), View::Panel(_)) {
             // Without hover (an editor or the CLI pins the panel) the
             // pointer is already away: its next visit reopens it.
-            self.collapsed = if self.hover {
-                Collapse::Shut
-            } else {
-                Collapse::Left
-            };
+            self.collapse();
             effects.push(effect);
         }
     }
@@ -1757,7 +1858,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 7), t0);
+        s.apply(Event::Wheel(-120 * 8), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
@@ -1776,6 +1877,7 @@ mod tests {
                 Page::Reminders,
                 Page::Notes,
                 Page::Media,
+                Page::Clipboard,
                 Page::System,
                 Page::Cli,
                 Page::Shortcuts,
@@ -2329,12 +2431,165 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_collapses_the_panel_until_the_pointer_leaves() {
+    fn the_clipboard_tile_opens_the_clipboard_page() {
         let t0 = Instant::now();
         let mut s = st();
         open_on(&mut s, Page::Shortcuts, t0);
         let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Clipboard)), t0);
-        assert_eq!(effects, vec![Effect::RunShortcut(Shortcut::Clipboard)]);
+        // No Win+V, no collapse: the island's own page.
+        assert_eq!(effects, vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        // The page sits between Musik and Sistem (interim order), then CLI.
+        s.apply(Event::Wheel(120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
+        s.apply(Event::Wheel(-240), t0);
+        assert_eq!(s.view(), View::Panel(Page::System));
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+    }
+
+    #[test]
+    fn clipboard_hits_act_only_on_their_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        for hit in [Hit::ClipSearch, Hit::ClipCard(1), Hit::ClipDelete(1)] {
+            assert_eq!(s.apply(Event::Click(hit), t0), vec![]);
+        }
+        open_on(&mut s, Page::Clipboard, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::ClipSearch), t0),
+            vec![Effect::FocusClipSearch]
+        );
+        let cases = [
+            (Hit::ClipCard(3), ClipAction::Copy(3)),
+            (Hit::ClipPin(3), ClipAction::TogglePin(3)),
+            (Hit::ClipPlain(3), ClipAction::CopyPlain(3)),
+            (Hit::ClipDelete(3), ClipAction::Delete(3)),
+        ];
+        for (hit, action) in cases {
+            assert_eq!(s.apply(Event::Click(hit), t0), vec![Effect::Clip(action)]);
+        }
+    }
+
+    #[test]
+    fn the_search_field_holds_the_panel_and_lets_go_with_its_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::ClipFocus(true), t0);
+        assert_eq!(s.apply(Event::Hover(false), t0), vec![]);
+        assert_eq!(
+            s.view(),
+            View::Panel(Page::Clipboard),
+            "held by the keyboard"
+        );
+        // Enter copied: the panel closes and the keyboard goes back.
+        let effects = s.apply(Event::ClipCommit, t0);
+        assert_eq!(effects, vec![Effect::ReleaseClipFocus]);
+        assert!(!s.clip_focused());
+        assert_eq!(s.view(), View::Idle);
+        // A page change lets go too.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        s.apply(Event::ClipFocus(true), t0);
+        assert_eq!(
+            s.apply(Event::Wheel(-120), t0),
+            vec![Effect::ReleaseClipFocus]
+        );
+        assert_eq!(s.view(), View::Panel(Page::System));
+    }
+
+    #[test]
+    fn the_hotkey_opens_the_page_without_hover_and_closes_it_again() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert_eq!(s.apply(Event::ClipHotkey, t0), vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        assert!(s.clip_held());
+        // Pressed again: closed.
+        s.apply(Event::ClipHotkey, t0);
+        assert_eq!(s.view(), View::Idle);
+        // Not visited in time: closed.
+        s.apply(Event::ClipHotkey, t0);
+        s.apply(Event::ClipHoldEnd, t0);
+        assert_eq!(s.view(), View::Idle);
+        // Visited: hover holds it, leaving closes it.
+        s.apply(Event::ClipHotkey, t0);
+        s.apply(Event::Hover(true), t0);
+        assert!(!s.clip_held());
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // Never over a fullscreen app.
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::ClipHotkey, t0);
+        assert!(!s.clip_held());
+    }
+
+    fn copied(body: &str) -> Notice {
+        Notice {
+            key: "clip-copied".into(),
+            source: "Clipboard".into(),
+            title: "Disalin".into(),
+            body: body.into(),
+            kind: NoticeKind::Copied,
+        }
+    }
+
+    #[test]
+    fn copied_is_short_and_the_newest_replaces_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(copied("a")), t0);
+        s.apply(Event::Notice(copied("b")), t0);
+        assert_eq!(s.view(), View::Notice(copied("b")));
+        assert_eq!(s.next_deadline(), Some(t0 + COPIED_DURATION));
+        s.apply(Event::Tick, t0 + COPIED_DURATION);
+        assert_eq!(s.view(), View::Idle, "nothing queued behind it");
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(copied("c")), t0 + secs(5));
+        assert_eq!(s.view(), View::Hidden);
+    }
+
+    #[test]
+    fn copied_never_replaces_a_cleaner_or_system_notice() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // A clean finished; a copy right after waits its turn behind it.
+        let done = mole_notice(NoticeKind::CleanDone);
+        s.apply(Event::Notice(done.clone()), t0);
+        s.apply(Event::Notice(copied("a")), t0);
+        s.apply(Event::Notice(system_notice()), t0);
+        s.apply(Event::Notice(copied("b")), t0);
+        assert_eq!(s.view(), View::Notice(done));
+        assert_eq!(s.next_deadline(), Some(t0 + NOTICE_DURATION));
+        // The system notice keeps its place; only the newer copy is said.
+        let t1 = t0 + NOTICE_DURATION;
+        s.apply(Event::Tick, t1);
+        assert_eq!(s.view(), View::Notice(system_notice()));
+        let t2 = t1 + NOTICE_DURATION;
+        s.apply(Event::Tick, t2);
+        assert_eq!(s.view(), View::Notice(copied("b")));
+        assert_eq!(s.next_deadline(), Some(t2 + COPIED_DURATION));
+        s.apply(Event::Tick, t2 + COPIED_DURATION);
+        assert_eq!(s.view(), View::Idle);
+        // A Mole failure is sticky: a copy shows over it briefly, then it is back.
+        let failed = mole_notice(NoticeKind::MoleFailed);
+        let t3 = t2 + secs(10);
+        s.apply(Event::Notice(failed.clone()), t3);
+        assert_eq!(s.view(), View::Notice(failed.clone()));
+        s.apply(Event::Notice(copied("c")), t3);
+        s.apply(Event::Tick, t3 + COPIED_DURATION);
+        assert_eq!(s.view(), View::Notice(failed));
+    }
+
+    #[test]
+    fn shortcut_collapses_the_panel_until_the_pointer_leaves() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Emoji)), t0);
+        assert_eq!(effects, vec![Effect::RunShortcut(Shortcut::Emoji)]);
         assert_eq!(
             s.view(),
             View::Idle,

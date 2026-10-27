@@ -30,6 +30,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[system-page]]
 - [[cleaner]]
 - [[mole-mode]]
+- [[clipboard-history]]
 
 ## Gotchas
 
@@ -40,6 +41,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[cli-panel-keyboard-focus]]
 - [[media-external-pause-causes]]
 - [[cli-explorer-com]]
+- [[clipboard-privacy]]
 
 ## Conventions
 

@@ -528,6 +528,8 @@ pub enum NoticeSort {
     /// A Mole clean failed or stopped.
     MoleFailed,
     Greeting,
+    /// "Disalin" after a copy.
+    Copied,
 }
 
 impl NoticeSort {
@@ -544,6 +546,7 @@ impl NoticeSort {
             NoticeKind::MoleDone => NoticeSort::MoleDone,
             NoticeKind::MoleFailed => NoticeSort::MoleFailed,
             NoticeKind::Greeting => NoticeSort::Greeting,
+            NoticeKind::Copied => NoticeSort::Copied,
         }
     }
 }
@@ -618,9 +621,10 @@ pub struct RobotInputs {
 ///
 /// 1. Hidden and the open panel: no robot.
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
-///    pomodoro phase done, Claude done and a finished clean (own or Mole) → Happy, low
-///    battery, low disk or high RAM and a failed Mole clean → Sad, greeting → Wave. Other
-///    apps' notifications (`App`) → no robot: they keep their app badge.
+///    pomodoro phase done, Claude done, a finished clean (own or Mole) and
+///    "Disalin" → Happy, low battery, low disk or high RAM and a failed Mole
+///    clean → Sad, greeting → Wave. Other apps' notifications (`App`) → no
+///    robot: they keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
 /// 4. Pomodoro → Focus, media → Music, lyric line → Sing.
 /// 5. Idle: CLI just done → Happy, just failed → Sad; Claude working, a
@@ -636,7 +640,8 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
                 NoticeSort::PomodoroDone
                 | NoticeSort::ClaudeDone
                 | NoticeSort::CleanDone
-                | NoticeSort::MoleDone => Some(Expr::Happy),
+                | NoticeSort::MoleDone
+                | NoticeSort::Copied => Some(Expr::Happy),
                 NoticeSort::BatteryLow | NoticeSort::SystemLow | NoticeSort::MoleFailed => {
                     Some(Expr::Sad)
                 }
@@ -1157,6 +1162,7 @@ mod tests {
             (NoticeSort::MoleDone, Expr::Happy),
             (NoticeSort::MoleFailed, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
+            (NoticeSort::Copied, Expr::Happy),
         ] {
             let spot = Spot::Notice(sort);
             assert_eq!(e(RobotInputs { spot, ..busy }), Some(expr), "{sort:?}");

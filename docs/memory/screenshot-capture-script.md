@@ -14,3 +14,8 @@ date: 2026-10-27
 - Demo titles (events, notes, reminders) stay Indonesian even with `DI_LANG=en`.
 - `cleaner`, `cleaner-confirm` and `cleaner-done` show the cleaner with the design's fixed sizes; the demo never scans or deletes, see [[cleaner]].
 - `cleaner-mole`, `-confirm`, `-log`, `-result`, `-missing` and `cleaner-mole-done` (`notch:mole-done`) show the Mole mode with fixed data; Mole is never looked for or run, see [[mole-mode]].
+- Clipboard shots: `clipboard` (the design's six cards of 48), `clipboard-search`
+  ("denah" typed), `clipboard-copied` (`notch:clipboard-copied`, Bata Happy) and
+  `settings-clipboard`. Their data and "now" are fixed (`demo_clips`), and the
+  demo never touches the real clipboard, see [[clipboard-privacy]]. The scenes
+  `clipboard-empty` and `clipboard-off` exist in `--demo` but are not shot.

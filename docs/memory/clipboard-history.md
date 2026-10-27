@@ -1,0 +1,81 @@
+---
+tags: [decision, clipboard, privacy, dpapi, panel]
+date: 2026-10-28
+---
+
+# Clipboard history: what it keeps and how
+
+Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
+`kinds`, `image`, `store`, the `persist` format; Win32: `win`) and
+`src/app_clip.rs` (the island's side). Privacy rules are in
+[[clipboard-privacy]].
+
+- **Kinds.** Text, Link, Code, Color (hex `#RGB`/`#RGBA`/`#RRGGBB`/`#RRGGBBAA`),
+  Image (thumbnail + width × height), Files (paths). `detect_kind` is pure:
+  a link is one token (`http(s)://`, `www.`, or a bare domain *with a path*),
+  so prose with a period or comma never is one; code is a known command
+  with arguments, a flag, code marks, or several lines with braces,
+  semicolons or indentation. Files beat text, text beats an image.
+- **Cap and pins.** Newest first, "Jumlah item" 50 (10–200, step 10).
+  Pinned entries are never pushed out by the cap; unpinned ones go oldest
+  first, but never the newest entry (so a copy still shows when pins fill the
+  cap). An external copy equal to an entry, or a copy from the island, moves
+  that entry to the front: no duplicates.
+- **Text over 64 KB is not kept at all** (not cut): pasting a cut copy back
+  would silently lose its end.
+- **Images.** Read from `CF_DIB` (Windows synthesises it from DIBV5/PNG
+  apps), at most 64 MB. The thumbnail (≤ 184 × 128, four samples per pixel,
+  opaque) is made straight from the DIB on the UI thread: cheap, no full
+  decode. All thumbnails together stay under 4 MB (memory and file): the
+  oldest unpinned image entries go first. The original DIB is kept in memory
+  only, within 48 MB (oldest images lose theirs first).
+  **A restored image (after a restart) copies back at thumbnail size**: the
+  file never holds full-size pixels.
+  "Screenshot · W × H" when only bitmap formats were on the clipboard,
+  else "Gambar · W × H". `clip_image_arrived` is the hook Run 8's
+  screenshot preview uses; it does nothing yet.
+- **Persistence.** `clipboard-history.bin` next to config.json, DPAPI
+  current user (`src/dpapi.rs`, shared with the Google token), plaintext
+  wiped. Versioned binary (`DICB`, v1), written to `.bin.tmp` then renamed,
+  on a short-lived thread, ordered by a generation counter. Writes coalesce:
+  one one-shot `TIMER_CLIP_SAVE` 1.5 s after the last change; a pending save
+  is flushed on `WM_DESTROY` and `WM_ENDSESSION`. Missing, foreign or corrupt
+  file → empty history, never a crash. "Simpan setelah restart" off: nothing
+  is written and the file is deleted.
+- **Lock.** "Hapus saat layar dikunci" (default off) clears the unpinned
+  entries from memory and the file on `WTS_SESSION_LOCK`. **Pins stay**:
+  pinning is an explicit "keep this". The clear button in Settings does the
+  same. Turning the history off stops the listener and shows "Riwayat
+  clipboard mati"; the entries stay until cleared.
+- **Hotkey.** None by default. Settings offers Ctrl+Alt+V and Win+Alt+V,
+  **never Ctrl+Shift+V** (paste as plain text in browsers, VS Code and
+  Office). An unknown name in config.json reads as none. `RegisterHotKey`
+  only when set; a failure shows in the row ("Dipakai aplikasi lain"). The
+  hotkey opens the panel on the Clipboard page *without* the foreground
+  (`clip_held`); it closes on a second press, when the pointer visits and
+  leaves, or after an 8 s one-shot if it never came.
+- **Page.** `Page::Clipboard` sits after Musik, with Sistem
+  ([[system-page]]) as its right neighbour and then CLI: the interim order
+  of the merge with Runs 4–6, nine pages (`Page::ALL: [Page; 9]`). Run 9
+  sets the final order. The
+  Pintasan Clipboard tile opens it instead of Win+V
+  (`shortcuts::shortcut_action` → `None`). Two columns of 64 px cards,
+  scrolled a row per wheel notch over the cards; the selected card gets the
+  accent ring and its buttons (pin, copy as plain text, delete), drawn in
+  the panel; a right-click selects a card. Clicking a card copies it.
+  Keyboard: [[cli-panel-keyboard-focus]].
+- **"Disalin".** `NoticeKind::Copied`, 1.5 s on the notice deadline, a newer
+  one replaces it, never over a fullscreen app; Bata Happy
+  ([[bata-robot-expressions]]), else the Clipboard badge. Only for copies
+  made from the island unless "Disalin untuk semua salinan" is on; never for
+  skipped content.
+- **Power.** No repeating timer ([[bata-idle-power-budget]]). A change while
+  the page is hidden draws nothing (unless a notice shows). Its one-shots are
+  timer ids 20–22 (17 and 18 are the System page's).
+- **Notices beside the cleaner's.** `Copied` is one more `NoticeKind` next to
+  `SystemLow`, `CleanDone`, `MoleDone` and `MoleFailed`; a newer "Disalin"
+  replaces only an older "Disalin", never a cleaner or system notice.
+
+Related: [[clipboard-privacy]], [[settings-appearance-scroll]]
+
+Listed in [[index]].

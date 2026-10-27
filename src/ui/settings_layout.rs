@@ -11,7 +11,8 @@ use crate::calendar::CalStatus;
 use crate::claude::install::HookState;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::{DISK_WARN_RANGE, RAM_WARN_RANGE, Style};
+use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
+use crate::config::{ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, RAM_WARN_RANGE, Style};
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
 use crate::pomodoro::{self, PomoSettings};
@@ -110,15 +111,17 @@ pub const GUIDE_URL: &str = "https://github.com/hartono0297/dynamic-island#setup
 pub enum Section {
     Appearance,
     General,
+    Clipboard,
     Pomodoro,
     Integrations,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::Appearance,
         Section::General,
+        Section::Clipboard,
         Section::Pomodoro,
         Section::Integrations,
         Section::About,
@@ -128,6 +131,7 @@ impl Section {
         match self {
             Section::Appearance => Key::SecAppearance,
             Section::General => Key::SecGeneral,
+            Section::Clipboard => Key::SecClipboard,
             Section::Pomodoro => Key::SecPomodoro,
             Section::Integrations => Key::SecIntegrations,
             Section::About => Key::SecAbout,
@@ -139,6 +143,7 @@ impl Section {
         match self {
             Section::Appearance => Icon::Palette,
             Section::General => Icon::Gear,
+            Section::Clipboard => Icon::Clipboard,
             Section::Pomodoro => Icon::Timer,
             Section::Integrations => Icon::Link,
             Section::About => Icon::Info,
@@ -156,6 +161,7 @@ impl Section {
         match name.trim().to_ascii_lowercase().as_str() {
             "appearance" | "tampilan" => Some(Section::Appearance),
             "general" | "umum" => Some(Section::General),
+            "clipboard" => Some(Section::Clipboard),
             "pomodoro" => Some(Section::Pomodoro),
             "integrations" | "integrasi" => Some(Section::Integrations),
             "about" | "tentang" => Some(Section::About),
@@ -281,6 +287,16 @@ pub enum Hit {
     RobotSleep(i32),
     /// "Sapaan pagi".
     Greeting,
+    /// Settings → Clipboard: "Riwayat clipboard", "Jumlah item" (−1 / +1),
+    /// "Simpan setelah restart", "Hapus saat layar dikunci", "Pintasan",
+    /// "Disalin" for every copy, and "Hapus riwayat".
+    ClipEnabled,
+    ClipItems(i32),
+    ClipPersist,
+    ClipClearOnLock,
+    ClipHotkey(ClipHotkey),
+    ClipFeedbackAll,
+    ClipClear,
     Battery(i32),
     /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
     DiskWarn(i32),
@@ -335,6 +351,7 @@ pub enum Group {
     CliStart,
     Shell,
     Motion,
+    ClipHotkey,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -624,6 +641,10 @@ pub struct State<'a> {
     pub hooks: Option<HookState>,
     /// The outcome of the last hook button, shown instead of the status.
     pub hook_note: Option<(&'a str, Tone)>,
+    /// Settings → Clipboard, and whether the chosen hotkey could not be
+    /// registered.
+    pub clip: ClipboardSettings,
+    pub clip_hotkey_failed: bool,
     pub version: &'a str,
 }
 
@@ -1220,6 +1241,7 @@ pub fn layout(section: Section, s: &State, m: &dyn Measure) -> Layout {
     match section {
         Section::Appearance => appearance(&mut b, s),
         Section::General => general(&mut b, s),
+        Section::Clipboard => clipboard_page(&mut b, s),
         Section::Pomodoro => pomodoro_page(&mut b, s),
         Section::Integrations => integrations(&mut b, s),
         Section::About => about(&mut b, s),
@@ -1571,6 +1593,100 @@ fn warnings_card(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
     b.row_text(card, rows[2], b.t(Key::MoleProtectSetting), desc, false, x);
     b.divider(card, rows[2]);
+}
+
+/// "Jumlah item" one step (10) up or down, kept in 10–200; a hand-edited
+/// value off the grid snaps onto it.
+pub fn clip_items_step(n: u32, dir: i32) -> u32 {
+    let stepped = if dir > 0 {
+        n.saturating_add(ITEMS_STEP)
+    } else {
+        n.saturating_sub(ITEMS_STEP)
+    };
+    (stepped / ITEMS_STEP * ITEMS_STEP).clamp(MIN_ITEMS, MAX_ITEMS)
+}
+
+/// Settings → Clipboard after keputusan-v3.1.html §5 (`settingsWin`), with
+/// the plan's hotkey choice (none, Ctrl+Alt+V, Win+Alt+V; never
+/// Ctrl+Shift+V) and a clear button. With the history off the other rows
+/// fade and take no clicks.
+fn clipboard_page(b: &mut Builder, s: &State) {
+    let c = s.clip;
+    let card = b.card(7.0 * ROW_H);
+    let rows: [f32; 7] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let cy = |y: f32| y + ROW_H / 2.0;
+    let on = c.enabled;
+
+    let x = b.toggle(Hit::ClipEnabled, RIGHT, cy(rows[0]), on);
+    let desc = Some((b.t(Key::ClipHistoryDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::ClipHistory), desc, false, x);
+
+    let n = c.max_items;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[1]),
+        n.to_string(),
+        Hit::ClipItems(-1),
+        Hit::ClipItems(1),
+        (n > MIN_ITEMS, n < MAX_ITEMS),
+        on,
+    );
+    let desc = Some((b.t(Key::ClipItemsDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::ClipItems), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let x = b.toggle_if(Hit::ClipPersist, RIGHT, cy(rows[2]), c.persist, on);
+    let desc = Some((b.t(Key::ClipPersistDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::ClipPersist), desc, false, x);
+    b.divider(card, rows[2]);
+
+    let x = b.toggle_if(
+        Hit::ClipClearOnLock,
+        RIGHT,
+        cy(rows[3]),
+        c.clear_on_lock,
+        on,
+    );
+    let desc = Some((b.t(Key::ClipClearOnLockDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::ClipClearOnLock), desc, false, x);
+    b.divider(card, rows[3]);
+
+    let items = vec![
+        (Hit::ClipHotkey(ClipHotkey::Off), b.t(Key::ClipHotkeyNone)),
+        (
+            Hit::ClipHotkey(ClipHotkey::CtrlAltV),
+            "Ctrl+Alt+V".to_owned(),
+        ),
+        (Hit::ClipHotkey(ClipHotkey::WinAltV), "Win+Alt+V".to_owned()),
+    ];
+    let selected = index_of(ClipHotkey::ALL, &c.hotkey);
+    let x = b.segmented(Group::ClipHotkey, RIGHT, cy(rows[4]), items, selected);
+    let desc = if s.clip_hotkey_failed && c.hotkey != ClipHotkey::Off {
+        (b.t(Key::ClipHotkeyTaken), Tone::Bad)
+    } else {
+        (b.t(Key::ClipHotkeyDesc), Tone::Secondary)
+    };
+    b.row_text(card, rows[4], b.t(Key::ClipHotkey), Some(desc), false, x);
+    b.divider(card, rows[4]);
+
+    let x = b.toggle_if(
+        Hit::ClipFeedbackAll,
+        RIGHT,
+        cy(rows[5]),
+        c.copied_feedback_all,
+        on,
+    );
+    let desc = Some((b.t(Key::ClipFeedbackAllDesc), Tone::Secondary));
+    b.row_text(card, rows[5], b.t(Key::ClipFeedbackAll), desc, false, x);
+    b.divider(card, rows[5]);
+
+    let label = b.t(Key::ClipClearButton);
+    let w = b.button_w(&[&label], ButtonKind::Secondary);
+    let item = (Hit::ClipClear, label, ButtonKind::Secondary, true, w);
+    let x = b.buttons(RIGHT, cy(rows[6]), vec![item]);
+    let desc = Some((b.t(Key::ClipClearDesc), Tone::Secondary));
+    b.row_text(card, rows[6], b.t(Key::ClipClear), desc, false, x);
+    b.divider(card, rows[6]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1925,6 +2041,17 @@ mod tests {
                         google_note: None,
                         hooks,
                         hook_note: None,
+                        clip: ClipboardSettings {
+                            enabled: !locked,
+                            max_items: if locked { MAX_ITEMS } else { MIN_ITEMS },
+                            hotkey: if locked {
+                                ClipHotkey::WinAltV
+                            } else {
+                                ClipHotkey::CtrlAltV
+                            },
+                            ..ClipboardSettings::default()
+                        },
+                        clip_hotkey_failed: !battery,
                         version: "2.1.0",
                     });
                 }
@@ -2497,7 +2624,7 @@ mod tests {
             Some(Hit::Style(Style::Pill))
         );
         // Nav rows switch sections.
-        let nav = &l.nav[3];
+        let nav = &l.nav[4];
         assert_eq!(
             l.hit(nav.pill.x + 4.0, nav.pill.y + 4.0),
             Some(Hit::Nav(Section::Integrations))

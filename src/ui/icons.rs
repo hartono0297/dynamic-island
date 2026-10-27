@@ -93,11 +93,18 @@ pub enum Icon {
     Image,
     Download,
     Windows,
+    /// The Clipboard page (`search`, `pin`, `text`, `color` in
+    /// keputusan-v3.1.html; `code` and `image` are the cleaner's above):
+    /// line only, no duotone.
+    Search,
+    Pin,
+    Text,
+    Swatch,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 51] = [
+    pub const ALL: [Icon; 55] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -149,6 +156,10 @@ impl Icon {
         Icon::Image,
         Icon::Download,
         Icon::Windows,
+        Icon::Search,
+        Icon::Pin,
+        Icon::Text,
+        Icon::Swatch,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -355,6 +366,10 @@ impl Icon {
                 Part::Rect(4.0, 13.0, 7.0, 7.0, 1.0),
                 Part::Rect(13.0, 13.0, 7.0, 7.0, 1.0),
             ],
+            Icon::Search => &[Part::Circle(11.0, 11.0, 6.0), Part::Path("M16 16l4 4")],
+            Icon::Pin => &[Part::Path("M9 4h6l-1 6 3 3H7l3-3zM12 13v7")],
+            Icon::Text => &[Part::Path("M5 6h14M5 11h14M5 16h9")],
+            Icon::Swatch => &[Part::Circle(12.0, 12.0, 8.5), Part::Path("M12 3.5v17")],
         }
     }
 }

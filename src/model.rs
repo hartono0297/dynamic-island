@@ -57,6 +57,9 @@ pub enum NoticeKind {
     /// A Mole clean failed or stopped (Bata low, "Log"). Sticky like a
     /// reminder: it stays until clicked, which opens Mole's log.
     MoleFailed,
+    /// "Disalin": an entry was copied from the island (or, with the setting,
+    /// any copy). Short (`COPIED_DURATION`); a newer one replaces it.
+    Copied,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +120,17 @@ pub enum Event {
     /// The CLI page's input has the keyboard (true) or lost it: like an open
     /// editor, it keeps the panel open meanwhile.
     CliFocus(bool),
+    /// The Clipboard page's search field has the keyboard (true) or lost it;
+    /// it keeps the panel open like the CLI input.
+    ClipFocus(bool),
+    /// The optional global hotkey: opens the panel on the Clipboard page
+    /// (without taking the foreground), or closes it when it shows that.
+    ClipHotkey,
+    /// The hotkey's panel was not visited in time: it closes.
+    ClipHoldEnd,
+    /// Enter in the search field copied an entry: the panel closes like
+    /// after a shortcut, and the keyboard goes back.
+    ClipCommit,
     /// Scroll the CLI output `lines` up (negative: down), at most `max` lines
     /// above the newest: the wheel over the output, PageUp and PageDown.
     CliScroll {
@@ -251,6 +265,14 @@ pub enum Hit {
     /// "lihat log" (an unreadable group) or the log shown: the preview's
     /// log in place of the groups, and back.
     MoleShowLog,
+    /// The Clipboard page's search field: it takes the keyboard.
+    ClipSearch,
+    /// A Clipboard card (entry id): copied again.
+    ClipCard(u64),
+    /// The selected card's buttons: pin or unpin, copy as plain text, delete.
+    ClipPin(u64),
+    ClipPlain(u64),
+    ClipDelete(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,6 +347,25 @@ pub enum Effect {
     MoleWhitelist,
     /// Mole's README in the browser.
     OpenMoleInstall,
+    /// Give the Clipboard search field the keyboard (the island activates).
+    FocusClipSearch,
+    /// The search field lets go; the window that had the keyboard gets it
+    /// back.
+    ReleaseClipFocus,
+    /// Something to do with a history entry.
+    Clip(ClipAction),
+}
+
+/// What a Clipboard card's click or button asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipAction {
+    /// Onto the clipboard in its own form.
+    Copy(u64),
+    /// Onto the clipboard as text only (not for an image).
+    CopyPlain(u64),
+    /// Pin or unpin.
+    TogglePin(u64),
+    Delete(u64),
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
@@ -336,7 +377,9 @@ pub enum PomoField {
     Sessions,
 }
 
-/// Panel pages, in scroll order.
+/// Panel pages, in scroll order: Kalender, Pomodoro, Pengingat, Catatan,
+/// Musik, Clipboard, Sistem, then CLI and Pintasan. This is the interim
+/// order; Run 9 sets the final one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Calendar,
@@ -344,6 +387,8 @@ pub enum Page {
     Reminders,
     Notes,
     Media,
+    /// The clipboard history.
+    Clipboard,
     /// Sistem: CPU, RAM, disks and the busiest processes.
     System,
     Cli,
@@ -352,13 +397,14 @@ pub enum Page {
 }
 
 impl Page {
-    /// Clipboard (Run 7) is not here yet; Run 9 sets the final order.
-    pub const ALL: [Page; 8] = [
+    /// Interim order (Clipboard, then Sistem); Run 9 sets the final order.
+    pub const ALL: [Page; 9] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
         Page::Notes,
         Page::Media,
+        Page::Clipboard,
         Page::System,
         Page::Cli,
         Page::Shortcuts,
