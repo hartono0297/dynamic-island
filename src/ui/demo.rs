@@ -473,6 +473,7 @@ fn run_scenes(scenes: &[Scene]) {
         artist: "Studio Ruang".into(),
         playing: true,
         art: Some(test_art()),
+        source_app: "Spotify.exe".into(),
     };
     let long_media = MediaInfo {
         title: "Sampai Jadi Debu (Live at Synchronize Festival 2024, Extended Version)".into(),

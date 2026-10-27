@@ -37,8 +37,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE,
+    WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -50,6 +50,7 @@ use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
+use crate::media_log;
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
@@ -60,7 +61,7 @@ use crate::sources::battery::{
 };
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{media, notifications};
-use crate::state::IslandState;
+use crate::state::{IslandState, is_media_hit};
 use crate::theme::{self, Theme};
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
@@ -162,7 +163,8 @@ thread_local! {
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
-pub fn run() {
+/// `media_log_flag`: started with `--media-log`.
+pub fn run(media_log_flag: bool) {
     if !claim_single_instance() {
         return;
     }
@@ -170,6 +172,7 @@ pub fn run() {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
     let config = config::load();
+    media_log::set_enabled(media_log::requested(media_log_flag, config.media_log));
     i18n::set_lang(config.language);
     theme::set_system_light(theme::read_system_light());
     theme::set_current(Theme::of(&config));
@@ -215,6 +218,8 @@ pub fn run() {
             fullscreen: false,
             battery,
             hover: HoverTracking::default(),
+            click: ClickPair::default(),
+            media_click: None,
             eq_timer: false,
             pomo_timer: false,
             clock_timer: false,
@@ -348,6 +353,11 @@ struct App {
     fullscreen: bool,
     battery: BatteryMonitor,
     hover: HoverTracking,
+    /// A left press on the island waiting for its release.
+    click: ClickPair,
+    /// The transport-button click being reduced, for the diagnosis log; its
+    /// `Effect::Media` takes it.
+    media_click: Option<media_log::Click>,
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
     pomo_timer: bool,
@@ -498,11 +508,39 @@ impl App {
                 other => other,
             };
             let page = self.state.page();
+            self.media_click = match &event {
+                Event::Click(hit) if media_log::enabled() && is_media_hit(hit) => {
+                    Some(media_log::Click {
+                        hit: hit.clone(),
+                        page,
+                        hover_open_ms: self
+                            .state
+                            .hover_open_age(now)
+                            .map(|age| age.as_millis() as u64),
+                        guarded: self.state.media_guarded(now),
+                    })
+                }
+                _ => None,
+            };
             for effect in self.state.apply(event, now) {
                 queue.extend(self.perform(effect, now));
             }
+            // No command came of it: the hover guard dropped it, or there
+            // was nothing to play or pause.
+            if let Some(click) = self.media_click.take() {
+                let why = if click.guarded { "guard" } else { "no media" };
+                media_log::log_command(&click, media_log::Outcome::Ignored(why), &self.media_app());
+            }
             self.follow_page(page, now);
         }
+    }
+
+    /// The AppUserModelId of the media session on show; empty without one.
+    fn media_app(&self) -> String {
+        self.state
+            .media()
+            .map(|m| m.source_app.clone())
+            .unwrap_or_default()
     }
 
     /// Bata's side of an event: activity resets its sleep clock, Claude
@@ -667,7 +705,10 @@ impl App {
     fn perform(&mut self, effect: Effect, now: Instant) -> Option<Event> {
         match effect {
             Effect::OpenApp(app_id) => notifications::open_app(&app_id),
-            Effect::Media(cmd) => media::send_command(cmd),
+            // To the session the island shows, not whichever is current.
+            Effect::Media(cmd) => {
+                media::send_command(cmd, self.media_app(), self.media_click.take())
+            }
             Effect::PlaySound => play_phase_sound(),
             Effect::SavePomodoro(settings) => {
                 self.config.pomodoro = settings;
@@ -1311,6 +1352,11 @@ impl App {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
             None => self.anim.to_opacity != 0.0,
         };
+        // Hidden, or something else on screen: a press made before must not
+        // pair with a release on what shows now.
+        if view == View::Hidden || view != self.drawn {
+            self.click.clear();
+        }
         if view != View::Hidden {
             self.drawn = view;
         }
@@ -1733,6 +1779,7 @@ impl App {
     }
 
     fn on_mouse_leave(&mut self) {
+        self.click.clear();
         self.bata.brain.hover(false, Instant::now());
         match self.hover.on_leave() {
             Some(event) => self.apply_now(event),
@@ -1740,11 +1787,26 @@ impl App {
         }
     }
 
-    fn on_click(&mut self, lparam: LPARAM) {
+    /// What the button event at `lparam` is over.
+    fn hit_at(&self, lparam: LPARAM) -> Option<Hit> {
         // Client coordinates in physical pixels, signed 16-bit each.
         let x = (lparam.0 & 0xFFFF) as i16 as f32;
         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
-        if let Some(hit) = self.renderer.hit_test(x, y) {
+        self.renderer.hit_test(x, y)
+    }
+
+    /// `WM_LBUTTONDOWN`: remembers what the press is on.
+    fn on_press(&mut self, lparam: LPARAM) {
+        let hit = self.hit_at(lparam);
+        self.click.press(hit);
+    }
+
+    /// `WM_LBUTTONUP`: a click only when the press was on the island too, on
+    /// the same target. A button pressed in another window and let go over
+    /// the island does nothing.
+    fn on_release(&mut self, lparam: LPARAM) {
+        let hit = self.hit_at(lparam);
+        if let Some(hit) = self.click.release(hit) {
             self.apply_now(Event::Click(hit));
         }
     }
@@ -2088,6 +2150,32 @@ impl HoverTracking {
     fn on_leave(&mut self) -> Option<Event> {
         self.armed = false;
         std::mem::take(&mut self.hovered).then_some(Event::Hover(false))
+    }
+}
+
+/// Pairs a left press with its release: a click counts only when both land
+/// on the island, on the same target, with nothing in between that ended the
+/// press (the pointer leaving, the view changing, the window hiding).
+#[derive(Default)]
+struct ClickPair {
+    /// What the pending press is on; `None` without one (or over nothing).
+    pressed: Option<Hit>,
+}
+
+impl ClickPair {
+    fn press(&mut self, hit: Option<Hit>) {
+        self.pressed = hit;
+    }
+
+    /// The click, when the release is on what was pressed. Every release
+    /// ends the press.
+    fn release(&mut self, hit: Option<Hit>) -> Option<Hit> {
+        let pressed = self.pressed.take()?;
+        (hit? == pressed).then_some(pressed)
+    }
+
+    fn clear(&mut self) {
+        self.pressed = None;
     }
 }
 
@@ -2944,8 +3032,12 @@ unsafe extern "system" fn wnd_proc(
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
+        WM_LBUTTONDOWN => {
+            with_app(|app| app.on_press(lparam));
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
-            with_app(|app| app.on_click(lparam));
+            with_app(|app| app.on_release(lparam));
             LRESULT(0)
         }
         WM_RBUTTONUP => {
@@ -3141,6 +3233,46 @@ mod tests {
         assert_eq!(h.on_leave(), Some(Event::Hover(false)));
         // Tracking ends on leave; the next move re-arms it.
         assert!(h.needs_arming());
+    }
+
+    #[test]
+    fn a_release_without_a_press_is_no_click() {
+        // The button went down in another window and came up over the island.
+        let mut c = ClickPair::default();
+        assert_eq!(c.release(Some(Hit::PlayPause)), None);
+    }
+
+    #[test]
+    fn press_and_release_must_be_on_the_same_target() {
+        let mut c = ClickPair::default();
+        c.press(Some(Hit::Prev));
+        assert_eq!(c.release(Some(Hit::PlayPause)), None);
+        // That release ended the press: a second release is no click either.
+        assert_eq!(c.release(Some(Hit::Prev)), None);
+        c.press(Some(Hit::PlayPause));
+        assert_eq!(c.release(Some(Hit::PlayPause)), Some(Hit::PlayPause));
+        assert_eq!(c.release(Some(Hit::PlayPause)), None, "one click per press");
+        // Pressed over nothing, or let go over nothing.
+        c.press(None);
+        assert_eq!(c.release(Some(Hit::Body)), None);
+        c.press(Some(Hit::Body));
+        assert_eq!(c.release(None), None);
+    }
+
+    #[test]
+    fn leaving_ends_a_press() {
+        let mut c = ClickPair::default();
+        c.press(Some(Hit::Next));
+        c.clear();
+        assert_eq!(c.release(Some(Hit::Next)), None);
+        // Targets with data compare whole.
+        c.press(Some(Hit::NoteOpen("a".into())));
+        assert_eq!(c.release(Some(Hit::NoteOpen("b".into()))), None);
+        c.press(Some(Hit::NoteOpen("a".into())));
+        assert_eq!(
+            c.release(Some(Hit::NoteOpen("a".into()))),
+            Some(Hit::NoteOpen("a".into()))
+        );
     }
 
     #[test]

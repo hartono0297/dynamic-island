@@ -23,6 +23,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[bata-idle-power-budget]]
 - [[bata-morning-greeting]]
 - [[settings-appearance-scroll]]
+- [[media-diagnosis-log]]
 
 ## Gotchas
 

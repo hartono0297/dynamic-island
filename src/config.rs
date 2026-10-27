@@ -53,6 +53,15 @@ pub struct Config {
     /// The day the greeting last showed; an unreadable date reads as none.
     #[serde(deserialize_with = "lenient_date")]
     pub last_greeting: Option<NaiveDate>,
+    /// Hidden, set by hand: write the media diagnosis log (`media_log`),
+    /// like `--media-log`. Not in the settings window, and not written to
+    /// the file while off.
+    #[serde(skip_serializing_if = "is_false")]
+    pub media_log: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// Any number, kept in 1–60; a non-number is the default.
@@ -94,6 +103,7 @@ impl Default for Config {
             robot_sleep_minutes: 10,
             morning_greeting: true,
             last_greeting: None,
+            media_log: false,
         }
     }
 }
@@ -382,6 +392,29 @@ mod tests {
     }
 
     #[test]
+    fn media_log_is_hidden_and_off_by_default() {
+        assert!(!Config::default().media_log);
+        // An older config without the field still parses, with it off.
+        let old = parse(r#"{"style":"Notch","lyrics":true}"#);
+        assert_eq!(
+            (old.style, old.lyrics, old.media_log),
+            (Style::Notch, true, false)
+        );
+        // Off, it is not written; set by hand, it is read and kept.
+        let json = serde_json::to_string(&Config::default()).unwrap();
+        assert!(!json.contains("media_log"), "{json}");
+        let on = parse(r#"{"media_log":true}"#);
+        assert!(on.media_log);
+        assert!(
+            serde_json::to_string(&on)
+                .unwrap()
+                .contains(r#""media_log":true"#)
+        );
+        // The island's own saves keep the hand-set value from disk.
+        assert!(merge_owned(on, &Config::default()).media_log);
+    }
+
+    #[test]
     fn cli_shell_is_a_name_and_a_typo_falls_back() {
         let cmd = Config {
             cli_shell: Shell::Cmd,
@@ -425,6 +458,7 @@ mod tests {
             robot_sleep_minutes: 5,
             morning_greeting: false,
             last_greeting: NaiveDate::from_ymd_opt(2026, 1, 2),
+            media_log: true,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }

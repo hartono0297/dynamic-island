@@ -10,6 +10,7 @@ use crate::model::{
     CalView, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page, Timeline, View,
 };
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
+use crate::ui::geometry::ANIM_MS;
 
 /// How long each temporary notice stays on screen, counted from when it becomes current.
 pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
@@ -23,6 +24,12 @@ fn duration_of(notice: &Notice) -> Duration {
         _ => NOTICE_DURATION,
     }
 }
+
+/// After hover opens the panel, its media buttons ignore clicks until the
+/// opening animation (`ANIM_MS`) has finished and this much longer: a pointer
+/// on its way to a browser tab must not land on play/pause as the panel
+/// grows under it.
+pub const MEDIA_HOVER_GUARD: Duration = Duration::from_millis(ANIM_MS + 300);
 
 /// One mouse-wheel notch, as Windows reports it.
 const WHEEL_STEP: i32 = 120;
@@ -48,6 +55,9 @@ pub struct IslandState {
     sticky: Vec<Notice>,
     fullscreen: bool,
     hover: bool,
+    /// When hover last opened the closed panel; cleared when it closes.
+    /// The media buttons wait `MEDIA_HOVER_GUARD` from then.
+    hover_opened: Option<Instant>,
     /// An editor window is open; it keeps the panel open like hover.
     editor_open: bool,
     /// The CLI page's input has the keyboard; it keeps the panel open like
@@ -92,6 +102,7 @@ impl IslandState {
             sticky: Vec::new(),
             fullscreen: false,
             hover: false,
+            hover_opened: None,
             editor_open: false,
             cli_focused: false,
             cli_tall: false,
@@ -115,6 +126,7 @@ impl IslandState {
         let calendar_was = (self.cal_view, self.cal_anchor);
         let selected_was = self.cal_selected;
         let panel_was_open = self.panel_open();
+        let hover_on = matches!(event, Event::Hover(true));
         let mut effects = Vec::new();
         // Finish a phase whose end has passed before handling the input, so a
         // click that beats the deadline's Tick never pauses the timer at 0:00.
@@ -192,6 +204,14 @@ impl IslandState {
         if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
             self.cli_focused = false;
             effects.push(Effect::ReleaseCliFocus);
+        }
+        if hover_on && !panel_was_open && self.panel_open() {
+            self.hover_opened = Some(now);
+        }
+        // Closed, or no longer open by hover (an editor or the CLI input
+        // holds it after the pointer left): no guard.
+        if !self.panel_open() || !self.hover {
+            self.hover_opened = None;
         }
         if panel_was_open && !self.panel_open() {
             self.wheel = 0;
@@ -312,7 +332,24 @@ impl IslandState {
         self.collapsed == Collapse::No && (self.hover || self.editor_open || self.cli_focused)
     }
 
+    /// How long ago hover opened the panel; `None` when it is closed or held
+    /// open by something else (an editor, the CLI input).
+    pub fn hover_open_age(&self, now: Instant) -> Option<Duration> {
+        self.hover_opened
+            .map(|at| now.saturating_duration_since(at))
+    }
+
+    /// The panel opened by hover less than `MEDIA_HOVER_GUARD` ago: its media
+    /// buttons do nothing yet.
+    pub fn media_guarded(&self, now: Instant) -> bool {
+        self.hover_open_age(now)
+            .is_some_and(|age| age < MEDIA_HOVER_GUARD)
+    }
+
     fn click(&mut self, hit: Hit, now: Instant, effects: &mut Vec<Effect>) {
+        if is_media_hit(&hit) && self.media_guarded(now) {
+            return;
+        }
         match hit {
             Hit::Body => match self.view() {
                 View::Notice(_) => effects.extend(self.dismiss_visible_notice(now)),
@@ -322,7 +359,17 @@ impl IslandState {
                 _ => {}
             },
             Hit::Prev => effects.push(Effect::Media(MediaCommand::Prev)),
-            Hit::PlayPause => effects.push(Effect::Media(MediaCommand::PlayPause)),
+            // What the island shows decides: playing pauses, paused plays.
+            Hit::PlayPause => {
+                if let Some(media) = &self.media {
+                    let cmd = if media.playing {
+                        MediaCommand::Pause
+                    } else {
+                        MediaCommand::Play
+                    };
+                    effects.push(Effect::Media(cmd));
+                }
+            }
             Hit::Next => effects.push(Effect::Media(MediaCommand::Next)),
             Hit::PomoStartPause => self.pomodoro.start_pause(now),
             Hit::PomoReset => self.pomodoro.reset(),
@@ -627,6 +674,11 @@ enum Sticky<'a> {
     Reminder(&'a str),
 }
 
+/// A transport button: previous, play/pause or next.
+pub fn is_media_hit(hit: &Hit) -> bool {
+    matches!(hit, Hit::Prev | Hit::PlayPause | Hit::Next)
+}
+
 fn sticky_key(notice: &Notice) -> Option<Sticky<'_>> {
     match &notice.kind {
         NoticeKind::ClaudeWaiting { session_id } => Some(Sticky::Session(session_id)),
@@ -686,6 +738,7 @@ mod tests {
             artist: "Queen".into(),
             playing,
             art: None,
+            source_app: "Chrome".into(),
         }
     }
 
@@ -903,19 +956,132 @@ mod tests {
         let mut s = st();
         s.apply(Event::Media(Some(media(true))), t0);
         open_on(&mut s, Page::Media, t0);
+        // Once the hover guard has passed.
+        let t = t0 + MEDIA_HOVER_GUARD;
+        assert_eq!(
+            s.apply(Event::Click(Hit::Next), t),
+            vec![Effect::Media(MediaCommand::Next)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::Prev), t),
+            vec![Effect::Media(MediaCommand::Prev)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), t),
+            vec![Effect::Media(MediaCommand::Pause)]
+        );
+        assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn play_pause_follows_the_shown_state() {
+        let t0 = Instant::now();
+        let t = t0 + MEDIA_HOVER_GUARD;
+        let mut s = st();
+        open_on(&mut s, Page::Media, t0);
+        // No media: nothing to command.
+        assert_eq!(s.apply(Event::Click(Hit::PlayPause), t), vec![]);
+        s.apply(Event::Media(Some(media(true))), t);
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), t),
+            vec![Effect::Media(MediaCommand::Pause)],
+            "playing pauses"
+        );
+        s.apply(Event::Media(Some(media(false))), t);
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), t),
+            vec![Effect::Media(MediaCommand::Play)],
+            "paused plays"
+        );
+    }
+
+    #[test]
+    fn media_buttons_wait_after_a_hover_open() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        open_on(&mut s, Page::Media, t0);
+        s.apply(Event::Hover(false), t0);
+        // Hover reopens it on the Music page, under a passing pointer.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
+        let early = t0 + Duration::from_millis(100);
+        assert!(s.media_guarded(early));
+        assert_eq!(s.hover_open_age(early), Some(Duration::from_millis(100)));
+        for hit in [Hit::PlayPause, Hit::Prev, Hit::Next] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), early), vec![], "{hit:?}");
+        }
+        // Just before the window ends: still ignored.
+        let edge = t0 + MEDIA_HOVER_GUARD - Duration::from_millis(1);
+        assert_eq!(s.apply(Event::Click(Hit::PlayPause), edge), vec![]);
+        let after = t0 + MEDIA_HOVER_GUARD;
+        assert!(!s.media_guarded(after));
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), after),
+            vec![Effect::Media(MediaCommand::Pause)]
+        );
+        // Closing clears it; a later hover open starts a new window.
+        s.apply(Event::Hover(false), after);
+        assert_eq!(s.hover_open_age(after), None);
+        let later = t0 + secs(10);
+        s.apply(Event::Hover(true), later);
+        assert_eq!(s.apply(Event::Click(Hit::PlayPause), later), vec![]);
+    }
+
+    #[test]
+    fn the_hover_guard_spares_other_buttons() {
+        let t0 = Instant::now();
+        let early = t0 + Duration::from_millis(100);
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        open_on(&mut s, Page::Media, t0);
+        assert!(s.media_guarded(early));
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricsToggle), early),
+            vec![Effect::SaveLyrics(true)]
+        );
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Click(Hit::CalNext), early);
+        assert_ne!(s.cal_anchor(), date(2026, 10, 25), "calendar moved");
+    }
+
+    #[test]
+    fn a_panel_held_open_without_hover_is_not_guarded() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(false))), t0);
+        // An editor opens the panel: no hover open, no guard.
+        s.apply(Event::EditorOpen(true), t0);
+        assert!(matches!(s.view(), View::Panel(_)));
+        assert!(!s.media_guarded(t0));
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), t0),
+            vec![Effect::Media(MediaCommand::Play)]
+        );
+        // Hover arriving while the editor already holds it open: still none.
+        s.apply(Event::Hover(true), t0);
+        assert!(!s.media_guarded(t0));
         assert_eq!(
             s.apply(Event::Click(Hit::Next), t0),
             vec![Effect::Media(MediaCommand::Next)]
         );
+        // Same for the CLI input's focus: it holds the panel once the pointer
+        // has gone, and a return of the pointer opens nothing new.
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::CliFocus(true), t0);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert!(!s.media_guarded(t0), "cleared once hover went");
+        s.apply(Event::Hover(true), t0);
+        assert!(!s.media_guarded(t0));
         assert_eq!(
             s.apply(Event::Click(Hit::Prev), t0),
             vec![Effect::Media(MediaCommand::Prev)]
         );
-        assert_eq!(
-            s.apply(Event::Click(Hit::PlayPause), t0),
-            vec![Effect::Media(MediaCommand::PlayPause)]
-        );
-        assert_eq!(s.view(), View::Panel(Page::Media));
     }
 
     #[test]

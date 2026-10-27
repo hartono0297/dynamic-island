@@ -9,6 +9,7 @@ mod config;
 mod google;
 mod i18n;
 mod lyrics;
+mod media_log;
 mod model;
 mod notes;
 mod pomodoro;
@@ -42,6 +43,7 @@ fn demo_lang_from_env() {
 fn opens_windows(arg: Option<&str>) -> bool {
     match arg {
         None => true,
+        Some(media_log::FLAG) => true,
         #[cfg(debug_assertions)]
         Some("--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--settings") => true,
         Some(_) => false,
@@ -54,7 +56,10 @@ fn main() {
         ui::fonts::register_gdi();
     }
     match arg.as_deref() {
-        None => app::run(),
+        None => app::run(false),
+        // The island as usual, with the media diagnosis log on. No console:
+        // it runs like a normal start, single instance included.
+        Some(media_log::FLAG) => app::run(true),
         // No console attach: the hook prints nothing, and attaching can swap an
         // unset stdin for the console's, leaving the hook blocked on keyboard input.
         Some("--hook") => claude::hook::run_hook(),

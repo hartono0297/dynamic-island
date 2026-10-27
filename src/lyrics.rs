@@ -952,6 +952,7 @@ mod tests {
             artist: artist.into(),
             playing: true,
             art: None,
+            source_app: String::new(),
         }
     }
 

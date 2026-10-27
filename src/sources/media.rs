@@ -9,9 +9,10 @@ use windows::Media::Control::{
 };
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-use windows::core::Result;
+use windows::core::{IUnknown, Interface, Result};
 
 use crate::lyrics::timeline_moved;
+use crate::media_log::{self, Click, Outcome, StatusSeen};
 use crate::model::{Event, MediaCommand, MediaInfo, Timeline};
 
 /// Thumbnails larger than this are dropped rather than held in memory.
@@ -89,6 +90,8 @@ struct Properties {
 /// Handlers registered on one session; removed when dropped.
 struct SessionSubscription {
     session: Session,
+    /// The session's AppUserModelId, read once.
+    app: String,
     properties_token: Option<i64>,
     playback_token: Option<i64>,
     timeline_token: Option<i64>,
@@ -96,6 +99,10 @@ struct SessionSubscription {
 
 impl SessionSubscription {
     fn new(session: Session, signals: &Sender<Signal>) -> Self {
+        let app = session
+            .SourceAppUserModelId()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
         let s = signals.clone();
         let properties_token = session
             .MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
@@ -119,6 +126,7 @@ impl SessionSubscription {
             .ok();
         Self {
             session,
+            app,
             properties_token,
             playback_token,
             timeline_token,
@@ -150,6 +158,8 @@ struct Watcher {
     signals: Sender<Signal>,
     subscription: Option<SessionSubscription>,
     properties: Option<Properties>,
+    /// The last (session, status) pair, for the diagnosis log.
+    status_seen: StatusSeen,
 }
 
 impl Watcher {
@@ -175,6 +185,7 @@ impl Watcher {
             signals,
             subscription: None,
             properties: None,
+            status_seen: StatusSeen::default(),
         }
     }
 
@@ -190,24 +201,34 @@ impl Watcher {
                 .ok()
                 .map(|session| SessionSubscription::new(session, &self.signals));
         }
-        let session = &self.subscription.as_ref()?.session;
+        let Some(subscription) = self.subscription.as_ref() else {
+            if self.status_seen.changed("", "None") {
+                media_log::log_status("", "None");
+            }
+            return None;
+        };
+        let session = &subscription.session;
         if refresh.properties || self.properties.is_none() {
             // On a failed read keep the previous values for this session.
             if let Ok(properties) = read_properties(session) {
                 self.properties = Some(properties);
             }
         }
-        let playing = shown_playing(
-            session
-                .GetPlaybackInfo()
-                .and_then(|info| info.PlaybackStatus()),
-        )?;
+        let status = session
+            .GetPlaybackInfo()
+            .and_then(|info| info.PlaybackStatus());
+        let name = status_name(&status);
+        if self.status_seen.changed(&subscription.app, name) {
+            media_log::log_status(&subscription.app, name);
+        }
+        let playing = shown_playing(status)?;
         let properties = self.properties.as_ref()?;
         Some(MediaInfo {
             title: properties.title.clone(),
             artist: properties.artist.clone(),
             playing,
             art: properties.art.clone(),
+            source_app: subscription.app.clone(),
         })
     }
 
@@ -238,6 +259,20 @@ fn shown_playing(status: Result<PlaybackStatus>) -> Option<bool> {
         Ok(PlaybackStatus::Closed | PlaybackStatus::Stopped) => None,
         Ok(status) => Some(status == PlaybackStatus::Playing),
         Err(_) => Some(false),
+    }
+}
+
+/// The status's name for the diagnosis log.
+fn status_name(status: &Result<PlaybackStatus>) -> &'static str {
+    match status {
+        Ok(PlaybackStatus::Playing) => "Playing",
+        Ok(PlaybackStatus::Paused) => "Paused",
+        Ok(PlaybackStatus::Stopped) => "Stopped",
+        Ok(PlaybackStatus::Closed) => "Closed",
+        Ok(PlaybackStatus::Changing) => "Changing",
+        Ok(PlaybackStatus::Opened) => "Opened",
+        Ok(_) => "Other",
+        Err(_) => "Unreadable",
     }
 }
 
@@ -306,25 +341,84 @@ fn next_refresh(signals: &Receiver<Signal>) -> Refresh {
     refresh
 }
 
-/// Sends a transport command to the current media session on a short-lived
-/// thread, so the caller never waits on WinRT. Errors are ignored.
-pub fn send_command(cmd: MediaCommand) {
+/// Sends a transport command to the session whose AppUserModelId is
+/// `target` (the one the island shows) on a short-lived thread, so the caller
+/// never waits on WinRT. Without such a session nothing is sent. `click`,
+/// when the command came from one, goes to the diagnosis log. Errors are
+/// ignored.
+pub fn send_command(cmd: MediaCommand, target: String, click: Option<Click>) {
     std::thread::spawn(move || {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
-        let _ = try_send_command(cmd);
+        let _ = try_send_command(&cmd, &target, click.as_ref());
     });
 }
 
-fn try_send_command(cmd: MediaCommand) -> Result<bool> {
-    let session = Manager::RequestAsync()?.join()?.GetCurrentSession()?;
+fn try_send_command(cmd: &MediaCommand, target: &str, click: Option<&Click>) -> Result<bool> {
+    let session = find_session(target);
+    if let Some(click) = click {
+        let outcome = Outcome::Sent {
+            cmd,
+            session_found: matches!(session, Ok(Some(_))),
+        };
+        media_log::log_command(click, outcome, target);
+    }
+    let Some(session) = session? else {
+        return Ok(false);
+    };
     let op = match cmd {
         MediaCommand::Prev => session.TrySkipPreviousAsync()?,
-        MediaCommand::PlayPause => session.TryTogglePlayPauseAsync()?,
+        MediaCommand::Play => session.TryPlayAsync()?,
+        MediaCommand::Pause => session.TryPauseAsync()?,
         MediaCommand::Next => session.TrySkipNextAsync()?,
     };
     op.join()
+}
+
+/// The session with AppUserModelId `target`; `None` when there is none.
+fn find_session(target: &str) -> Result<Option<Session>> {
+    if target.is_empty() {
+        return Ok(None);
+    }
+    let manager = Manager::RequestAsync()?.join()?;
+    let sessions = manager.GetSessions()?;
+    let list: Vec<Session> = (0..sessions.Size()?)
+        .filter_map(|i| sessions.GetAt(i).ok())
+        .collect();
+    let ids: Vec<String> = list
+        .iter()
+        .map(|s| {
+            s.SourceAppUserModelId()
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    // COM identity: the same session always gives the same IUnknown.
+    let current = manager
+        .GetCurrentSession()
+        .ok()
+        .and_then(|c| c.cast::<IUnknown>().ok())
+        .and_then(|c| {
+            list.iter()
+                .position(|s| s.cast::<IUnknown>().ok().as_ref() == Some(&c))
+        });
+    Ok(pick_session(&ids, current, target).map(|i| list[i].clone()))
+}
+
+/// Which of the sessions (by AppUserModelId) gets a command meant for
+/// `target`. Browser tabs share one id, so the current session wins when it
+/// matches, else the first match. No match, or no target: none.
+fn pick_session(ids: &[String], current: Option<usize>, target: &str) -> Option<usize> {
+    if target.is_empty() {
+        return None;
+    }
+    if let Some(i) = current
+        && ids.get(i).is_some_and(|id| id == target)
+    {
+        return Some(i);
+    }
+    ids.iter().position(|id| id == target)
 }
 
 fn read_properties(session: &Session) -> Result<Properties> {
@@ -437,7 +531,50 @@ mod tests {
             artist: "Artist".to_string(),
             playing,
             art,
+            source_app: "Chrome".to_string(),
         })
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_command_goes_to_the_session_with_the_shown_id() {
+        let sessions = ids(&["Spotify.exe", "Chrome", "MSEdge"]);
+        assert_eq!(pick_session(&sessions, None, "Chrome"), Some(1));
+        assert_eq!(pick_session(&sessions, Some(0), "MSEdge"), Some(2));
+    }
+
+    #[test]
+    fn the_current_session_wins_among_tabs_sharing_an_id() {
+        let sessions = ids(&["Chrome", "Spotify.exe", "Chrome", "Chrome"]);
+        assert_eq!(pick_session(&sessions, Some(2), "Chrome"), Some(2));
+        // The current one is another app: the first match.
+        assert_eq!(pick_session(&sessions, Some(1), "Chrome"), Some(0));
+        assert_eq!(pick_session(&sessions, None, "Chrome"), Some(0));
+        // A stale index past the end is ignored.
+        assert_eq!(pick_session(&sessions, Some(9), "Chrome"), Some(0));
+    }
+
+    #[test]
+    fn no_matching_session_or_no_target_sends_nothing() {
+        let sessions = ids(&["Spotify.exe", "Chrome"]);
+        assert_eq!(pick_session(&sessions, Some(0), "MSEdge"), None);
+        assert_eq!(pick_session(&sessions, Some(0), ""), None);
+        assert_eq!(pick_session(&ids(&["", "Chrome"]), Some(0), ""), None);
+        assert_eq!(pick_session(&[], None, "Chrome"), None);
+    }
+
+    #[test]
+    fn status_names_for_the_log() {
+        assert_eq!(status_name(&Ok(PlaybackStatus::Playing)), "Playing");
+        assert_eq!(status_name(&Ok(PlaybackStatus::Paused)), "Paused");
+        assert_eq!(status_name(&Ok(PlaybackStatus::Closed)), "Closed");
+        assert_eq!(
+            status_name(&Err(windows::core::Error::empty())),
+            "Unreadable"
+        );
     }
 
     #[test]
