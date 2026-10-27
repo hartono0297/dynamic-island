@@ -84,11 +84,20 @@ pub enum Icon {
     /// The CLI folder menu's favourites (`star` in keputusan-v3.1.html):
     /// outline to star a folder, with the duotone fill once it is one.
     Star,
+    /// The cleaner's rows (the `I` map in deepclean-opsi-d.html: `temp`,
+    /// `globe`, `box`, `code`, `image`, `dl`, `win`). Line only, as there.
+    TempFile,
+    Globe,
+    Package,
+    Code,
+    Image,
+    Download,
+    Windows,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 44] = [
+    pub const ALL: [Icon; 51] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -133,6 +142,13 @@ impl Icon {
         Icon::Expand,
         Icon::Shrink,
         Icon::Star,
+        Icon::TempFile,
+        Icon::Globe,
+        Icon::Package,
+        Icon::Code,
+        Icon::Image,
+        Icon::Download,
+        Icon::Windows,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -316,6 +332,28 @@ impl Icon {
             Icon::Star => &[
                 Part::Fill("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
                 Part::Path("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
+            ],
+            Icon::TempFile => &[Part::Path("M7 4h7l4 4v12H7z"), Part::Path("M14 4v4h4")],
+            Icon::Globe => &[
+                Part::Circle(12.0, 12.0, 8.5),
+                Part::Path("M3.5 12h17M12 3.5c3 3.3 3 13.7 0 17M12 3.5c-3 3.3-3 13.7 0 17"),
+            ],
+            Icon::Package => &[
+                Part::Path("M4 8l8-4 8 4v8l-8 4-8-4z"),
+                Part::Path("M4 8l8 4 8-4M12 12v8"),
+            ],
+            Icon::Code => &[Part::Path("M9 8l-4 4 4 4M15 8l4 4-4 4")],
+            Icon::Image => &[
+                Part::Rect(3.0, 5.0, 18.0, 14.0, 3.0),
+                Part::Circle(9.0, 10.0, 1.6),
+                Part::Path("M21 16l-5-5-8 8"),
+            ],
+            Icon::Download => &[Part::Path("M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14")],
+            Icon::Windows => &[
+                Part::Rect(4.0, 4.0, 7.0, 7.0, 1.0),
+                Part::Rect(13.0, 4.0, 7.0, 7.0, 1.0),
+                Part::Rect(4.0, 13.0, 7.0, 7.0, 1.0),
+                Part::Rect(13.0, 13.0, 7.0, 7.0, 1.0),
             ],
         }
     }
@@ -1091,6 +1129,37 @@ mod tests {
             unsafe { layers(Icon::Calc).dots.as_ref().unwrap().GetFigureCount() }.unwrap(),
             6
         );
+    }
+
+    #[test]
+    fn cleaner_icons_are_line_only_as_in_the_design() {
+        let cleaner = [
+            Icon::TempFile,
+            Icon::Globe,
+            Icon::Package,
+            Icon::Code,
+            Icon::Image,
+            Icon::Download,
+            Icon::Windows,
+        ];
+        for icon in cleaner {
+            assert!(
+                icon.parts().iter().all(|p| p.layer() == Layer::Stroke),
+                "{icon:?}"
+            );
+        }
+        let count = |icon: Icon, i: usize| match icon.parts()[i] {
+            Part::Path(d) => kinds(&parse_path(d).unwrap()),
+            other => panic!("{other:?}"),
+        };
+        // M h l v H z, then M v h.
+        assert_eq!(count(Icon::TempFile, 0), "MLLLLZ");
+        assert_eq!(count(Icon::TempFile, 1), "MLL");
+        // M h, then two arcs of curves.
+        assert_eq!(count(Icon::Globe, 1), "MLMCMC");
+        assert_eq!(count(Icon::Code, 0), "MLLMLL");
+        assert_eq!(count(Icon::Download, 0), "MLMLLML");
+        assert_eq!(Icon::Windows.parts().len(), 4);
     }
 
     #[test]

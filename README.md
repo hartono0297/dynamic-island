@@ -44,6 +44,7 @@ On first run, Windows asks for access to your notifications: allow it.
 - **Notifications:** every Windows toast shows in the island; click one to open its app. Turn on Windows *Do Not Disturb* to avoid seeing them twice (Settings → General → *Turn off Windows pop-ups* shows how). A low-battery notice comes at the threshold set in Settings.
 - **Claude Code:** "Claude finished" and "Claude needs you" notices through Claude Code hooks.
 - **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen.
+- **Clean up:** from the System page, measure and clean temp files and logs, browser and app caches, developer caches, Autodesk and Adobe caches, old installers in Downloads (to the Recycle Bin) and Windows Update leftovers (asks for admin through UAC). You tick what goes, and the button asks once more before anything is deleted. Open browsers and files in use are skipped and reported; the island reports the free space it measured afterwards.
 - **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed.
 - **Bata, the assistant:** a small robot beside the clock and on the island's own notices (reminders, pomodoro, Claude Code, battery, greeting). It has faces for idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving; it blinks, falls asleep after a while without activity and wakes when you point at the island. Other apps' notifications keep their own badge, and the open panel shows no robot.
 - **Morning greeting:** once a day, before noon, Bata says good morning with the number of today's events and reminders, at startup, after a wake or when you unlock the PC.
@@ -162,7 +163,7 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 - CLI commands get no input (stdin), so interactive programs won't work; one command runs at a time.
 - The pomodoro timer is not kept when the island quits.
 
-## Fonts / credits
+## Fonts and credits
 
 The exe embeds Latin subsets of two typefaces, both under the SIL Open Font License 1.1:
 
@@ -170,5 +171,7 @@ The exe embeds Latin subsets of two typefaces, both under the SIL Open Font Lice
 - **DM Mono** by Colophon Foundry for Google Fonts, © 2020 The DM Mono Project Authors (the CLI)
 
 Licence texts and copyright lines are in [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt). [`scripts/make-fonts.ps1`](scripts/make-fonts.ps1) rebuilds the files from pinned upstream sources.
+
+The cleaner's list of locations (which cache, temp and download folders are safe to clean, and after how many days) follows **Mole for Windows** by tw93 ([github.com/tw93/mole](https://github.com/tw93/mole), branch `windows`, version 1.30.0), © 2025 tw93, under the MIT licence. Only that data is used; the island scans and deletes with its own code. The full licence text is in [`NOTICE`](NOTICE).
 
 Design notes and plans: [`docs/superpowers/`](docs/superpowers/).

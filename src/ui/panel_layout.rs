@@ -7,6 +7,7 @@ use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::clean::CleanCat;
 use crate::cli_folders::{MenuItem, Section};
 use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::notes::Note;
@@ -193,13 +194,67 @@ pub enum PageLayout {
     Notes(ListLayout),
     Media(ExpandedLayout),
     System(SystemLayout),
+    /// The cleaner over the System page.
+    Cleaner(CleanerLayout),
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
 }
 
-/// The cleaner behind "Bersihkan" exists (Run 5). Until then the button is
-/// drawn dimmed with a "segera" tag and takes no click.
-pub const CLEANER_READY: bool = false;
+/// The cleaner behind "Bersihkan" exists (Run 5): the button is the accent
+/// `.cbtn` and opens it. The dimmed "segera" look is kept for a build
+/// without it.
+pub const CLEANER_READY: bool = true;
+
+/// The cleaner's header as the renderer measured it: the mode segment's two
+/// labels ("Pilih sendiri", "Otomatis · Mole"), each with its padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CleanHead {
+    pub seg: [f32; 2],
+}
+
+/// The cleaner's footer as measured: "Dipilih 2,3 GB" and the button
+/// ("Bersihkan 2,3 GB", or armed "Yakin? Hapus 2,3 GB").
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CleanFoot {
+    pub picked_w: f32,
+    pub go_w: f32,
+}
+
+/// One cleaner row (`.cl .row`): checkbox, icon, name over its subtitle,
+/// size at the right. `row` is its click area.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CleanRow {
+    pub cat: CleanCat,
+    pub row: Rect,
+    pub check: Rect,
+    pub icon: Rect,
+    pub name: Rect,
+    pub sub: Rect,
+    pub size: Rect,
+}
+
+/// The cleaner after deepclean-opsi-d.html `cleanPanel2` / `ownPanel`: a
+/// back button and "Bersihkan" with the mode segment on the right; the
+/// seven rows in `CleanCat::ALL` order; the credit line at the bottom left,
+/// "Dipilih" and the button at the right.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CleanerLayout {
+    /// The round back button (to Sistem), left of the title.
+    pub back: Rect,
+    pub header: Rect,
+    /// The segment's track and its two items.
+    pub seg: Rect,
+    pub seg_items: [Rect; 2],
+    pub rows: Vec<CleanRow>,
+    pub credit: Rect,
+    pub picked: Rect,
+    pub go: Rect,
+    /// The rows take clicks (not while a clean runs).
+    pub rows_live: bool,
+    /// The button takes clicks (something ticked; no scan or clean
+    /// running).
+    pub go_live: bool,
+}
 
 /// The System page's header as the renderer measured it: the uptime chip
 /// and the "Bersihkan" button, full widths.
@@ -418,6 +473,34 @@ const TILE_MAX_H: f32 = 98.0;
 const TILE_GLYPH_H: f32 = 28.0;
 const TILE_LABEL_H: f32 = 16.0;
 const TILE_INNER_GAP: f32 = 8.0;
+
+/// The cleaner, after deepclean-opsi-d.html `.panel` (16 px over the
+/// header), `.ph` (28 px, 10 under it), `.cl .row` (3 / 8 px in, a
+/// 18 + 22 px grid with 9 px gaps), the segment (2 px track, 3 / 10 px
+/// items) and the footer 26 px over the bottom edge.
+const CLEAN_TOP: f32 = 16.0;
+const CLEAN_HEAD_H: f32 = 28.0;
+const CLEAN_HEAD_GAP: f32 = 10.0;
+const CLEAN_BACK: f32 = 24.0;
+const CLEAN_BACK_GAP: f32 = 8.0;
+const CLEAN_SEG_H: f32 = 24.0;
+const CLEAN_SEG_PAD: f32 = 2.0;
+/// One row and the 1 px under it; less when the waiting strip takes room.
+const CLEAN_ROW_PITCH: f32 = 34.0;
+const CLEAN_ROW_GAP: f32 = 1.0;
+const CLEAN_ROW_PAD_X: f32 = 8.0;
+pub const CLEAN_CHECK: f32 = 16.0;
+const CLEAN_CHECK_COL: f32 = 18.0;
+const CLEAN_ICON_COL: f32 = 22.0;
+const CLEAN_COL_GAP: f32 = 9.0;
+const CLEAN_NAME_H: f32 = 15.0;
+const CLEAN_SUB_H: f32 = 13.0;
+const CLEAN_SIZE_W: f32 = 76.0;
+const CLEAN_FOOT_H: f32 = 24.0;
+const CLEAN_FOOT_BOTTOM: f32 = 26.0;
+const CLEAN_FOOT_GAP: f32 = 8.0;
+/// Clear space between the last row and the footer.
+const CLEAN_ROWS_FOOT_GAP: f32 = 6.0;
 
 /// The System page, after keputusan-v3.1.html `.sys`, `.ringw`, `.spark`,
 /// `.meter`, `.bar`, `.procs` and `.cbtn`.
@@ -1627,6 +1710,102 @@ pub fn system_layout(
     }
 }
 
+/// The cleaner in `s` (`ShapeKind::PanelClean`): `head` and `foot` as the
+/// renderer measured them; `rows_live` / `go_live` say what takes clicks.
+pub fn cleaner_layout(
+    s: ShapeRect,
+    strip: bool,
+    head: &CleanHead,
+    foot: &CleanFoot,
+    rows_live: bool,
+    go_live: bool,
+) -> CleanerLayout {
+    let top = s.y + CLEAN_TOP + if strip { STRIP_H } else { 0.0 };
+    let (l, r) = (left(s), right(s));
+    let back = rect(
+        l,
+        top + (CLEAN_HEAD_H - CLEAN_BACK) / 2.0,
+        CLEAN_BACK,
+        CLEAN_BACK,
+    );
+    let seg_w = head.seg[0] + head.seg[1] + 2.0 * CLEAN_SEG_PAD;
+    let seg = rect(
+        r - seg_w,
+        top + (CLEAN_HEAD_H - CLEAN_SEG_H) / 2.0,
+        seg_w,
+        CLEAN_SEG_H,
+    );
+    let item_h = CLEAN_SEG_H - 2.0 * CLEAN_SEG_PAD;
+    let first = rect(
+        seg.x + CLEAN_SEG_PAD,
+        seg.y + CLEAN_SEG_PAD,
+        head.seg[0],
+        item_h,
+    );
+    let second = rect(first.right(), first.y, head.seg[1], item_h);
+    let title_x = back.right() + CLEAN_BACK_GAP;
+    let header = rect(title_x, top, seg.x - 8.0 - title_x, CLEAN_HEAD_H);
+
+    let foot_y = s.y + s.h - CLEAN_FOOT_BOTTOM - CLEAN_FOOT_H;
+    let go = rect(r - foot.go_w, foot_y, foot.go_w, CLEAN_FOOT_H);
+    let picked = rect(
+        go.x - CLEAN_FOOT_GAP - foot.picked_w,
+        foot_y,
+        foot.picked_w,
+        CLEAN_FOOT_H,
+    );
+    let credit = rect(l, foot_y, picked.x - 12.0 - l, CLEAN_FOOT_H);
+
+    let rows_top = top + CLEAN_HEAD_H + CLEAN_HEAD_GAP;
+    let n = CleanCat::ALL.len() as f32;
+    let avail = foot_y - CLEAN_ROWS_FOOT_GAP - rows_top + CLEAN_ROW_GAP;
+    let pitch = CLEAN_ROW_PITCH.min(avail / n);
+    let rows = CleanCat::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, cat)| {
+            let row = rect(l, rows_top + i as f32 * pitch, r - l, pitch - CLEAN_ROW_GAP);
+            let mid = row.y + row.h / 2.0;
+            let check_x = row.x + CLEAN_ROW_PAD_X + (CLEAN_CHECK_COL - CLEAN_CHECK) / 2.0;
+            let check = rect(check_x, mid - CLEAN_CHECK / 2.0, CLEAN_CHECK, CLEAN_CHECK);
+            let icon_x = row.x + CLEAN_ROW_PAD_X + CLEAN_CHECK_COL + CLEAN_COL_GAP;
+            let icon = rect(icon_x, row.y, CLEAN_ICON_COL, row.h);
+            let size = rect(
+                row.right() - CLEAN_ROW_PAD_X - CLEAN_SIZE_W,
+                row.y,
+                CLEAN_SIZE_W,
+                row.h,
+            );
+            let text_x = icon.right() + CLEAN_COL_GAP;
+            let text_w = size.x - CLEAN_COL_GAP - text_x;
+            let lines = CLEAN_NAME_H + CLEAN_SUB_H;
+            let name = rect(text_x, mid - lines / 2.0, text_w, CLEAN_NAME_H);
+            let sub = rect(text_x, name.bottom(), text_w, CLEAN_SUB_H);
+            CleanRow {
+                cat: *cat,
+                row,
+                check,
+                icon,
+                name,
+                sub,
+                size,
+            }
+        })
+        .collect();
+    CleanerLayout {
+        back,
+        header,
+        seg,
+        seg_items: [first, second],
+        rows,
+        credit,
+        picked,
+        go,
+        rows_live,
+        go_live,
+    }
+}
+
 /// A tile's icon and, under it, its label; the two centred in the tile.
 pub fn tile_parts(tile: Rect) -> (Rect, Rect) {
     let h = TILE_GLYPH_H + TILE_INNER_GAP + TILE_LABEL_H;
@@ -1757,6 +1936,18 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
         PageLayout::Shortcuts(l) => {
             for (s, r) in l.tiles {
                 add(r, Hit::Shortcut(s));
+            }
+        }
+        PageLayout::Cleaner(l) => {
+            // The segment's second mode comes in Run 6: no region yet.
+            add(l.back, Hit::CleanBack);
+            if l.rows_live {
+                for row in &l.rows {
+                    add(row.row, Hit::CleanToggle(row.cat));
+                }
+            }
+            if l.go_live {
+                add(l.go, Hit::CleanGo);
             }
         }
         PageLayout::System(l) => {
@@ -2026,8 +2217,101 @@ mod tests {
         }
     }
 
+    /// "Pilih sendiri" and "Otomatis · Mole", "Dipilih 2,3 GB" and
+    /// "Yakin? Hapus 2,3 GB", measured with their padding.
+    const CLEAN_HEAD: CleanHead = CleanHead { seg: [82.0, 100.0] };
+    const CLEAN_FOOT: CleanFoot = CleanFoot {
+        picked_w: 76.0,
+        go_w: 132.0,
+    };
+
     #[test]
-    fn system_regions_per_drive_and_process_and_no_clean_button_yet() {
+    fn cleaner_fits_its_panel() {
+        use crate::ui::geometry::ShapeKind;
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::PanelClean);
+            for strip in [false, true] {
+                let l = cleaner_layout(s, strip, &CLEAN_HEAD, &CLEAN_FOOT, true, true);
+                let tag = format!("{style:?} strip={strip}");
+                // Header: back, title, the segment at the right edge.
+                assert!(l.back.right() < l.header.x, "{tag}");
+                assert!(l.header.right() < l.seg.x, "{tag}");
+                assert_eq!(l.seg.right(), right(s));
+                assert_eq!(l.seg_items[0].right(), l.seg_items[1].x);
+                assert!(l.seg_items[1].right() <= l.seg.right() - 1.99);
+                if strip {
+                    assert!(l.back.y >= waiting_strip(s).bottom(), "{tag}");
+                } else {
+                    assert_eq!(l.back.y, s.y + 16.0 + 2.0);
+                }
+                // Seven rows in order, stacked, clear of the footer.
+                let cats: Vec<CleanCat> = l.rows.iter().map(|r| r.cat).collect();
+                assert_eq!(cats, CleanCat::ALL);
+                for pair in l.rows.windows(2) {
+                    assert!(pair[0].row.bottom() <= pair[1].row.y, "{tag}");
+                }
+                let last = l.rows.last().unwrap().row;
+                assert!(last.bottom() + 5.99 <= l.go.y, "{tag}: {last:?}");
+                assert!(l.rows[0].row.y >= l.header.bottom() + 9.99);
+                if !strip {
+                    assert_eq!(l.rows[0].row.h, 33.0, "the design's row");
+                }
+                for r in &l.rows {
+                    // Checkbox, icon, text, size from left to right, the
+                    // two lines inside the row.
+                    assert!(r.check.right() < r.icon.x && r.icon.right() < r.name.x);
+                    assert!(r.name.right() < r.size.x && r.size.right() <= r.row.right());
+                    assert_eq!(r.sub.y, r.name.bottom());
+                    assert!(r.name.y >= r.row.y && r.sub.bottom() <= r.row.bottom() + 0.01);
+                    assert_eq!(r.check.w, CLEAN_CHECK);
+                }
+                // Footer: credit at the left, "Dipilih" then the button at
+                // the right, 26 px over the bottom edge.
+                assert_eq!(l.go.right(), right(s));
+                assert_eq!(l.go.bottom(), s.y + s.h - 26.0);
+                assert!(l.picked.right() < l.go.x && l.credit.right() < l.picked.x);
+                assert!(l.credit.w > 200.0, "{tag}: room for the credit");
+                for r in regions(s, &PageLayout::Cleaner(l.clone()), strip) {
+                    assert!(rect_inside(style, s, r.rect), "{tag}: {r:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cleaner_regions_follow_what_is_live() {
+        use crate::ui::geometry::ShapeKind;
+        let s = shape_for(Style::Pill, ShapeKind::PanelClean);
+        let hits = |rows, go| {
+            let l = cleaner_layout(s, false, &CLEAN_HEAD, &CLEAN_FOOT, rows, go);
+            regions(s, &PageLayout::Cleaner(l), false)
+                .into_iter()
+                .map(|r| r.hit)
+                .collect::<Vec<Hit>>()
+        };
+        let mut want = vec![Hit::CleanBack];
+        want.extend(CleanCat::ALL.map(Hit::CleanToggle));
+        want.push(Hit::CleanGo);
+        assert_eq!(hits(true, true), want);
+        // While a clean runs only the way back takes a click; the mode
+        // segment never does yet (Run 6).
+        assert_eq!(hits(false, false), [Hit::CleanBack]);
+        assert!(!hits(true, false).contains(&Hit::CleanGo));
+        let l = cleaner_layout(s, false, &CLEAN_HEAD, &CLEAN_FOOT, true, true);
+        let r = regions(s, &PageLayout::Cleaner(l.clone()), false);
+        for (i, a) in r.iter().enumerate() {
+            for b in &r[i + 1..] {
+                assert!(disjoint(a.rect, b.rect), "{a:?} overlaps {b:?}");
+            }
+        }
+        assert!(
+            !r.iter()
+                .any(|x| x.rect == l.seg || l.seg_items.contains(&x.rect))
+        );
+    }
+
+    #[test]
+    fn system_regions_per_drive_and_process_and_the_clean_button() {
         let s = panel(Style::Pill);
         let l = system_layout(s, false, &SYS_HEAD, &['C', 'D'], 3);
         let hits = regions(s, &PageLayout::System(l.clone()), false);
@@ -2049,17 +2333,24 @@ mod tests {
             .map(|r| r.rect)
             .collect();
         assert_eq!(procs, l.procs.iter().map(|p| p.row).collect::<Vec<_>>());
-        // "Bersihkan" takes no click until the cleaner exists (Run 5).
-        assert!(!CLEANER_READY);
-        assert!(!hits.iter().any(|r| r.hit == Hit::SystemClean));
-        // Before the first sample: no drives, no rows, nothing clickable.
+        // "Bersihkan" opens the cleaner (Run 5).
+        const { assert!(CLEANER_READY) };
+        let clean: Vec<Rect> = hits
+            .iter()
+            .filter(|r| r.hit == Hit::SystemClean)
+            .map(|r| r.rect)
+            .collect();
+        assert_eq!(clean, [l.clean]);
+        // Before the first sample: no drives, no rows; only the button.
         let empty = system_layout(s, false, &SYS_HEAD, &[], 0);
-        assert!(regions(s, &PageLayout::System(empty), false).is_empty());
+        let hits = regions(s, &PageLayout::System(empty), false);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].hit, Hit::SystemClean);
         // With the strip: the strip, then the page's own regions.
         let l = system_layout(s, true, &SYS_HEAD, &['C', 'D', 'E'], 3);
         let hits = regions(s, &PageLayout::System(l), true);
         assert_eq!(hits[0].hit, Hit::Strip);
-        assert_eq!(hits.len(), 1 + 2 + 3);
+        assert_eq!(hits.len(), 1 + 1 + 2 + 3);
     }
 
     /// Header chips of the CLI page: folder and shell, running with Stop,
@@ -3272,6 +3563,8 @@ mod tests {
                                 drawn.extend([glyph, label]);
                             }
                         }
+                        // On its own, taller shape: `cleaner_fits_its_panel`.
+                        PageLayout::Cleaner(_) => {}
                     }
                 }
                 for r in drawn {

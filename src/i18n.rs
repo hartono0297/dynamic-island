@@ -10,6 +10,7 @@
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::clean::CleanCat;
 use crate::reminders::{self, Repeat};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -265,6 +266,31 @@ keys! {
     SystemDiskBody => "Buka halaman Sistem untuk detailnya", "Open the System page for details";
     SystemRamBody => "Di atas batas lebih dari semenit", "Above the limit for over a minute";
     Open => "Buka", "Open";
+
+    // The cleaner over the System page (deepclean-opsi-d.html).
+    CleanModeOwn => "Pilih sendiri", "Pick yourself";
+    CleanModeMole => "Otomatis · Mole", "Automatic · Mole";
+    CleanTempLogs => "File sementara & log", "Temporary files & logs";
+    CleanTempLogsSub => "Temp, log, laporan error > 7 hari", "Temp, logs, error reports > 7 days";
+    CleanBrowser => "Cache browser", "Browser cache";
+    CleanBrowserSub => "Chrome, Edge, Firefox, Brave, Opera · dilewati kalau browser terbuka",
+        "Chrome, Edge, Firefox, Brave, Opera · skipped while the browser is open";
+    CleanApps => "Cache aplikasi", "App cache";
+    CleanAppsSub => "VS Code, Teams, Discord, Spotify, Zoom", "VS Code, Teams, Discord, Spotify, Zoom";
+    CleanDev => "Cache developer", "Developer cache";
+    CleanDevSub => "npm, pip, NuGet, Go, Cargo · diunduh ulang saat build",
+        "npm, pip, NuGet, Go, Cargo · downloaded again on the next build";
+    CleanAdobe => "Cache Autodesk & Adobe", "Autodesk & Adobe cache";
+    CleanAdobeSub => "Dibuat ulang saat aplikasi dibuka", "Rebuilt when the app opens";
+    CleanInstallers => "Installer lama di Downloads", "Old installers in Downloads";
+    CleanInstallersSub => ".exe/.msi > 30 hari · ke Recycle Bin", ".exe/.msi > 30 days · to the Recycle Bin";
+    CleanUpdate => "Sisa Windows Update", "Windows Update leftovers";
+    CleanUpdateSub => "Perlu izin admin", "Needs admin permission";
+    CleanAdminTag => "admin", "admin";
+    CleanScanning => "memindai…", "scanning…";
+    CleanBusy => "Membersihkan…", "Cleaning…";
+    CleanCredit => "Ukuran dari pemindaian · daftar lokasi: Mole Windows (MIT)",
+        "Sizes from the scan · location list: Mole Windows (MIT)";
 
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
@@ -625,6 +651,126 @@ pub fn disk_low_title(lang: Lang, letter: char, free: u64) -> String {
         Lang::Id => format!("{name} tinggal {f}"),
         Lang::En => format!("{name} {f} left"),
     }
+}
+
+/// A cleaner size: "38 MB" under 0,1 GB, else "1,8 GB" ("1.8 GB") with
+/// one decimal like the design, "1,2 TB" from 1000 GB.
+pub fn clean_size(lang: Lang, bytes: u64) -> String {
+    let mb = (bytes as f64 / MIB as f64).round();
+    if mb < 102.0 {
+        return format!("{mb:.0} MB");
+    }
+    let gb = bytes as f64 / GIB as f64;
+    if (gb * 10.0).round() >= 10_000.0 {
+        return format!("{} TB", one_decimal(lang, gb / 1024.0));
+    }
+    format!("{} GB", one_decimal(lang, gb))
+}
+
+/// A cleaner row's name and its subtitle.
+pub fn clean_cat(cat: CleanCat) -> (Key, Key) {
+    match cat {
+        CleanCat::TempLogs => (Key::CleanTempLogs, Key::CleanTempLogsSub),
+        CleanCat::BrowserCache => (Key::CleanBrowser, Key::CleanBrowserSub),
+        CleanCat::AppCache => (Key::CleanApps, Key::CleanAppsSub),
+        CleanCat::DevCache => (Key::CleanDev, Key::CleanDevSub),
+        CleanCat::AutodeskAdobe => (Key::CleanAdobe, Key::CleanAdobeSub),
+        CleanCat::OldInstallers => (Key::CleanInstallers, Key::CleanInstallersSub),
+        CleanCat::WindowsUpdate => (Key::CleanUpdate, Key::CleanUpdateSub),
+    }
+}
+
+/// The cleaner's footer: "Dipilih 2,3 GB", "Selected 2.3 GB".
+pub fn clean_picked(lang: Lang, bytes: u64) -> String {
+    let size = clean_size(lang, bytes);
+    match lang {
+        Lang::Id => format!("Dipilih {size}"),
+        Lang::En => format!("Selected {size}"),
+    }
+}
+
+/// The cleaner's button: "Bersihkan 2,3 GB", "Clean 2.3 GB".
+pub fn clean_go(lang: Lang, bytes: u64) -> String {
+    let size = clean_size(lang, bytes);
+    match lang {
+        Lang::Id => format!("Bersihkan {size}"),
+        Lang::En => format!("Clean {size}"),
+    }
+}
+
+/// The armed button: "Yakin? Hapus 2,3 GB", "Sure? Delete 2.3 GB".
+pub fn clean_confirm(lang: Lang, bytes: u64) -> String {
+    let size = clean_size(lang, bytes);
+    match lang {
+        Lang::Id => format!("Yakin? Hapus {size}"),
+        Lang::En => format!("Sure? Delete {size}"),
+    }
+}
+
+/// The browser row while some were open at the scan: "Chrome, Edge
+/// terbuka · dilewati", "Chrome, Edge open · skipped".
+pub fn clean_browsers_open(lang: Lang, names: &[&str]) -> String {
+    let names = names.join(", ");
+    match lang {
+        Lang::Id => format!("{names} terbuka · dilewati"),
+        Lang::En => format!("{names} open · skipped"),
+    }
+}
+
+/// The done notice's title: "2,3 GB dibebaskan", "2.3 GB freed".
+pub fn clean_freed(lang: Lang, bytes: u64) -> String {
+    let size = clean_size(lang, bytes);
+    match lang {
+        Lang::Id => format!("{size} dibebaskan"),
+        Lang::En => format!("{size} freed"),
+    }
+}
+
+/// What the done notice adds under its title, joined by " · ".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CleanNote<'a> {
+    /// The drive measured and its free space now.
+    pub drive: Option<(char, u64)>,
+    /// Files in use (or denied) left in place.
+    pub skipped: u32,
+    /// Browsers left alone because they were open.
+    pub browsers: &'a [&'a str],
+    /// Windows Update was ticked but UAC was refused or the helper failed.
+    pub admin_skipped: bool,
+}
+
+/// "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)",
+/// "Drive C: now 49.5 GB free · 3 items skipped (in use)".
+pub fn clean_done_body(lang: Lang, note: &CleanNote) -> String {
+    let mut parts = Vec::new();
+    if let Some((letter, free)) = note.drive {
+        let (name, f) = (disk_name(letter), format_size(lang, free));
+        parts.push(match lang {
+            Lang::Id => format!("{name} sekarang sisa {f}"),
+            Lang::En => format!("{name} now {f} free"),
+        });
+    }
+    if note.skipped > 0 {
+        let n = note.skipped;
+        parts.push(match lang {
+            Lang::Id => format!("{n} item dilewati (sedang dipakai)"),
+            Lang::En if n == 1 => "1 item skipped (in use)".to_string(),
+            Lang::En => format!("{n} items skipped (in use)"),
+        });
+    }
+    if !note.browsers.is_empty() {
+        parts.push(clean_browsers_open(lang, note.browsers));
+    }
+    if note.admin_skipped {
+        parts.push(
+            match lang {
+                Lang::Id => "Windows Update dilewati",
+                Lang::En => "Windows Update skipped",
+            }
+            .to_string(),
+        );
+    }
+    parts.join(" · ")
 }
 
 /// The RAM notice: "RAM terpakai 93%", "RAM 93% used".
@@ -1961,6 +2107,60 @@ mod tests {
                 assert_no_leak(lang, "formatted", s);
             }
         }
+    }
+
+    #[test]
+    fn cleaner_texts_in_both_languages() {
+        let gb = |x: f64| (x * GIB as f64).round() as u64;
+        assert_eq!(clean_size(Lang::Id, gb(0.1)), "0,1 GB");
+        assert_eq!(clean_size(Lang::Id, gb(1.8)), "1,8 GB");
+        assert_eq!(clean_size(Lang::En, gb(2.3)), "2.3 GB");
+        assert_eq!(clean_size(Lang::Id, 38 * MIB), "38 MB");
+        assert_eq!(clean_size(Lang::En, 0), "0 MB");
+        assert_eq!(clean_size(Lang::Id, gb(1500.0)), "1,5 TB");
+        assert_eq!(clean_picked(Lang::Id, gb(2.3)), "Dipilih 2,3 GB");
+        assert_eq!(clean_go(Lang::Id, gb(2.3)), "Bersihkan 2,3 GB");
+        assert_eq!(clean_go(Lang::En, gb(2.3)), "Clean 2.3 GB");
+        assert_eq!(clean_confirm(Lang::Id, gb(2.3)), "Yakin? Hapus 2,3 GB");
+        assert_eq!(clean_confirm(Lang::En, gb(2.3)), "Sure? Delete 2.3 GB");
+        assert_eq!(clean_freed(Lang::Id, gb(2.3)), "2,3 GB dibebaskan");
+        assert_eq!(clean_freed(Lang::En, gb(2.3)), "2.3 GB freed");
+        let note = CleanNote {
+            drive: Some(('C', gb(49.5))),
+            skipped: 3,
+            ..CleanNote::default()
+        };
+        assert_eq!(
+            clean_done_body(Lang::Id, &note),
+            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)"
+        );
+        assert_eq!(
+            clean_done_body(Lang::En, &note),
+            "Disk C: now 49.5 GB free · 3 items skipped (in use)"
+        );
+        let more = CleanNote {
+            drive: None,
+            skipped: 1,
+            browsers: &["Chrome", "Edge"],
+            admin_skipped: true,
+        };
+        assert_eq!(
+            clean_done_body(Lang::En, &more),
+            "1 item skipped (in use) · Chrome, Edge open · skipped · Windows Update skipped"
+        );
+        assert_eq!(clean_done_body(Lang::Id, &CleanNote::default()), "");
+        assert_eq!(
+            text(Lang::Id, clean_cat(CleanCat::TempLogs).0),
+            "File sementara & log"
+        );
+        assert_eq!(
+            text(Lang::En, clean_cat(CleanCat::WindowsUpdate).1),
+            "Needs admin permission"
+        );
+        assert_eq!(
+            text(Lang::Id, Key::CleanCredit),
+            "Ukuran dari pemindaian · daftar lokasi: Mole Windows (MIT)"
+        );
     }
 
     #[test]

@@ -36,6 +36,20 @@ pub enum ShapeKind {
     Panel,
     /// The CLI page enlarged: the panel 440 px tall.
     PanelTall,
+    /// The cleaner over the System page: seven rows and a footer, 352 px
+    /// tall (`cleanPanel2` in deepclean-opsi-d.html).
+    PanelClean,
+}
+
+/// The open panel's shape: the CLI page enlarged when asked for, the
+/// cleaner taller than a page, every other page the same.
+pub fn panel_kind(page: crate::model::Page, cli_tall: bool, cleaner: bool) -> ShapeKind {
+    use crate::model::Page;
+    match page {
+        Page::Cli if cli_tall => ShapeKind::PanelTall,
+        Page::System if cleaner => ShapeKind::PanelClean,
+        _ => ShapeKind::Panel,
+    }
 }
 
 /// Pill floats this far below the top edge; Notch is flush with it.
@@ -52,11 +66,12 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::Panel => (560.0, 290.0),
         ShapeKind::PanelTall => (560.0, 440.0),
+        ShapeKind::PanelClean => (560.0, 352.0),
     };
     // The panel and notices round the same in both styles; compact shapes
     // are a full pill floating, a gentler curve hanging from the edge.
     let radius = match kind {
-        ShapeKind::Panel | ShapeKind::PanelTall => radius::PANEL,
+        ShapeKind::Panel | ShapeKind::PanelTall | ShapeKind::PanelClean => radius::PANEL,
         ShapeKind::Notice => radius::NOTICE,
         _ if style == Style::Pill => h / 2.0,
         _ => NOTCH_COMPACT_RADIUS,
@@ -566,6 +581,8 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
         // Drawn by the robot (low); the badge shows when it is off.
         NoticeKind::SystemLow => tint(p.ochre, Icon::Activity),
+        // Drawn by the robot (happy); the badge shows when it is off.
+        NoticeKind::CleanDone => tint(p.sage, Icon::Sparkle),
         // Drawn by the robot; this badge only shows if it is turned off meanwhile.
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
@@ -679,6 +696,31 @@ mod tests {
             let small = lerp_shape(idle, shape_for(style, ShapeKind::Panel), peak);
             assert!(small.y + small.h <= WINDOW_H, "{style:?}: {small:?}");
         }
+    }
+
+    #[test]
+    fn cleaner_panel_is_taller_and_fits_the_tall_window() {
+        use crate::model::Page;
+        let peak = (0..=100)
+            .map(|i| ease_out_back(i as f32 / 100.0))
+            .fold(0.0, f32::max);
+        for style in [Style::Pill, Style::Notch] {
+            let clean = shape_for(style, ShapeKind::PanelClean);
+            assert_eq!((clean.x, clean.w, clean.h), (30.0, 560.0, 352.0));
+            let panel = shape_for(style, ShapeKind::Panel);
+            assert_eq!(clean.y, panel.y);
+            // Taller than the small window: the island grows its canvas.
+            assert!(clean.y + clean.h > WINDOW_H);
+            for from in [ShapeKind::Idle, ShapeKind::Panel] {
+                let s = lerp_shape(shape_for(style, from), clean, peak);
+                assert!(s.y + s.h <= TALL_WINDOW_H, "{style:?} from {from:?}: {s:?}");
+            }
+        }
+        assert_eq!(panel_kind(Page::System, false, true), ShapeKind::PanelClean);
+        assert_eq!(panel_kind(Page::System, true, false), ShapeKind::Panel);
+        assert_eq!(panel_kind(Page::Cli, true, true), ShapeKind::PanelTall);
+        assert_eq!(panel_kind(Page::Cli, false, true), ShapeKind::Panel);
+        assert_eq!(panel_kind(Page::Media, true, true), ShapeKind::Panel);
     }
 
     #[test]
@@ -880,6 +922,7 @@ mod tests {
                 ShapeKind::Notice,
                 ShapeKind::Panel,
                 ShapeKind::PanelTall,
+                ShapeKind::PanelClean,
             ] {
                 // Off: exactly as before.
                 assert_eq!(shape_with_robot(style, kind, false), shape_for(style, kind));
@@ -974,6 +1017,10 @@ mod tests {
         assert!(style(&battery).alpha < 0.5, "a tint");
         let system = notice("Sistem", NoticeKind::SystemLow);
         assert_eq!(fill(&system), (0xD9A441, 0xD9A441, Some(Icon::Activity)));
+        // A finished clean: sage, the sparkle (the robot's Happy face when on).
+        let clean = notice("Bersihkan", NoticeKind::CleanDone);
+        assert_eq!(fill(&clean), (0x9DB59A, 0x9DB59A, Some(Icon::Sparkle)));
+        assert!(style(&clean).alpha < 0.5, "a tint");
         // Pomodoro: the colour of the phase a click starts.
         let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
         assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
@@ -1027,6 +1074,11 @@ mod tests {
         assert_eq!(
             notice_action(&NoticeKind::SystemLow, PomoStatus::Idle),
             Some(Key::Open)
+        );
+        // A finished clean: a click only dismisses it.
+        assert_eq!(
+            notice_action(&NoticeKind::CleanDone, PomoStatus::Idle),
+            None
         );
     }
 

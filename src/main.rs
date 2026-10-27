@@ -3,6 +3,7 @@
 mod app;
 mod calendar;
 mod claude;
+mod clean;
 mod cli;
 mod cli_folders;
 mod cli_panel;
@@ -65,6 +66,13 @@ fn main() {
         // No console attach: the hook prints nothing, and attaching can swap an
         // unset stdin for the console's, leaving the hook blocked on keyboard input.
         Some("--hook") => claude::hook::run_hook(),
+        // The cleaner's administrator helper, started elevated by the
+        // island itself (UAC): it removes the Windows Update leftovers and
+        // exits with a status. No window, no console, no island.
+        Some(clean::ADMIN_FLAG) => {
+            let job = std::env::args().nth(2);
+            std::process::exit(clean::run_admin(job.as_deref()));
+        }
         Some("--probe-notifications") => {
             attach_parent_console();
             sources::notifications::probe();
@@ -123,5 +131,16 @@ fn main() {
             eprintln!("dynamic-island: unknown argument `{other}`");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_admin_helper_opens_no_window() {
+        assert!(!opens_windows(Some(clean::ADMIN_FLAG)));
+        assert!(opens_windows(None));
     }
 }

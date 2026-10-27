@@ -45,6 +45,7 @@ use windows::core::{PCWSTR, PWSTR, w};
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::pipe_server::spawn_pipe_server;
+use crate::clean::{self, CleanCat, CleanEvent, Cleaner, ScanResult};
 use crate::cli::{self, Builtin, CliEvent, History, HistoryCursor, RunHandle, Session};
 use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
@@ -71,11 +72,11 @@ use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
     ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect,
     ease_out_back, lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
-    lyric_shape, lyric_target_w, lyric_width, shape_for, shape_with_robot,
+    lyric_shape, lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
-    CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
+    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
 };
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
@@ -237,6 +238,7 @@ pub fn run(media_log_flag: bool) {
             fullscreen: false,
             battery,
             system: SystemState::new(warn),
+            clean: CleanState::default(),
             hover: HoverTracking::default(),
             click: ClickPair::default(),
             media_click: None,
@@ -384,6 +386,8 @@ struct App {
     battery: BatteryMonitor,
     /// The System page's readings and the disk / RAM warnings.
     system: SystemState,
+    /// The cleaner's thread and its last scan.
+    clean: CleanState,
     hover: HoverTracking,
     /// A left press on the island waiting for its release.
     click: ClickPair,
@@ -524,6 +528,16 @@ impl SystemState {
     }
 }
 
+/// The cleaner: its thread (started on the first scan), the last scan and
+/// whether one runs. Nothing here runs or redraws while the cleaner is not
+/// open; a clean already asked for finishes in the background.
+#[derive(Default)]
+struct CleanState {
+    worker: Option<Cleaner>,
+    scan: Option<ScanResult>,
+    scanning: bool,
+}
+
 /// What the island keeps for the robot besides its `Brain`.
 struct Bata {
     brain: Brain,
@@ -621,6 +635,10 @@ impl App {
                 }
                 Event::SystemSample(sample) => {
                     self.on_system_sample(sample, now);
+                    continue;
+                }
+                Event::Clean(event) => {
+                    self.on_clean_event(event, now);
                     continue;
                 }
                 other => other,
@@ -1012,9 +1030,8 @@ impl App {
             }
             Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)),
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
-            // The cleaner comes in Run 5; until then "Bersihkan" registers no
-            // region (`panel_layout::CLEANER_READY`), so this never arrives.
-            Effect::OpenCleaner => {}
+            Effect::OpenCleaner => self.scan_clean(),
+            Effect::CleanDelete(cats) => return self.start_clean(cats),
             Effect::FocusCliInput => return self.focus_cli_input(),
             Effect::ReleaseCliFocus => self.return_keyboard(),
             Effect::StopCli => self.stop_cli(),
@@ -1189,12 +1206,64 @@ impl App {
         Some(win.to_screen(panel.x + panel.w / 2.0, panel.y + panel.h))
     }
 
-    /// The open panel's shape: enlarged on the CLI page when asked for.
+    /// The open panel's shape: enlarged on the CLI page when asked for,
+    /// taller for the cleaner.
     fn panel_kind(&self) -> ShapeKind {
-        if self.state.page() == Page::Cli && self.state.cli_tall() {
-            ShapeKind::PanelTall
-        } else {
-            ShapeKind::Panel
+        let cleaner = self.state.cleaner().is_some();
+        panel_kind(self.state.page(), self.state.cli_tall(), cleaner)
+    }
+
+    /// The cleaner thread, started on first use; `None` when it cannot run.
+    fn cleaner(&mut self) -> Option<&Cleaner> {
+        if self.clean.worker.is_none() {
+            self.clean.worker = Cleaner::spawn(self.tx.clone(), poster(self.hwnd, WM_APP_EVENT));
+        }
+        self.clean.worker.as_ref()
+    }
+
+    /// The cleaner opened (or a clean ended while it shows): measure every
+    /// category. Not while a clean runs; its end scans again.
+    fn scan_clean(&mut self) {
+        if self.state.clean_busy() || self.clean.scanning {
+            return;
+        }
+        let sent = self.cleaner().is_some_and(Cleaner::scan);
+        if !sent {
+            self.clean.worker = None;
+        }
+        self.clean.scanning = sent;
+    }
+
+    /// The confirmed clean. If the thread cannot take it, the rows take
+    /// clicks again at once.
+    fn start_clean(&mut self, cats: Vec<CleanCat>) -> Option<Event> {
+        if self.cleaner().is_some_and(|c| c.delete(cats)) {
+            return None;
+        }
+        self.clean.worker = None;
+        Some(Event::CleanFinished)
+    }
+
+    /// A scan or a clean came back. A clean raises its notice (Bata happy),
+    /// frees the rows and, while the cleaner shows, scans again.
+    fn on_clean_event(&mut self, event: CleanEvent, now: Instant) {
+        match event {
+            CleanEvent::Scanned(scan) => {
+                self.clean.scanning = false;
+                self.clean.scan = Some(scan);
+            }
+            CleanEvent::Done(report) => {
+                // The old sizes are no longer true.
+                self.clean.scan = None;
+                self.apply(Event::CleanFinished, now);
+                self.apply(
+                    Event::Notice(clean::done_notice(i18n::lang(), &report)),
+                    now,
+                );
+                if self.state.cleaner().is_some() {
+                    self.scan_clean();
+                }
+            }
         }
     }
 
@@ -1515,7 +1584,7 @@ impl App {
     /// The System page just showed: a sample at once; it left: the 2 s
     /// one-shot goes (a sample still on its way is kept but re-arms nothing).
     fn sync_system_page(&mut self) {
-        let wanted = system_sample_wanted(&self.state.view());
+        let wanted = system_sample_wanted(&self.state.view(), self.state.cleaner().is_some());
         match system_page_plan(wanted, self.system.page_timer, self.system.page_pending) {
             PagePlan::Request => {
                 self.system.page_pending = self.request_system(SampleKind::Page);
@@ -1565,7 +1634,7 @@ impl App {
                 self.system.page_pending = false;
                 self.system.history.push(sample.cpu, now);
                 self.system.sample = Some(sample);
-                if system_sample_wanted(&self.state.view()) {
+                if system_sample_wanted(&self.state.view(), self.state.cleaner().is_some()) {
                     if !self.animating() {
                         self.draw(now);
                     }
@@ -2560,7 +2629,9 @@ impl App {
     }
 
     fn redraw_system_page(&mut self) {
-        if system_sample_wanted(&self.state.view()) && !self.animating() {
+        if system_sample_wanted(&self.state.view(), self.state.cleaner().is_some())
+            && !self.animating()
+        {
             self.draw(Instant::now());
         }
     }
@@ -2604,6 +2675,13 @@ impl App {
             disk_warn_gb: self.config.disk_warn_gb,
             ram_warn_percent: self.config.ram_warn_percent,
         };
+        let cleaner = state.cleaner().map(|c| CleanerView {
+            checked: c.checked,
+            armed: c.armed(),
+            scan: self.clean.scan.as_ref(),
+            scanning: self.clean.scanning,
+            busy: state.clean_busy(),
+        });
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -2652,6 +2730,7 @@ impl App {
             progress: track_progress(state, now),
             robot,
             system: Some(&system),
+            cleaner: cleaner.as_ref(),
         };
         if let Err(error) = self
             .renderer
@@ -2917,9 +2996,10 @@ fn drain_refreshes(received: usize, samples: usize, raised: bool) -> bool {
     received == 0 || samples < received || raised
 }
 
-/// The System page samples (and redraws) only while it shows.
-fn system_sample_wanted(view: &View) -> bool {
-    *view == View::Panel(Page::System)
+/// The System page samples (and redraws) only while it shows, and not
+/// while the cleaner covers it.
+fn system_sample_wanted(view: &View, cleaner: bool) -> bool {
+    *view == View::Panel(Page::System) && !cleaner
 }
 
 /// What the System page's sampling does after a change.
@@ -4171,8 +4251,10 @@ mod tests {
 
     #[test]
     fn system_page_samples_only_while_it_shows() {
-        // Only the System page of the open panel wants samples.
-        assert!(system_sample_wanted(&View::Panel(Page::System)));
+        // Only the System page of the open panel wants samples, and not
+        // while the cleaner covers it.
+        assert!(system_sample_wanted(&View::Panel(Page::System), false));
+        assert!(!system_sample_wanted(&View::Panel(Page::System), true));
         for view in [
             View::Idle,
             View::Hidden,
@@ -4181,7 +4263,7 @@ mod tests {
             View::Panel(Page::Media),
             View::Panel(Page::Cli),
         ] {
-            assert!(!system_sample_wanted(&view), "{view:?}");
+            assert!(!system_sample_wanted(&view, false), "{view:?}");
         }
         use PagePlan::*;
         // Just shown: ask at once. Waiting on a sample or the 2 s: nothing.

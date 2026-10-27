@@ -21,8 +21,12 @@ use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliView, FolderMenuView, Frame, Progress, Renderer, SystemView, color, d2d_rect, mix};
+use super::{
+    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RowSize, SystemView, color,
+    d2d_rect, mix,
+};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::clean::CleanCat;
 use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::config::Style;
@@ -34,17 +38,18 @@ use crate::reminders::{Reminder, Repeat, local_time};
 use crate::shortcuts;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
-use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, shape_for};
+use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER,
-    ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, MeterLayout, PageLayout, PomodoroLayout,
-    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H,
-    calendar_layout, cli_folder_menu, cli_layout, cli_suggestions, media_panel_layout,
-    media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
-    pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
-    system_layout, tile_parts, waiting_strip,
+    CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CleanFoot, CleanHead,
+    CleanerLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS,
+    MenuLayout, MeterLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE,
+    ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, calendar_layout, cleaner_layout,
+    cli_folder_menu, cli_layout, cli_suggestions, media_panel_layout, media_progress_layout,
+    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot,
+    pomodoro_layout, regions, reminders_layout, shortcuts_layout, system_layout, tile_parts,
+    waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -114,6 +119,54 @@ const CLEAN_DIM: f32 = 0.55;
 const SOON_GAP: f32 = 6.0;
 const SOON_PAD_X: f32 = 6.0;
 const SOON_H: f32 = 14.0;
+/// The cleaner (deepclean-opsi-d.html): the segment's item padding and
+/// corners, the striped rows' tint, the row icon, the checkbox's corner and
+/// line, the admin tag, the button's padding, and the dimmed look of what
+/// takes no click.
+const SEG_ITEM_PAD_X: f32 = 10.0;
+const SEG_RADIUS: f32 = 10.0;
+const SEG_ITEM_RADIUS: f32 = 8.0;
+const ROW_STRIPE: f32 = 0.03;
+const ROW_RADIUS: f32 = 10.0;
+const ROW_ICON: f32 = 17.0;
+const CHECK_RADIUS: f32 = 5.0;
+const CHECK_BORDER: f32 = 1.5;
+const CHECK_MARK: f32 = 2.0;
+const ADMIN_GAP: f32 = 6.0;
+const ADMIN_PAD_X: f32 = 6.0;
+const ADMIN_H: f32 = 13.0;
+const ADMIN_TINT: f32 = 0.15;
+const GO_PAD_X: f32 = 12.0;
+const BACK_ICON: f32 = 14.0;
+const CLEAN_INERT: f32 = 0.5;
+/// What stands for a size not measured.
+const EM_DASH: &str = "\u{2014}";
+
+/// The cleaner's button label: the total, armed "Yakin? Hapus …", or the
+/// clean running.
+fn go_label(lang: Lang, view: &CleanerView) -> String {
+    let total = view.picked_bytes();
+    if view.busy {
+        text(lang, Key::CleanBusy).to_owned()
+    } else if view.armed {
+        i18n::clean_confirm(lang, total)
+    } else {
+        i18n::clean_go(lang, total)
+    }
+}
+
+/// The row icons, from the design's `I` map.
+fn clean_icon(cat: CleanCat) -> Icon {
+    match cat {
+        CleanCat::TempLogs => Icon::TempFile,
+        CleanCat::BrowserCache => Icon::Globe,
+        CleanCat::AppCache => Icon::Package,
+        CleanCat::DevCache => Icon::Code,
+        CleanCat::AutodeskAdobe => Icon::Image,
+        CleanCat::OldInstallers => Icon::Download,
+        CleanCat::WindowsUpdate => Icon::Windows,
+    }
+}
 
 /// The uptime chip's text; "Uptime –" before the first sample.
 fn system_uptime(lang: Lang, sample: Option<&SystemSample>) -> String {
@@ -222,11 +275,7 @@ impl Renderer {
         shape: ShapeRect,
         frame: &Frame,
     ) -> Result<()> {
-        let kind = if frame.page == Page::Cli && frame.cli.tall {
-            ShapeKind::PanelTall
-        } else {
-            ShapeKind::Panel
-        };
+        let kind = panel_kind(frame.page, frame.cli.tall, frame.cleaner.is_some());
         let rest = shape_for(style, kind);
         let settled = shape == rest;
         // Content is fully visible by ~70 % of the growth, so the panel reads
@@ -274,11 +323,14 @@ impl Renderer {
         if let Some(notice) = frame.strip {
             self.paint_strip(s, notice);
         }
-        let (dots, active) = page_dots(s, page);
-        for (i, dot) in dots.into_iter().enumerate() {
-            let p = &self.palette;
-            self.set_color(if i == active { p.accent } else { p.dot_off }, 1.0);
-            self.fill_round(dot, dot.w / 2.0);
+        // The cleaner is not a page: its footer takes the dots' place.
+        if !matches!(layout, PageLayout::Cleaner(_)) {
+            let (dots, active) = page_dots(s, page);
+            for (i, dot) in dots.into_iter().enumerate() {
+                let p = &self.palette;
+                self.set_color(if i == active { p.accent } else { p.dot_off }, 1.0);
+                self.fill_round(dot, dot.w / 2.0);
+            }
         }
         // No clicks on a page still sliding in: its controls are not where
         // the regions say yet, and the old page's are still under the pointer.
@@ -341,6 +393,20 @@ impl Renderer {
             )),
             Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
             Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
+            Page::System if page == frame.page && frame.cleaner.is_some() => {
+                let view = frame.cleaner.expect("checked above");
+                let head = self.cleaner_head();
+                let foot = self.cleaner_foot(view);
+                let rows_live = !view.busy;
+                PageLayout::Cleaner(cleaner_layout(
+                    s,
+                    strip,
+                    &head,
+                    &foot,
+                    rows_live,
+                    view.go_live(),
+                ))
+            }
             Page::System => {
                 let sample = frame.system.and_then(|v| v.sample);
                 let head = self.system_head(&system_uptime(i18n::lang(), sample));
@@ -380,6 +446,12 @@ impl Renderer {
                 self.paint_media(l, frame.media, frame.lyrics_on, frame.progress)
             }
             PageLayout::System(l) => self.paint_system(l, frame.system),
+            PageLayout::Cleaner(l) => {
+                if let Some(view) = frame.cleaner {
+                    self.paint_cleaner(l, view)?;
+                }
+                Ok(())
+            }
             PageLayout::Cli(l) => self.paint_cli(l, frame),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l);
@@ -600,6 +672,176 @@ impl Renderer {
         self.fill_round(tag, tag.h / 2.0);
         let soon = text(lang, Key::SystemSoon);
         self.text_colored(soon, &self.fonts.micro_center, tag, p.secondary, 1.0);
+    }
+
+    /// The cleaner's mode segment, measured: each label and its padding.
+    fn cleaner_head(&self) -> CleanHead {
+        let lang = i18n::lang();
+        let w =
+            |key| self.text_width(text(lang, key), &self.fonts.small).ceil() + 2.0 * SEG_ITEM_PAD_X;
+        CleanHead {
+            seg: [w(Key::CleanModeOwn), w(Key::CleanModeMole)],
+        }
+    }
+
+    /// The cleaner's footer, measured: "Dipilih …" and the button.
+    fn cleaner_foot(&self, view: &CleanerView) -> CleanFoot {
+        let lang = i18n::lang();
+        let picked = i18n::clean_picked(lang, view.picked_bytes());
+        let go = go_label(lang, view);
+        CleanFoot {
+            picked_w: self.text_width(&picked, &self.fonts.small).ceil() + 2.0,
+            go_w: self.text_width(&go, &self.fonts.button).ceil() + 2.0 * GO_PAD_X,
+        }
+    }
+
+    /// deepclean-opsi-d.html `cleanPanel2` with `segMode(0)`: the back
+    /// button and "Bersihkan", the mode segment ("Otomatis · Mole" drawn
+    /// but not yet a choice), seven striped rows (checkbox, icon, name and
+    /// subtitle, the ochre "admin" tag, the size), the credit line,
+    /// "Dipilih" and the button. Dimmed while a clean runs.
+    fn paint_cleaner(&self, l: &CleanerLayout, view: &CleanerView) -> Result<()> {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.back, l.back.w / 2.0);
+        self.icon_colored(Icon::ChevL, l.back, BACK_ICON, p.secondary, 1.0, None);
+        self.heading(text(lang, Key::SystemClean), l.header);
+
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.seg, SEG_RADIUS);
+        self.set_color(p.raised_hi, 1.0);
+        self.fill_round(l.seg_items[0], SEG_ITEM_RADIUS);
+        let (own, mole) = (
+            text(lang, Key::CleanModeOwn),
+            text(lang, Key::CleanModeMole),
+        );
+        let center = &self.fonts.small_center;
+        self.text_colored(own, center, l.seg_items[0], p.text, 1.0);
+        self.text_colored(mole, center, l.seg_items[1], p.secondary, 1.0);
+
+        let alpha = if view.busy { CLEAN_INERT } else { 1.0 };
+        let browsers = view.scan.map_or(&[][..], |s| &s.skipped_browsers[..]);
+        for (i, row) in l.rows.iter().enumerate() {
+            if i % 2 == 0 {
+                self.set_color(p.text, ROW_STRIPE);
+                self.fill_round(row.row, ROW_RADIUS);
+            }
+            let on = view.checked[row.cat.index()];
+            self.paint_check(row.check, on, alpha);
+            let icon = clean_icon(row.cat);
+            self.icon_colored(icon, row.icon, ROW_ICON, p.secondary, alpha, None);
+            let (name_key, sub_key) = i18n::clean_cat(row.cat);
+            let name = text(lang, name_key);
+            self.text_colored(name, &self.fonts.row_name, row.name, p.text, alpha);
+            if row.cat.admin() {
+                self.paint_admin_tag(row.name, name, alpha);
+            }
+            let sub = if row.cat == CleanCat::BrowserCache && !browsers.is_empty() {
+                i18n::clean_browsers_open(lang, browsers)
+            } else {
+                text(lang, sub_key).to_owned()
+            };
+            self.text_colored(&sub, &self.fonts.micro, row.sub, p.secondary, alpha);
+            match view.size(row.cat) {
+                RowSize::Bytes(b) => {
+                    let size = i18n::clean_size(lang, b);
+                    self.text_colored(&size, &self.fonts.row_size, row.size, p.text, alpha);
+                }
+                RowSize::Unknown => {
+                    self.text_colored(EM_DASH, &self.fonts.row_size, row.size, p.text, alpha);
+                }
+                RowSize::Scanning => {
+                    let scanning = text(lang, Key::CleanScanning);
+                    self.text_colored(
+                        scanning,
+                        &self.fonts.small_right,
+                        row.size,
+                        p.secondary,
+                        1.0,
+                    );
+                }
+            }
+        }
+
+        let credit = text(lang, Key::CleanCredit);
+        self.text_colored(credit, &self.fonts.track_time, l.credit, p.secondary, 1.0);
+        let picked = i18n::clean_picked(lang, view.picked_bytes());
+        self.text_colored(&picked, &self.fonts.small_right, l.picked, p.secondary, 1.0);
+        let go_alpha = if l.go_live { 1.0 } else { CLEAN_INERT };
+        self.set_color(p.accent, go_alpha);
+        self.fill_round(l.go, l.go.h / 2.0);
+        let label = go_label(lang, view);
+        let center = &self.fonts.button_center;
+        self.text_colored(&label, center, l.go, p.on_accent, go_alpha);
+        Ok(())
+    }
+
+    /// `.ck`: an outlined rounded square, or the accent one with a tick.
+    fn paint_check(&self, r: Rect, on: bool, alpha: f32) {
+        let p = self.palette;
+        if !on {
+            let inset = CHECK_BORDER / 2.0;
+            let inner = Rect {
+                x: r.x + inset,
+                y: r.y + inset,
+                w: r.w - CHECK_BORDER,
+                h: r.h - CHECK_BORDER,
+            };
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe {
+                target.brush.SetColor(&color(p.secondary, alpha));
+                target.rt.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(inner),
+                        radiusX: CHECK_RADIUS - inset,
+                        radiusY: CHECK_RADIUS - inset,
+                    },
+                    &target.brush,
+                    CHECK_BORDER,
+                    None,
+                );
+            }
+            return;
+        }
+        self.set_color(p.accent, alpha);
+        self.fill_round(r, CHECK_RADIUS);
+        // The design's 7 × 4 corner turned −45°, on the 16 px box.
+        let k = r.w / CLEAN_CHECK;
+        let at = |x: f32, y: f32| Vector2::new(r.x + x * k, r.y + y * k);
+        let (a, b, c) = (at(4.4, 8.2), at(6.9, 10.6), at(11.6, 5.8));
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            target.brush.SetColor(&color(p.on_accent, alpha));
+            target
+                .rt
+                .DrawLine(a, b, &target.brush, CHECK_MARK, &self.round_cap);
+            target
+                .rt
+                .DrawLine(b, c, &target.brush, CHECK_MARK, &self.round_cap);
+        }
+    }
+
+    /// `.lock`: the ochre "admin" tag right after the row's name.
+    fn paint_admin_tag(&self, name_area: Rect, name: &str, alpha: f32) {
+        let p = self.palette;
+        let lang = i18n::lang();
+        let label = text(lang, Key::CleanAdminTag);
+        let name_w = self.text_width(name, &self.fonts.row_name).ceil();
+        let w = self.text_width(label, &self.fonts.micro).ceil() + 2.0 * ADMIN_PAD_X;
+        let x = name_area.x + name_w + ADMIN_GAP;
+        if x + w > name_area.right() {
+            return;
+        }
+        let tag = Rect {
+            x,
+            y: name_area.y + (name_area.h - ADMIN_H) / 2.0,
+            w,
+            h: ADMIN_H,
+        };
+        self.set_color(p.ochre, ADMIN_TINT * alpha);
+        self.fill_round(tag, tag.h / 2.0);
+        self.text_colored(label, &self.fonts.micro_center, tag, p.ochre, alpha);
     }
 
     /// The measured header of the CLI page: each chip's full width and,
@@ -2283,10 +2525,73 @@ fn primary_icon(status: PomoStatus) -> Icon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clean::{CatSize, ScanResult};
     use crate::pomodoro::PomoSettings;
     use crate::theme::{Accent, Surface, island};
+    use crate::ui::geometry::ShapeKind;
     use chrono::{NaiveTime, TimeZone};
     use std::time::Instant;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    fn design_scan() -> ScanResult {
+        let gb = |tenths: u64| CatSize {
+            bytes: tenths * GIB / 10,
+            files: 1,
+            measured: true,
+        };
+        let unknown = CatSize::default();
+        ScanResult {
+            cats: [gb(1), gb(18), gb(4), gb(1), unknown, unknown, unknown],
+            skipped_browsers: vec![],
+        }
+    }
+
+    #[test]
+    fn cleaner_totals_and_labels() {
+        let scan = design_scan();
+        let mut view = CleanerView {
+            checked: CleanCat::ALL.map(CleanCat::checked_at_start),
+            armed: false,
+            scan: Some(&scan),
+            scanning: false,
+            busy: false,
+        };
+        // The top three: 0,1 + 1,8 + 0,4.
+        let top3 = GIB / 10 + 18 * GIB / 10 + 4 * GIB / 10;
+        assert_eq!(view.picked_bytes(), top3);
+        assert_eq!(go_label(Lang::Id, &view), "Bersihkan 2,3 GB");
+        assert!(view.go_live());
+        assert_eq!(view.size(CleanCat::DevCache), RowSize::Bytes(GIB / 10));
+        assert_eq!(view.size(CleanCat::WindowsUpdate), RowSize::Unknown);
+        // An unmeasured row adds nothing.
+        view.checked[CleanCat::WindowsUpdate.index()] = true;
+        assert_eq!(view.picked_bytes(), top3);
+        view.armed = true;
+        assert_eq!(go_label(Lang::Id, &view), "Yakin? Hapus 2,3 GB");
+        assert_eq!(go_label(Lang::En, &view), "Sure? Delete 2.3 GB");
+        // Scanning: every size waits, the button takes no click.
+        let scanning = CleanerView {
+            scanning: true,
+            ..view
+        };
+        assert_eq!(scanning.size(CleanCat::TempLogs), RowSize::Scanning);
+        assert!(!scanning.go_live());
+        // A clean running: the button says so and takes no click.
+        let busy = CleanerView { busy: true, ..view };
+        assert_eq!(go_label(Lang::Id, &busy), "Membersihkan…");
+        assert!(!busy.go_live());
+        // Nothing ticked: no click; no scan yet: dashes.
+        let none = CleanerView {
+            checked: [false; 7],
+            ..view
+        };
+        assert!(!none.go_live());
+        let fresh = CleanerView { scan: None, ..view };
+        assert_eq!(fresh.size(CleanCat::TempLogs), RowSize::Unknown);
+        assert_eq!(fresh.picked_bytes(), 0);
+        assert_eq!(clean_icon(CleanCat::WindowsUpdate), Icon::Windows);
+    }
 
     #[test]
     fn utf16_offsets_map_to_whole_characters() {

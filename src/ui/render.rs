@@ -55,6 +55,7 @@ use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
+use crate::clean::{CleanCat, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
@@ -134,6 +135,62 @@ pub struct Frame<'a> {
     pub robot: Option<RobotFrame>,
     /// The System page's readings; `None` draws it without numbers.
     pub system: Option<&'a SystemView<'a>>,
+    /// The cleaner, while it shows over the System page.
+    pub cleaner: Option<&'a CleanerView<'a>>,
+}
+
+/// What the cleaner shows: the ticks and the armed button (the reducer's),
+/// the last scan and what runs (the app's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CleanerView<'a> {
+    /// By `CleanCat::index`.
+    pub checked: [bool; 7],
+    /// The button says "Yakin? Hapus …".
+    pub armed: bool,
+    /// The last scan; `None` before the first one ends.
+    pub scan: Option<&'a ScanResult>,
+    pub scanning: bool,
+    /// A clean runs: rows and button take no clicks.
+    pub busy: bool,
+}
+
+/// A row's size column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowSize {
+    /// "—": not measured (no scan yet, or a folder that cannot be read).
+    Unknown,
+    /// "memindai…".
+    Scanning,
+    Bytes(u64),
+}
+
+impl CleanerView<'_> {
+    pub fn size(&self, cat: CleanCat) -> RowSize {
+        if self.scanning {
+            return RowSize::Scanning;
+        }
+        match self.scan.map(|s| s.cats[cat.index()]) {
+            Some(c) if c.measured => RowSize::Bytes(c.bytes),
+            _ => RowSize::Unknown,
+        }
+    }
+
+    /// The measured size of the ticked rows.
+    pub fn picked_bytes(&self) -> u64 {
+        CleanCat::ALL
+            .into_iter()
+            .filter(|c| self.checked[c.index()])
+            .filter_map(|c| match self.size(c) {
+                RowSize::Bytes(b) => Some(b),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// The button takes a click: something ticked, nothing running.
+    pub fn go_live(&self) -> bool {
+        !self.scanning && !self.busy && self.checked.iter().any(|c| *c)
+    }
 }
 
 /// What the System page shows.
@@ -363,6 +420,10 @@ struct Fonts {
     eleven_right: IDWriteTextFormat,
     /// A process row's CPU and memory: DM Sans 10.5, right-aligned.
     small_right: IDWriteTextFormat,
+    /// A cleaner row's name: DM Sans 11.5.
+    row_name: IDWriteTextFormat,
+    /// A cleaner row's size: DM Sans 600 11.5, right-aligned.
+    row_size: IDWriteTextFormat,
 }
 
 /// Device-dependent drawing state; rebuilt if Direct2D reports the target lost.
@@ -1492,6 +1553,8 @@ impl Fonts {
             meter_name: line(&text, semi, 11.5)?,
             eleven_right: aligned(&text, normal, 11.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
             small_right: aligned(&text, normal, caption, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+            row_name: line(&text, normal, 11.5)?,
+            row_size: aligned(&text, semi, 11.5, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         })
     }
 }

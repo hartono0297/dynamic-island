@@ -4,6 +4,7 @@ use std::time::Instant;
 use chrono::NaiveDate;
 
 use crate::calendar::CalendarSnapshot;
+use crate::clean::{CleanCat, CleanEvent};
 use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::pomodoro::PomoSettings;
@@ -46,6 +47,9 @@ pub enum NoticeKind {
     /// minute (`system::WarnMonitor`). Clicking it opens the panel on the
     /// System page.
     SystemLow,
+    /// The cleaner finished: what it freed, measured on the drive (Bata
+    /// happy). Temporary; a click only dismisses it.
+    CleanDone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,6 +132,11 @@ pub enum Event {
     /// A reading from the system sampler (`system::Sampler`); `App` keeps
     /// it, the reducer ignores it.
     SystemSample(SystemSample),
+    /// A scan or a clean from the cleaner thread (`clean::Cleaner`); `App`
+    /// keeps it, the reducer ignores it.
+    Clean(CleanEvent),
+    /// The clean the panel asked for is over: its rows take clicks again.
+    CleanFinished,
     Tick,
 }
 
@@ -193,9 +202,16 @@ pub enum Hit {
     SystemDrive(char),
     /// A busiest-process row on the System page: Task Manager opens.
     SystemProcess,
-    /// The System page's "Bersihkan" button (no region until the cleaner
-    /// exists, Run 5).
+    /// The System page's "Bersihkan" button: the cleaner opens over the
+    /// page and scans.
     SystemClean,
+    /// The cleaner's back button: the System page again.
+    CleanBack,
+    /// A cleaner row: its category ticked or not.
+    CleanToggle(CleanCat),
+    /// The cleaner's main button: the first click arms it ("Yakin?"), a
+    /// second one within `CLEAN_CONFIRM` cleans.
+    CleanGo,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -251,8 +267,10 @@ pub enum Effect {
     },
     /// Explorer on this drive's root, once the panel has collapsed.
     OpenDrive(char),
-    /// The cleaner (Run 5); nothing yet.
+    /// The cleaner opened: measure the categories.
     OpenCleaner,
+    /// Clean these categories. Only after a confirmed second click.
+    CleanDelete(Vec<CleanCat>),
 }
 
 /// A Pomodoro setting the settings window's steppers can change.
