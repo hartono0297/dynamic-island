@@ -13,8 +13,14 @@ yourself in the main session.
   builder runs the tests, and Ship tests `main` before pushing. Only `full`
   (medium or large, or core/risky work) gets review and check. The rule is in
   `.claude/workflows/build.js` (`MODES.*.review` / `.check`).
-- The workflow merges passing tasks into `main` and pushes. This project uses a
-  single branch (`main`), so that push is pre-approved. Deploy stays with me.
+- The workflow merges passing tasks into `main` locally and does not push. The
+  main session pushes `main` once all the requested work is finished (for a
+  batch of runs: after the last run and after the deferred review/check pass).
+  This project uses a single branch (`main`), so that push is pre-approved.
+  Deploy stays with me.
+- Heavy tasks get build, review and check; small or light tasks get build only.
+  In a long batch of runs the review/check of the heavy tasks can be done once
+  at the end, before the push.
 - When it finishes, report: mode and why, which tasks were merged, whether
   `main` was pushed, and any open findings or failed checks.
 
