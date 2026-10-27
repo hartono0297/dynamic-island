@@ -1,16 +1,19 @@
-//! The Studio typefaces (Fraunces Italic, DM Sans, DM Mono), embedded in the
-//! exe as RCDATA resources and loaded from memory: for DirectWrite as a
-//! custom font collection, for the remaining GDI windows as process-private
-//! fonts. When a face is missing (no resource, a load error), every caller
-//! falls back to the Segoe / Cascadia families the app used before.
+//! The Studio typefaces (DM Sans, DM Mono), embedded in the exe as RCDATA
+//! resources and loaded from memory: for DirectWrite as a custom font
+//! collection, for the remaining GDI windows as process-private fonts. When a
+//! face is missing (no resource, a load error), every caller falls back to the
+//! Segoe / Cascadia families the app used before.
+//!
+//! Display text (headings, the big clock, the song title) is DM Sans 600
+//! upright, tracked tighter by `DISPLAY_TRACKING_EM` (see `apply_tracking`).
 
 use std::sync::OnceLock;
 
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_FEATURE, DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_TEXT_RANGE, IDWriteFactory, IDWriteFactory5, IDWriteFontCollection,
-    IDWriteFontCollection1, IDWriteInMemoryFontFileLoader, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FONT_STYLE, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_TEXT_RANGE,
+    IDWriteFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1,
+    IDWriteInMemoryFontFileLoader, IDWriteTextFormat, IDWriteTextLayout, IDWriteTextLayout1,
     IDWriteTypography,
 };
 use windows::Win32::Graphics::Gdi::{
@@ -23,13 +26,15 @@ use windows::Win32::System::LibraryLoader::{
 };
 use windows::core::{BOOL, HSTRING, IUnknown, Interface, PCWSTR, Result, w};
 
-pub const FRAUNCES: &str = "Fraunces";
 pub const DM_SANS: &str = "DM Sans";
 pub const DM_MONO: &str = "DM Mono";
 
-/// RCDATA ids in `app.rc`: Fraunces Italic 400/500, DM Sans 400/500/600,
-/// DM Mono 400/500.
-pub const FONT_RESOURCE_IDS: [u16; 7] = [201, 202, 203, 204, 205, 206, 207];
+/// RCDATA ids in `app.rc`: DM Sans 400/500/600, DM Mono 400/500.
+pub const FONT_RESOURCE_IDS: [u16; 5] = [203, 204, 205, 206, 207];
+
+/// Display text is tracked this much tighter, in em (the design's
+/// `letter-spacing: -.025em`).
+pub const DISPLAY_TRACKING_EM: f32 = -0.025;
 
 /// `RT_RCDATA` (`MAKEINTRESOURCE(10)`).
 const RT_RCDATA: PCWSTR = PCWSTR(10 as _);
@@ -43,7 +48,8 @@ const MONO_FALLBACK: &[&str] = &["Cascadia Mono", "Consolas"];
 pub enum Role {
     /// Body text and captions: DM Sans.
     Text,
-    /// Headings and the big clock: Fraunces Italic (16 px and up only).
+    /// Headings, the big clock and the song title: DM Sans 600 upright,
+    /// tracked by `DISPLAY_TRACKING_EM` (16 px and up only).
     Display,
     /// Code: DM Mono.
     Mono,
@@ -52,7 +58,6 @@ pub enum Role {
 /// Which embedded families resolved in the custom collection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Loaded {
-    pub fraunces: bool,
     pub dm_sans: bool,
     pub dm_mono: bool,
 }
@@ -63,23 +68,21 @@ pub struct Choice {
     pub family: &'static str,
     /// Look the family up in the embedded collection (else the system one).
     pub embedded: bool,
-    pub italic: bool,
 }
 
 /// The embedded family for `role` when it loaded, else the first of the
 /// fallback chain that `installed` reports (the chain's last name when none
 /// is, leaving the rest to DirectWrite's own font fallback).
 pub fn choose(role: Role, loaded: Loaded, installed: impl Fn(&str) -> bool) -> Choice {
-    let (family, ok, fallback, italic) = match role {
-        Role::Text => (DM_SANS, loaded.dm_sans, TEXT_FALLBACK, false),
-        Role::Display => (FRAUNCES, loaded.fraunces, DISPLAY_FALLBACK, true),
-        Role::Mono => (DM_MONO, loaded.dm_mono, MONO_FALLBACK, false),
+    let (family, ok, fallback) = match role {
+        Role::Text => (DM_SANS, loaded.dm_sans, TEXT_FALLBACK),
+        Role::Display => (DM_SANS, loaded.dm_sans, DISPLAY_FALLBACK),
+        Role::Mono => (DM_MONO, loaded.dm_mono, MONO_FALLBACK),
     };
     if ok {
         return Choice {
             family,
             embedded: true,
-            italic,
         };
     }
     let last = fallback[fallback.len() - 1];
@@ -90,7 +93,6 @@ pub fn choose(role: Role, loaded: Loaded, installed: impl Fn(&str) -> bool) -> C
             .find(|f| installed(f))
             .unwrap_or(last),
         embedded: false,
-        italic,
     }
 }
 
@@ -199,7 +201,6 @@ impl Embedded {
         let collection = build_collection(dwrite, files).and_then(|c| c.cast().ok());
         let has = |name| collection.as_ref().is_some_and(|c| has_family(c, name));
         let loaded = Loaded {
-            fraunces: has(FRAUNCES),
             dm_sans: has(DM_SANS),
             dm_mono: has(DM_MONO),
         };
@@ -238,6 +239,7 @@ pub struct Face {
     pub family: HSTRING,
     /// `None`: the system collection.
     pub collection: Option<IDWriteFontCollection>,
+    /// Every role is upright: `DWRITE_FONT_STYLE_NORMAL`.
     pub style: DWRITE_FONT_STYLE,
 }
 
@@ -253,11 +255,7 @@ impl Face {
             } else {
                 None
             },
-            style: if choice.italic {
-                DWRITE_FONT_STYLE_ITALIC
-            } else {
-                DWRITE_FONT_STYLE_NORMAL
-            },
+            style: DWRITE_FONT_STYLE_NORMAL,
         }
     }
 
@@ -321,6 +319,30 @@ pub fn text_layout(
             )?;
         }
         Ok(layout)
+    }
+}
+
+/// Tracks the first `len` UTF-16 units of `layout` by `DISPLAY_TRACKING_EM`
+/// of the font `size` (trailing space after each character, so the line
+/// starts where it did). Display text only; both the draw and the measure
+/// of a line must call it, or measured widths stop matching what is drawn.
+///
+/// Character spacing needs `IDWriteTextLayout1` (Windows 8 and up); where
+/// the cast fails the text stays untracked and this returns `Ok`.
+pub fn apply_tracking(layout: &IDWriteTextLayout, len: u32, size: f32) -> Result<()> {
+    let Ok(layout) = layout.cast::<IDWriteTextLayout1>() else {
+        return Ok(());
+    };
+    unsafe {
+        layout.SetCharacterSpacing(
+            0.0,
+            size * DISPLAY_TRACKING_EM,
+            0.0,
+            DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: len,
+            },
+        )
     }
 }
 
@@ -447,7 +469,8 @@ pub fn gdi_face(font: HFONT) -> String {
 mod tests {
     use super::*;
     use windows::Win32::Graphics::DirectWrite::{
-        DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory,
+        DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+        DWriteCreateFactory,
     };
 
     fn factory() -> IDWriteFactory {
@@ -460,10 +483,10 @@ mod tests {
         let all = |_: &str| true;
         let text = choose(Role::Text, none, all);
         assert_eq!(text.family, "Segoe UI Variable Text");
-        assert!(!text.embedded && !text.italic);
+        assert!(!text.embedded);
         let display = choose(Role::Display, none, all);
         assert_eq!(display.family, "Segoe UI Variable Display");
-        assert!(!display.embedded && display.italic);
+        assert!(!display.embedded);
         assert_eq!(choose(Role::Mono, none, all).family, "Cascadia Mono");
         // Older systems: the chain moves on, ending on its last name.
         let only_segoe = |f: &str| f == "Segoe UI";
@@ -475,27 +498,17 @@ mod tests {
     #[test]
     fn embedded_names_when_loaded() {
         let loaded = Loaded {
-            fraunces: true,
             dm_sans: true,
             dm_mono: true,
         };
         let pick = |role| choose(role, loaded, |_| true);
-        assert_eq!(
-            pick(Role::Text),
-            Choice {
-                family: DM_SANS,
-                embedded: true,
-                italic: false
-            }
-        );
-        assert_eq!(
-            pick(Role::Display),
-            Choice {
-                family: FRAUNCES,
-                embedded: true,
-                italic: true
-            }
-        );
+        let dm_sans = Choice {
+            family: DM_SANS,
+            embedded: true,
+        };
+        assert_eq!(pick(Role::Text), dm_sans);
+        // Display is DM Sans too (600, tracked): only weight and spacing differ.
+        assert_eq!(pick(Role::Display), dm_sans);
         assert_eq!(pick(Role::Mono).family, DM_MONO);
         // One family missing falls back alone.
         let partial = Loaded {
@@ -504,7 +517,39 @@ mod tests {
         };
         let text = choose(Role::Text, partial, |_| true);
         assert!(!text.embedded);
-        assert!(choose(Role::Display, partial, |_| true).embedded);
+        let display = choose(Role::Display, partial, |_| true);
+        assert_eq!(display.family, "Segoe UI Variable Display");
+        assert!(!display.embedded);
+        assert!(choose(Role::Mono, partial, |_| true).embedded);
+    }
+
+    #[test]
+    fn tracking_narrows_display_text() {
+        let dwrite = factory();
+        let face = Face::for_role(&dwrite, Role::Display);
+        let size = 20.0;
+        let format = face
+            .format(&dwrite, DWRITE_FONT_WEIGHT_SEMI_BOLD, size)
+            .expect("format");
+        let typography = tabular_figures(&dwrite).expect("typography");
+        let wide: Vec<u16> = "Oktober 2026".encode_utf16().collect();
+        let len = wide.len() as u32;
+        let width = |tracked: bool| unsafe {
+            let layout =
+                text_layout(&dwrite, &wide, &format, 4096.0, 64.0, &typography).expect("layout");
+            if tracked {
+                apply_tracking(&layout, len, size).expect("tracking");
+            }
+            let mut m = Default::default();
+            layout.GetMetrics(&mut m).expect("metrics");
+            m.widthIncludingTrailingWhitespace
+        };
+        let (plain, tracked) = (width(false), width(true));
+        let expected = len as f32 * size * -DISPLAY_TRACKING_EM;
+        assert!(
+            ((plain - tracked) - expected).abs() < 0.5,
+            "plain {plain}, tracked {tracked}, expected {expected} narrower"
+        );
     }
 
     #[test]

@@ -24,7 +24,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTypography,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::Result;
@@ -88,6 +88,25 @@ impl Gfx {
         }
     }
 
+    /// `s` (UTF-16) in `text` laid out in a `w` × `h` box: tabular figures on
+    /// its digits and, for display text, the display tracking. `width` and
+    /// `Painter::text` both go through here, so what is measured is drawn.
+    fn layout(
+        &self,
+        s: &[u16],
+        text: Text,
+        align: Align,
+        w: f32,
+        h: f32,
+    ) -> Result<IDWriteTextLayout> {
+        let format = &self.formats[&(text, align)];
+        let layout = fonts::text_layout(&self.dwrite, s, format, w, h, &self.tabular)?;
+        if text.display() {
+            fonts::apply_tracking(&layout, s.len() as u32, text.size())?;
+        }
+        Ok(layout)
+    }
+
     /// One-line width of `s` in `text`, in logical px.
     pub fn width(&self, s: &str, text: Text) -> f32 {
         if s.is_empty() {
@@ -98,8 +117,8 @@ impl Gfx {
             return *w;
         }
         let wide: Vec<u16> = s.encode_utf16().collect();
-        let format = &self.formats[&(text, Align::Left)];
-        let w = fonts::text_layout(&self.dwrite, &wide, format, 4096.0, 64.0, &self.tabular)
+        let w = self
+            .layout(&wide, text, Align::Left, 4096.0, 64.0)
             .ok()
             .and_then(|layout| unsafe {
                 let mut m = DWRITE_TEXT_METRICS::default();
@@ -252,10 +271,7 @@ impl Painter<'_> {
             return;
         }
         let wide: Vec<u16> = s.encode_utf16().collect();
-        let format = &self.gfx.formats[&(text, align)];
-        let Ok(layout) =
-            fonts::text_layout(&self.gfx.dwrite, &wide, format, r.w, r.h, &self.gfx.tabular)
-        else {
+        let Ok(layout) = self.gfx.layout(&wide, text, align, r.w, r.h) else {
             return;
         };
         self.pen(1.0).set(rgb, a);
