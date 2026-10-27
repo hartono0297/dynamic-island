@@ -204,13 +204,14 @@ impl Item {
     }
 }
 
-/// The text styles of the editors and popovers. Fraunces Italic only for
-/// the two headings (21 and 16 px); everything else DM Sans.
+/// The text styles of the editors and popovers, all DM Sans. The two
+/// headings (21 and 16 px) use the display style: DM Sans 600 upright with
+/// tight tracking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Text {
-    /// The window title, Fraunces Italic 21.
+    /// The window title, DM Sans 600 upright 21, display style.
     Heading,
-    /// The calendar popover's month, Fraunces Italic 16.
+    /// The calendar popover's month, DM Sans 600 upright 16, display style.
     Month,
     /// Chips and time rows, 12.
     Body,
@@ -268,17 +269,14 @@ impl Text {
     /// CSS weight: 400, 500 or 600.
     pub fn weight(self) -> u16 {
         match self {
-            Text::Heading
-            | Text::Month
-            | Text::BodyStrong
-            | Text::SmallStrong
-            | Text::ButtonStrong => 500,
-            Text::DayBold | Text::MiniBold => 600,
+            Text::BodyStrong | Text::SmallStrong | Text::ButtonStrong => 500,
+            Text::Heading | Text::Month | Text::DayBold | Text::MiniBold => 600,
             _ => 400,
         }
     }
 
-    /// Set in Fraunces Italic (16 px and up only).
+    /// The display style: DM Sans 600 upright with tight (negative)
+    /// tracking. The renderer reads this to pick the tracking.
     pub fn display(self) -> bool {
         matches!(self, Text::Heading | Text::Month)
     }
@@ -1087,5 +1085,37 @@ mod tests {
             Some(Shortcut::DayAfter)
         );
         assert_eq!(Shortcut::matching(mon, ymd(2026, 10, 29)), None);
+    }
+
+    /// Every editor title fits the header beside the close button in both
+    /// languages, set in the display style (DM Sans 600 upright) and
+    /// measured at 0.66 em per character, above its real width.
+    #[test]
+    fn headings_fit_in_both_languages() {
+        use crate::i18n::{Key, Lang, text};
+        let semibold = |s: &str, t: Text| s.chars().count() as f32 * t.size() * 0.66;
+        let keys = [
+            Key::EditorNote,
+            Key::EditorEvent,
+            Key::EditorAddEvent,
+            Key::EditorEditEvent,
+            Key::EditorNewReminder,
+            Key::EditorEditReminder,
+        ];
+        for form in [Form::Note, Form::Event, Form::Reminder] {
+            let heading = layout(&spec(form), &estimate).heading;
+            for lang in [Lang::Id, Lang::En] {
+                for key in keys {
+                    let title = text(lang, key);
+                    let w = semibold(title, Text::Heading);
+                    assert!(
+                        w <= heading.w,
+                        "{title:?} is {w} wide, header {}",
+                        heading.w
+                    );
+                    assert!(Text::Heading.size() <= heading.h);
+                }
+            }
+        }
     }
 }

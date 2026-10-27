@@ -193,9 +193,9 @@ impl Font {
         Font::Eyebrow,
     ];
 
-    /// Studio scale: Fraunces Italic 20 for titles (16 for the brand, the
-    /// smallest size Fraunces is used at), DM Sans 12 for text and 10.5 for
-    /// descriptions.
+    /// Studio scale: the display style (DM Sans 600 upright, tight
+    /// tracking) at 20 for titles and the About name and 16 for the brand,
+    /// DM Sans 12 for text and 10.5 for descriptions.
     pub fn size(self) -> f32 {
         match self {
             Font::Brand => 16.0,
@@ -205,7 +205,9 @@ impl Font {
         }
     }
 
-    /// Set in the display face (Fraunces Italic) rather than DM Sans.
+    /// The display style: DM Sans 600 upright with tight (negative)
+    /// tracking. The renderer reads this to pick the tracking; the face and
+    /// weight are the same DM Sans as the body text.
     pub fn display(self) -> bool {
         matches!(self, Font::Brand | Font::Title | Font::AboutName)
     }
@@ -213,8 +215,8 @@ impl Font {
     /// CSS-style weight: 400, 500 or 600 (the weights embedded).
     pub fn weight(self) -> u16 {
         match self {
-            Font::Brand | Font::Title | Font::AboutName | Font::Label => 500,
-            Font::Eyebrow => 600,
+            Font::Brand | Font::Title | Font::AboutName | Font::Eyebrow => 600,
+            Font::Label => 500,
             Font::Nav | Font::Desc | Font::Control | Font::Value | Font::AboutVersion => 400,
         }
     }
@@ -230,20 +232,23 @@ pub trait Measure {
     fn width(&self, text: &str, font: Font) -> f32;
 }
 
-/// A generous width estimate (wider than DM Sans, Fraunces Italic or the
-/// Segoe UI fallback draw nearly any text), so a layout that fits with it
-/// also fits on screen.
+/// A generous width estimate (wider than DM Sans or the Segoe UI Variable
+/// fallback draw nearly any text, the display style included), so a layout
+/// that fits with it also fits on screen.
 pub struct Estimate;
 
 impl Measure for Estimate {
     fn width(&self, text: &str, font: Font) -> f32 {
-        let per_char = if font.display() {
-            // Fraunces Italic runs narrower than DM Sans.
-            0.56
-        } else if font == Font::Eyebrow {
+        let per_char = if font == Font::Eyebrow {
             // All capitals.
             0.8
         } else if font.weight() >= 500 {
+            // Medium and semibold, the display style included. Measured
+            // from DMSans-600.ttf with the display style's -2.5% tracking,
+            // the titles and brand take 0.45 to 0.57 em per character, and
+            // the Segoe UI Variable Display semibold fallback is about as
+            // wide; 0.66 leaves over 15% for wide letters (m, w) and
+            // rounding.
             0.66
         } else {
             0.62
@@ -1089,10 +1094,14 @@ impl Builder<'_> {
         };
         let brand_x = self.l.logo.right() + 8.0;
         self.l.brand = Some(Text {
+            // No fill or divider marks the sidebar's edge, so the brand may
+            // run into the gutter, up to half a gap before the content
+            // column. DM Sans 600 draws "Dynamic Island" at 16 px about
+            // 112 px wide; the estimate asks 148, more than the sidebar has.
             rect: Rect {
                 x: brand_x,
                 y: 22.0,
-                w: SIDEBAR_W - brand_x - 2.0,
+                w: CONTENT_X - GAP / 2.0 - brand_x,
                 h: LOGO,
             },
             text: "Dynamic Island".into(),
