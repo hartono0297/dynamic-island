@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic Island for Windows</title>
+<meta name="description" content="A macOS-style island for the top of your Windows 11 screen: calendar, pomodoro, reminders, notes, music and more.">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=DM+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="hero dark">
+  <div class="wrap">
+    <div class="nav">
+      <a class="brand" href="index.html"><img src="img/logo.svg" alt="" width="30" height="30">Dynamic Island</a>
+      <nav><a href="#features" class="hide-sm">Features</a><a href="#google-calendar" class="hide-sm">Google Calendar</a><a href="privacy.html">Privacy</a><a href="terms.html" class="hide-sm">Terms</a></nav>
+    </div>
+    <div class="inner">
+      <div>
+        <h1>The island at the top of your Windows screen.</h1>
+        <p>Calendar, pomodoro, reminders, notes, music and a small terminal, one hover away. A native Windows 11 app, free and open source.</p>
+        <div class="btns">
+          <a class="btn pri" href="https://github.com/hartono0297/dynamic-island/releases">Download for Windows</a>
+          <a class="btn sec" href="https://github.com/hartono0297/dynamic-island">Source code</a>
+        </div>
+        <p class="note">Or in PowerShell: <code>irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/install.ps1 | iex</code></p>
+      </div>
+      <img class="shot" src="img/calendar.png" alt="The Calendar page of the island, month view">
+    </div>
+  </div>
+</div>
+
+<section class="block" id="features">
+  <div class="wrap">
+    <h2>Everything you check ten times a day</h2>
+    <p class="lead">Hover the notch to open the panel, scroll to change pages. When nothing is happening, it is just a clock.</p>
+    <div class="grid3">
+      <div class="card"><img src="img/calendar.png" alt="Calendar page"><h3>Calendar</h3><p>Your Google Calendar by day, week or month. Add and edit events without opening a browser.</p></div>
+      <div class="card"><img src="img/pomodoro.png" alt="Pomodoro page"><h3>Pomodoro</h3><p>A focus timer with a ring in the notch, so you always know how long is left.</p></div>
+      <div class="card"><img src="img/reminders.png" alt="Reminders page"><h3>Reminders</h3><p>Once, daily or weekly. Missed ones show up when you are back.</p></div>
+      <div class="card"><img src="img/music.png" alt="Music page"><h3>Music</h3><p>Cover, controls and optional synced lyrics for whatever is playing.</p></div>
+      <div class="card"><img src="img/cli.png" alt="CLI page"><h3>CLI</h3><p>Run a quick command in PowerShell or cmd, right inside the panel.</p></div>
+      <div class="card"><img src="img/robot.png" alt="Bata, the robot in the notch"><h3>Bata</h3><p>A small robot in the notch whose face tells you what is going on.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="google-calendar" style="padding-top:0">
+  <div class="wrap">
+    <h2>How Dynamic Island uses Google Calendar</h2>
+    <p class="lead">Connecting Google Calendar is optional. If you do, this is exactly what happens.</p>
+    <div class="gcal">
+      <ul>
+        <li><span class="i">1</span><div><b>You sign in with Google</b><small>In the browser, on Google's own page. Dynamic Island never sees your password.</small></div></li>
+        <li><span class="i">2</span><div><b>It reads your calendar list and events</b><small>To show them on the Calendar page, by day, week or month.</small></div></li>
+        <li><span class="i">3</span><div><b>It adds or edits events you ask it to</b><small>Only when you press Save in the event editor. It never deletes events.</small></div></li>
+        <li><span class="i">4</span><div><b>Everything stays on your PC</b><small>There is no Dynamic Island server. Data goes only between your PC and Google.</small></div></li>
+      </ul>
+      <div>
+        <p style="font-size:15px;margin-bottom:10px"><b>Permissions requested</b></p>
+        <p style="font-size:14px;color:var(--ink2);margin-bottom:6px"><code style="font-family:'DM Mono',monospace;font-size:12.5px">calendar.calendarlist.readonly</code><br>See the list of your calendars.</p>
+        <p style="font-size:14px;color:var(--ink2);margin-bottom:14px"><code style="font-family:'DM Mono',monospace;font-size:12.5px">calendar.events</code><br>View and edit events on your calendars.</p>
+        <p style="font-size:14px;color:var(--ink2)">You can disconnect any time in Settings → Integrations, or remove access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Details in the <a href="privacy.html">privacy policy</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap inner">
+    <div><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/hartono0297/dynamic-island/issues">Contact</a></div>
+    <div>Dynamic Island is not affiliated with Google or Apple.</div>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kucing Vale Simpel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713; --term: #0F0C0A;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --red: #FF8A73;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+    /* header font for every mock-up (the recommended option B) */
+    --hf: 'DM Sans', sans-serif; --hw: 600; --hs: normal; --hls: -.02em;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--hf); font-weight: 700; font-size: 28px; letter-spacing: -.02em; margin: 2px 0 12px; display: flex; align-items: center; gap: 12px; }
+  h1 .no { width: 34px; height: 34px; border-radius: 11px; background: var(--a); color: #FFFBF5; font-size: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  .ux li { list-style: none; position: relative; padding-left: 13px; font-size: 11px; line-height: 1.5; margin-bottom: 4px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 6.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .ux h3 { font-family: var(--hf); font-weight: 700; font-size: 15px; margin-bottom: 6px; letter-spacing: -.01em; }
+  code { font-family: var(--mono); font-size: 10px; background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  .opt { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 11px 13px; position: relative; }
+  .opt.rec { border: 2px solid var(--a); }
+  .opt .tag { position: absolute; top: -9px; right: 12px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 2px 8px; border-radius: 99px; }
+  .opt b { font-size: 12.5px; display: block; margin-bottom: 3px; }
+  .opt p { font-size: 10.8px; line-height: 1.45; color: #4A3D33; }
+  .opt .pc { font-size: 10px; color: var(--ink2); margin-top: 5px; line-height: 1.4; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* screens */
+  .scr { border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .scr.gray { background: linear-gradient(115deg, #3a3a3a, #6b6b6b); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx); border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 6px; height: 34px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; overflow: hidden; }
+  .nt.big { height: auto; min-height: 60px; border-radius: 24px; padding: 10px 12px; gap: 10px; align-items: center; }
+  .nt .t1 { font-size: 12.5px; font-weight: 600; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .lyr { font-family: var(--hf); font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  .fade { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); overflow: hidden; }
+  .act { font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--tx); white-space: nowrap; }
+  .act.pri { background: var(--a); color: var(--ai); font-weight: 600; }
+  .act.dng { background: rgba(255,138,115,.14); color: var(--red); }
+  .ruler { position: absolute; top: 50px; height: 14px; border-left: 1px solid rgba(255,255,255,.7); border-right: 1px solid rgba(255,255,255,.7); font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; }
+  .ruler::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; border-top: 1px dashed rgba(255,255,255,.7); }
+  .ruler span { background: rgba(0,0,0,.45); padding: 0 5px; border-radius: 4px; position: relative; }
+
+  /* panel */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--tx); border-radius: 0 0 30px 30px; position: relative; padding: 16px 20px 28px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 10px; gap: 8px; }
+  .ttl { font-family: var(--hf); font-weight: var(--hw); font-style: var(--hs); letter-spacing: var(--hls); font-size: 20px; white-space: nowrap; }
+  .hchip { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--tx2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .hchip.mono { font-family: var(--mono); }
+  .hchip.acc { background: rgba(226,104,60,.15); color: var(--a); }
+  .hchip.sage { background: rgba(157,181,154,.15); color: var(--sage); }
+  .hchip svg { width: 12px; height: 12px; }
+  .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); }
+  .term { background: var(--term); border-radius: 16px; height: 214px; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.62; color: #E6DED3; overflow: hidden; }
+  .term .out { padding: 10px 14px 0; height: 170px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .term .p { color: var(--a); } .term .m { color: var(--tx2); } .term .g { color: var(--sage); }
+  .term .inp { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid #221B16; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--a); vertical-align: -3px; }
+  .menu { position: absolute; right: 54px; top: 44px; width: 300px; background: #241D18; border: 1px solid #332A23; border-radius: 14px; padding: 6px; box-shadow: 0 14px 30px rgba(0,0,0,.45); z-index: 2; font-size: 11px; }
+  .menu .hd { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); padding: 6px 8px 4px; }
+  .menu div.it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+  .menu div.it.on { background: rgba(226,104,60,.16); }
+  .menu div.it span { font-family: var(--mono); font-size: 10.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu div.it small { font-size: 9.5px; color: var(--tx2); white-space: nowrap; }
+  .menu svg { width: 13px; height: 13px; color: var(--tx2); flex: none; }
+
+  /* system page */
+  .sys { display: grid; grid-template-columns: 170px 1fr; gap: 18px; height: 222px; }
+  .ringw { position: relative; width: 150px; height: 150px; margin: 4px auto 0; }
+  .ringw .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ringw b { font-size: 30px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ringw small { font-size: 10px; color: var(--tx2); letter-spacing: .1em; text-transform: uppercase; }
+  .spark { margin-top: 10px; }
+  .meter { margin-bottom: 11px; }
+  .meter .hd { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 5px; }
+  .meter .hd b { font-weight: 600; }
+  .meter .hd span { color: var(--tx2); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .bar { height: 7px; border-radius: 7px; background: var(--t); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 7px; }
+  .warn { color: var(--ochre) !important; }
+  .procs { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 12px; font-size: 10.5px; margin-top: 4px; }
+  .procs span:nth-child(3n+2), .procs span:nth-child(3n) { color: var(--tx2); text-align: right; font-variant-numeric: tabular-nums; }
+  .cbtn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 6px 12px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 600; }
+  .cbtn.ghost { background: var(--r); color: var(--tx); font-weight: 500; }
+  .cbtn svg { width: 13px; height: 13px; }
+
+  /* cleanup list */
+  .cl { display: grid; gap: 1px; }
+  .cl .row { display: grid; grid-template-columns: 18px 22px 1fr auto; align-items: center; gap: 9px; padding: 3px 8px; border-radius: 10px; font-size: 11.5px; }
+  .cl .row:nth-child(odd) { background: rgba(244,237,228,.03); }
+  .cl .row small { display: block; color: var(--tx2); font-size: 9.5px; }
+  .cl .row .csz { font-variant-numeric: tabular-nums; color: var(--tx); font-weight: 600; font-size: 11.5px; }
+  .ck { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--tx2); display: flex; align-items: center; justify-content: center; }
+  .ck.on { background: var(--a); border-color: var(--a); }
+  .ck.on::after { content: ""; width: 7px; height: 4px; border-left: 2px solid #17120F; border-bottom: 2px solid #17120F; transform: rotate(-45deg) translate(1px, -1px); }
+  .cl .ic { color: var(--tx2); }
+  .cl .ic svg { width: 17px; height: 17px; }
+  .lock { font-size: 9px; padding: 1px 6px; border-radius: 99px; background: rgba(217,164,65,.15); color: var(--ochre); margin-left: 6px; }
+
+  /* clipboard */
+  .search { display: flex; align-items: center; gap: 8px; background: var(--r); border-radius: 12px; padding: 7px 11px; font-size: 11.5px; color: var(--tx2); flex: 1; }
+  .search svg { width: 14px; height: 14px; }
+  .clips { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+  .clip { background: var(--r); border-radius: 13px; padding: 8px 10px; height: 64px; position: relative; overflow: hidden; font-size: 11px; display: flex; flex-direction: column; }
+  .clip .k { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--tx2); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .clip .k svg { width: 11px; height: 11px; }
+  .clip .v { line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .clip.sel { box-shadow: inset 0 0 0 1.5px var(--a); }
+  .clip .pin { position: absolute; right: 8px; top: 7px; color: var(--a); }
+  .clip .pin svg { width: 12px; height: 12px; }
+  .clip.img { padding: 0; flex-direction: row; }
+  .clip.img .th { width: 92px; height: 100%; background: linear-gradient(160deg, #E2683C, #5A2A1C); flex: none; position: relative; }
+  .clip.img .th::after { content: ""; position: absolute; left: 14px; right: 14px; top: 14px; bottom: 14px; border: 1.5px solid rgba(244,237,228,.55); border-radius: 4px; }
+  .clip.img .meta { padding: 8px 10px; }
+  .sw { width: 18px; height: 18px; border-radius: 6px; display: inline-block; vertical-align: -4px; margin-right: 6px; }
+
+  /* screenshot preview */
+  .shot { width: 170px; height: 100px; border-radius: 12px; flex: none; position: relative; overflow: hidden;
+          background: linear-gradient(180deg, #2B221C 0 18%, #F4EEE6 18% 100%); border: 1px solid #3A2F27; }
+  .shot::before { content: ""; position: absolute; left: 10px; top: 26px; width: 70px; height: 8px; border-radius: 3px; background: #C9542B; }
+  .shot::after { content: ""; position: absolute; left: 10px; top: 42px; right: 14px; height: 46px; border-radius: 6px; background: repeating-linear-gradient(180deg, #E6DCCF 0 6px, transparent 6px 12px); }
+  .shot.lg { width: 230px; height: 136px; }
+
+  .robot { flex: none; }
+  .note { font-size: 10.5px; color: var(--ink2); margin-top: 5px; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  th { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .sz { font-size: 9.5px; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; white-space: nowrap; }
+  .sz.l { background: rgba(226,104,60,.18); color: #A8431F; }
+
+  .vcard { background: var(--card); border: 1px solid var(--rule); border-radius: 18px; padding: 16px; position: relative; }
+  .vcard.rec { border: 2px solid var(--a); }
+  .vcard .tag2 { position: absolute; top: 12px; right: 12px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 3px 8px; border-radius: 99px; }
+  .stage { background: var(--s); border-radius: 14px; display: flex; align-items: center; justify-content: center; }
+  .sizes { display: flex; align-items: flex-end; gap: 14px; justify-content: center; padding: 12px 0 4px; }
+  .sizes div { text-align: center; font-size: 9.5px; color: var(--tx2); }
+  .sizes svg { margin: 0 auto 4px; }
+  .vname { font-weight: 700; font-size: 18px; letter-spacing: -.02em; margin: 12px 0 2px; }
+  .vdesc { font-size: 11px; color: var(--ink2); line-height: 1.45; }
+  .xg { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .xc { background: var(--r); border-radius: 16px; padding: 12px; color: var(--tx); }
+  .xc .st2 { height: 100px; display: flex; align-items: center; justify-content: center; }
+  .xc b { font-size: 13.5px; font-weight: 700; display: block; margin-top: 4px; }
+  .xc small { font-size: 10px; color: var(--tx2); line-height: 1.4; display: block; margin-top: 2px; min-height: 28px; }
+  .wm { font-weight: 700; letter-spacing: -.04em; line-height: 1; }
+  .lockup { border-radius: 18px; padding: 22px 26px; display: flex; align-items: center; gap: 16px; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+
+const P = (d, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const I = {
+  folder: P('<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'),
+  star: P('<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  search: P('<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>'),
+  pin: P('<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>'),
+  link: P('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>'),
+  text: P('<path d="M5 6h14M5 11h14M5 16h9"/>'),
+  code: P('<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>'),
+  image: P('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>'),
+  color: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>'),
+  trash: P('<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13z"/>'),
+  temp: P('<path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/>'),
+  globe: P('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3.3 3 13.7 0 17M12 3.5c-3 3.3-3 13.7 0 17"/>'),
+  box: P('<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>'),
+  win: P('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>'),
+  dl: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  img2: P('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M8 12l2.5 2.5L16 9"/>'),
+  sparkle: P('<path d="M12 4l1.8 6.2L20 12l-6.2 1.8L12 20l-1.8-6.2L4 12l6.2-1.8z"/>'),
+  copy: P('<rect x="8" y="8" width="11" height="11" rx="2.5"/><path d="M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"/>'),
+  save: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  edit: P('<path d="M4 20h4l11-11-4-4L4 16z"/>'),
+  check: P('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2),
+};
+
+function robot(expr = 'idle', size = 26) {
+  const T = '#E2683C', D = '#17120F', C = '#F4EDE4', L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const note = `<path d="M57 9v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/><circle cx="55.4" cy="9" r="1.9" fill="${C}"/><circle cx="60.4" cy="7.5" r="1.9" fill="${C}"/>`;
+  const E = {
+    idle: eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3), happy,
+    sing: happy + `<ellipse cx="32" cy="${Y + 6.5}" rx="2.6" ry="2" fill="${C}"/>` + note,
+    alert: `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`,
+    think: eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
+    sad: eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8),
+  }[expr];
+  return `<svg class="robot" width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/><rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>${E}</svg>`;
+}
+const ring = (p, size, sw, color = 'var(--a)') => { const r = (size - sw) / 2 - 1, c = 2 * Math.PI * r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--t)" stroke-width="${sw}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`; };
+const dots = (on, n = 9) => `<div class="dots">${Array.from({ length: n }, (_, i) => `<i class="${i === on ? 'on' : ''}"></i>`).join('')}</div>`;
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Brainstorm v3.1</span><span>${r}</span></div>`;
+const ux = (t, items) => `<div class="ux">${t ? `<h3>${t}</h3>` : ''}<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+const opt = (k, t, p, pc, rec) => `<div class="opt${rec ? ' rec' : ''}">${rec ? '<span class="tag">Saran</span>' : ''}<b>${k} · ${t}</b><p>${p}</p>${pc ? `<div class="pc">${pc}</div>` : ''}</div>`;
+
+
+const F = (r) => folio(r).replace('Dynamic Island · Brainstorm v3.1', 'Vale · kucing simpel');
+const T = '#E2683C', D = '#17120F', C = '#F4EDE4', PLUM = '#B07A9A';
+
+// ===== simple cat: head + ears + eyes only (64 grid) =====
+// variant: 'lash' (eyelashes), 'bow' (lashes + bow on the right ear), 'almond' (cat-eye shape + lashes)
+function cat(expr = 'idle', size = 64, variant = 'bow') {
+  const L = 24, R = 40, Y = 35;
+  let ear = { up: 0, droop: 0 }, eyes = '', extra = '', bob = 0, tilt = 0;
+  const st = (d, w = 2.4, c = D) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // two lashes at the outer upper corner of each eye; `dy` lifts them for closed eyes
+  const lashes = (dy = 0, droop = 0) => st(`M${L - 3.2} ${Y - 3.6 + dy}l-3.4 ${-2.2 + droop}M${L - 4} ${Y - 1 + dy}l-3.8 ${-.4 + droop}M${R + 3.2} ${Y - 3.6 + dy}l3.4 ${-2.2 + droop}M${R + 4} ${Y - 1 + dy}l3.8 ${-.4 + droop}`, 1.6);
+  const open = (h = 9.5, w = 7, dy = 0) => variant === 'almond'
+    ? `<path d="M${L - 4.5} ${Y + dy}Q${L - .5} ${Y - h / 1.6 + dy} ${L + 4} ${Y - 1 + dy}Q${L + .5} ${Y + h / 2.4 + dy} ${L - 4.5} ${Y + dy}Z" fill="${D}"/><path d="M${R + 4.5} ${Y + dy}Q${R + .5} ${Y - h / 1.6 + dy} ${R - 4} ${Y - 1 + dy}Q${R - .5} ${Y + h / 2.4 + dy} ${R + 4.5} ${Y + dy}Z" fill="${D}"/>`
+    : `<rect x="${L - w / 2}" y="${Y - h / 2 + dy}" width="${w}" height="${h}" rx="${w / 2}" fill="${D}"/><rect x="${R - w / 2}" y="${Y - h / 2 + dy}" width="${w}" height="${h}" rx="${w / 2}" fill="${D}"/>`;
+  const shine = (dy = 0) => `<circle cx="${L + 1.2}" cy="${Y - 2 + dy}" r="1.2" fill="${C}"/><circle cx="${R + 1.2}" cy="${Y - 2 + dy}" r="1.2" fill="${C}"/>`;
+  const happy = st(`M${L - 4} ${Y + 1.5}q4-5.5 8 0M${R - 4} ${Y + 1.5}q4-5.5 8 0`) + lashes(1.5);
+  const note = (x, y) => `<path d="M${x} ${y}v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/><circle cx="${x - 1.6}" cy="${y}" r="1.9" fill="${C}"/><circle cx="${x + 3.4}" cy="${y - 1.5}" r="1.9" fill="${C}"/>`;
+  const heart = (x, y, s = 1) => `<path transform="translate(${x} ${y}) scale(${s})" d="M0 3C-4-1-5.5 2.5-3 5L0 8L3 5C5.5 2.5 4-1 0 3Z" fill="${C}"/>`;
+  switch (expr) {
+    case 'idle': eyes = open() + shine() + lashes(); break;
+    case 'blink': eyes = st(`M${L - 4} ${Y + 1}h8M${R - 4} ${Y + 1}h8`) + lashes(1.5); break;
+    case 'happy': eyes = happy; break;
+    case 'focus': eyes = open(4.2, 7.5, 1) + lashes(1); break;
+    case 'music': eyes = happy; extra = note(56, 10); break;
+    case 'sing': eyes = happy; extra = note(57, 12) + note(64, 2); break;
+    case 'alert': eyes = `<circle cx="${L}" cy="${Y}" r="4.8" fill="${D}"/><circle cx="${R}" cy="${Y}" r="4.8" fill="${D}"/>` + shine(-.5) + lashes(-1); ear = { up: 3, droop: 0 }; bob = -1.5; break;
+    case 'think': eyes = `<rect x="${L - 1}" y="${Y - 7.5}" width="6" height="8.5" rx="3" fill="${D}"/><rect x="${R - 1}" y="${Y - 7.5}" width="6" height="8.5" rx="3" fill="${D}"/>` + lashes(-2.5);
+      extra = `<circle cx="55" cy="8" r="1.4" fill="${C}"/><circle cx="59.5" cy="5" r="1.8" fill="${C}"/><circle cx="64.5" cy="2" r="2.2" fill="${C}"/>`; break;
+    case 'sleep': eyes = st(`M${L - 4} ${Y}q4 3.5 8 0M${R - 4} ${Y}q4 3.5 8 0`, 2.2) + lashes(1, 2.4); ear = { up: 0, droop: 4 }; bob = 1.5;
+      extra = `<path d="M53 6h5l-5 5.5h5M60-1h3.6l-3.6 4h3.6" fill="none" stroke="${C}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`; break;
+    case 'sad': eyes = open(6, 6.5, 2.5) + lashes(3, 3); ear = { up: 0, droop: 8 }; bob = 1.5; break;
+    case 'wave': eyes = happy; tilt = -7; extra = heart(6, 2, 1); break;
+  }
+  const earL = `<g transform="rotate(${-ear.droop * 3} 18 24)"><path d="M10 27L14 ${7 - ear.up}L28 17Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g>`;
+  const earR = `<g transform="rotate(${ear.droop * 3} 46 24)"><path d="M54 27L50 ${7 - ear.up}L36 17Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g>`;
+  const bow = variant === 'bow' ? `<g transform="rotate(${ear.droop * 3} 46 24) translate(43.5 ${17.5 - ear.up / 2}) rotate(22) scale(1.15)">
+      <path d="M0 0L-6.5-4.2Q-7.8 0-6.5 4.2Z" fill="${PLUM}" stroke="${PLUM}" stroke-width="1.6" stroke-linejoin="round"/><path d="M0 0L6.5-4.2Q7.8 0 6.5 4.2Z" fill="${PLUM}" stroke="${PLUM}" stroke-width="1.6" stroke-linejoin="round"/><circle r="2.2" fill="${PLUM}" stroke="${T}" stroke-width=".8"/></g>` : '';
+  const head = `<rect x="7" y="15" width="50" height="42" rx="20" fill="${T}"/>`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><g transform="translate(0 ${bob}) rotate(${tilt} 32 36)">${earL}${earR}${head}${bow}${eyes}${extra}</g></svg>`;
+}
+
+const SQ = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
+const logoEars = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 256 256">
+  <path d="M30 104L52 22L116 64Z" fill="#E2683C" stroke="#E2683C" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M226 104L204 22L140 64Z" fill="#E2683C" stroke="#E2683C" stroke-width="16" stroke-linejoin="round"/>
+  <rect x="12" y="52" width="232" height="192" rx="72" fill="#E2683C"/>
+  <rect x="58" y="122" width="140" height="48" rx="24" fill="#17120F"/><circle cx="174" cy="146" r="9.5" fill="#F4EDE4"/></svg>`;
+const sizesRow = (fn) => `<div class="sizes">${[48, 32, 24, 20].map(s => `<div>${fn(s)}${s}</div>`).join('')}</div>`;
+
+// old cat (previous PDF, variant A) for the before/after
+function oldCat(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64"><path d="M9 26L13 6L29 15Z" fill="${T}" stroke="${T}" stroke-width="4" stroke-linejoin="round"/><path d="M55 26L51 6L35 15Z" fill="${T}" stroke="${T}" stroke-width="4" stroke-linejoin="round"/><rect x="6" y="13" width="52" height="44" rx="18" fill="${T}"/><rect x="12" y="24" width="40" height="20" rx="10" fill="${D}"/><rect x="21.5" y="29.5" width="6" height="9" rx="3" fill="${C}"/><rect x="36.5" y="29.5" width="6" height="9" rx="3" fill="${C}"/><path d="M30 45.6h4l-2 2.4z" fill="${D}"/><path d="M28 49q2 2.2 4 0q2 2.2 4 0" fill="none" stroke="${D}" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+}
+
+// ================= pages =================
+const V = [
+  ['lash', 'A · Bulu mata', 'Kepala, telinga, dan dua mata dengan bulu mata kecil di sudut luar. Paling minimal.'],
+  ['bow', 'B · Bulu mata + pita', 'Sama dengan A, ditambah pita plum kecil di telinga kanan. Paling jelas terbaca sebagai kucing perempuan.', true],
+  ['almond', 'C · Mata almond', 'Mata berbentuk almond (cat-eye) dengan bulu mata. Lebih tajam, tapi bisa terlihat judes.'],
+];
+const p1 = `<section class="page"><div class="eyebrow">Maskot · versi simpel</div><h1><span class="no">1</span>Hanya telinga dan mata</h1>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">${V.map(([v, n, d, rec]) => `<div class="vcard${rec ? ' rec' : ''}">${rec ? '<span class="tag2">Saran</span>' : ''}
+    <div class="stage" style="height:200px">${cat('idle', 150, v)}</div>
+    <div class="stage" style="margin-top:8px;border-radius:12px">${sizesRow(s => cat('idle', s, v))}</div>
+    <div class="vname">${n}</div><div class="vdesc">${d}</div>
+    <div style="display:flex;gap:10px;margin-top:10px;justify-content:center;background:var(--s);border-radius:12px;padding:10px">${['happy', 'alert', 'sleep', 'sad'].map(e => cat(e, 40, v)).join('')}</div></div>`).join('')}</div>
+  <div style="display:flex;align-items:center;gap:16px;margin-top:14px;font-size:11px;color:var(--ink2)">
+    <span>Sebelumnya</span><span style="background:var(--s);border-radius:12px;padding:8px">${oldCat(44)}</span><span>→ dibuang: visor, hidung, mulut, kumis, bagian dalam telinga. Kepala dibuat lebih bulat.</span></div>
+  ${F('Versi simpel')}</section>`;
+
+const X = [['idle', 'Diam', 'Mata berkilau, berkedip tiap 4–7 dtk'], ['happy', 'Senang', 'Sapaan, tugas selesai, hover'], ['focus', 'Fokus', 'Pomodoro fase fokus'], ['music', 'Mendengar', 'Ada musik diputar'], ['sing', 'Bernyanyi', 'Mode lirik'], ['alert', 'Waspada', 'Pengingat, Claude butuh kamu · telinga tegak'],
+  ['think', 'Berpikir', 'Claude bekerja, CLI, Mole · melirik ke atas'], ['sleep', 'Tidur', 'Telinga turun'], ['sad', 'Lesu', 'Baterai/disk lemah, gagal · telinga layu'], ['wave', 'Menyapa', 'Pertama kali hari ini · kepala miring + hati'], ['blink', 'Kedip', '120 ms, acak'], ['idle', 'Tanpa pita', 'Varian A, kalau pitanya terlalu ramai']];
+const p2 = `<section class="page dark"><div class="eyebrow">Maskot · ekspresi (pilihan B)</div><h1 style="color:var(--tx)"><span class="no">2</span>Ekspresi lewat mata dan telinga saja</h1>
+  <div class="xg">${X.map(([e, n, d], i) => `<div class="xc"><div class="st2">${cat(e, 84, i === 11 ? 'lash' : 'bow')}</div><b>${n}</b><small>${d}</small></div>`).join('')}</div>
+  <p style="font-size:11px;color:var(--tx2);margin-top:14px">Tanpa mulut, semua rasa dibawa oleh bentuk mata, bulu mata, dan posisi telinga. Not musik, titik berpikir, "z" dan hati ada di luar kepala, jadi wajahnya tetap bersih.</p>
+  ${F('Ekspresi').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`;
+
+const S = (label, desc, inner, alt) => `<div><div class="lbl">${label}</div><div class="scr${alt ? ' alt' : ''}" style="height:80px">${inner}</div><div class="note" style="margin-top:3px">${desc}</div></div>`;
+const nt = (inner, big) => `<div class="nt${big ? ' big' : ''}" style="${big ? 'top:10px' : 'top:12px'}">${inner}</div>`;
+const p3 = `<section class="page"><div class="eyebrow">Maskot · di notch</div><h1><span class="no">3</span>Kucing di notch</h1>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 22px">
+    ${S('Kosong', 'Duduk di samping jam.', nt(`${cat('idle', 26)}<span style="font-weight:600;font-size:15px">14:32</span>`))}
+    ${S('Tidur', 'Telinga turun, jam meredup.', nt(`${cat('sleep', 26)}<span style="font-weight:600;font-size:15px;opacity:.6">23:48</span>`), true)}
+    ${S('Pomodoro', 'Fokus + cincin progres.', nt(`${cat('focus', 26)}${ring(.25, 20, 3)}<span style="font-weight:600">18:42</span>`))}
+    ${S('Lirik', 'Bernyanyi.', nt(`${cat('sing', 26)}<span style="font-weight:600;font-size:13px">di antara gedung dan cahaya sore</span>`), true)}
+    ${S('Pengingat', 'Telinga tegak sampai ditandai selesai.', nt(`${cat('alert', 38)}<div><div class="t1">Kirim revisi denah ke klien</div><div class="t2">Pengingat · 16:30</div></div><span class="act pri">Selesai</span>`, true))}
+    ${S('Sapaan pagi', 'Kepala miring dengan hati kecil.', nt(`${cat('wave', 38)}<div><div class="t1">Selamat pagi</div><div class="t2">3 acara dan 2 pengingat hari ini</div></div>`, true), true)}
+    ${S('Claude / CLI bekerja', 'Melirik ke atas.', nt(`${cat('think', 38)}<div><div class="t1">Claude sedang bekerja</div><div class="t2">vale · 3 file diubah</div></div>`, true))}
+    ${S('Disk lemah', 'Telinga layu.', nt(`${cat('sad', 38)}<div><div class="t1">Disk C: tinggal 9,6 GB</div><div class="t2">Buka halaman Sistem</div></div><span class="act pri">Buka</span>`, true), true)}
+  </div>
+  ${F('Di notch')}</section>`;
+
+const p4 = `<section class="page"><div class="eyebrow">Bersama nama Vale</div><h1><span class="no">4</span>Vale dan kucingnya</h1>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="lockup" style="background:var(--s);color:var(--tx)">${logoEars(64)}<span class="wm" style="font-size:52px">Vale</span><span style="margin-left:auto">${cat('happy', 60)}</span></div>
+    <div class="lockup" style="background:#FBF7F1;border:1px solid var(--rule);color:var(--ink)">${logoEars(64)}<span class="wm" style="font-size:52px">Vale</span><span style="margin-left:auto">${cat('idle', 60)}</span></div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:18px">
+    ${ux('Kenapa terasa "perempuan" tanpa jadi ramai', ['<b>Bulu mata</b>: dua garis kecil di sudut luar tiap mata, ikut di semua ekspresi.', '<b>Kilau di mata</b>: titik krem kecil membuat mata terlihat lembut.', '<b>Pita plum</b>: warna plum sudah ada di palet Studio, jadi tidak keluar dari tema.', '<b>Kepala lebih bulat</b> (sudut 20, sebelumnya 18), telinga sedikit lebih kecil.'])}
+    ${ux('Catatan', ['Di 20 px pita masih terlihat sebagai titik plum di telinga; bulu mata mulai samar tapi bentuknya tetap terbaca.', 'Logo bisa tetap "tile bertelinga", atau ikut diberi pita kecil di telinga kanan.', 'Nama maskot: <b>Oyen</b>, atau yang terdengar lebih perempuan: <b>Mimi</b>, <b>Luna</b>, <b>Kiki</b>.'])}</div>
+  ${F('Vale')}</section>`;
+
+document.getElementById('doc').innerHTML = p1 + p2 + p3 + p4;
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

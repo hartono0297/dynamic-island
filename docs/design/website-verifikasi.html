@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Website Verifikasi Google</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713; --term: #0F0C0A;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --red: #FF8A73;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+    /* header font for every mock-up (the recommended option B) */
+    --hf: 'DM Sans', sans-serif; --hw: 600; --hs: normal; --hls: -.02em;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--hf); font-weight: 700; font-size: 28px; letter-spacing: -.02em; margin: 2px 0 12px; display: flex; align-items: center; gap: 12px; }
+  h1 .no { width: 34px; height: 34px; border-radius: 11px; background: var(--a); color: #FFFBF5; font-size: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  .ux li { list-style: none; position: relative; padding-left: 13px; font-size: 11px; line-height: 1.5; margin-bottom: 4px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 6.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .ux h3 { font-family: var(--hf); font-weight: 700; font-size: 15px; margin-bottom: 6px; letter-spacing: -.01em; }
+  code { font-family: var(--mono); font-size: 10px; background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  .opt { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 11px 13px; position: relative; }
+  .opt.rec { border: 2px solid var(--a); }
+  .opt .tag { position: absolute; top: -9px; right: 12px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 2px 8px; border-radius: 99px; }
+  .opt b { font-size: 12.5px; display: block; margin-bottom: 3px; }
+  .opt p { font-size: 10.8px; line-height: 1.45; color: #4A3D33; }
+  .opt .pc { font-size: 10px; color: var(--ink2); margin-top: 5px; line-height: 1.4; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* screens */
+  .scr { border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .scr.gray { background: linear-gradient(115deg, #3a3a3a, #6b6b6b); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx); border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 6px; height: 34px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; overflow: hidden; }
+  .nt.big { height: auto; min-height: 60px; border-radius: 24px; padding: 10px 12px; gap: 10px; align-items: center; }
+  .nt .t1 { font-size: 12.5px; font-weight: 600; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .lyr { font-family: var(--hf); font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  .fade { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); overflow: hidden; }
+  .act { font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--tx); white-space: nowrap; }
+  .act.pri { background: var(--a); color: var(--ai); font-weight: 600; }
+  .act.dng { background: rgba(255,138,115,.14); color: var(--red); }
+  .ruler { position: absolute; top: 50px; height: 14px; border-left: 1px solid rgba(255,255,255,.7); border-right: 1px solid rgba(255,255,255,.7); font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; }
+  .ruler::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; border-top: 1px dashed rgba(255,255,255,.7); }
+  .ruler span { background: rgba(0,0,0,.45); padding: 0 5px; border-radius: 4px; position: relative; }
+
+  /* panel */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--tx); border-radius: 0 0 30px 30px; position: relative; padding: 16px 20px 28px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 10px; gap: 8px; }
+  .ttl { font-family: var(--hf); font-weight: var(--hw); font-style: var(--hs); letter-spacing: var(--hls); font-size: 20px; white-space: nowrap; }
+  .hchip { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--tx2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .hchip.mono { font-family: var(--mono); }
+  .hchip.acc { background: rgba(226,104,60,.15); color: var(--a); }
+  .hchip.sage { background: rgba(157,181,154,.15); color: var(--sage); }
+  .hchip svg { width: 12px; height: 12px; }
+  .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); }
+  .term { background: var(--term); border-radius: 16px; height: 214px; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.62; color: #E6DED3; overflow: hidden; }
+  .term .out { padding: 10px 14px 0; height: 170px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .term .p { color: var(--a); } .term .m { color: var(--tx2); } .term .g { color: var(--sage); }
+  .term .inp { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid #221B16; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--a); vertical-align: -3px; }
+  .menu { position: absolute; right: 54px; top: 44px; width: 300px; background: #241D18; border: 1px solid #332A23; border-radius: 14px; padding: 6px; box-shadow: 0 14px 30px rgba(0,0,0,.45); z-index: 2; font-size: 11px; }
+  .menu .hd { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); padding: 6px 8px 4px; }
+  .menu div.it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+  .menu div.it.on { background: rgba(226,104,60,.16); }
+  .menu div.it span { font-family: var(--mono); font-size: 10.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu div.it small { font-size: 9.5px; color: var(--tx2); white-space: nowrap; }
+  .menu svg { width: 13px; height: 13px; color: var(--tx2); flex: none; }
+
+  /* system page */
+  .sys { display: grid; grid-template-columns: 170px 1fr; gap: 18px; height: 222px; }
+  .ringw { position: relative; width: 150px; height: 150px; margin: 4px auto 0; }
+  .ringw .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ringw b { font-size: 30px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ringw small { font-size: 10px; color: var(--tx2); letter-spacing: .1em; text-transform: uppercase; }
+  .spark { margin-top: 10px; }
+  .meter { margin-bottom: 11px; }
+  .meter .hd { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 5px; }
+  .meter .hd b { font-weight: 600; }
+  .meter .hd span { color: var(--tx2); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .bar { height: 7px; border-radius: 7px; background: var(--t); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 7px; }
+  .warn { color: var(--ochre) !important; }
+  .procs { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 12px; font-size: 10.5px; margin-top: 4px; }
+  .procs span:nth-child(3n+2), .procs span:nth-child(3n) { color: var(--tx2); text-align: right; font-variant-numeric: tabular-nums; }
+  .cbtn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 6px 12px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 600; }
+  .cbtn.ghost { background: var(--r); color: var(--tx); font-weight: 500; }
+  .cbtn svg { width: 13px; height: 13px; }
+
+  /* cleanup list */
+  .cl { display: grid; gap: 1px; }
+  .cl .row { display: grid; grid-template-columns: 18px 22px 1fr auto; align-items: center; gap: 9px; padding: 3px 8px; border-radius: 10px; font-size: 11.5px; }
+  .cl .row:nth-child(odd) { background: rgba(244,237,228,.03); }
+  .cl .row small { display: block; color: var(--tx2); font-size: 9.5px; }
+  .cl .row .csz { font-variant-numeric: tabular-nums; color: var(--tx); font-weight: 600; font-size: 11.5px; }
+  .ck { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--tx2); display: flex; align-items: center; justify-content: center; }
+  .ck.on { background: var(--a); border-color: var(--a); }
+  .ck.on::after { content: ""; width: 7px; height: 4px; border-left: 2px solid #17120F; border-bottom: 2px solid #17120F; transform: rotate(-45deg) translate(1px, -1px); }
+  .cl .ic { color: var(--tx2); }
+  .cl .ic svg { width: 17px; height: 17px; }
+  .lock { font-size: 9px; padding: 1px 6px; border-radius: 99px; background: rgba(217,164,65,.15); color: var(--ochre); margin-left: 6px; }
+
+  /* clipboard */
+  .search { display: flex; align-items: center; gap: 8px; background: var(--r); border-radius: 12px; padding: 7px 11px; font-size: 11.5px; color: var(--tx2); flex: 1; }
+  .search svg { width: 14px; height: 14px; }
+  .clips { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+  .clip { background: var(--r); border-radius: 13px; padding: 8px 10px; height: 64px; position: relative; overflow: hidden; font-size: 11px; display: flex; flex-direction: column; }
+  .clip .k { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--tx2); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .clip .k svg { width: 11px; height: 11px; }
+  .clip .v { line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .clip.sel { box-shadow: inset 0 0 0 1.5px var(--a); }
+  .clip .pin { position: absolute; right: 8px; top: 7px; color: var(--a); }
+  .clip .pin svg { width: 12px; height: 12px; }
+  .clip.img { padding: 0; flex-direction: row; }
+  .clip.img .th { width: 92px; height: 100%; background: linear-gradient(160deg, #E2683C, #5A2A1C); flex: none; position: relative; }
+  .clip.img .th::after { content: ""; position: absolute; left: 14px; right: 14px; top: 14px; bottom: 14px; border: 1.5px solid rgba(244,237,228,.55); border-radius: 4px; }
+  .clip.img .meta { padding: 8px 10px; }
+  .sw { width: 18px; height: 18px; border-radius: 6px; display: inline-block; vertical-align: -4px; margin-right: 6px; }
+
+  /* screenshot preview */
+  .shot { width: 170px; height: 100px; border-radius: 12px; flex: none; position: relative; overflow: hidden;
+          background: linear-gradient(180deg, #2B221C 0 18%, #F4EEE6 18% 100%); border: 1px solid #3A2F27; }
+  .shot::before { content: ""; position: absolute; left: 10px; top: 26px; width: 70px; height: 8px; border-radius: 3px; background: #C9542B; }
+  .shot::after { content: ""; position: absolute; left: 10px; top: 42px; right: 14px; height: 46px; border-radius: 6px; background: repeating-linear-gradient(180deg, #E6DCCF 0 6px, transparent 6px 12px); }
+  .shot.lg { width: 230px; height: 136px; }
+
+  .robot { flex: none; }
+  .note { font-size: 10.5px; color: var(--ink2); margin-top: 5px; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  th { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .sz { font-size: 9.5px; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; white-space: nowrap; }
+  .sz.l { background: rgba(226,104,60,.18); color: #A8431F; }
+
+  .browser { border-radius: 12px; overflow: hidden; border: 1px solid var(--rule); box-shadow: 0 14px 30px rgba(34,26,20,.16); background: #fff; flex: none; }
+  .browser .bar { height: 26px; background: #EDE5DA; display: flex; align-items: center; gap: 5px; padding: 0 9px; }
+  .browser .bar i { width: 7px; height: 7px; border-radius: 50%; background: #CDBFAF; display: block; }
+  .browser .bar span { margin-left: 8px; flex: 1; background: #FBF7F1; border-radius: 6px; font-size: 9px; color: var(--ink2); padding: 2px 8px; font-family: var(--mono); }
+  .shotbg { background-repeat: no-repeat; background-position: top center; background-size: 100% auto; }
+  .phone { width: 300px; height: 640px; border-radius: 36px; background: #17120F; padding: 10px; flex: none; box-shadow: 0 14px 30px rgba(34,26,20,.22); }
+  .phone .scrn { width: 280px; height: 620px; border-radius: 28px; overflow: hidden; position: relative; background: #fff; }
+  .phone iframe { width: 390px; height: 864px; border: 0; transform: scale(.718); transform-origin: 0 0; }
+  .row3 { display: flex; gap: 22px; align-items: flex-start; }
+  .chk { display: grid; grid-template-columns: 22px 1fr; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--rule); font-size: 11.5px; line-height: 1.45; }
+  .chk i { width: 20px; height: 20px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-style: normal; font-weight: 700; font-size: 11px; }
+  .chk i.ok { background: rgba(157,181,154,.3); color: #3F5A3C; }
+  .chk i.todo { background: #FFF3C4; color: #8A5F12; }
+  .chk small { display: block; color: var(--ink2); font-size: 10px; }
+  .map { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .map .pg { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 10px; }
+  .map .pg .t { font-weight: 700; font-size: 13px; margin: 8px 2px 2px; }
+  .map .pg .u { font-family: var(--mono); font-size: 9.5px; color: var(--ink2); margin: 0 2px; }
+  .map .pg p { font-size: 10.5px; color: #4A3D33; margin: 4px 2px 0; line-height: 1.45; }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+
+const P = (d, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const I = {
+  folder: P('<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'),
+  star: P('<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  search: P('<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>'),
+  pin: P('<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>'),
+  link: P('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>'),
+  text: P('<path d="M5 6h14M5 11h14M5 16h9"/>'),
+  code: P('<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>'),
+  image: P('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>'),
+  color: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>'),
+  trash: P('<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13z"/>'),
+  temp: P('<path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/>'),
+  globe: P('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3.3 3 13.7 0 17M12 3.5c-3 3.3-3 13.7 0 17"/>'),
+  box: P('<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>'),
+  win: P('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>'),
+  dl: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  img2: P('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M8 12l2.5 2.5L16 9"/>'),
+  sparkle: P('<path d="M12 4l1.8 6.2L20 12l-6.2 1.8L12 20l-1.8-6.2L4 12l6.2-1.8z"/>'),
+  copy: P('<rect x="8" y="8" width="11" height="11" rx="2.5"/><path d="M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"/>'),
+  save: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  edit: P('<path d="M4 20h4l11-11-4-4L4 16z"/>'),
+  check: P('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2),
+};
+
+function robot(expr = 'idle', size = 26) {
+  const T = '#E2683C', D = '#17120F', C = '#F4EDE4', L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const note = `<path d="M57 9v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/><circle cx="55.4" cy="9" r="1.9" fill="${C}"/><circle cx="60.4" cy="7.5" r="1.9" fill="${C}"/>`;
+  const E = {
+    idle: eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3), happy,
+    sing: happy + `<ellipse cx="32" cy="${Y + 6.5}" rx="2.6" ry="2" fill="${C}"/>` + note,
+    alert: `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`,
+    think: eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
+    sad: eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8),
+  }[expr];
+  return `<svg class="robot" width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/><rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>${E}</svg>`;
+}
+const ring = (p, size, sw, color = 'var(--a)') => { const r = (size - sw) / 2 - 1, c = 2 * Math.PI * r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--t)" stroke-width="${sw}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`; };
+const dots = (on, n = 9) => `<div class="dots">${Array.from({ length: n }, (_, i) => `<i class="${i === on ? 'on' : ''}"></i>`).join('')}</div>`;
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Brainstorm v3.1</span><span>${r}</span></div>`;
+const ux = (t, items) => `<div class="ux">${t ? `<h3>${t}</h3>` : ''}<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+const opt = (k, t, p, pc, rec) => `<div class="opt${rec ? ' rec' : ''}">${rec ? '<span class="tag">Saran</span>' : ''}<b>${k} · ${t}</b><p>${p}</p>${pc ? `<div class="pc">${pc}</div>` : ''}</div>`;
+
+
+const F = (r) => folio(r).replace('Brainstorm v3.1', 'Website verifikasi Google');
+const IMG = 'img/site/';
+// content heights of the desktop shots at 1280 px wide
+const H = { index: 2150, privacy: 1740, terms: 1180 };
+const desk = (name, w, url) => `<div class="browser" style="width:${w}px"><div class="bar"><i></i><i></i><i></i><span>${url}</span></div>
+  <div class="shotbg" style="width:${w}px;height:${Math.round(w * H[name] / 1280)}px;background-image:url('${IMG}${name}-d.png')"></div></div>`;
+const phone = (file) => `<div class="phone"><div class="scrn"><iframe src="../../site/${file}" scrolling="no" title="${file}"></iframe></div></div>`;
+const chk = (s, t, d) => `<div class="chk"><i class="${s}">${s === 'ok' ? '✓' : '!'}</i><div>${t}${d ? `<small>${d}</small>` : ''}</div></div>`;
+const DOM = 'hartono0297.github.io/dynamic-island';
+
+const p1 = `<section class="page"><div class="eyebrow">Website untuk verifikasi Google · 1/4</div><h1><span class="no">W</span>Tiga halaman, satu tujuan</h1>
+  <div style="display:grid;grid-template-columns:1fr 360px;gap:26px">
+    <div><div class="map">
+      <div class="pg"><div class="shotbg" style="height:150px;border-radius:8px;background-image:url('${IMG}index-d.png')"></div><div class="t">Beranda</div><div class="u">/index.html</div><p>Penjelasan app, fitur, cara app memakai Google Calendar, tombol download, tautan privasi & ketentuan, kontak.</p></div>
+      <div class="pg"><div class="shotbg" style="height:150px;border-radius:8px;background-image:url('${IMG}privacy-d.png')"></div><div class="t">Kebijakan privasi</div><div class="u">/privacy.html</div><p>Data Google apa yang diakses, untuk apa, di mana disimpan, tidak dibagikan, cara menghapus, pernyataan Limited Use.</p></div>
+      <div class="pg"><div class="shotbg" style="height:150px;border-radius:8px;background-image:url('${IMG}terms-d.png')"></div><div class="t">Ketentuan layanan</div><div class="u">/terms.html</div><p>Syarat pemakaian, akun Google, tanpa garansi, batas tanggung jawab, kontak.</p></div></div>
+      <div class="opt" style="margin-top:14px"><b>Bahasa Inggris, gaya Studio</b><p>Halaman ditulis dalam bahasa Inggris karena tim verifikasi Google membacanya. Warna, font (DM Sans, tegak) dan logo Bata sama dengan app. File sudah ada di folder <code>site/</code> repo, belum dipasang di mana pun.</p></div></div>
+    <div><div class="lbl">Syarat Google vs isi website</div>
+      ${chk('ok', 'Beranda menjelaskan fungsi app', 'Hero + 6 fitur + bagian "How Dynamic Island uses Google Calendar"')}
+      ${chk('ok', 'Tautan ke kebijakan privasi & ketentuan di beranda', 'Di menu atas dan footer')}
+      ${chk('ok', 'Privasi: data apa, dipakai untuk apa, dibagikan ke siapa, cara menghapus', 'Sesuai perilaku app: token DPAPI, cache lokal, tanpa server, tidak pernah menghapus acara')}
+      ${chk('ok', 'Pernyataan Google API Services User Data Policy / Limited Use', 'Kotak bergaris terakota di halaman privasi')}
+      ${chk('ok', 'Nama & logo sama dengan layar izin Google', '"Dynamic Island", logo Bata')}
+      ${chk('todo', 'Email kontak', 'Masih [support email]; isi dengan email yang kamu pantau')}
+      ${chk('todo', 'Tanggal berlaku', 'Isi saat dipasang')}
+      ${chk('todo', 'Lisensi kode', 'Repo belum punya file LICENSE; pilih (mis. MIT) lalu tulis di Ketentuan')}
+      ${chk('todo', 'Domain yang bisa diverifikasi', 'Lihat halaman 4')}</div></div>
+  ${F('Ringkasan')}</section>`;
+
+const page = (n, title, name, file, w, notes) => `<section class="page"><div class="eyebrow">Website untuk verifikasi Google · ${n}/4</div><h1><span class="no">W</span>${title}</h1>
+  <div class="row3">${desk(name, w, DOM + '/' + file)}${phone(file)}<div style="flex:1">${notes}</div></div>
+  ${F(title)}</section>`;
+
+const p2 = page(2, 'Beranda', 'index', 'index.html', 370, `<div class="lbl">Desktop · seluruh halaman</div><div class="lbl" style="margin-top:-2px;color:var(--ink2);font-weight:400;text-transform:none;letter-spacing:0">Kiri: 1280 px diperkecil. Tengah: ponsel 390 px (layar pertama).</div>
+  ${ux('Isi', ['<b>Hero</b>: judul, deskripsi, Download (GitHub Releases), Source code, perintah PowerShell.', '<b>Fitur</b>: 6 kartu memakai screenshot app asli.', '<b>Google Calendar</b>: 4 langkah yang terjadi saat terhubung + 2 izin yang diminta + cara mencabut akses.', '<b>Footer</b>: Privasi, Ketentuan, Kontak, "tidak berafiliasi dengan Google atau Apple".'])}
+  <div class="opt" style="margin-top:10px"><b>Catatan</b><p>Screenshot fitur masih versi 3.0 (judul italic). Setelah rencana v3.1 jalan, ganti dengan screenshot baru.</p></div>`);
+
+const p3 = page(3, 'Kebijakan privasi', 'privacy', 'privacy.html', 430, `${ux('Bagian', ['<b>Google user data</b>: tabel 2 izin dan pemakaiannya; penyimpanan (DPAPI, cache lokal), berbagi (tidak ada), pemakaian (tidak untuk iklan atau AI).', '<b>Limited Use</b>: kalimat wajib dari Google.', '<b>Data lain di PC</b>: notifikasi & media tetap lokal; lirik (mati bawaan) ke lrclib.net.', '<b>Menghapus data</b>: Putuskan, cabut akses Google, hapus folder data.', '<b>Anak-anak, Perubahan, Kontak</b>.'])}
+  <div class="opt" style="margin-top:10px"><b>Perlu diperbarui nanti</b><p>Saat fitur v3.1 masuk (riwayat Clipboard, preview Screenshot, deep clean, Mole), tambahkan paragraf: semuanya tetap lokal, dan mode Mole menjalankan program Mole di PC.</p></div>`);
+
+const p4 = `<section class="page"><div class="eyebrow">Website untuk verifikasi Google · 4/4</div><h1><span class="no">W</span>Ketentuan, lalu di mana dipasang</h1>
+  <div class="row3">${desk('terms', 520, DOM + '/terms.html')}
+    <div style="flex:1">
+      <div class="lbl">Di mana dipasang (domain)</div>
+      <table><tr><th></th><th>GitHub Pages</th><th>Domain sendiri</th></tr>
+        <tr><td><b>Alamat</b></td><td><code>hartono0297.github.io</code></td><td>mis. <code>dynamicisland.app</code></td></tr>
+        <tr><td><b>Biaya</b></td><td>Gratis</td><td>± Rp 150–400 rb / tahun</td></tr>
+        <tr><td><b>Verifikasi Search Console</b></td><td>Lewat file HTML di akar situs. Butuh repo <code>hartono0297.github.io</code> (situs utama), karena halaman proyek <code>/dynamic-island</code> tidak bisa menaruh file di akar.</td><td>Lewat DNS, paling pasti</td></tr>
+        <tr><td><b>Diterima Google</b></td><td>Biasanya ya (github.io ada di Public Suffix List), tapi tidak dijamin</td><td>Ya</td></tr></table>
+      <div class="lbl" style="margin-top:14px">Urutannya</div>
+      ${ux('', ['Isi 4 bagian kuning (email, tanggal, lisensi, domain).', 'Pilih tempat: repo situs utama di GitHub Pages, atau domain sendiri.', 'Pasang folder <code>site/</code> di sana.', 'Verifikasi domain di Google Search Console dengan akun pemilik project Google.', 'Masukkan URL beranda, privasi dan ketentuan di Google Auth Platform → Branding.'])}
+    </div></div>
+  ${F('Ketentuan & domain')}</section>`;
+
+document.getElementById('doc').innerHTML = p1 + p2 + p3 + p4;
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

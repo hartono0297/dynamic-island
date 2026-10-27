@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Vector source of the Dynamic Island logo, "Bata": a terracotta tile with
+       an espresso island and a cream camera dot. These are fixed brand colours,
+       independent of the user's accent. scripts/make-icon.ps1 draws the same
+       shapes (tile corners: 70 px span, control points 0.76 of it) and
+       src/ui/settings_controls.rs draws them in the settings window. -->
+  <path d="M82 12 H174 C227.2 12 244 28.8 244 82 V174 C244 227.2 227.2 244 174 244 H82 C28.8 244 12 227.2 12 174 V82 C12 28.8 28.8 12 82 12 Z" fill="#E2683C"/>
+  <rect x="58" y="104" width="140" height="48" rx="24" fill="#17120F"/>
+  <circle cx="174" cy="128" r="9.5" fill="#F4EDE4"/>
+</svg>

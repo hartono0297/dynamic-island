@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login Google Calendar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --rh: #3A2F27; --t: #332A23; --col: #1D1713; --term: #0F0C0A;
+    --tx: #F4EDE4; --tx2: #A89A8B; --dot: #4A3E35;
+    --a: #E2683C; --ai: #17120F; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --red: #FF8A73;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+    /* header font for every mock-up (the recommended option B) */
+    --hf: 'DM Sans', sans-serif; --hw: 600; --hs: normal; --hls: -.02em;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 30px 40px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 40px; right: 40px; bottom: 16px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-family: var(--hf); font-weight: 700; font-size: 28px; letter-spacing: -.02em; margin: 2px 0 12px; display: flex; align-items: center; gap: 12px; }
+  h1 .no { width: 34px; height: 34px; border-radius: 11px; background: var(--a); color: #FFFBF5; font-size: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  .ux li { list-style: none; position: relative; padding-left: 13px; font-size: 11px; line-height: 1.5; margin-bottom: 4px; color: #3E3229; }
+  .ux li::before { content: ""; position: absolute; left: 0; top: 6.5px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .ux h3 { font-family: var(--hf); font-weight: 700; font-size: 15px; margin-bottom: 6px; letter-spacing: -.01em; }
+  code { font-family: var(--mono); font-size: 10px; background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  .opt { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 11px 13px; position: relative; }
+  .opt.rec { border: 2px solid var(--a); }
+  .opt .tag { position: absolute; top: -9px; right: 12px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--a); color: #FFFBF5; padding: 2px 8px; border-radius: 99px; }
+  .opt b { font-size: 12.5px; display: block; margin-bottom: 3px; }
+  .opt p { font-size: 10.8px; line-height: 1.45; color: #4A3D33; }
+  .opt .pc { font-size: 10px; color: var(--ink2); margin-top: 5px; line-height: 1.4; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* screens */
+  .scr { border-radius: 14px; position: relative; overflow: hidden; background: linear-gradient(115deg, #6B4A36 0%, #A97B57 50%, #E0C4A0 100%); }
+  .scr.alt { background: linear-gradient(115deg, #2F3B36 0%, #5E7A6C 55%, #B9C8B5 100%); }
+  .scr.gray { background: linear-gradient(115deg, #3a3a3a, #6b6b6b); }
+  .nt { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: var(--s); color: var(--tx); border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 6px; height: 34px; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.3); font-size: 12px; overflow: hidden; }
+  .nt.big { height: auto; min-height: 60px; border-radius: 24px; padding: 10px 12px; gap: 10px; align-items: center; }
+  .nt .t1 { font-size: 12.5px; font-weight: 600; }
+  .nt .t2 { font-size: 10.5px; color: var(--tx2); }
+  .lyr { font-family: var(--hf); font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  .fade { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); overflow: hidden; }
+  .act { font-size: 10.5px; padding: 5px 11px; border-radius: 99px; background: var(--r); color: var(--tx); white-space: nowrap; }
+  .act.pri { background: var(--a); color: var(--ai); font-weight: 600; }
+  .act.dng { background: rgba(255,138,115,.14); color: var(--red); }
+  .ruler { position: absolute; top: 50px; height: 14px; border-left: 1px solid rgba(255,255,255,.7); border-right: 1px solid rgba(255,255,255,.7); font-size: 9px; color: #fff; display: flex; align-items: center; justify-content: center; }
+  .ruler::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; border-top: 1px dashed rgba(255,255,255,.7); }
+  .ruler span { background: rgba(0,0,0,.45); padding: 0 5px; border-radius: 4px; position: relative; }
+
+  /* panel */
+  .panel { width: 560px; height: 290px; background: var(--s); color: var(--tx); border-radius: 0 0 30px 30px; position: relative; padding: 16px 20px 28px; box-shadow: 0 14px 30px rgba(34,26,20,.22); overflow: hidden; }
+  .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 10px; gap: 8px; }
+  .ttl { font-family: var(--hf); font-weight: var(--hw); font-style: var(--hs); letter-spacing: var(--hls); font-size: 20px; white-space: nowrap; }
+  .hchip { font-size: 10.5px; padding: 3px 9px; border-radius: 99px; background: var(--r); color: var(--tx2); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .hchip.mono { font-family: var(--mono); }
+  .hchip.acc { background: rgba(226,104,60,.15); color: var(--a); }
+  .hchip.sage { background: rgba(157,181,154,.15); color: var(--sage); }
+  .hchip svg { width: 12px; height: 12px; }
+  .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--dot); display: block; }
+  .dots i.on { background: var(--a); }
+  .term { background: var(--term); border-radius: 16px; height: 214px; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.62; color: #E6DED3; overflow: hidden; }
+  .term .out { padding: 10px 14px 0; height: 170px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .term .p { color: var(--a); } .term .m { color: var(--tx2); } .term .g { color: var(--sage); }
+  .term .inp { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid #221B16; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--a); vertical-align: -3px; }
+  .menu { position: absolute; right: 54px; top: 44px; width: 300px; background: #241D18; border: 1px solid #332A23; border-radius: 14px; padding: 6px; box-shadow: 0 14px 30px rgba(0,0,0,.45); z-index: 2; font-size: 11px; }
+  .menu .hd { font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--tx2); padding: 6px 8px 4px; }
+  .menu div.it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+  .menu div.it.on { background: rgba(226,104,60,.16); }
+  .menu div.it span { font-family: var(--mono); font-size: 10.5px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu div.it small { font-size: 9.5px; color: var(--tx2); white-space: nowrap; }
+  .menu svg { width: 13px; height: 13px; color: var(--tx2); flex: none; }
+
+  /* system page */
+  .sys { display: grid; grid-template-columns: 170px 1fr; gap: 18px; height: 222px; }
+  .ringw { position: relative; width: 150px; height: 150px; margin: 4px auto 0; }
+  .ringw .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ringw b { font-size: 30px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .ringw small { font-size: 10px; color: var(--tx2); letter-spacing: .1em; text-transform: uppercase; }
+  .spark { margin-top: 10px; }
+  .meter { margin-bottom: 11px; }
+  .meter .hd { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 5px; }
+  .meter .hd b { font-weight: 600; }
+  .meter .hd span { color: var(--tx2); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .bar { height: 7px; border-radius: 7px; background: var(--t); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 7px; }
+  .warn { color: var(--ochre) !important; }
+  .procs { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 12px; font-size: 10.5px; margin-top: 4px; }
+  .procs span:nth-child(3n+2), .procs span:nth-child(3n) { color: var(--tx2); text-align: right; font-variant-numeric: tabular-nums; }
+  .cbtn { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 6px 12px; border-radius: 99px; background: var(--a); color: var(--ai); font-weight: 600; }
+  .cbtn.ghost { background: var(--r); color: var(--tx); font-weight: 500; }
+  .cbtn svg { width: 13px; height: 13px; }
+
+  /* cleanup list */
+  .cl { display: grid; gap: 1px; }
+  .cl .row { display: grid; grid-template-columns: 18px 22px 1fr auto; align-items: center; gap: 9px; padding: 3px 8px; border-radius: 10px; font-size: 11.5px; }
+  .cl .row:nth-child(odd) { background: rgba(244,237,228,.03); }
+  .cl .row small { display: block; color: var(--tx2); font-size: 9.5px; }
+  .cl .row .csz { font-variant-numeric: tabular-nums; color: var(--tx); font-weight: 600; font-size: 11.5px; }
+  .ck { width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--tx2); display: flex; align-items: center; justify-content: center; }
+  .ck.on { background: var(--a); border-color: var(--a); }
+  .ck.on::after { content: ""; width: 7px; height: 4px; border-left: 2px solid #17120F; border-bottom: 2px solid #17120F; transform: rotate(-45deg) translate(1px, -1px); }
+  .cl .ic { color: var(--tx2); }
+  .cl .ic svg { width: 17px; height: 17px; }
+  .lock { font-size: 9px; padding: 1px 6px; border-radius: 99px; background: rgba(217,164,65,.15); color: var(--ochre); margin-left: 6px; }
+
+  /* clipboard */
+  .search { display: flex; align-items: center; gap: 8px; background: var(--r); border-radius: 12px; padding: 7px 11px; font-size: 11.5px; color: var(--tx2); flex: 1; }
+  .search svg { width: 14px; height: 14px; }
+  .clips { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 9px; }
+  .clip { background: var(--r); border-radius: 13px; padding: 8px 10px; height: 64px; position: relative; overflow: hidden; font-size: 11px; display: flex; flex-direction: column; }
+  .clip .k { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--tx2); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .clip .k svg { width: 11px; height: 11px; }
+  .clip .v { line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .clip.sel { box-shadow: inset 0 0 0 1.5px var(--a); }
+  .clip .pin { position: absolute; right: 8px; top: 7px; color: var(--a); }
+  .clip .pin svg { width: 12px; height: 12px; }
+  .clip.img { padding: 0; flex-direction: row; }
+  .clip.img .th { width: 92px; height: 100%; background: linear-gradient(160deg, #E2683C, #5A2A1C); flex: none; position: relative; }
+  .clip.img .th::after { content: ""; position: absolute; left: 14px; right: 14px; top: 14px; bottom: 14px; border: 1.5px solid rgba(244,237,228,.55); border-radius: 4px; }
+  .clip.img .meta { padding: 8px 10px; }
+  .sw { width: 18px; height: 18px; border-radius: 6px; display: inline-block; vertical-align: -4px; margin-right: 6px; }
+
+  /* screenshot preview */
+  .shot { width: 170px; height: 100px; border-radius: 12px; flex: none; position: relative; overflow: hidden;
+          background: linear-gradient(180deg, #2B221C 0 18%, #F4EEE6 18% 100%); border: 1px solid #3A2F27; }
+  .shot::before { content: ""; position: absolute; left: 10px; top: 26px; width: 70px; height: 8px; border-radius: 3px; background: #C9542B; }
+  .shot::after { content: ""; position: absolute; left: 10px; top: 42px; right: 14px; height: 46px; border-radius: 6px; background: repeating-linear-gradient(180deg, #E6DCCF 0 6px, transparent 6px 12px); }
+  .shot.lg { width: 230px; height: 136px; }
+
+  .robot { flex: none; }
+  .note { font-size: 10.5px; color: var(--ink2); margin-top: 5px; line-height: 1.45; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.45; }
+  th { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); font-weight: 600; }
+  .sz { font-size: 9.5px; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; white-space: nowrap; }
+  .sz.l { background: rgba(226,104,60,.18); color: #A8431F; }
+
+  .flow { display: grid; gap: 7px; }
+  .fs { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: center; background: var(--card); border: 1px solid var(--rule); border-radius: 12px; padding: 8px 11px; font-size: 11.5px; }
+  .fs i { width: 24px; height: 24px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-style: normal; font-weight: 700; font-size: 11px; background: #E6DCCF; color: var(--ink2); }
+  .fs small { display: block; color: var(--ink2); font-size: 10px; }
+  .fs.bad i { background: rgba(196,43,28,.12); color: #A3291B; }
+  .fs.good i { background: var(--a); color: #FFFBF5; }
+  .big { font-size: 40px; font-weight: 700; letter-spacing: -.03em; }
+  .colh { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .colh b { font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
+  .win { background: #F4EEE6; border: 1px solid rgba(34,26,20,.10); border-radius: 14px; overflow: hidden; box-shadow: 0 12px 28px rgba(34,26,20,.14); }
+  .win .wt { font-weight: 700; font-size: 16px; letter-spacing: -.02em; padding: 12px 14px 8px; }
+  .wcard { background: #FFFBF5; border: 1px solid rgba(34,26,20,.10); border-radius: 12px; margin: 0 12px 12px; padding: 10px 12px; display: grid; gap: 7px; }
+  .field { background: #fff; border: 1px solid rgba(34,26,20,.12); border-radius: 9px; padding: 6px 9px; font-size: 10.5px; color: var(--ink2); font-family: var(--mono); }
+  .wbtn { font-size: 10.5px; padding: 5px 12px; border-radius: 99px; background: #EFE6DA; display: inline-block; }
+  .wbtn.pri { background: #C9542B; color: #FFFBF5; font-weight: 600; }
+  .gbtn { display: flex; align-items: center; justify-content: center; gap: 9px; background: #fff; border: 1px solid rgba(34,26,20,.18); border-radius: 99px; padding: 9px 14px; font-size: 12px; font-weight: 600; }
+  .gdot { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(#4285F4 0 25%, #34A853 0 50%, #FBBC05 0 75%, #EA4335 0); position: relative; }
+  .gdot::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #fff; }
+  /* diagram */
+  .dg { display: grid; align-items: center; gap: 10px; }
+  .node { border-radius: 14px; padding: 10px 12px; font-size: 11px; text-align: center; line-height: 1.35; }
+  .node b { display: block; font-size: 12px; margin-bottom: 2px; }
+  .node.user { background: #FBF7F1; border: 1px solid var(--rule); }
+  .node.proj { background: #FFF3EC; border: 1.5px dashed var(--a); }
+  .node.goog { background: #EEF3FB; border: 1px solid #C9D7EE; }
+  .node.app { background: var(--s); color: var(--tx); }
+  .arr { text-align: center; color: var(--ink2); font-size: 16px; }
+  /* consent mockups (illustration) */
+  .scr4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .cs { background: #fff; border: 1px solid #DADCE0; border-radius: 12px; padding: 14px 14px 12px; height: 300px; display: flex; flex-direction: column; font-family: Arial, sans-serif; color: #202124; position: relative; }
+  .cs .gh { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #5f6368; margin-bottom: 10px; }
+  .cs h5 { font-size: 15px; font-weight: 400; margin-bottom: 8px; line-height: 1.3; }
+  .cs p { font-size: 10px; line-height: 1.45; color: #3c4043; margin-bottom: 6px; }
+  .cs .acc { display: flex; align-items: center; gap: 7px; font-size: 10px; border: 1px solid #DADCE0; border-radius: 99px; padding: 3px 9px 3px 3px; width: max-content; margin-bottom: 8px; }
+  .cs .av { width: 18px; height: 18px; border-radius: 50%; background: #B07A9A; color: #fff; font-size: 9px; display: flex; align-items: center; justify-content: center; }
+  .cs .warn { background: #FCE8E6; color: #A50E0E; border-radius: 8px; padding: 8px; font-size: 10px; line-height: 1.4; margin-bottom: 8px; }
+  .cs .test { background: #FEF7E0; color: #7A5B00; border-radius: 8px; padding: 8px; font-size: 10px; line-height: 1.4; margin-bottom: 8px; }
+  .cs .sc { font-size: 10px; display: flex; gap: 6px; align-items: flex-start; margin-bottom: 5px; color: #3c4043; }
+  .cs .sc::before { content: "☑"; color: #1a73e8; }
+  .cs .bt { margin-top: auto; display: flex; justify-content: flex-end; gap: 8px; }
+  .cs .bt span { font-size: 10.5px; padding: 6px 12px; border-radius: 6px; }
+  .cs .bt .b1 { color: #1a73e8; }
+  .cs .bt .b2 { background: #1a73e8; color: #fff; }
+  .cs .lnk { color: #1a73e8; font-size: 10px; text-decoration: underline; }
+  .applogo { width: 22px; height: 22px; }
+  .cap4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 8px; }
+  .cap4 > div { font-size: 10.5px; line-height: 1.45; }
+  .cap4 b { font-size: 12.5px; display: block; margin-bottom: 3px; }
+  .pill { display: inline-block; font-size: 9.5px; font-weight: 600; padding: 2px 8px; border-radius: 99px; margin: 2px 4px 2px 0; }
+  .pill.g { background: rgba(157,181,154,.25); color: #3F5A3C; }
+  .pill.r { background: rgba(196,43,28,.12); color: #A3291B; }
+  .pill.y { background: rgba(217,164,65,.22); color: #8A5F12; }
+  /* decision tree */
+  .tree { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .q { background: var(--s); color: var(--tx); border-radius: 14px; padding: 12px 16px; text-align: center; font-weight: 600; font-size: 14px; grid-column: 1 / 3; }
+  .br { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 12px 14px; }
+  .br .h { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .br .a { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--a); margin-bottom: 4px; }
+  .who { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .who td, .who th { padding: 6px 8px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; line-height: 1.45; }
+  .who th { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink2); }
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<script>
+
+const P = (d, w = 1.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const I = {
+  folder: P('<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>'),
+  star: P('<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  search: P('<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>'),
+  pin: P('<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>'),
+  link: P('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>'),
+  text: P('<path d="M5 6h14M5 11h14M5 16h9"/>'),
+  code: P('<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>'),
+  image: P('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>'),
+  color: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17"/>'),
+  trash: P('<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13z"/>'),
+  temp: P('<path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/>'),
+  globe: P('<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 3.3 3 13.7 0 17M12 3.5c-3 3.3-3 13.7 0 17"/>'),
+  box: P('<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/>'),
+  win: P('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>'),
+  dl: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  img2: P('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M8 12l2.5 2.5L16 9"/>'),
+  sparkle: P('<path d="M12 4l1.8 6.2L20 12l-6.2 1.8L12 20l-1.8-6.2L4 12l6.2-1.8z"/>'),
+  copy: P('<rect x="8" y="8" width="11" height="11" rx="2.5"/><path d="M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"/>'),
+  save: P('<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>'),
+  edit: P('<path d="M4 20h4l11-11-4-4L4 16z"/>'),
+  check: P('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2),
+};
+
+function robot(expr = 'idle', size = 26) {
+  const T = '#E2683C', D = '#17120F', C = '#F4EDE4', L = 24.5, R = 39.5, Y = 32;
+  const eye = (x, y, w, h, r) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${r}" fill="${C}"/>`;
+  const line = (d, w = 2.6) => `<path d="${d}" fill="none" stroke="${C}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const happy = line(`M${L - 4} ${Y + 2}q4-6 8 0M${R - 4} ${Y + 2}q4-6 8 0`);
+  const note = `<path d="M57 9v-8l5-1.5v8" fill="none" stroke="${C}" stroke-width="1.6" stroke-linecap="round"/><circle cx="55.4" cy="9" r="1.9" fill="${C}"/><circle cx="60.4" cy="7.5" r="1.9" fill="${C}"/>`;
+  const E = {
+    idle: eye(L, Y, 6, 9, 3) + eye(R, Y, 6, 9, 3), happy,
+    sing: happy + `<ellipse cx="32" cy="${Y + 6.5}" rx="2.6" ry="2" fill="${C}"/>` + note,
+    alert: `<circle cx="${L}" cy="${Y}" r="4.6" fill="${C}"/><circle cx="${R}" cy="${Y}" r="4.6" fill="${C}"/>`,
+    think: eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75) + eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
+    sad: eye(L, Y + 2.5, 6, 5, 2.5) + eye(R, Y + 2.5, 6, 5, 2.5) + line(`M${L - 4} ${Y - 2}l7-2M${R + 4} ${Y - 2}l-7-2`, 1.8),
+  }[expr];
+  return `<svg class="robot" width="${size}" height="${size}" viewBox="0 0 64 64" style="overflow:visible"><rect x="6" y="9" width="52" height="46" rx="18" fill="${T}"/><rect x="12" y="21" width="40" height="22" rx="11" fill="${D}"/>${E}</svg>`;
+}
+const ring = (p, size, sw, color = 'var(--a)') => { const r = (size - sw) / 2 - 1, c = 2 * Math.PI * r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--t)" stroke-width="${sw}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c * p} ${c}"/></svg>`; };
+const dots = (on, n = 9) => `<div class="dots">${Array.from({ length: n }, (_, i) => `<i class="${i === on ? 'on' : ''}"></i>`).join('')}</div>`;
+const folio = (r) => `<div class="folio"><span>Dynamic Island · Brainstorm v3.1</span><span>${r}</span></div>`;
+const ux = (t, items) => `<div class="ux">${t ? `<h3>${t}</h3>` : ''}<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+const opt = (k, t, p, pc, rec) => `<div class="opt${rec ? ' rec' : ''}">${rec ? '<span class="tag">Saran</span>' : ''}<b>${k} · ${t}</b><p>${p}</p>${pc ? `<div class="pc">${pc}</div>` : ''}</div>`;
+
+
+const F = (r) => folio(r).replace('Brainstorm v3.1', 'Login Google Calendar');
+const SQ = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
+const logo = (s) => `<svg class="applogo" width="${s}" height="${s}" viewBox="0 0 256 256"><path d="${SQ}" fill="#E2683C"/><rect x="58" y="104" width="140" height="48" rx="24" fill="#17120F"/><circle cx="174" cy="128" r="9.5" fill="#F4EDE4"/></svg>`;
+const fs = (n, t, s, cls = '') => `<div class="fs ${cls}"><i>${n}</i><div>${t}${s ? `<small>${s}</small>` : ''}</div></div>`;
+
+// ---------- 1. now vs later ----------
+const p1 = `<section class="page"><div class="eyebrow">Login Google Calendar · 1/4</div><h1><span class="no">G</span>Sekarang vs nanti</h1>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px">
+    <div><div class="colh"><span class="big" style="color:#A3291B">8</span><b>langkah sekarang, <span style="color:#A3291B">per user</span></b></div>
+      <div class="flow">
+        ${fs(1, 'Buka Google Cloud Console, buat project', 'Situs untuk programmer, berbahasa teknis', 'bad')}
+        ${fs(2, 'Aktifkan Google Calendar API', '', 'bad')}
+        ${fs(3, 'Isi OAuth consent screen', 'Nama app, email, tipe External', 'bad')}
+        ${fs(4, 'Daftarkan email sendiri sebagai test user', '', 'bad')}
+        ${fs(5, 'Buat Client ID tipe Desktop, salin ID & secret', 'Secret kadang hanya tampil sekali', 'bad')}
+        ${fs(6, 'Tempel di Pengaturan → Integrasi → Simpan', '', 'bad')}
+        ${fs(7, 'Connect → lewati peringatan "unverified" → centang izin', '', 'bad')}
+        ${fs(8, 'Login lagi tiap 7 hari', 'Karena project masih berstatus Testing', 'bad')}
+      </div></div>
+    <div><div class="colh"><span class="big" style="color:var(--a)">3</span><b>langkah nanti</b></div>
+      <div class="flow">
+        ${fs(1, 'Klik "Masuk dengan Google" di island', 'Di Pengaturan → Integrasi, atau dari halaman Kalender', 'good')}
+        ${fs(2, 'Pilih akun Google di browser', '', 'good')}
+        ${fs(3, 'Klik "Izinkan"', 'Selesai. Login bertahan, tidak perlu ulang tiap 7 hari*', 'good')}
+      </div>
+      <div class="lbl" style="margin-top:18px">Pengaturan → Integrasi, nanti</div>
+      <div class="win"><div class="wt">Integrasi</div><div class="wcard">
+        <div style="font-size:11px;color:var(--ink2)">Google Calendar</div>
+        <div class="gbtn"><span class="gdot"></span>Masuk dengan Google</div>
+        <div style="font-size:10px;color:var(--ink2)">▸ Lanjutan: pakai Client ID sendiri</div></div></div>
+      <p class="note">* Kalau project Google-nya sudah "Published" (lihat halaman 3). Opsi Client ID sendiri tetap ada untuk yang mau.</p></div></div>
+  ${F('Sekarang vs nanti')}</section>`;
+
+// ---------- 2. who owns the project ----------
+const userBox = (n) => `<div class="node user"><b>User ${n}</b>punya project<br>Google Cloud sendiri</div>`;
+const p2 = `<section class="page"><div class="eyebrow">Login Google Calendar · 2/4</div><h1><span class="no">G</span>Bedanya: siapa yang membuat "project Google"</h1>
+  <p style="font-size:12px;color:#4A3D33;max-width:900px;margin:-4px 0 14px">Google hanya mau memberi akses Calendar ke app yang terdaftar. Pendaftarannya disebut <b>project</b>, dan dari situ keluar <b>Client ID</b>: semacam "KTP app" (bukan password).</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px">
+    <div><div class="lbl">Sekarang · tiap user membuat project sendiri</div>
+      <div class="dg" style="grid-template-columns:1fr 1fr 1fr">${userBox('A')}${userBox('B')}${userBox('C')}</div>
+      <div class="arr">↓ &nbsp; ↓ &nbsp; ↓</div>
+      <div class="node goog"><b>Google</b>melihat 3 app berbeda, masing-masing dalam mode Testing</div>
+      ${ux('', ['Setiap orang harus jadi "developer" dulu.', 'Kalau project dalam mode Testing, login habis tiap 7 hari.'])}</div>
+    <div><div class="lbl">Nanti · satu project milikmu, ditanam di app</div>
+      <div class="node proj" style="display:flex;align-items:center;gap:10px;justify-content:center">${logo(28)}<div style="text-align:left"><b>Project "Dynamic Island"</b>dibuat sekali oleh kamu · Client ID ada di dalam exe</div></div>
+      <div class="arr">↓</div>
+      <div class="dg" style="grid-template-columns:1fr 1fr 1fr">${['A', 'B', 'C'].map(n => `<div class="node user"><b>User ${n}</b>klik "Masuk dengan Google"</div>`).join('')}</div>
+      <div class="arr">↓ &nbsp; ↓ &nbsp; ↓</div>
+      <div class="node goog"><b>Google</b>melihat satu app "Dynamic Island" dengan banyak user</div>
+      ${ux('', ['User tidak perlu tahu soal Google Cloud.', 'Tiap user tetap login dengan akunnya sendiri; kamu <b>tidak</b> bisa melihat kalender mereka.', 'Karena app-nya satu, <b>status app ini</b> yang menentukan apa yang dilihat user (halaman berikutnya).'])}</div></div>
+  ${F('Project Google')}</section>`;
+
+// ---------- 3. consent screens ----------
+const csAcc = `<div class="acc"><span class="av">R</span>rani@gmail.com</div>`;
+const scopes = `<div class="sc">Melihat daftar kalender kamu</div><div class="sc">Melihat dan mengedit acara di semua kalender kamu</div>`;
+const p3 = `<section class="page"><div class="eyebrow">Login Google Calendar · 3/4</div><h1><span class="no">G</span>Apa yang dilihat user, tergantung status app</h1>
+  <div class="scr4">
+    <div class="cs"><div class="gh">Masuk dengan Google</div>${csAcc}
+      <div class="test"><b>Google hasn't verified this app.</b> The app is being tested. You should only continue if you know the developer.</div>
+      <p>Hanya akun yang didaftarkan sebagai <b>test user</b> yang bisa lanjut. Akun lain ditolak.</p>
+      <div class="bt"><span class="b1">Back to safety</span><span class="b2">Continue</span></div></div>
+    <div class="cs"><div class="gh">Masuk dengan Google</div>${csAcc}
+      <div class="warn"><b>⚠ Google hasn't verified this app</b><br>The app is requesting access to sensitive info in your Google Account.</div>
+      <p>User harus klik <span class="lnk">Advanced</span> lalu <span class="lnk">Go to Dynamic Island (unsafe)</span>.</p>
+      <div class="bt"><span class="b2">Back to safety</span></div></div>
+    <div class="cs"><div class="gh">Masuk dengan Google</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${logo(26)}<b style="font-size:13px">Dynamic Island</b></div>
+      ${csAcc}<h5>Dynamic Island ingin mengakses Akun Google kamu</h5>${scopes}
+      <div class="bt"><span class="b1">Batal</span><span class="b2">Izinkan</span></div></div>
+    <div class="cs"><div class="gh">Masuk dengan Google</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">${logo(26)}<b style="font-size:13px">Dynamic Island</b></div>
+      <div class="acc"><span class="av">N</span>nama@thuangarchitect.com</div><h5>Dynamic Island ingin mengakses Akun Google kamu</h5>${scopes}
+      <div class="bt"><span class="b1">Batal</span><span class="b2">Izinkan</span></div></div>
+  </div>
+  <div class="cap4">
+    <div><b>A · Testing</b><span class="pill y">maks. 100 test user</span><span class="pill r">login habis 7 hari</span><br>Seperti sekarang. Cocok untuk mencoba saja.</div>
+    <div><b>B · Published, belum verifikasi</b><span class="pill g">siapa pun</span><span class="pill r">maks. 100 user total</span><span class="pill r">layar merah</span><br>Bisa dipakai sambil menunggu verifikasi.</div>
+    <div><b>C · Published + terverifikasi</b><span class="pill g">siapa pun</span><span class="pill g">tanpa batas</span><span class="pill g">tanpa peringatan</span><br>Paling enak. Butuh verifikasi Google, ± 3–5 hari kerja.</div>
+    <div><b>D · Internal (Workspace)</b><span class="pill g">tanpa verifikasi</span><span class="pill g">tanpa peringatan</span><span class="pill y">hanya akun kantor</span><br>Untuk akun satu organisasi Google Workspace, mis. @thuangarchitect.com.</div>
+  </div>
+  <p class="note">Ilustrasi, bukan tangkapan layar asli. Teks peringatan Google aslinya berbahasa sesuai akun.</p>
+  ${F('Layar login')}</section>`;
+
+// ---------- 4. path & who does what ----------
+const p4 = `<section class="page"><div class="eyebrow">Login Google Calendar · 4/4</div><h1><span class="no">G</span>Jalan yang disarankan</h1>
+  <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:26px">
+    <div class="tree">
+      <div class="q">Siapa yang akan memakai Dynamic Island?</div>
+      <div class="br"><div class="a">Hanya kamu & tim kantor</div><div class="h">→ D · Internal</div>
+        <p style="font-size:11px;line-height:1.5;color:#4A3D33">Kalau email kantor memakai <b>Google Workspace</b>: buat project di organisasi itu, pilih tipe <b>Internal</b>. Semua akun @thuangarchitect.com langsung satu klik, tanpa verifikasi.</p>
+        <p class="note">Akun Gmail pribadi tidak bisa memakai project Internal.</p></div>
+      <div class="br"><div class="a">Publik (siapa pun dari GitHub)</div><div class="h">→ B dulu, lalu C</div>
+        <p style="font-size:11px;line-height:1.5;color:#4A3D33">Publish project (tipe External): langsung bisa dipakai dengan layar peringatan, maks. 100 user. Sambil itu ajukan <b>verifikasi</b>; setelah lolos, peringatan hilang dan batas user dibuka.</p>
+        <p class="note">Syarat verifikasi: domain milikmu, halaman beranda & kebijakan privasi di domain itu, logo, video demo pemakaian Calendar.</p></div>
+      <div class="br" style="grid-column:1 / 3"><div class="a">Di app (untuk semua jalan)</div>
+        <p style="font-size:11px;line-height:1.5;color:#4A3D33">Tombol <b>"Masuk dengan Google"</b> jadi cara utama. Opsi <b>"Pakai Client ID sendiri"</b> tetap ada di Lanjutan, untuk yang tidak mau memakai project bersama atau kalau batas 100 user tercapai.</p></div>
+    </div>
+    <div><div class="lbl">Siapa mengerjakan apa</div>
+      <table class="who"><tr><th>Langkah</th><th>Siapa</th></tr>
+        <tr><td>Cek: email kantor pakai Google Workspace?</td><td><b>Kamu</b></td></tr>
+        <tr><td>Buat project Google Cloud, pilih Internal / External, isi branding</td><td><b>Kamu</b> (butuh login akunmu)</td></tr>
+        <tr><td>Kirim Client ID ke Claude / taruh di repo</td><td><b>Kamu</b></td></tr>
+        <tr><td>Tombol "Masuk dengan Google", Client ID bawaan, opsi Lanjutan</td><td>Claude (kode)</td></tr>
+        <tr><td>Halaman beranda & kebijakan privasi (kalau publik)</td><td>Claude menyiapkan, kamu memasang di domain</td></tr>
+        <tr><td>Naskah video demo verifikasi</td><td>Claude menyiapkan, kamu merekam & mengirim</td></tr>
+        <tr><td>Ajukan verifikasi, tunggu 3–5 hari kerja</td><td><b>Kamu</b></td></tr></table>
+      <div class="opt" style="margin-top:14px"><b>Singkatnya</b><p>Kodenya kecil, karena alur login (PKCE + loopback) sudah ada. Yang membuat beda adalah <strong>siapa pemilik project Google</strong> dan <strong>statusnya</strong>. Untuk tim kantor: D. Untuk publik: B lalu C.</p></div></div></div>
+  ${F('Jalan yang disarankan')}</section>`;
+
+document.getElementById('doc').innerHTML = p1 + p2 + p3 + p4;
+const only = /^#p(\d+)$/.exec(location.hash);
+if (only) {
+  document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
+  document.body.style.background = 'none';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Dynamic Island</title>
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=DM+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap"><div class="nav">
+  <a class="brand" href="index.html"><img src="img/logo.svg" alt="" width="30" height="30">Dynamic Island</a>
+  <nav><a href="index.html">Home</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></nav>
+</div></div>
+
+<main class="doc">
+  <h1>Privacy Policy</h1>
+  <p class="meta">Last updated: <span class="todo">[date of publishing]</span></p>
+
+  <p>Dynamic Island is a desktop app for Windows 11. This policy explains what data the app accesses, how it is used and stored, and how you can delete it. In short: <b>the app has no server, collects no analytics, and keeps your data on your own PC.</b></p>
+
+  <h2>Google user data</h2>
+  <p>If you connect Google Calendar, the app asks Google for these permissions:</p>
+  <table>
+    <tr><th>Permission</th><th>What the app does with it</th></tr>
+    <tr><td><code>calendar.calendarlist.readonly</code></td><td>Reads the list of your calendars, so their events and colours can be shown.</td></tr>
+    <tr><td><code>calendar.events</code></td><td>Reads your events to show them on the Calendar page; creates or updates an event only when you press Save in the event editor. The app never deletes events.</td></tr>
+  </table>
+  <ul>
+    <li><b>Storage.</b> Your sign-in token is stored on your PC, encrypted with Windows DPAPI so only your Windows account can read it. The most recent calendar data is cached on your PC so the calendar works offline.</li>
+    <li><b>Sharing.</b> Google user data is sent only between your PC and Google. It is not sent to the developer, to any server of ours, or to any third party, and it is not sold.</li>
+    <li><b>Use.</b> Google user data is used only to show and edit your calendar inside the app. It is not used for advertising, profiling or training AI models.</li>
+  </ul>
+  <div class="callout">Dynamic Island's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</div>
+
+  <h2>Other data on your PC</h2>
+  <p>Everything else the app keeps lives in <code>%APPDATA%\DynamicIsland\</code> on your PC: settings, notes, reminders, CLI history and cached lyrics. None of it is uploaded.</p>
+  <ul>
+    <li><b>Notifications and media.</b> The app reads Windows notifications and the currently playing track to show them in the island. This stays on your PC.</li>
+    <li><b>Lyrics (off by default).</b> If you turn on lyrics, the artist, title and length of the playing track are sent to <a href="https://lrclib.net">lrclib.net</a> to fetch synced lyrics.</li>
+  </ul>
+
+  <h2>Deleting your data</h2>
+  <ul>
+    <li>Disconnect Google Calendar in <b>Settings → Integrations</b>. This deletes the stored token.</li>
+    <li>Remove the app's access to your Google account at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+    <li>Delete the folder <code>%APPDATA%\DynamicIsland\</code> to remove all local data, or uninstall with the uninstall script and <code>DI_PURGE=1</code>.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>The app is not directed at children under 13 and does not knowingly collect their data.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version is published on this page with a new date. Material changes are also noted in the release notes on GitHub.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy: <span class="todo">[support email]</span> or <a href="https://github.com/hartono0297/dynamic-island/issues">GitHub issues</a>.</p>
+</main>
+
+<footer>
+  <div class="wrap inner">
+    <div><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/hartono0297/dynamic-island/issues">Contact</a></div>
+    <div>Dynamic Island is not affiliated with Google or Apple.</div>
+  </div>
+</footer>
+</body>
+</html>

@@ -94,8 +94,10 @@
   .stp b { display: block; font-size: 13px; margin: 3px 0 4px; }
   .stp p { font-size: 10.5px; line-height: 1.45; color: #4A3D33; }
 
-  /* v3.1: upright headings in DM Sans */
   h1, .cv .big, .phases b, .oc b, .run .rh b { font-family: 'DM Sans', sans-serif !important; font-style: normal !important; font-weight: 700 !important; letter-spacing: -.02em; }
+  .rrow { padding: 3px 0 !important; }
+  .rrow .nm i { width: 24px !important; height: 24px !important; font-size: 10px !important; }
+  .rrow .nm b { font-size: 11.5px !important; }
 </style>
 </head>
 <body>
@@ -103,7 +105,7 @@
 <script>
 const SQ = 'M82 12H174C227.2 12 244 28.8 244 82V174C244 227.2 227.2 244 174 244H82C28.8 244 12 227.2 12 174V82C12 28.8 28.8 12 82 12Z';
 const robot = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 64 64"><rect x="6" y="9" width="52" height="46" rx="18" fill="#E2683C"/><rect x="12" y="21" width="40" height="22" rx="11" fill="#17120F"/><path d="M20.5 34q4-6 8 0M35.5 34q4-6 8 0" fill="none" stroke="#F4EDE4" stroke-width="2.6" stroke-linecap="round"/></svg>`;
-const PC = { 0: '#C9BBA8', 1: '#E2683C', 2: '#D9A441', 3: '#9DB59A', 4: '#B07A9A', 5: '#A3A55A' };
+const PC = { 0: '#C9BBA8', 1: '#E2683C', 2: '#D9A441', 3: '#9DB59A', 4: '#B07A9A', 5: '#A3A55A', 6: '#C9826B' };
 const folio = (r) => `<div class="folio"><span>Dynamic Island · Rencana v3.1</span><span>${r}</span></div>`;
 const PLAN = 'rencana v3.1';
 
@@ -118,8 +120,13 @@ const RUNS = [
   { id: '7', ph: 4, name: 'Clipboard sendiri', sub: 'Riwayat 50 item, halaman panel', size: 'L', dep: 'Setelah Run 1' },
   { id: '8', ph: 4, name: 'Screenshot + preview', sub: 'Salin lagi / Simpan / Hapus di notch', size: 'M', dep: 'Setelah Run 7' },
   { id: '9', ph: 5, name: 'Sembilan halaman + pengaturan', sub: 'Urutan, sembunyikan halaman', size: 'S', dep: 'Setelah Run 4 & 7' },
-  { id: '10', ph: 5, name: 'Teks, screenshot, versi 3.1.0', sub: 'i18n, README, kredit Mole, memori', size: 'S', dep: 'Terakhir' },
+  { id: '10', ph: 5, name: 'Teks, screenshot, versi 3.1.0', sub: 'i18n, README, kredit Mole, memori', size: 'S', dep: 'Paling akhir (setelah Run 14)' },
+  { id: '11', ph: 6, name: 'Fix: musik ter-pause sendiri', sub: 'Log diagnosis + klik aman + sesi yang benar', size: 'S', dep: 'Paling awal, setelah F0' },
+  { id: '12', ph: 6, name: 'Ganti nama ke Vale', sub: 'Exe, folder data + migrasi, installer', size: 'M', dep: 'Setelah Run 9' },
+  { id: '13', ph: 6, name: 'Maskot kucing + logo bertelinga', sub: 'Varian B dengan pita', size: 'M', dep: 'Setelah Run 12' },
+  { id: '14', ph: 6, name: 'Login Google satu klik', sub: 'Client bawaan, Lanjutan tetap ada', size: 'S', dep: 'Setelah Run 13' },
 ];
+const ORDER = ['F0', '11', '1', '2', '3', '4', '5', '6', '7', '8', '9', '12', '13', '14', '10'];
 const badge = (r) => `<i style="background:${PC[r.ph]}">${r.id}</i>`;
 const run = (id) => RUNS.find(r => r.id === id);
 const SZ = { S: 'kecil', M: 'sedang', L: 'besar' };
@@ -133,13 +140,13 @@ function runCard(id, body) {
 }
 const thumbs = (items) => `<div class="thumbs">${items.map(([src, cap]) => `<div><img src="img/${src}.png" alt="${cap}"><div class="cap">${cap}</div></div>`).join('')}</div>`;
 
-const PHASES = [['Fase 0', 'Persiapan', 'Pull, preflight'], ['Fase 1', 'Tampilan', 'Judul, lirik'], ['Fase 2', 'CLI', 'Ikut folder'], ['Fase 3', 'Sistem', 'Monitor, deep clean'], ['Fase 4', 'Clipboard', 'Riwayat, screenshot'], ['Fase 5', 'Penutup', 'Halaman, 3.1.0']];
+const PHASES = [['Fase 0', 'Persiapan', 'Pull, preflight'], ['Fase 1', 'Tampilan', 'Judul, lirik'], ['Fase 2', 'CLI', 'Ikut folder'], ['Fase 3', 'Sistem', 'Monitor, deep clean'], ['Fase 4', 'Clipboard', 'Riwayat, screenshot'], ['Fase 5', 'Penutup', 'Halaman, 3.1.0'], ['Fase 6', 'Tambahan', 'Fix musik, Vale, kucing, login']];
 const cover = `<section class="page dark"><div class="cv">
   <div class="eyebrow">Dynamic Island for Windows · rencana kerja</div>
   <div style="display:flex;align-items:center;gap:36px">${robot(120)}
     <div><div class="big">Rencana v3.1</div>
-      <div class="sub">Lirik yang tidak terpotong, CLI yang ikut folder, judul tegak, halaman Sistem dengan deep clean dua mode, clipboard sendiri, dan preview screenshot. Dijalankan per run dengan workflow <b style="color:var(--tx)">build</b>.</div></div></div>
-  <div class="phases" style="grid-template-columns:repeat(6,1fr)">${PHASES.map(([k, b, d], i) => `<div style="border-color:${PC[i]}"><span style="color:${PC[i]}">${k}</span><b>${b}</b>${d}</div>`).join('')}</div></div>
+      <div class="sub">Lirik yang tidak terpotong, CLI yang ikut folder, judul tegak, halaman Sistem dengan deep clean dua mode, clipboard sendiri, preview screenshot, perbaikan musik ter-pause, nama baru Vale dengan maskot kucing, dan login Google satu klik. Dijalankan per run dengan workflow <b style="color:var(--tx)">build</b>.</div></div></div>
+  <div class="phases" style="grid-template-columns:repeat(7,1fr)">${PHASES.map(([k, b, d], i) => `<div style="border-color:${PC[i]}"><span style="color:${PC[i]}">${k}</span><b>${b}</b>${d}</div>`).join('')}</div></div>
   ${folio('27 Oktober 2026').replace('class="folio"', 'class="folio" style="color:var(--tx)"')}</section>`;
 
 const OV = [
@@ -152,11 +159,11 @@ const OV = [
 ];
 const overview = `<section class="page"><div class="eyebrow">Ringkasan</div><h1>Apa yang dikerjakan</h1>
   <div class="ov">${OV.map(([img, t, d]) => `<div class="oc"><div class="im" style="background-image:url('img/${img}.png')"></div><div class="tx"><b>${t}</b><p>${d}</p></div></div>`).join('')}</div>
-  <p style="font-size:11px;color:var(--ink2);margin-top:10px">Ditambah: preview screenshot di notch (Run 8) dan 9 halaman panel dengan pengaturan halaman (Run 9).</p>
+  <p style="font-size:11px;color:var(--ink2);margin-top:10px">Ditambah: preview screenshot (Run 8), 9 halaman panel (Run 9), fix musik ter-pause (Run 11), nama Vale (Run 12), maskot kucing (Run 13), login Google satu klik (Run 14).</p>
   ${folio('Ringkasan')}</section>`;
 
-const roadmap = `<section class="page"><div class="eyebrow">Peta jalan</div><h1>Sebelas langkah, berurutan</h1>
-  <div class="road">${RUNS.map(r => `<div class="rrow"><span class="ph" style="color:${PC[r.ph]}">Fase ${r.ph}</span>
+const roadmap = `<section class="page"><div class="eyebrow">Peta jalan</div><h1>Lima belas langkah, dalam urutan ini</h1>
+  <div class="road">${ORDER.map(run).map(r => `<div class="rrow"><span class="ph" style="color:${PC[r.ph]}">Fase ${r.ph}</span>
     <div class="nm">${badge(r)}<div><b>${r.id === 'F0' ? r.name : 'Run ' + r.id + ' · ' + r.name}</b><small>${r.sub}</small></div></div>
     <span class="size${r.size === 'L' ? ' l' : ''}">${SZ[r.size]}</span><span class="dep">${r.dep}</span></div>`).join('')}</div>
   <p style="font-size:11px;color:var(--ink2);margin-top:10px">Satu run = satu kali workflow <strong>build</strong> (Plan → Build → Review → Check → Ship ke <code>main</code>). Rencana lengkap untuk agen: <code>docs/superpowers/plans/2026-10-27-v3.1.md</code>.</p>
@@ -220,7 +227,7 @@ const f5 = `<section class="page"><div class="eyebrow">Fase 5 · penutup, defaul
         <tr><td>Screenshot diabaikan</td><td>Simpan, tampil 8 detik</td></tr>
         <tr><td>Peringatan Sistem</td><td>Disk &lt; 10 GB, RAM &gt; 90% selama 1 menit</td></tr>
         <tr><td>Deep clean</td><td>Bawaan "Pilih sendiri"; Mole: whitelist Cargo & Autodesk, + Sistem tidak dicentang, versi lain boleh dengan peringatan</td></tr>
-        <tr><td>Halaman panel</td><td>Semua 9 aktif</td></tr></table>
+        <tr><td>Halaman panel</td><td>Semua 9 aktif</td></tr><tr><td>Nama & maskot</td><td>Vale; kucing varian B (pita); logo tile bertelinga</td></tr><tr><td>Belum diputuskan</td><td>Nama maskot, lisensi repo, email & domain website, Client ID Google (dibuat pemilik)</td></tr></table>
       <div class="lbl" style="margin-top:12px">Risiko</div>
       <table><tr><th>Risiko</th><th>Penanganan</th></tr>
         <tr><td>Output Mole berubah / salah</td><td>Parse per baris, hasil diukur island, fallback "lihat log"</td></tr>
@@ -233,7 +240,7 @@ const f5 = `<section class="page"><div class="eyebrow">Fase 5 · penutup, defaul
 const howto = `<section class="page"><div class="eyebrow">Cara menjalankan</div><h1>Lanjut di PC mana pun</h1>
   <div class="steps">
     <div class="stp"><div class="k">1</div><b>Fase 0</b><p><code>git pull</code>, preflight ulang kalau PC baru, Rust + Build Tools, <code>cargo test --locked</code> hijau.</p></div>
-    <div class="stp"><div class="k">2</div><b>Minta satu run</b><p><i>"jalankan Run 1 dari rencana v3.1"</i> atau <i>"jalankan Run 1 sampai 10"</i>.</p></div>
+    <div class="stp"><div class="k">2</div><b>Minta satu run</b><p><i>"jalankan Run 11 dari rencana v3.1"</i>, atau <i>"jalankan semua run sesuai urutan di rencana"</i> (Run 11 duluan, Run 10 terakhir).</p></div>
     <div class="stp"><div class="k">3</div><b>Cek hasilnya</b><p>Workflow merge ke <code>main</code> dan push kalau hijau. Bandingkan dengan PDF desain.</p></div>
     <div class="stp"><div class="k">4</div><b>Selesai</b><p>Memori Obsidian diperbarui di Run 10. Tag rilis <code>v3.1.0</code> kamu yang buat.</p></div></div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:18px">
@@ -249,7 +256,30 @@ const howto = `<section class="page"><div class="eyebrow">Cara menjalankan</div>
       <tr><td>Win+V untuk tombol Clipboard</td><td>Diganti halaman Clipboard</td></tr></table></div></div>
   ${folio('Cara menjalankan')}</section>`;
 
-document.getElementById('doc').innerHTML = cover + overview + roadmap + f01 + f23 + f3b + f4 + f5 + howto;
+
+const t1 = `<section class="page"><div class="eyebrow">Fase 6 · tambahan (1/2)</div>
+  <div class="split" style="margin-top:10px"><div class="runs c2">
+    ${runCard('11', { files: ['src/app.rs', 'src/state.rs', 'src/sources/media.rs'],
+      tasks: ['<b>Temuan:</b> island hanya mengirim perintah media dari klik, bukan timer.', 'Celah: klik dihitung dari <code>WM_LBUTTONUP</code> saja; panel bisa terbuka di bawah kursor di halaman Musik; perintah ke <code>GetCurrentSession()</code> + toggle buta.', 'Kemungkinan luar: YouTube Music "Continue watching?", headset Bluetooth, app panggilan.', 'Kerjakan: log diagnosis (tanpa judul lagu), klik harus tekan+lepas di island, abaikan tombol 300 ms setelah panel terbuka, kirim ke sesi yang tampil dengan Play/Pause eksplisit.'],
+      done: 'test klik tanpa tekan & klik saat panel baru terbuka; test pemilihan sesi.', args: 'Selidiki dan perbaiki musik yang kadang ter-pause sendiri sesuai Run 11 di rencana v3.1.' })}
+    ${runCard('14', { files: ['src/google/oauth.rs', 'settings_layout.rs', 'site/'],
+      tasks: ['Client ID bawaan dari satu konstanta; kosong = tombol tidak muncul.', 'Integrasi: "Masuk dengan Google" utama, "Lanjutan: Client ID sendiri" tetap.', 'Alur PKCE + loopback dan scope tidak berubah.', 'Jalur Google: publish (B) lalu verifikasi (C) — dikerjakan pemilik.'],
+      done: 'test pemilihan client bawaan / sendiri / kosong.', args: 'Tambah tombol Masuk dengan Google memakai client bawaan sesuai Run 14 di rencana v3.1.' })}
+  </div>${thumbs([['r31-login', 'Login sekarang vs nanti'], ['r31-site', 'Website verifikasi (site/)']])}</div>
+  ${folio('Fase 6 · 1/2')}</section>`;
+
+const t2 = `<section class="page"><div class="eyebrow">Fase 6 · tambahan (2/2)</div>
+  <div class="split" style="margin-top:10px"><div class="runs c2">
+    ${runCard('12', { files: ['seluruh src (nama)', 'config.rs (folder data)', 'install.ps1', 'uninstall.ps1', 'release.yml', 'README', 'site/'],
+      tasks: ['Nama tampilan "Vale"; exe <code>vale.exe</code>.', 'Folder data <code>%APPDATA%\\Vale</code> + migrasi sekali jalan dari DynamicIsland.', 'Autostart, hooks Claude, mutex, installer: entri lama dibersihkan.', 'ID teknis unik (bukan "Vale" polos); ganti nama repo GitHub oleh pemilik.'],
+      done: 'test migrasi folder; instal di atas versi lama membawa data.', args: 'Ganti nama app ke Vale beserta migrasi data sesuai Run 12 di rencana v3.1.' })}
+    ${runCard('13', { files: ['src/ui/robot.rs → maskot', 'assets/logo.svg', 'make-icon.ps1', 'icon.ico', 'app_icon.rs'],
+      tasks: ['Kucing varian B: kepala bulat, telinga, mata + bulu mata, pita plum.', 'Semua ekspresi dipetakan; telinga ikut ekspresi.', 'Animasi & aturan tampil sama seperti Bata.', 'Logo tile bertelinga di 3 sumber logo.'],
+      done: 'screenshot semua ekspresi; ikon tray 16 px terbaca.', args: 'Ganti robot Bata dengan kucing Vale (varian B, pita) dan logo tile bertelinga sesuai Run 13 di rencana v3.1.' })}
+  </div>${thumbs([['r31-kucing', 'Kucing varian B (dengan pita)'], ['r31-vale', 'Vale + logo bertelinga']])}</div>
+  ${folio('Fase 6 · 2/2')}</section>`;
+
+document.getElementById('doc').innerHTML = cover + overview + roadmap + f01 + f23 + f3b + f4 + t1 + t2 + f5 + howto;
 const only = /^#p(\d+)$/.exec(location.hash);
 if (only) {
   document.querySelectorAll('.page').forEach((p, i) => { if (i + 1 !== +only[1]) p.remove(); else p.style.margin = '0'; });
