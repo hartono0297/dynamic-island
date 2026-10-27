@@ -3115,7 +3115,7 @@ mod tests {
         assert_eq!(n.title, "Matiin popup Windows");
         assert_eq!(
             n.body,
-            "Nyalain Do Not Disturb: Settings → System → Notifications"
+            "Nyalain Jangan Ganggu: Pengaturan → Sistem → Pemberitahuan"
         );
     }
 

@@ -153,7 +153,7 @@ keys! {
     ClientIdMissing => "Isi Google client ID dulu", "Add a Google client ID first";
     SeeReadme => "Lihat README", "See the README";
     DndTitle => "Matiin popup Windows", "Turn off Windows pop-ups";
-    DndBody => "Nyalain Do Not Disturb: Settings → System → Notifications",
+    DndBody => "Nyalain Jangan Ganggu: Pengaturan → Sistem → Pemberitahuan",
         "Turn on Do Not Disturb: Settings → System → Notifications";
     UserProfileUnset => "USERPROFILE tidak diset", "USERPROFILE is not set";
 
@@ -253,7 +253,7 @@ keys! {
     ShortcutEmoji => "Emoji", "Emoji";
     ShortcutExplorer => "Explorer", "Explorer";
     ShortcutCalculator => "Kalkulator", "Calculator";
-    ShortcutTaskManager => "Task Manager", "Task Manager";
+    ShortcutTaskManager => "Pengelola Tugas", "Task Manager";
     ShortcutSettings => "Pengaturan Windows", "Windows Settings";
     ShortcutLock => "Kunci layar", "Lock screen";
 
@@ -1525,13 +1525,8 @@ mod tests {
         "pill", "pomodoro", "powershell", "readme", "spotify", "stop", "windows",
     ];
 
-    /// Names of Windows' own UI and brands, quoted as Windows writes them.
-    const SHARED_PHRASES: &[&str] = &[
-        "Do Not Disturb",
-        "Settings → System → Notifications",
-        "Google Calendar",
-        "Task Manager",
-    ];
+    /// Brand names written the same in both languages.
+    const SHARED_PHRASES: &[&str] = &["Google Calendar"];
 
     /// "notes.json.bak", "lrclib.net", "D:\proj\a.json": a dot with a letter
     /// after it.
@@ -1560,7 +1555,7 @@ mod tests {
         plain
             .split_whitespace()
             .filter(|chunk| !is_file_name(chunk))
-            .flat_map(|chunk| chunk.split(|c: char| !c.is_alphanumeric() && c != '\''))
+            .flat_map(|chunk| chunk.split(|c: char| !c.is_alphanumeric()))
             .map(str::to_lowercase)
             .filter(|w| banned.contains(&w.as_str()) && !SHARED_WORDS.contains(&w.as_str()))
             .collect()
@@ -1584,7 +1579,10 @@ mod tests {
         assert_eq!(leaked("Theme · Saved?", ENGLISH), ["saved"]);
         assert!(leaked("Sedia", INDONESIAN).is_empty());
         assert!(leaked("Edit Notes · Pengaturan Windows", ENGLISH).is_empty());
-        assert!(leaked("Buka Task Manager", ENGLISH).is_empty());
+        assert!(leaked("Buka Google Calendar", ENGLISH).is_empty());
+        // An apostrophe ends a word, like any other mark.
+        assert_eq!(leaked("Today's", ENGLISH), ["today"]);
+        assert_eq!(leaked("don't Settings' isn't", ENGLISH), ["settings"]);
         assert!(leaked("reminders.json tidak terbaca.", ENGLISH).is_empty());
         assert!(leaked("<title>x</title>", ENGLISH).is_empty());
     }
