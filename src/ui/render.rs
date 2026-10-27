@@ -233,6 +233,17 @@ pub struct CliView<'a> {
     pub selected: usize,
     /// The enlarged panel.
     pub tall: bool,
+    /// The folder came from the last active Explorer window: the accent
+    /// "dari Explorer" chip shows before it.
+    pub from_explorer: bool,
+    /// The folder menu, while it is open.
+    pub menu: Option<&'a FolderMenuView>,
+}
+
+/// What the open folder menu lists, top to bottom (`cli_folders::menu_items`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FolderMenuView {
+    pub items: Vec<crate::cli_folders::MenuItem>,
 }
 
 /// Draws the island into an offscreen premultiplied DIB and pushes it to the

@@ -81,11 +81,14 @@ pub enum Icon {
     /// pengingat-cli.html).
     Expand,
     Shrink,
+    /// The CLI folder menu's favourites (`star` in keputusan-v3.1.html):
+    /// outline to star a folder, with the duotone fill once it is one.
+    Star,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 43] = [
+    pub const ALL: [Icon; 44] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -129,6 +132,7 @@ impl Icon {
         Icon::ChevD,
         Icon::Expand,
         Icon::Shrink,
+        Icon::Star,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -309,6 +313,10 @@ impl Icon {
             Icon::ChevD => &[Part::Path("M6 9l6 6 6-6")],
             Icon::Expand => &[Part::Path("M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4")],
             Icon::Shrink => &[Part::Path("M4 8h4V4M20 8h-4V4M4 16h4v4M20 16h-4v4")],
+            Icon::Star => &[
+                Part::Fill("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
+                Part::Path("M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z"),
+            ],
         }
     }
 }

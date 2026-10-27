@@ -69,6 +69,10 @@ pub struct IslandState {
     /// How many lines the CLI output is scrolled up from the newest; 0
     /// follows new output. Reset when the panel closes.
     cli_scroll: usize,
+    /// The CLI page's folder menu is open. It never takes the keyboard;
+    /// closed by a pick, a click beside it, Esc, a page change or the
+    /// panel closing.
+    cli_menu: bool,
     /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
     /// open (an editor; the CLI input lets go), until the pointer leaves the island
     /// and comes back. Leaving alone is not enough: once the panel shrinks
@@ -107,6 +111,7 @@ impl IslandState {
             cli_focused: false,
             cli_tall: false,
             cli_scroll: 0,
+            cli_menu: false,
             collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
@@ -195,7 +200,11 @@ impl IslandState {
             Event::Today(date) => self.set_today(date),
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
             Event::Click(hit) => self.click(hit, now, &mut effects),
-            Event::Calendar(_) | Event::Lyrics(_) | Event::Cli(_) | Event::Tick => {}
+            Event::Calendar(_)
+            | Event::Lyrics(_)
+            | Event::Cli(_)
+            | Event::ExplorerFolders { .. }
+            | Event::Tick => {}
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
@@ -204,6 +213,10 @@ impl IslandState {
         if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
             self.cli_focused = false;
             effects.push(Effect::ReleaseCliFocus);
+        }
+        // The menu belongs to the CLI page of an open panel.
+        if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
+            self.cli_menu = false;
         }
         if hover_on && !panel_was_open && self.panel_open() {
             self.hover_opened = Some(now);
@@ -294,6 +307,17 @@ impl IslandState {
     /// Lines the CLI output is scrolled up from the newest.
     pub fn cli_scroll(&self) -> usize {
         self.cli_scroll
+    }
+
+    /// The CLI page's folder menu is open.
+    pub fn cli_menu(&self) -> bool {
+        self.cli_menu
+    }
+
+    /// The panel is open (hover, an editor or the CLI input holds it), even
+    /// while a notice covers it.
+    pub fn panel_is_open(&self) -> bool {
+        self.panel_open()
     }
 
     pub fn lyrics_ready(&self) -> bool {
@@ -447,11 +471,34 @@ impl IslandState {
                     effects.push(Effect::RunShortcut(s));
                 }
             }
-            Hit::CliInput | Hit::CliStop | Hit::CliExpand
-                if self.view() != View::Panel(Page::Cli) => {}
+            Hit::CliInput
+            | Hit::CliStop
+            | Hit::CliExpand
+            | Hit::CliFolder
+            | Hit::CliFolderPick { .. }
+            | Hit::CliFolderStar { .. }
+            | Hit::CliMenuDismiss
+                if self.view() != View::Panel(Page::Cli) =>
+            {
+                self.cli_menu = false;
+            }
             Hit::CliInput => effects.push(Effect::FocusCliInput),
             Hit::CliStop => effects.push(Effect::StopCli),
             Hit::CliExpand => self.cli_tall = !self.cli_tall,
+            // The menu is drawn in the panel: none of these touch the
+            // keyboard (no FocusCliInput, no ReleaseCliFocus).
+            Hit::CliFolder => self.cli_menu = !self.cli_menu,
+            Hit::CliFolderPick { path, .. } => {
+                if std::mem::take(&mut self.cli_menu) {
+                    effects.push(Effect::CliChangeFolder(path));
+                }
+            }
+            Hit::CliFolderStar { path, on } => {
+                if self.cli_menu {
+                    effects.push(Effect::CliFavorite { path, on });
+                }
+            }
+            Hit::CliMenuDismiss => self.cli_menu = false,
         }
     }
 
@@ -1449,6 +1496,83 @@ mod tests {
         );
         assert_eq!(s.view(), View::Idle);
         assert!(!s.cli_focused());
+    }
+
+    fn pick(path: &str) -> Hit {
+        Hit::CliFolderPick {
+            path: path.into(),
+            favorite: false,
+        }
+    }
+
+    #[test]
+    fn the_folder_chip_toggles_the_menu_without_touching_the_keyboard() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // Off the CLI page the chip does nothing.
+        open_on(&mut s, Page::Notes, t0);
+        assert_eq!(s.apply(Event::Click(Hit::CliFolder), t0), vec![]);
+        assert!(!s.cli_menu());
+        open_on(&mut s, Page::Cli, t0);
+        assert_eq!(s.apply(Event::Click(Hit::CliFolder), t0), vec![]);
+        assert!(s.cli_menu());
+        assert_eq!(s.apply(Event::Click(Hit::CliFolder), t0), vec![]);
+        assert!(!s.cli_menu(), "the chip again closes it");
+        // While the input has the keyboard, the menu leaves it alone.
+        s.apply(Event::CliFocus(true), t0);
+        assert_eq!(s.apply(Event::Click(Hit::CliFolder), t0), vec![]);
+        assert!(s.cli_menu() && s.cli_focused());
+        // Starring keeps the menu open.
+        let star = Hit::CliFolderStar {
+            path: r"D:\a".into(),
+            on: true,
+        };
+        assert_eq!(
+            s.apply(Event::Click(star), t0),
+            vec![Effect::CliFavorite {
+                path: r"D:\a".into(),
+                on: true
+            }]
+        );
+        assert!(s.cli_menu());
+        // A pick closes it and moves the CLI; focus stays as it was.
+        assert_eq!(
+            s.apply(Event::Click(pick(r"D:\b")), t0),
+            vec![Effect::CliChangeFolder(r"D:\b".into())]
+        );
+        assert!(!s.cli_menu() && s.cli_focused());
+        // A pick without the menu (a stale click) does nothing.
+        assert_eq!(s.apply(Event::Click(pick(r"D:\b")), t0), vec![]);
+        // The backdrop closes it, as Esc does (`App` sends the same click).
+        s.apply(Event::Click(Hit::CliFolder), t0);
+        assert_eq!(s.apply(Event::Click(Hit::CliMenuDismiss), t0), vec![]);
+        assert!(!s.cli_menu() && s.cli_focused());
+    }
+
+    #[test]
+    fn the_folder_menu_closes_with_its_page_or_the_panel() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliFolder), t0);
+        assert!(s.cli_menu());
+        // A page change.
+        s.apply(Event::Wheel(-120), t0);
+        assert!(!s.cli_menu());
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliFolder), t0);
+        // The panel closing; it reopens without the menu.
+        assert_eq!(s.apply(Event::Hover(false), t0), vec![]);
+        assert!(!s.cli_menu());
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert!(!s.cli_menu());
+        // Explorer results reach `App` only.
+        let read = Event::ExplorerFolders {
+            request: 1,
+            folders: vec![r"D:\x".into()],
+        };
+        assert_eq!(s.apply(read, t0), vec![]);
     }
 
     #[test]

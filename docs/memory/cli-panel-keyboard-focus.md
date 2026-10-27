@@ -47,6 +47,12 @@ page, which it never did before. Same family of gotchas as
   the morph starts and back after it settles; `UpdateLayeredWindow` applies
   the size, so no `SetWindowPos`.
 
+- **Folder menu.** Drawn inside the panel; it never takes focus or the
+  foreground (no `SetFocus`, `SetForegroundWindow` or Windows menu), and
+  the reducer emits no `FocusCliInput` / `ReleaseCliFocus` for its clicks.
+  Esc with the input focused closes the menu first; the next Esc lets go
+  as above. See [[cli-explorer-folder]].
+
 - **Robot.** A running CLI command shows Bata's Think face, a finished one
   Happy or Sad for 4 s, see [[bata-robot-expressions]].
 

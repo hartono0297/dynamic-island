@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Instant;
 
 use chrono::NaiveDate;
@@ -113,6 +114,12 @@ pub enum Event {
     Calendar(CalendarSnapshot),
     /// Output or the end of a CLI command; `App` keeps it, the reducer ignores it.
     Cli(CliEvent),
+    /// The open File Explorer folders, the last active first, from the
+    /// reader `request` started; `App` keeps them, the reducer ignores them.
+    ExplorerFolders {
+        request: u64,
+        folders: Vec<PathBuf>,
+    },
     Tick,
 }
 
@@ -158,6 +165,22 @@ pub enum Hit {
     CliStop,
     /// The CLI header's enlarge / shrink button.
     CliExpand,
+    /// The CLI header's folder chip (or the "dari Explorer" chip): opens or
+    /// closes the folder menu.
+    CliFolder,
+    /// A folder row of the menu: the CLI moves there. `favorite`: the row is
+    /// under Favorit (a right-click on it unstars it).
+    CliFolderPick {
+        path: PathBuf,
+        favorite: bool,
+    },
+    /// A row's star: `on` stars the folder, off unstars it.
+    CliFolderStar {
+        path: PathBuf,
+        on: bool,
+    },
+    /// Anywhere on the page outside the open menu: it closes.
+    CliMenuDismiss,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -203,6 +226,14 @@ pub enum Effect {
     ReleaseCliFocus,
     /// End the running command (Stop, Ctrl+C).
     StopCli,
+    /// A folder picked in the menu: the CLI moves there (not while a
+    /// command runs).
+    CliChangeFolder(PathBuf),
+    /// Star (`on`) or unstar a folder in the menu.
+    CliFavorite {
+        path: PathBuf,
+        on: bool,
+    },
 }
 
 /// A Pomodoro setting the settings window's steppers can change.

@@ -6,7 +6,9 @@
 //!
 //! Environment knobs for screenshots:
 //! `--demo-cli` runs only the CLI page's scenes, for comparing with
-//! `docs/design/pengingat-cli.html` (p3, p4, p5).
+//! `docs/design/pengingat-cli.html` (p3, p4, p5) and the folder ones with
+//! `docs/design/keputusan-v3.1.html` (p2). Their folder menu times count
+//! from a fixed "now", so they never depend on the clock.
 //!
 //! - `DI_DEMO_STEP=n` holds step `n` (see `SCENES`; Notch adds `SCENES.len()`).
 //!   A scene's name works too: `DI_DEMO_STEP=cal-day`, or `notch:cal-day`.
@@ -43,11 +45,12 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::render::{CliView, Frame, Progress, Renderer, RobotFrame};
+use super::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::cli::{self, Output, Shell};
+use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
@@ -121,6 +124,11 @@ enum CliDemo {
     Error,
     /// p5: the enlarged panel with a long git log.
     Tall,
+    /// keputusan-v3.1 p2: the page followed Explorer after a git status.
+    FromExplorer,
+    /// keputusan-v3.1 p2: the folder menu open (2 windows, 1 favourite,
+    /// 2 recent).
+    FolderMenu,
 }
 
 /// `View` without its payloads, so scenes can be `const`.
@@ -234,7 +242,7 @@ const fn cli(name: &'static str, which: CliDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 53] = [
+const SCENES: [Scene; 55] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -343,6 +351,8 @@ const SCENES: [Scene; 53] = [
     cli("cli-done", CliDemo::Done),
     cli("cli-error", CliDemo::Error),
     cli("cli-tall", CliDemo::Tall),
+    cli("cli-from-explorer", CliDemo::FromExplorer),
+    cli("cli-folder-menu", CliDemo::FolderMenu),
     panel("shortcuts", Page::Shortcuts),
     Scene {
         name: "bata-sheet",
@@ -461,7 +471,8 @@ pub fn run() {
 }
 
 /// `--demo-cli`: only the CLI page's scenes (`cli-empty`, `cli-ready`,
-/// `cli-typing`, `cli-running`, `cli-done`, `cli-error`, `cli-tall`), Pill
+/// `cli-typing`, `cli-running`, `cli-done`, `cli-error`, `cli-tall`,
+/// `cli-from-explorer`, `cli-folder-menu`), Pill
 /// then Notch; `DI_DEMO_STEP` picks one by number or name as in `--demo`.
 /// `--demo-robot`: only Bata's scenes, Pill then Notch; `DI_DEMO_STEP`
 /// picks one by number or name as in `--demo`.
@@ -770,6 +781,9 @@ struct DemoCli {
     focused: bool,
     suggestions: Vec<&'static str>,
     tall: bool,
+    cwd: &'static str,
+    from_explorer: bool,
+    menu: Option<FolderMenuView>,
 }
 
 impl DemoCli {
@@ -781,13 +795,15 @@ impl DemoCli {
             scroll: 0,
             run: self.run,
             shell: Shell::PowerShell,
-            cwd: "D:\\Proyek\\rumah-kemang",
+            cwd: self.cwd,
             input: self.input,
             selection: (end, end),
             focused: self.focused,
             suggestions: self.suggestions.clone(),
             selected: 0,
             tall: self.tall,
+            from_explorer: self.from_explorer,
+            menu: self.menu.as_ref(),
         }
     }
 }
@@ -890,7 +906,20 @@ fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
             ready(&mut output, &mut command);
             command(&mut output, "git log --oneline -12", &lines);
         }
+        CliDemo::FromExplorer => {
+            command(
+                &mut output,
+                "git status",
+                &["On branch main \u{00B7} nothing to commit"],
+            );
+            output.push(crate::i18n::cli_moved_to(
+                crate::i18n::lang(),
+                r"D:\github\project-a",
+            ));
+        }
+        CliDemo::FolderMenu => ready(&mut output, &mut command),
     }
+    let menu = (which == CliDemo::FolderMenu).then(demo_folder_menu);
     DemoCli {
         output,
         echoes,
@@ -903,6 +932,41 @@ fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
             Vec::new()
         },
         tall: which == CliDemo::Tall,
+        cwd: match which {
+            CliDemo::FromExplorer | CliDemo::FolderMenu => r"D:\github\project-a",
+            _ => "D:\\Proyek\\rumah-kemang",
+        },
+        from_explorer: which == CliDemo::FromExplorer,
+        menu,
+    }
+}
+
+/// The design's menu: two Explorer windows, one favourite, two recent
+/// folders (2 minutes ago and yesterday), timed from a fixed "now" of
+/// 27 October 2026, 14.32, so the screenshot never depends on the clock.
+fn demo_folder_menu() -> FolderMenuView {
+    let day = NaiveDate::from_ymd_opt(2026, 10, 27).expect("valid date");
+    let at = |d: NaiveDate, h, m| d.and_time(NaiveTime::from_hms_opt(h, m, 0).expect("valid time"));
+    let now = at(day, 14, 32);
+    let explorer = [
+        std::path::PathBuf::from(r"D:\github\project-a"),
+        std::path::PathBuf::from(r"D:\Proyek\rumah-kemang\gambar"),
+    ];
+    let mut favorites = FolderList::new(ListKind::Favorites);
+    favorites.set_favorite(std::path::Path::new(r"D:\github\dynamic-island"), true);
+    let mut recent = FolderList::new(ListKind::Recent);
+    let yesterday = day.pred_opt().expect("valid date");
+    recent.push_recent(
+        std::path::Path::new(r"C:\Users\hartono"),
+        stamp(at(yesterday, 17, 10)),
+    );
+    recent.push_recent(
+        std::path::Path::new(r"D:\Proyek\rumah-kemang"),
+        stamp(at(day, 14, 30)),
+    );
+    let sections = crate::cli_folders::menu_rows(&explorer, &favorites, &recent, now, &|_| true);
+    FolderMenuView {
+        items: crate::cli_folders::menu_items(&sections),
     }
 }
 

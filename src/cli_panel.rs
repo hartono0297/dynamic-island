@@ -113,7 +113,11 @@ pub fn line_kind(line: &str, echo: bool) -> LineKind {
     if line == cli::exit_line(Some(0), false) {
         return LineKind::Ok;
     }
-    if line == cli::exit_line(None, true) || line == cli::exit_line(None, false) {
+    // `↳` marks the island's own notes (the move to an Explorer folder).
+    if line == cli::exit_line(None, true)
+        || line == cli::exit_line(None, false)
+        || line.starts_with('\u{21B3}')
+    {
         return LineKind::Quiet;
     }
     if line.starts_with("[exit ") && line.ends_with(']') {
@@ -281,6 +285,8 @@ mod tests {
         assert_eq!(line_kind("[exit 1]", false), LineKind::Error);
         assert_eq!(line_kind("[exit ?]", false), LineKind::Quiet);
         assert_eq!(line_kind("[dihentikan]", false), LineKind::Quiet);
+        let moved = crate::i18n::cli_moved_to(crate::i18n::Lang::Id, "D:\\x");
+        assert_eq!(line_kind(&moved, false), LineKind::Quiet);
         assert_eq!(line_kind("FAIL src/rab.test.ts", false), LineKind::Error);
         assert_eq!(
             line_kind("error: could not compile", false),

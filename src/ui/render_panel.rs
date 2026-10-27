@@ -20,8 +20,9 @@ use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{CliView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use super::{CliView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
@@ -36,10 +37,11 @@ use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
     CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
-    PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, ShortcutsLayout, WEEK_HEAD_H,
-    calendar_layout, cli_layout, cli_suggestions, media_panel_layout, media_progress_layout,
-    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot,
-    pomodoro_layout, regions, reminders_layout, shortcuts_layout, tile_parts, waiting_strip,
+    MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD,
+    ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_folder_menu, cli_layout, cli_suggestions,
+    media_panel_layout, media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
+    pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
+    tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -85,11 +87,23 @@ const HINT_GAP: f32 = 8.0;
 const CARET_W: f32 = 7.0;
 const CARET_H: f32 = 14.0;
 const FOCUS_W: f32 = 1.5;
+/// The "dari Explorer" chip's folder icon and the gap after it.
+const CHIP_ICON: f32 = 12.0;
+const CHIP_ICON_GAP: f32 = 5.0;
+/// The folder menu's rows: the icon, the gaps around the path, the star.
+const MENU_ICON: f32 = 13.0;
+const MENU_STAR_ICON: f32 = 12.0;
+const MENU_IN_X: f32 = 8.0;
+const MENU_GAP: f32 = 8.0;
+/// The first Explorer row's accent tint (`.it.on`).
+const MENU_ON_TINT: f32 = 0.16;
 
 /// How a CLI header chip looks: the folder (path ellipsis) and the shell in
-/// mono on the raised fill; the run's state tinted.
+/// mono on the raised fill; the run's state tinted; "dari Explorer" in the
+/// accent with a folder icon.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ChipLook {
+    Explorer,
     Mono,
     Path,
     Run,
@@ -105,13 +119,20 @@ struct CliChip {
 
 /// The header chips left to right: folder and shell; "Berjalan · 0:42"
 /// while a command runs (Stop follows it); folder, the result and the shell
-/// once one ended.
+/// once one ended. "dari Explorer" comes first while the folder is the one
+/// the page followed from Explorer (and not while a command runs).
 fn cli_chips(lang: Lang, cli: &CliView, now: Instant) -> Vec<CliChip> {
     let chip = |text: String, look| CliChip { text, look };
     let folder = chip(cli.cwd.to_owned(), ChipLook::Path);
     let shell = chip(cli.shell.name().to_owned(), ChipLook::Mono);
+    let explorer = cli.from_explorer.then(|| {
+        chip(
+            text(lang, Key::CliFromExplorer).to_owned(),
+            ChipLook::Explorer,
+        )
+    });
     match cli.run {
-        RunState::Idle => vec![folder, shell],
+        RunState::Idle => explorer.into_iter().chain([folder, shell]).collect(),
         RunState::Running { since } => {
             let elapsed = now.saturating_duration_since(since);
             vec![chip(i18n::cli_running(lang, elapsed), ChipLook::Run)]
@@ -123,7 +144,10 @@ fn cli_chips(lang: Lang, cli: &CliView, now: Instant) -> Vec<CliChip> {
                 ChipLook::Err
             };
             let result = chip(i18n::cli_result(lang, code, killed, took), look);
-            vec![folder, result, shell]
+            explorer
+                .into_iter()
+                .chain([folder, result, shell])
+                .collect()
         }
     }
 }
@@ -295,7 +319,9 @@ impl Renderer {
             Page::Cli => {
                 let chips = cli_chips(i18n::lang(), &frame.cli, frame.now);
                 let head = self.cli_head(&chips, frame.cli.run.running());
-                PageLayout::Cli(cli_layout(s, strip, &head))
+                let mut l = cli_layout(s, strip, &head);
+                l.menu = frame.cli.menu.map(|m| cli_folder_menu(&l, &m.items));
+                PageLayout::Cli(l)
             }
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip)),
         }
@@ -335,12 +361,12 @@ impl Renderer {
             .iter()
             .map(|c| {
                 let w = self.text_width(&c.text, self.chip_format(c.look)).ceil();
-                let spin = if c.look == ChipLook::Run {
-                    SPIN + SPIN_GAP
-                } else {
-                    0.0
+                let mark = match c.look {
+                    ChipLook::Run => SPIN + SPIN_GAP,
+                    ChipLook::Explorer => CHIP_ICON + CHIP_ICON_GAP,
+                    _ => 0.0,
                 };
-                w + spin + 2.0 * CHIP_PAD_X
+                w + mark + 2.0 * CHIP_PAD_X
             })
             .collect();
         let stop = running.then(|| {
@@ -350,6 +376,8 @@ impl Renderer {
         CliHead {
             chips: widths,
             stop,
+            explorer: chips.first().is_some_and(|c| c.look == ChipLook::Explorer),
+            folder_menu: !running,
         }
     }
 
@@ -357,7 +385,7 @@ impl Renderer {
         match look {
             ChipLook::Mono => &self.fonts.mono_small,
             ChipLook::Path => &self.fonts.chip_mono,
-            ChipLook::Run | ChipLook::Ok | ChipLook::Err => &self.fonts.small,
+            ChipLook::Run | ChipLook::Ok | ChipLook::Err | ChipLook::Explorer => &self.fonts.small,
         }
     }
 
@@ -407,7 +435,117 @@ impl Renderer {
         if cli.focused && !cli.suggestions.is_empty() {
             self.paint_cli_suggestions(l, cli);
         }
-        self.paint_cli_input(l, cli)
+        self.paint_cli_input(l, cli)?;
+        if let (Some(m), Some(menu)) = (&l.menu, cli.menu) {
+            self.paint_cli_menu(m, menu);
+        }
+        Ok(())
+    }
+
+    /// The folder menu (keputusan-v3.1.html `.menu`): a raised box with a
+    /// thin border; capital section headers; rows with an icon, the path
+    /// (cut in the middle, keeping the last folder) and a small note; the
+    /// last active Explorer window tinted; a star at the right of Explorer
+    /// and recent rows, filled for a favourite.
+    fn paint_cli_menu(&self, m: &MenuLayout, menu: &FolderMenuView) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.set_color(p.raised, 1.0);
+        self.fill_round(m.boxed, MENU_RADIUS);
+        self.stroke_round(inset(m.boxed, 0.5, 0.5), MENU_RADIUS, p.track);
+        for (i, r) in &m.rows {
+            let Some(item) = menu.items.get(*i) else {
+                continue;
+            };
+            match item {
+                MenuItem::Header(section) => {
+                    let key = match section {
+                        Section::Explorer => Key::CliMenuExplorer,
+                        Section::Favorites => Key::CliMenuFavorites,
+                        Section::Recent => Key::CliMenuRecent,
+                    };
+                    let label = text(lang, key).to_uppercase();
+                    let area = Rect {
+                        x: r.x + MENU_IN_X,
+                        y: r.y + 2.0,
+                        w: r.w - 2.0 * MENU_IN_X,
+                        h: r.h - 2.0,
+                    };
+                    self.text2(&label, &self.fonts.micro, area);
+                }
+                MenuItem::Empty => {
+                    let area = inset(*r, MENU_IN_X, 0.0);
+                    let label = text(lang, Key::CliMenuEmpty);
+                    self.text_colored(label, &self.fonts.micro, area, p.secondary, 0.8);
+                }
+                MenuItem::Folder { section, row } => {
+                    if row.note == RowNote::LastActive {
+                        self.set_color(p.accent, MENU_ON_TINT);
+                        self.fill_round(*r, MENU_ROW_RADIUS);
+                    }
+                    let glyph = Rect {
+                        x: r.x + MENU_IN_X,
+                        w: MENU_ICON,
+                        ..*r
+                    };
+                    match section {
+                        Section::Explorer => self.icon_colored(
+                            Icon::Folder,
+                            glyph,
+                            MENU_ICON,
+                            p.secondary,
+                            1.0,
+                            None,
+                        ),
+                        Section::Favorites => self.icon_colored(
+                            Icon::Star,
+                            glyph,
+                            MENU_ICON,
+                            p.accent,
+                            1.0,
+                            Some(p.accent),
+                        ),
+                        Section::Recent => {
+                            self.icon_colored(Icon::Clock, glyph, MENU_ICON, p.secondary, 1.0, None)
+                        }
+                    }
+                    let mut right = r.right() - MENU_IN_X;
+                    if let Some((_, star)) = m.stars.iter().find(|(k, _)| k == i) {
+                        right = star.x;
+                        let (ink, alpha, fill) = if row.favorite {
+                            (p.accent, 1.0, Some(p.accent))
+                        } else {
+                            (p.secondary, 0.6, None)
+                        };
+                        self.icon_colored(Icon::Star, *star, MENU_STAR_ICON, ink, alpha, fill);
+                    }
+                    let note = match row.note {
+                        RowNote::None => None,
+                        RowNote::LastActive => Some(text(lang, Key::CliLastActive).to_owned()),
+                        RowNote::Unpin => Some(text(lang, Key::CliUnpinHint).to_owned()),
+                        RowNote::Ago(ago) => Some(i18n::folder_ago(lang, ago)),
+                    };
+                    if let Some(note) = note {
+                        let w = self.text_width(&note, &self.fonts.micro).ceil() + 1.0;
+                        let area = Rect {
+                            x: right - w,
+                            w,
+                            ..*r
+                        };
+                        self.text2(&note, &self.fonts.micro, area);
+                        right = area.x - MENU_GAP;
+                    }
+                    let x = glyph.right() + MENU_GAP;
+                    let path = Rect {
+                        x,
+                        w: (right - x).max(0.0),
+                        ..*r
+                    };
+                    let shown = row.path.to_string_lossy();
+                    self.text_colored(&shown, &self.fonts.chip_mono, path, p.text, 1.0);
+                }
+            }
+        }
     }
 
     fn paint_cli_chip(&self, chip: &CliChip, r: Rect, run: RunState, now: Instant) -> Result<()> {
@@ -416,6 +554,7 @@ impl Renderer {
         }
         let p = self.palette;
         let (fill, alpha, ink) = match chip.look {
+            ChipLook::Explorer => (p.accent, 0.15, p.accent),
             ChipLook::Mono | ChipLook::Path => (p.raised, 1.0, p.secondary),
             ChipLook::Run => (p.accent, 0.15, p.accent),
             ChipLook::Ok => (p.sage, 0.15, p.sage),
@@ -433,6 +572,15 @@ impl Renderer {
             self.spinner(center, turn)?;
             area.x += SPIN + SPIN_GAP;
             area.w = (area.w - SPIN - SPIN_GAP).max(0.0);
+        }
+        if chip.look == ChipLook::Explorer {
+            let glyph = Rect {
+                w: CHIP_ICON,
+                ..area
+            };
+            self.icon_colored(Icon::Folder, glyph, CHIP_ICON, p.accent, 1.0, None);
+            area.x += CHIP_ICON + CHIP_ICON_GAP;
+            area.w = (area.w - CHIP_ICON - CHIP_ICON_GAP).max(0.0);
         }
         self.text_colored(&chip.text, self.chip_format(chip.look), area, ink, 1.0);
         Ok(())
@@ -1920,7 +2068,53 @@ mod tests {
             suggestions: Vec::new(),
             selected: 0,
             tall: false,
+            from_explorer: false,
+            menu: None,
         }
+    }
+
+    #[test]
+    fn the_explorer_chip_leads_while_idle_or_ended() {
+        let (output, echoes) = Default::default();
+        let t0 = Instant::now();
+        let looks = |run, lang| {
+            let view = CliView {
+                from_explorer: true,
+                ..cli_view(&output, &echoes, run)
+            };
+            cli_chips(lang, &view, t0)
+                .into_iter()
+                .map(|c| (c.text, c.look))
+                .collect::<Vec<_>>()
+        };
+        let explorer = ("dari Explorer".to_owned(), ChipLook::Explorer);
+        let folder = ("D:\\Proyek".to_owned(), ChipLook::Path);
+        assert_eq!(
+            looks(RunState::Idle, Lang::Id),
+            [
+                explorer.clone(),
+                folder.clone(),
+                ("PowerShell".to_owned(), ChipLook::Mono)
+            ]
+        );
+        assert_eq!(
+            looks(RunState::Idle, Lang::En)[0],
+            ("from Explorer".to_owned(), ChipLook::Explorer)
+        );
+        // Running: only the run's chip, as before.
+        let running = looks(RunState::Running { since: t0 }, Lang::Id);
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].1, ChipLook::Run);
+        let ended = looks(
+            RunState::Ended {
+                code: Some(0),
+                killed: false,
+                took: Duration::from_millis(2_100),
+            },
+            Lang::Id,
+        );
+        assert_eq!(ended.len(), 4);
+        assert_eq!((&ended[0], &ended[1]), (&explorer, &folder));
     }
 
     #[test]
@@ -2317,10 +2511,7 @@ mod tests {
                     h: header.h + 2.0 * HEADING_BLEED,
                     ..header
                 };
-                let head = CliHead {
-                    chips: Vec::new(),
-                    stop: None,
-                };
+                let head = CliHead::default();
                 let cli = cli_layout(s, strip, &head);
                 for lang in [Lang::Id, Lang::En] {
                     fits(text(lang, Key::Cli), &f.heading, bleed(cli.header));

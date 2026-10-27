@@ -7,6 +7,7 @@ use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::cli_folders::{MenuItem, Section};
 use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::notes::Note;
 use crate::reminders::{Reminder, local_time};
@@ -106,12 +107,19 @@ pub struct ListLayout {
 }
 
 /// The CLI page's header chips as the renderer measured them: each chip's
-/// full width, left to right (the first, the folder, gives way when room is
-/// short), and the Stop button's while a command runs.
+/// full width, left to right (the folder gives way when room is short), and
+/// the Stop button's while a command runs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CliHead {
     pub chips: Vec<f32>,
     pub stop: Option<f32>,
+    /// The first chip is the accent "dari Explorer": the folder chip follows
+    /// it, and it is dropped (width 0) before the folder is cut below
+    /// `CLI_FOLDER_MIN`.
+    pub explorer: bool,
+    /// The folder chip (and "dari Explorer") open the folder menu: not
+    /// while a command runs, when the first chip is the run's state.
+    pub folder_menu: bool,
 }
 
 /// The CLI page: the title and header chips, then the terminal: output
@@ -120,8 +128,11 @@ pub struct CliHead {
 pub struct CliLayout {
     /// "CLI".
     pub header: Rect,
-    /// Folder, shell or the run's state, left to right as asked.
+    /// Folder, shell or the run's state, left to right as asked; a chip
+    /// dropped for room is 0 wide.
     pub chips: Vec<Rect>,
+    /// How many of the first chips open the folder menu.
+    pub folder_chips: usize,
     /// While a command runs, right of the chips.
     pub stop: Option<Rect>,
     /// The enlarge / shrink button, top right.
@@ -137,6 +148,21 @@ pub struct CliLayout {
     /// The `›` prompt, then the typed text up to the hint.
     pub prompt: Rect,
     pub field: Rect,
+    /// The open folder menu (`cli_folder_menu`), set by the renderer.
+    pub menu: Option<MenuLayout>,
+}
+
+/// The CLI page's folder menu: a raised box under the header's right side.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuLayout {
+    pub boxed: Rect,
+    /// The lines that fit: their index in the items given, and their rect.
+    pub rows: Vec<(usize, Rect)>,
+    /// A folder row's star button (Explorer and recent rows): item index
+    /// and rect, at the row's right end.
+    pub stars: Vec<(usize, Rect)>,
+    /// Picks and stars, for `regions`.
+    pub hits: Vec<Region>,
 }
 
 /// The CLI output's line pitch: DM Mono 11 at the design's 1.62.
@@ -309,6 +335,26 @@ const CLI_PROMPT_W: f32 = 16.0;
 const CLI_SUGGEST_INSET: f32 = 10.0;
 const CLI_SUGGEST_GAP: f32 = 6.0;
 const CLI_SUGGEST_PAD: f32 = 5.0;
+/// The folder chip is not cut below this while "dari Explorer" could go.
+pub const CLI_FOLDER_MIN: f32 = 120.0;
+/// The folder menu, after keputusan-v3.1.html `.menu`: 300 px wide (or
+/// the terminal's width), 6 px in, 14 px corners; headers 9 px capitals
+/// (6 above, 4 below), rows 6 / 8 px in with 8 px corners.
+pub const MENU_W: f32 = 300.0;
+pub const MENU_PAD: f32 = 6.0;
+pub const MENU_RADIUS: f32 = 14.0;
+pub const MENU_HEAD_H: f32 = 22.0;
+pub const MENU_ROW_H: f32 = 26.0;
+pub const MENU_ROW_RADIUS: f32 = 8.0;
+/// A row's star button at its right end.
+pub const MENU_STAR_W: f32 = 24.0;
+/// Under the header row's chips.
+const MENU_TOP_GAP: f32 = 2.0;
+/// Explorer windows shown at most, unless the terminal is taller than
+/// `MENU_ROOMY_TERM` (the enlarged panel), which shows more.
+const MENU_EXPLORER_MAX: usize = 3;
+const MENU_EXPLORER_MAX_TALL: usize = 6;
+const MENU_ROOMY_TERM: f32 = 300.0;
 
 const TILE_GAP: f32 = 10.0;
 /// Tiles stay this short when the panel has room to spare.
@@ -1154,19 +1200,45 @@ pub fn cli_layout(s: ShapeRect, strip: bool, head: &CliHead) -> CliLayout {
         r
     });
     let floor = header.right() + CLI_CHIP_GAP;
+    // The folder chip takes what the others leave; "dari Explorer" before
+    // it goes first when that would cut the folder short.
+    let flex = usize::from(head.explorer && head.chips.len() > 1);
+    let fixed: f32 = head
+        .chips
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != flex)
+        .map(|(_, w)| w + CLI_CHIP_GAP)
+        .sum();
+    let drop_explorer = flex == 1 && x - floor - fixed < head.chips[flex].min(CLI_FOLDER_MIN);
     let mut chips = Vec::with_capacity(head.chips.len());
     for (i, &want) in head.chips.iter().enumerate().rev() {
-        // The first chip (the folder) takes what the others leave.
-        let w = if i == 0 {
-            want.min(x - floor).max(0.0)
+        let w = if flex == 1 && i == 0 && drop_explorer {
+            0.0
+        } else if i == flex {
+            let before = if flex == 1 && !drop_explorer {
+                head.chips[0] + CLI_CHIP_GAP
+            } else {
+                0.0
+            };
+            want.min(x - floor - before).max(0.0)
         } else {
             want
         };
+        if w <= 0.0 && i < flex {
+            chips.push(rect(x, mid - CLI_CHIP_H / 2.0, 0.0, CLI_CHIP_H));
+            continue;
+        }
         x -= w;
         chips.push(rect(x, mid - CLI_CHIP_H / 2.0, w, CLI_CHIP_H));
         x -= CLI_CHIP_GAP;
     }
     chips.reverse();
+    let folder_chips = if head.folder_menu {
+        (flex + 1).min(chips.len())
+    } else {
+        0
+    };
     let term_top = header.bottom() + CLI_HEAD_GAP;
     let term = rect(l, term_top, r - l, s.y + s.h - CLI_BOTTOM - term_top);
     let input = rect(term.x, term.bottom() - CLI_INPUT_H, term.w, CLI_INPUT_H);
@@ -1187,6 +1259,7 @@ pub fn cli_layout(s: ShapeRect, strip: bool, head: &CliHead) -> CliLayout {
     CliLayout {
         header,
         chips,
+        folder_chips,
         stop,
         expand,
         term,
@@ -1195,7 +1268,126 @@ pub fn cli_layout(s: ShapeRect, strip: bool, head: &CliHead) -> CliLayout {
         input,
         prompt,
         field,
+        menu: None,
     }
+}
+
+/// The folder menu under the header, right-aligned under the chips, as
+/// wide as `MENU_W` or the terminal. Its lines (`items`) are kept top to
+/// bottom while they fit above the terminal's bottom; no more than
+/// `MENU_EXPLORER_MAX` Explorer windows in the normal panel, and a section
+/// header never stays without its first row.
+pub fn cli_folder_menu(l: &CliLayout, items: &[MenuItem]) -> MenuLayout {
+    let w = MENU_W.min(l.term.w);
+    let x = (l.expand.x - CLI_CHIP_GAP - w).max(l.term.x);
+    let top = l.header.bottom() + MENU_TOP_GAP;
+    let avail = l.term.bottom() - top - 2.0 * MENU_PAD;
+    let explorer_max = if l.term.h > MENU_ROOMY_TERM {
+        MENU_EXPLORER_MAX_TALL
+    } else {
+        MENU_EXPLORER_MAX
+    };
+    let height = |item: &MenuItem| match item {
+        MenuItem::Header(_) => MENU_HEAD_H,
+        _ => MENU_ROW_H,
+    };
+    let mut kept: Vec<usize> = Vec::new();
+    let mut used = 0.0;
+    let mut explorer = 0;
+    let mut i = 0;
+    while i < items.len() {
+        let item = &items[i];
+        let h = height(item);
+        match item {
+            MenuItem::Header(_) => {
+                // With its first row, or not at all.
+                let first = items
+                    .get(i + 1)
+                    .filter(|n| !matches!(n, MenuItem::Header(_)));
+                if first.is_none_or(|f| used + h + height(f) > avail) {
+                    i += 1;
+                    while i < items.len() && !matches!(items[i], MenuItem::Header(_)) {
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+            MenuItem::Folder {
+                section: Section::Explorer,
+                ..
+            } if explorer >= explorer_max => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if used + h > avail {
+            // A row that does not fit ends its section; a later header
+            // gets its own chance (and its own check).
+            i += 1;
+            while i < items.len() && !matches!(items[i], MenuItem::Header(_)) {
+                i += 1;
+            }
+            continue;
+        }
+        if matches!(
+            item,
+            MenuItem::Folder {
+                section: Section::Explorer,
+                ..
+            }
+        ) {
+            explorer += 1;
+        }
+        kept.push(i);
+        used += h;
+        i += 1;
+    }
+    let boxed = rect(x, top, w, used + 2.0 * MENU_PAD);
+    let mut y = top + MENU_PAD;
+    let mut rows = Vec::with_capacity(kept.len());
+    let mut stars = Vec::new();
+    let mut hits = Vec::new();
+    for i in kept {
+        let h = height(&items[i]);
+        let r = rect(x + MENU_PAD, y, w - 2.0 * MENU_PAD, h);
+        y += h;
+        rows.push((i, r));
+        if let MenuItem::Folder { section, row } = &items[i] {
+            let mut pick = r;
+            if *section != Section::Favorites {
+                let star = rect(r.right() - MENU_STAR_W, r.y, MENU_STAR_W, r.h);
+                pick.w -= MENU_STAR_W;
+                stars.push((i, star));
+                hits.push(Region {
+                    rect: star,
+                    hit: Hit::CliFolderStar {
+                        path: row.path.clone(),
+                        on: !row.favorite,
+                    },
+                });
+            }
+            hits.push(Region {
+                rect: pick,
+                hit: Hit::CliFolderPick {
+                    path: row.path.clone(),
+                    favorite: *section == Section::Favorites,
+                },
+            });
+        }
+    }
+    MenuLayout {
+        boxed,
+        rows,
+        stars,
+        hits,
+    }
+}
+
+/// While the folder menu is open, a click anywhere else on the CLI page
+/// (header row and terminal) closes it.
+pub fn cli_menu_backdrop(l: &CliLayout) -> Rect {
+    rect(l.term.x, l.header.y, l.term.w, l.term.bottom() - l.header.y)
 }
 
 /// The suggestion box just above the input, `n` rows tall, and its rows.
@@ -1343,11 +1535,27 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(l.lyrics, Hit::LyricsToggle);
         }
         PageLayout::Cli(l) => {
-            if let Some(stop) = l.stop {
-                add(stop, Hit::CliStop);
+            let folder = l.chips[..l.folder_chips].iter().filter(|c| c.w > 0.0);
+            if let Some(menu) = &l.menu {
+                // The menu over the page; the chips close it again, and the
+                // rest of the page underneath does too.
+                for r in &menu.hits {
+                    add(r.rect, r.hit.clone());
+                }
+                for chip in folder {
+                    add(*chip, Hit::CliFolder);
+                }
+                add(cli_menu_backdrop(l), Hit::CliMenuDismiss);
+            } else {
+                for chip in folder {
+                    add(*chip, Hit::CliFolder);
+                }
+                if let Some(stop) = l.stop {
+                    add(stop, Hit::CliStop);
+                }
+                add(l.expand, Hit::CliExpand);
+                add(l.term, Hit::CliInput);
             }
-            add(l.expand, Hit::CliExpand);
-            add(l.term, Hit::CliInput);
         }
         PageLayout::Shortcuts(l) => {
             for (s, r) in l.tiles {
@@ -1535,6 +1743,11 @@ mod tests {
             let l = cli_layout(s, strip, &head);
             out.push((format!("cli {head:?}"), PageLayout::Cli(l)));
         }
+        for (n, items) in menu_cases().into_iter().enumerate() {
+            let mut l = cli_layout(s, strip, &cli_heads()[4]);
+            l.menu = Some(cli_folder_menu(&l, &items));
+            out.push((format!("cli menu {n}"), PageLayout::Cli(l)));
+        }
         out.push((
             "shortcuts".into(),
             PageLayout::Shortcuts(shortcuts_layout(s, strip)),
@@ -1549,17 +1762,69 @@ mod tests {
             CliHead {
                 chips: vec![150.0, 76.0],
                 stop: None,
+                explorer: false,
+                folder_menu: true,
             },
             CliHead {
                 chips: vec![110.0],
                 stop: Some(56.0),
+                explorer: false,
+                folder_menu: false,
             },
             CliHead {
                 chips: vec![600.0, 76.0],
                 stop: None,
+                explorer: false,
+                folder_menu: true,
             },
             CliHead::default(),
+            // After an Explorer switch: "dari Explorer", folder, shell.
+            CliHead {
+                chips: vec![104.0, 150.0, 76.0],
+                stop: None,
+                explorer: true,
+                folder_menu: true,
+            },
+            // The same once a command ended: the result chip too.
+            CliHead {
+                chips: vec![104.0, 220.0, 120.0, 76.0],
+                stop: None,
+                explorer: true,
+                folder_menu: true,
+            },
         ]
+    }
+
+    fn folder(section: Section, path: &str, favorite: bool) -> MenuItem {
+        MenuItem::Folder {
+            section,
+            row: crate::cli_folders::MenuRow {
+                path: path.into(),
+                note: crate::cli_folders::RowNote::None,
+                favorite,
+            },
+        }
+    }
+
+    /// The design's menu (2 Explorer, 1 favourite, 1 recent), a crowded one
+    /// (8 Explorer windows, 4 favourites, 5 recent) and the empty one.
+    fn menu_cases() -> Vec<Vec<MenuItem>> {
+        let design = vec![
+            MenuItem::Header(Section::Explorer),
+            folder(Section::Explorer, r"D:\github\project-a", false),
+            folder(Section::Explorer, r"D:\Proyek\rumah-kemang\gambar", false),
+            MenuItem::Header(Section::Favorites),
+            folder(Section::Favorites, r"D:\github\dynamic-island", true),
+            MenuItem::Header(Section::Recent),
+            folder(Section::Recent, r"C:\Users\hartono", false),
+        ];
+        let mut crowded = vec![MenuItem::Header(Section::Explorer)];
+        crowded.extend((0..8).map(|i| folder(Section::Explorer, &format!(r"D:\w{i}"), i == 1)));
+        crowded.push(MenuItem::Header(Section::Favorites));
+        crowded.extend((0..4).map(|i| folder(Section::Favorites, &format!(r"D:\f{i}"), true)));
+        crowded.push(MenuItem::Header(Section::Recent));
+        crowded.extend((0..5).map(|i| folder(Section::Recent, &format!(r"D:\r{i}"), false)));
+        vec![design, crowded, vec![MenuItem::Empty]]
     }
 
     fn disjoint(a: Rect, b: Rect) -> bool {
@@ -2275,14 +2540,22 @@ mod tests {
         assert_eq!(
             r,
             [
+                region(idle.chips[0], Hit::CliFolder),
                 region(idle.expand, Hit::CliExpand),
                 region(idle.term, Hit::CliInput)
             ]
         );
+        // While a command runs the run's chip opens nothing.
         let running = cli_layout(s, false, &cli_heads()[1]);
         let r = regions(s, &PageLayout::Cli(running.clone()), false);
         assert_eq!(r[0], region(running.stop.unwrap(), Hit::CliStop));
         assert_eq!(r.len(), 3);
+        // After an Explorer switch both chips open the menu.
+        let explorer = cli_layout(s, false, &cli_heads()[4]);
+        let r = regions(s, &PageLayout::Cli(explorer.clone()), false);
+        assert_eq!(r[0], region(explorer.chips[0], Hit::CliFolder));
+        assert_eq!(r[1], region(explorer.chips[1], Hit::CliFolder));
+        assert_eq!(r.len(), 4);
 
         let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false)), false);
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
@@ -2382,6 +2655,183 @@ mod tests {
     }
 
     #[test]
+    fn the_explorer_chip_gives_way_before_the_folder() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            // Idle: room for all three, the folder whole.
+            let idle = cli_layout(s, false, &cli_heads()[4]);
+            assert_eq!(
+                idle.chips.iter().map(|c| c.w).collect::<Vec<_>>(),
+                [104.0, 150.0, 76.0]
+            );
+            assert_eq!(idle.folder_chips, 2);
+            assert!(idle.chips[0].x >= idle.header.right());
+            assert!(idle.chips[0].right() < idle.chips[1].x);
+            // Ended with a long folder: "dari Explorer" goes, the folder
+            // keeps what is left.
+            let ended = cli_layout(s, false, &cli_heads()[5]);
+            assert_eq!(ended.chips[0].w, 0.0, "dropped");
+            assert!(ended.chips[1].w >= CLI_FOLDER_MIN, "{:?}", ended.chips[1]);
+            assert!(ended.chips[1].x >= ended.header.right());
+            assert_eq!((ended.chips[2].w, ended.chips[3].w), (120.0, 76.0));
+            let r = regions(s, &PageLayout::Cli(ended.clone()), false);
+            assert_eq!(
+                r.iter().filter(|r| r.hit == Hit::CliFolder).count(),
+                1,
+                "a dropped chip takes no click"
+            );
+        }
+    }
+
+    #[test]
+    fn folder_menu_hangs_under_the_header_on_the_right() {
+        for style in [Style::Pill, Style::Notch] {
+            for kind in [ShapeKind::Panel, ShapeKind::PanelTall] {
+                let s = shape_for(style, kind);
+                let l = cli_layout(s, false, &cli_heads()[4]);
+                let design = &menu_cases()[0];
+                let m = cli_folder_menu(&l, design);
+                // 300 px, just under the header, ending where the chips end.
+                assert_eq!(m.boxed.w, MENU_W);
+                assert!(m.boxed.y >= l.header.bottom() && m.boxed.y < l.term.y + 4.0);
+                assert_eq!(m.boxed.right(), l.expand.x - 6.0);
+                assert!(m.boxed.bottom() <= l.term.bottom());
+                // The design's menu fits whole: 3 headers and 4 rows.
+                assert_eq!(m.rows.len(), design.len(), "{style:?} {kind:?}");
+                assert_eq!(
+                    m.boxed.h,
+                    3.0 * MENU_HEAD_H + 4.0 * MENU_ROW_H + 2.0 * MENU_PAD
+                );
+                for w in m.rows.windows(2) {
+                    assert_eq!(w[0].1.bottom(), w[1].1.y, "rows stack");
+                }
+                // Explorer and recent rows have a star; the favourite not.
+                assert_eq!(
+                    m.stars.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+                    [1, 2, 6]
+                );
+                let picks: Vec<&Hit> = m
+                    .hits
+                    .iter()
+                    .map(|r| &r.hit)
+                    .filter(|h| matches!(h, Hit::CliFolderPick { .. }))
+                    .collect();
+                assert_eq!(picks.len(), 4);
+                assert!(m.hits.contains(&Region {
+                    rect: m.rows[4].1,
+                    hit: Hit::CliFolderPick {
+                        path: r"D:\github\dynamic-island".into(),
+                        favorite: true
+                    }
+                }));
+                assert!(m.hits.iter().any(|r| r.hit
+                    == Hit::CliFolderStar {
+                        path: r"D:\github\project-a".into(),
+                        on: true
+                    }));
+            }
+        }
+        // A narrow terminal: the menu takes its width and stays inside it.
+        let mut l = cli_layout(panel(Style::Pill), false, &cli_heads()[0]);
+        l.term.w = 240.0;
+        let m = cli_folder_menu(&l, &menu_cases()[0]);
+        assert_eq!(m.boxed.w, 240.0);
+        assert!(m.boxed.x >= l.term.x);
+    }
+
+    #[test]
+    fn a_crowded_menu_is_trimmed_to_the_panel() {
+        let crowded = &menu_cases()[1];
+        for style in [Style::Pill, Style::Notch] {
+            for kind in [ShapeKind::Panel, ShapeKind::PanelTall] {
+                let s = shape_for(style, kind);
+                for strip in [false, true] {
+                    let l = cli_layout(s, strip, &cli_heads()[4]);
+                    let m = cli_folder_menu(&l, crowded);
+                    assert!(m.boxed.bottom() <= l.term.bottom() + 0.01);
+                    let kept: Vec<&MenuItem> = m.rows.iter().map(|(i, _)| &crowded[*i]).collect();
+                    let explorer = kept
+                        .iter()
+                        .filter(|i| {
+                            matches!(
+                                i,
+                                MenuItem::Folder {
+                                    section: Section::Explorer,
+                                    ..
+                                }
+                            )
+                        })
+                        .count();
+                    let want = if kind == ShapeKind::Panel { 3 } else { 6 };
+                    assert_eq!(explorer, want, "{style:?} {kind:?} strip={strip}");
+                    // Every kept header has its first row right under it.
+                    for (k, item) in kept.iter().enumerate() {
+                        if matches!(item, MenuItem::Header(_)) {
+                            assert!(
+                                matches!(kept.get(k + 1), Some(MenuItem::Folder { .. })),
+                                "{style:?} {kind:?} strip={strip}: header {k} alone"
+                            );
+                        }
+                    }
+                    // The favourites follow the windows.
+                    assert!(kept.contains(&&MenuItem::Header(Section::Favorites)));
+                }
+            }
+        }
+        // The empty menu: one quiet line.
+        let l = cli_layout(panel(Style::Pill), false, &cli_heads()[0]);
+        let m = cli_folder_menu(&l, &[MenuItem::Empty]);
+        assert_eq!(m.rows.len(), 1);
+        assert!(m.hits.is_empty() && m.stars.is_empty());
+    }
+
+    #[test]
+    fn an_open_menu_takes_the_page_clicks() {
+        for style in [Style::Pill, Style::Notch] {
+            for kind in [ShapeKind::Panel, ShapeKind::PanelTall] {
+                let s = shape_for(style, kind);
+                let mut l = cli_layout(s, false, &cli_heads()[4]);
+                let m = cli_folder_menu(&l, &menu_cases()[0]);
+                l.menu = Some(m.clone());
+                let r = regions(s, &PageLayout::Cli(l.clone()), false);
+                // Menu first, then the folder chips, then the backdrop.
+                assert_eq!(r[..m.hits.len()], m.hits[..]);
+                assert_eq!(r[m.hits.len()].hit, Hit::CliFolder);
+                assert_eq!(r[m.hits.len() + 1].hit, Hit::CliFolder);
+                let last = r.last().unwrap();
+                assert_eq!(last.hit, Hit::CliMenuDismiss);
+                assert!(
+                    !r.iter()
+                        .any(|r| matches!(r.hit, Hit::CliInput | Hit::CliExpand | Hit::CliStop))
+                );
+                // The terminal and the enlarge button now close the menu.
+                let first_hit = |x: f32, y: f32| {
+                    r.iter()
+                        .find(|r| r.rect.contains(x, y))
+                        .map(|r| r.hit.clone())
+                };
+                let (tx, ty) = (l.term.x + 10.0, l.term.bottom() - 10.0);
+                assert_eq!(first_hit(tx, ty), Some(Hit::CliMenuDismiss));
+                let e = l.expand;
+                assert_eq!(
+                    first_hit(e.x + e.w / 2.0, e.y + e.h / 2.0),
+                    Some(Hit::CliMenuDismiss)
+                );
+                // A row is a pick, its star a star.
+                let (_, row) = m.rows[1];
+                assert!(matches!(
+                    first_hit(row.x + 20.0, row.y + row.h / 2.0),
+                    Some(Hit::CliFolderPick { .. })
+                ));
+                assert!(matches!(
+                    first_hit(row.right() - 4.0, row.y + row.h / 2.0),
+                    Some(Hit::CliFolderStar { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn cli_suggestions_sit_just_above_the_input() {
         let s = panel(Style::Pill);
         let l = cli_layout(s, false, &cli_heads()[0]);
@@ -2405,7 +2855,13 @@ mod tests {
             let s = panel(style);
             for strip in [false, true] {
                 for (name, layout) in all_layouts(s, strip) {
-                    let r = regions(s, &layout, strip);
+                    let mut r = regions(s, &layout, strip);
+                    // The open menu's backdrop is the underlay: it comes
+                    // last, so everything over it is found first.
+                    if let Some(i) = r.iter().position(|r| r.hit == Hit::CliMenuDismiss) {
+                        assert_eq!(i, r.len() - 1, "{name}: the backdrop is last");
+                        r.pop();
+                    }
                     for (i, a) in r.iter().enumerate() {
                         for b in &r[i + 1..] {
                             assert!(
@@ -2483,6 +2939,10 @@ mod tests {
                         PageLayout::Cli(l) => {
                             drawn.extend([l.header, l.output, l.prompt, l.field]);
                             drawn.extend(l.chips.iter().filter(|c| c.w > 0.0));
+                            if let Some(m) = &l.menu {
+                                drawn.push(m.boxed);
+                                drawn.extend(m.rows.iter().map(|(_, r)| *r));
+                            }
                         }
                         PageLayout::Shortcuts(l) => {
                             drawn.push(l.header);

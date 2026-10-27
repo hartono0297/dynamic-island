@@ -46,6 +46,7 @@ use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_no
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::pipe_server::spawn_pipe_server;
 use crate::cli::{self, Builtin, CliEvent, History, HistoryCursor, RunHandle, Session};
+use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
@@ -60,7 +61,7 @@ use crate::sources::battery::{
     BatteryMonitor, battery_low_now, battery_notice, energy_saver_on, read_battery,
 };
 use crate::sources::fullscreen::is_fullscreen;
-use crate::sources::{media, notifications};
+use crate::sources::{explorer, media, notifications};
 use crate::state::{IslandState, is_media_hit};
 use crate::theme::{self, Theme};
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
@@ -72,7 +73,7 @@ use crate::ui::geometry::{
     lyric_shape, lyric_target_w, lyric_width, shape_for, shape_with_robot,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
-use crate::ui::render::{CliView, Frame, Progress, Renderer, RobotFrame};
+use crate::ui::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
 };
@@ -253,6 +254,12 @@ pub fn run(media_log_flag: bool) {
             cli_text: String::new(),
             cli_timer: false,
             cli_wake: Arc::new(AtomicBool::new(false)),
+            cli_favorites: FolderList::load(ListKind::Favorites, &cli_folders::favorites_path()),
+            cli_recent: FolderList::load(ListKind::Recent, &cli_folders::recent_path()),
+            cli_from_explorer: false,
+            cli_pinned: false,
+            cli_menu_view: FolderMenuView::default(),
+            explorer: ExplorerReads::default(),
             shortcut: None,
             bata: Bata::new(Instant::now()),
             greet_pending: true,
@@ -423,6 +430,19 @@ struct App {
     /// Set by a run's threads when they post a wake, cleared when `drain`
     /// reads the queue: a burst of output posts one message, not hundreds.
     cli_wake: Arc<AtomicBool>,
+    /// The folder menu's starred and recently used folders.
+    cli_favorites: FolderList,
+    cli_recent: FolderList,
+    /// `cli_cwd` is the last active Explorer window's folder, followed as
+    /// the page opened: the "dari Explorer" chip shows.
+    cli_from_explorer: bool,
+    /// A `cd` or a menu pick chose the folder during this panel visit: the
+    /// page does not follow Explorer again until the panel closes.
+    cli_pinned: bool,
+    /// The open folder menu's lines, built when it opens or its lists change.
+    cli_menu_view: FolderMenuView,
+    /// Explorer folders read off the UI thread, and what waits for them.
+    explorer: ExplorerReads,
     /// A clicked shortcut waiting for `TIMER_SHORTCUT`.
     shortcut: Option<shortcuts::Action>,
     /// Bata, the robot: its state, blink and timers.
@@ -435,6 +455,23 @@ struct App {
     /// The last lock or unlock `WM_WTSSESSION_CHANGE` said locked; used when
     /// asking Windows for the session's state fails.
     session_locked: bool,
+}
+
+/// The File Explorer reader (`sources::explorer`): at most one read runs.
+#[derive(Default)]
+struct ExplorerReads {
+    /// The last list read, the last active window first; the menu shows it
+    /// until a fresher one arrives.
+    folders: Vec<PathBuf>,
+    /// Reads asked for so far (request ids).
+    asked: u64,
+    /// The read running, if any.
+    running: Option<u64>,
+    /// The read started because the CLI page opened: its result may move
+    /// the CLI there.
+    for_open: Option<u64>,
+    /// Another read asked for while one ran (true: for the page opening).
+    queued: Option<bool>,
 }
 
 /// What the island keeps for the robot besides its `Brain`.
@@ -519,9 +556,18 @@ impl App {
                     self.on_cli_event(event);
                     continue;
                 }
+                Event::ExplorerFolders { request, folders } => {
+                    self.on_explorer_folders(request, folders);
+                    continue;
+                }
                 other => other,
             };
             let page = self.state.page();
+            let cli_was = (
+                self.state.view() == View::Panel(Page::Cli),
+                self.state.cli_menu(),
+                self.state.panel_is_open(),
+            );
             self.media_click = match &event {
                 Event::Click(hit) if media_log::enabled() && is_media_hit(hit) => {
                     Some(media_log::Click {
@@ -546,6 +592,162 @@ impl App {
                 media_log::log_command(&click, media_log::Outcome::Ignored(why), &self.media_app());
             }
             self.follow_page(page, now);
+            self.follow_cli_page(cli_was);
+        }
+    }
+
+    /// After the reducer: the CLI page just showed (read Explorer for its
+    /// start folder), its folder menu just opened (read again, so its
+    /// windows are fresh, and list what is known meanwhile), or the panel
+    /// closed (the next visit may follow Explorer again).
+    fn follow_cli_page(&mut self, (was_cli, was_menu, was_open): (bool, bool, bool)) {
+        if was_open && !self.state.panel_is_open() {
+            self.cli_pinned = false;
+        }
+        let shown = self.state.view() == View::Panel(Page::Cli);
+        // Only when following could happen: not in "Folder terakhir" mode,
+        // nor after a cd this visit.
+        if shown
+            && !was_cli
+            && self.config.cli_start == cli_folders::CliStart::Explorer
+            && !self.cli_pinned
+        {
+            self.read_explorer(true);
+        }
+        if self.state.cli_menu() && !was_menu {
+            self.rebuild_cli_menu();
+            self.read_explorer(false);
+        }
+    }
+
+    /// Starts a read of the Explorer windows on a background thread, or
+    /// queues it behind the one running.
+    fn read_explorer(&mut self, for_open: bool) {
+        let reads = &mut self.explorer;
+        if reads.running.is_some() {
+            reads.queued = Some(reads.queued.unwrap_or(false) || for_open);
+            return;
+        }
+        reads.asked += 1;
+        let id = reads.asked;
+        if explorer::read_folders(id, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
+            reads.running = Some(id);
+            if for_open {
+                reads.for_open = Some(id);
+            }
+        }
+    }
+
+    /// A read finished: the menu lists its windows; the read for the page
+    /// opening may move the CLI to the last active one.
+    fn on_explorer_folders(&mut self, request: u64, folders: Vec<PathBuf>) {
+        if self.explorer.running == Some(request) {
+            self.explorer.running = None;
+        }
+        self.explorer.folders = folders;
+        if self.explorer.for_open == Some(request) {
+            self.explorer.for_open = None;
+            self.follow_explorer();
+        }
+        if self.state.cli_menu() {
+            self.rebuild_cli_menu();
+        }
+        if let Some(for_open) = self.explorer.queued.take() {
+            self.read_explorer(for_open);
+        }
+    }
+
+    /// Moves the CLI to the last active Explorer folder if `choose_on_open`
+    /// says so, checked now (a command may have started since the read
+    /// began). An automatic move does not write cli-cwd.txt: that file
+    /// stays the user's own last folder for "Folder terakhir".
+    fn follow_explorer(&mut self) {
+        if self.state.view() != View::Panel(Page::Cli) {
+            return;
+        }
+        let Some(dir) = cli_folders::choose_on_open(
+            self.config.cli_start,
+            self.cli.running().is_some(),
+            self.cli_pinned,
+            &self.explorer.folders,
+            &self.cli_cwd,
+        ) else {
+            return;
+        };
+        let line = i18n::cli_moved_to(i18n::lang(), &dir.to_string_lossy());
+        self.cli_cwd = dir;
+        self.cli_from_explorer = true;
+        self.cli.note(line);
+    }
+
+    /// The menu's lines from the lists as they are now; gone folders hidden.
+    fn rebuild_cli_menu(&mut self) {
+        let sections = cli_folders::menu_rows(
+            &self.explorer.folders,
+            &self.cli_favorites,
+            &self.cli_recent,
+            Local::now().naive_local(),
+            &|p| p.is_dir(),
+        );
+        self.cli_menu_view.items = cli_folders::menu_items(&sections);
+    }
+
+    /// The user chose `dir` (`cd` or the menu): it is saved as the last
+    /// folder and the newest recent one, and it holds until the panel
+    /// closes.
+    fn set_cli_folder(&mut self, dir: PathBuf) {
+        let _ = cli::save_cwd(&cli::cwd_path(), &dir);
+        self.remember_recent(&dir);
+        self.cli_cwd = dir;
+        self.cli_pinned = true;
+        self.cli_from_explorer = false;
+    }
+
+    fn remember_recent(&mut self, dir: &std::path::Path) {
+        self.cli_recent.push_recent(dir, Local::now().timestamp());
+        // A list that cannot be written only loses the list.
+        let _ = self.cli_recent.save(&cli_folders::recent_path());
+    }
+
+    /// A folder picked in the menu; never while a command runs.
+    fn pick_cli_folder(&mut self, dir: PathBuf) {
+        if self.cli.running().is_some() {
+            return;
+        }
+        if dir.is_dir() {
+            self.set_cli_folder(dir);
+        } else {
+            self.cli.note(cli::cd_error(&dir.to_string_lossy()));
+        }
+        self.note_cli_output(Instant::now());
+    }
+
+    /// Stars or unstars `dir`; the open menu follows.
+    fn set_cli_favorite(&mut self, dir: &std::path::Path, on: bool) {
+        if self.cli_favorites.set_favorite(dir, on) {
+            let _ = self.cli_favorites.save(&cli_folders::favorites_path());
+            if self.state.cli_menu() {
+                self.rebuild_cli_menu();
+            }
+            self.redraw_cli();
+        }
+    }
+
+    /// A right-click on a favourite in the open menu unstars it (true);
+    /// anywhere else the tray menu opens as always (false).
+    fn on_right_click(&mut self, lparam: LPARAM) -> bool {
+        if !self.state.cli_menu() || self.state.view() != View::Panel(Page::Cli) {
+            return false;
+        }
+        match self.hit_at(lparam) {
+            Some(Hit::CliFolderPick {
+                path,
+                favorite: true,
+            }) => {
+                self.set_cli_favorite(&path, false);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -761,6 +963,8 @@ impl App {
             Effect::FocusCliInput => return self.focus_cli_input(),
             Effect::ReleaseCliFocus => self.return_keyboard(),
             Effect::StopCli => self.stop_cli(),
+            Effect::CliChangeFolder(dir) => self.pick_cli_folder(dir),
+            Effect::CliFavorite { path, on } => self.set_cli_favorite(&path, on),
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
                 self.reminder_fired.retain(|f| *f != id);
@@ -1087,6 +1291,10 @@ impl App {
                 }
             }
             InputKey::Stop => self.stop_cli(),
+            // The folder menu closes first; the next Esc lets go.
+            InputKey::Escape if self.state.cli_menu() => {
+                self.apply_now(Event::Click(Hit::CliMenuDismiss))
+            }
             InputKey::Escape => self.release_cli(),
             InputKey::PageUp => self.cli_scroll(self.cli_rows() as i32),
             InputKey::PageDown => self.cli_scroll(-(self.cli_rows() as i32)),
@@ -1140,10 +1348,8 @@ impl App {
             Some(Builtin::Cd(arg)) => {
                 self.begin_cli(cmd);
                 match cli::resolve_cd(&self.cli_cwd, arg.as_deref(), &cli::home()) {
-                    Ok(dir) => {
-                        let _ = cli::save_cwd(&cli::cwd_path(), &dir);
-                        self.cli_cwd = dir;
-                    }
+                    // A manual cd wins over Explorer until the panel closes.
+                    Ok(dir) => self.set_cli_folder(dir),
                     Err(arg) => self.cli.note(cli::cd_error(&arg)),
                 }
             }
@@ -1162,6 +1368,14 @@ impl App {
                         self.cli_run = Some(run);
                         self.cli_clock.start(now);
                         self.bata.brain.cli_started();
+                        // The folder a command ran in is the user's last one.
+                        let _ = cli::save_cwd(&cli::cwd_path(), &self.cli_cwd);
+                        let dir = self.cli_cwd.clone();
+                        self.remember_recent(&dir);
+                        // The folder cannot change mid-command.
+                        if self.state.cli_menu() {
+                            self.apply(Event::Click(Hit::CliMenuDismiss), now);
+                        }
                     }
                     Err(error) => {
                         let line = i18n::cli_start_failed(i18n::lang(), &error.to_string());
@@ -2119,6 +2333,11 @@ impl App {
                 self.config.morning_greeting = on;
                 self.save_config();
             }
+            SettingsAction::CliStart(start) => {
+                // Read the next time the CLI page opens.
+                self.config.cli_start = start;
+                self.save_config();
+            }
             SettingsAction::Shell(shell) => {
                 // The next command runs in it; one running goes on as it is.
                 self.config.cli_shell = shell;
@@ -2226,6 +2445,8 @@ impl App {
                 suggestions,
                 selected: self.cli_pick,
                 tall: state.cli_tall(),
+                from_explorer: self.cli_from_explorer,
+                menu: state.cli_menu().then_some(&self.cli_menu_view),
             },
             progress: track_progress(state, now),
             robot,
@@ -3243,7 +3464,11 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            open_menu(hwnd);
+            // A favourite in the open CLI folder menu unstars; elsewhere
+            // the tray menu opens (outside the app borrow: it is modal).
+            if !with_app(|app| app.on_right_click(lparam)).unwrap_or(false) {
+                open_menu(hwnd);
+            }
             LRESULT(0)
         }
         WM_APP_TRAY => {

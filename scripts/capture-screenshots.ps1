@@ -171,6 +171,9 @@ $shots = @(
     # A lyric line too long for the notch, mid-scroll with its right edge faded.
     @{ name = 'lyric-long'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-lirik-long'; DI_LYRIC_SCROLL = '4000' } }
     @{ name = 'cli'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-done' } }
+    # The CLI followed File Explorer, and its folder menu open.
+    @{ name = 'cli-explorer'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-from-explorer' } }
+    @{ name = 'cli-folder-menu'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-folder-menu' } }
     @{ name = 'robot'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'bata-sheet' } }
     @{ name = 'greeting'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'bata-sapaan' } }
     @{ name = 'editor'; args = '--demo-editor event'; env = @{ DI_WINDOW = $Window } }

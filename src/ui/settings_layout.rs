@@ -10,6 +10,7 @@
 use crate::calendar::CalStatus;
 use crate::claude::install::HookState;
 use crate::cli::Shell;
+use crate::cli_folders::CliStart;
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
@@ -269,6 +270,8 @@ pub enum Hit {
     Autostart,
     IdleClock,
     Lyrics,
+    /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
+    CliStart(CliStart),
     Shell(Shell),
     /// "Asisten di notch".
     Robot,
@@ -324,6 +327,7 @@ pub enum Group {
     Surface,
     Window,
     Lang,
+    CliStart,
     Shell,
     Motion,
 }
@@ -594,6 +598,8 @@ pub struct State<'a> {
     pub lyrics: bool,
     /// The CLI page's shell.
     pub shell: Shell,
+    /// Where the CLI page starts when it opens.
+    pub cli_start: CliStart,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -1403,8 +1409,8 @@ pub fn sleep_value(lang: Lang, minutes: u32) -> String {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(6.0 * ROW_H);
-    let rows: [f32; 6] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(7.0 * ROW_H);
+    let rows: [f32; 7] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1454,15 +1460,29 @@ fn general(b: &mut Builder, s: &State) {
     b.row_text(card, rows[4], b.t(Key::LyricsInNotch), desc, false, x);
     b.divider(card, rows[4]);
 
+    // Just before the shell, as in keputusan-v3.1.html.
+    let items = vec![
+        (
+            Hit::CliStart(CliStart::Explorer),
+            b.t(Key::CliStartExplorer),
+        ),
+        (Hit::CliStart(CliStart::Last), b.t(Key::CliStartLast)),
+    ];
+    let selected = index_of(&CliStart::ALL, &s.cli_start);
+    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[5]), items, selected);
+    let desc = Some((b.t(Key::CliStartFolderDesc), Tone::Secondary));
+    b.row_text(card, rows[5], b.t(Key::CliStartFolder), desc, false, x);
+    b.divider(card, rows[5]);
+
     let items = vec![
         (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
         (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
     ];
     let selected = index_of(&Shell::ALL, &s.shell);
-    let x = b.segmented(Group::Shell, RIGHT, cy(rows[5]), items, selected);
+    let x = b.segmented(Group::Shell, RIGHT, cy(rows[6]), items, selected);
     let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
-    b.row_text(card, rows[5], b.t(Key::ShellCli), desc, false, x);
-    b.divider(card, rows[5]);
+    b.row_text(card, rows[6], b.t(Key::ShellCli), desc, false, x);
+    b.divider(card, rows[6]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1789,6 +1809,11 @@ mod tests {
                             Shell::Cmd
                         } else {
                             Shell::PowerShell
+                        },
+                        cli_start: if locked {
+                            CliStart::Last
+                        } else {
+                            CliStart::Explorer
                         },
                         autostart: true,
                         battery_threshold: 50,
@@ -2451,6 +2476,55 @@ mod tests {
         // Not in Appearance, which is full.
         let l = layout(Section::Appearance, &states()[0], &Estimate);
         assert!(!l.hits().iter().any(|(h, _)| *h == Hit::Lyrics));
+    }
+
+    #[test]
+    fn cli_start_folder_sits_just_above_the_shell() {
+        for lang in [Lang::Id, Lang::En] {
+            for start in CliStart::ALL {
+                let s = State {
+                    lang,
+                    cli_start: start,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::General, &s, &Estimate);
+                let (track, items, selected) =
+                    l.segmented(Group::CliStart).expect("Folder awal CLI");
+                assert_eq!(items[selected].hit, Hit::CliStart(start));
+                let hits: Vec<Hit> = items.iter().map(|i| i.hit).collect();
+                assert_eq!(
+                    hits,
+                    [
+                        Hit::CliStart(CliStart::Explorer),
+                        Hit::CliStart(CliStart::Last)
+                    ]
+                );
+                let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+                assert_eq!(
+                    labels,
+                    [
+                        text(lang, Key::CliStartExplorer),
+                        text(lang, Key::CliStartLast)
+                    ]
+                );
+                let r = items[1].rect;
+                assert_eq!(
+                    l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                    Some(Hit::CliStart(CliStart::Last))
+                );
+                // One row above the shell, under everything else.
+                let (shell, _, _) = l.segmented(Group::Shell).expect("Shell CLI");
+                assert_eq!(shell.y - track.y, ROW_H);
+                for key in [Key::CliStartFolder, Key::CliStartFolderDesc] {
+                    assert!(
+                        l.texts.iter().any(|t| t.text == text(lang, key)),
+                        "{lang:?} {key:?}"
+                    );
+                }
+                // The card still ends above the window's bottom margin.
+                assert!(l.cards[0].bottom() <= CLIENT_H - PAD);
+            }
+        }
     }
 
     #[test]
