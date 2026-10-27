@@ -18,9 +18,14 @@ yourself in the main session.
   batch of runs: after the last run and after the deferred review/check pass).
   This project uses a single branch (`main`), so that push is pre-approved.
   Deploy stays with me.
-- Heavy tasks get build, review and check; small or light tasks get build only.
-  In a long batch of runs the review/check of the heavy tasks can be done once
-  at the end, before the push.
+- Each task is marked light or heavy by the Plan step. Light tasks get build
+  only (the builder and Ship run the tests). Heavy tasks get build, a blind
+  review of a pinned commit (fixes land in the builder's worktree), and a check
+  against a written checklist; anything the checker cannot test lands in
+  `manualChecks` for me.
+- For a long batch of runs, pass `args: {request, defer: true}` to build now,
+  then run one verify pass with `args: {verify: [...]}` (the `deferred` list the
+  runs returned) at the end, before the push.
 - When it finishes, report: mode and why, which tasks were merged, whether
   `main` was pushed, and any open findings or failed checks.
 
