@@ -1,7 +1,5 @@
 1 24 "app.manifest"
 1 ICON "assets/icon.ico"
-201 RCDATA "assets/fonts/Fraunces-Italic-400.ttf"
-202 RCDATA "assets/fonts/Fraunces-Italic-500.ttf"
 203 RCDATA "assets/fonts/DMSans-400.ttf"
 204 RCDATA "assets/fonts/DMSans-500.ttf"
 205 RCDATA "assets/fonts/DMSans-600.ttf"

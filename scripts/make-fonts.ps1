@@ -1,6 +1,6 @@
 # Builds the embedded fonts in assets\fonts: static, Latin-subset TTF files of
-# Fraunces Italic, DM Sans and DM Mono, plus assets\fonts\OFL.txt.
-# app.rc embeds the TTFs as RCDATA 201-207; keep the file names in sync.
+# DM Sans and DM Mono, plus assets\fonts\OFL.txt.
+# app.rc embeds the TTFs as RCDATA 203-207; keep the file names in sync.
 #
 # Sources are pinned by commit and SHA-256 below and downloaded into a fresh
 # scratch directory (-WorkDir, default a new folder under %TEMP%), never into
@@ -30,10 +30,6 @@ $OutDir = Join-Path $Repo 'assets\fonts'
 $GoogleFonts = 'https://raw.githubusercontent.com/google/fonts'
 $DmFonts = 'https://raw.githubusercontent.com/googlefonts/dm-fonts'
 $Sources = @(
-    @{ Name = 'Fraunces-Italic-VF.ttf'; Sha256 = 'B24448C43702FAC4EE856781D461A0DFBA8D8E594B6E8E190234B75FED2C0E01'
-       Url = "$GoogleFonts/4024282d9b0cffcdb8e3024560862746178d741f/ofl/fraunces/Fraunces-Italic%5BSOFT,WONK,opsz,wght%5D.ttf" }
-    @{ Name = 'Fraunces-OFL.txt'; Sha256 = 'BDF4C22802EAF804F998195871C6B8938AAC2AC14B2D78A8BD66A6F1ECED833B'
-       Url = "$GoogleFonts/4024282d9b0cffcdb8e3024560862746178d741f/ofl/fraunces/OFL.txt" }
     @{ Name = 'DMSans-VF.ttf'; Sha256 = 'A023F465D2F26D8F56C6E3CAC6AECE08B7A66EB75B4D75EEEF9DF838C53C81F6'
        Url = "$DmFonts/4412393b7d2de9fe7a92064c2dce9b5af5d7fd26/Sans/fonts/variable/DMSans%5Bopsz,wght%5D.ttf" }
     @{ Name = 'DMSans-OFL.txt'; Sha256 = '9AF36190332437F5ECD09974DE43C1F7C77A310A996CDD8CEB25628B458840E1'
@@ -66,59 +62,21 @@ FEATURES = "kern,liga,calt,ccmp,locl,mark,mkmk,tnum,pnum,lnum"
 NAME_IDS = "0,1,2,3,4,5,6,13,14,16,17"
 WEIGHT_NAMES = {400: "Regular", 500: "Medium", 600: "SemiBold"}
 
-# (source, axis location or None for a static source, output, family, weight, italic)
-# Axes not listed (Fraunces SOFT and WONK) stay at their defaults.
+# (source, axis location or None for a static source, output, family, weight)
 JOBS = [
-    ("Fraunces-Italic-VF.ttf", {"wght": 400, "opsz": 48}, "Fraunces-Italic-400.ttf", "Fraunces", 400, True),
-    ("Fraunces-Italic-VF.ttf", {"wght": 500, "opsz": 20}, "Fraunces-Italic-500.ttf", "Fraunces", 500, True),
-    ("DMSans-VF.ttf", {"wght": 400, "opsz": 12}, "DMSans-400.ttf", "DM Sans", 400, False),
-    ("DMSans-VF.ttf", {"wght": 500, "opsz": 12}, "DMSans-500.ttf", "DM Sans", 500, False),
-    ("DMSans-VF.ttf", {"wght": 600, "opsz": 12}, "DMSans-600.ttf", "DM Sans", 600, False),
-    ("DMMono-Regular.ttf", None, "DMMono-400.ttf", "DM Mono", 400, False),
-    ("DMMono-Medium.ttf", None, "DMMono-500.ttf", "DM Mono", 500, False),
+    ("DMSans-VF.ttf", {"wght": 400, "opsz": 12}, "DMSans-400.ttf", "DM Sans", 400),
+    ("DMSans-VF.ttf", {"wght": 500, "opsz": 12}, "DMSans-500.ttf", "DM Sans", 500),
+    ("DMSans-VF.ttf", {"wght": 600, "opsz": 12}, "DMSans-600.ttf", "DM Sans", 600),
+    ("DMMono-Regular.ttf", None, "DMMono-400.ttf", "DM Mono", 400),
+    ("DMMono-Medium.ttf", None, "DMMono-500.ttf", "DM Mono", 500),
 ]
 
 
-def single_subst_mappings(gsub, lookup_index):
-    lookup = gsub.LookupList.Lookup[lookup_index]
-    for st in lookup.SubTable:
-        kind = lookup.LookupType
-        if kind == 7:
-            kind, st = st.ExtensionLookupType, st.ExtSubTable
-        if kind != 1:
-            raise SystemExit(f"rvrn lookup {lookup_index} has type {kind}; only single substitution can be baked")
-        yield st.mapping
-
-
-def bake_rvrn(font):
-    # The instancer resolves FeatureVariations (Fraunces swaps in its non-wonky
-    # glyphs at small opsz) into the rvrn feature. Not every renderer runs rvrn
-    # on a static font, so apply it to the cmap; the subsetter then drops rvrn.
-    if "GSUB" not in font:
-        return 0
-    gsub = font["GSUB"].table
-    mapping = {}
-    for rec in gsub.FeatureList.FeatureRecord:
-        if rec.FeatureTag == "rvrn":
-            for li in rec.Feature.LookupListIndex:
-                for m in single_subst_mappings(gsub, li):
-                    mapping.update(m)
-    if mapping:
-        for table in font["cmap"].tables:
-            table.cmap = {cp: mapping.get(g, g) for cp, g in table.cmap.items()}
-    return len(mapping)
-
-
-def set_names(font, family, weight, italic):
+def set_names(font, family, weight):
     # Contract with the loader: typographic and legacy family are both the bare
-    # family name; weight comes from usWeightClass, italic from the style bits.
-    wname = WEIGHT_NAMES[weight]
-    if italic:
-        typo_sub = "Italic" if weight == 400 else f"{wname} Italic"
-        legacy_sub = "Italic"
-    else:
-        typo_sub = wname
-        legacy_sub = "Regular"
+    # family name; weight comes from usWeightClass. Every face is upright.
+    typo_sub = WEIGHT_NAMES[weight]
+    legacy_sub = "Regular"
     ps_name = f"{family.replace(' ', '')}-{typo_sub.replace(' ', '')}"
     name = font["name"]
     version = (name.getDebugName(5) or "Version 1.000").split(";")[0]
@@ -138,24 +96,21 @@ def set_names(font, family, weight, italic):
     os2 = font["OS/2"]
     os2.usWeightClass = weight
     sel = os2.fsSelection & ~((1 << 0) | (1 << 5) | (1 << 6))
-    if italic:
-        sel |= 1 << 0
-    elif weight == 400:
+    if weight == 400:
         sel |= 1 << 6
     os2.fsSelection = sel
-    font["head"].macStyle = (font["head"].macStyle & ~0b11) | (0b10 if italic else 0)
+    font["head"].macStyle = font["head"].macStyle & ~0b11
     if "STAT" in font:
         del font["STAT"]
 
 
 os.makedirs(work_dir, exist_ok=True)
 os.makedirs(out_dir, exist_ok=True)
-for src, location, out, family, weight, italic in JOBS:
+for src, location, out, family, weight in JOBS:
     font = TTFont(os.path.join(src_dir, src))
     if location is not None:
         font = instancer.instantiateVariableFont(font, location, static=True)
-    baked = bake_rvrn(font)
-    set_names(font, family, weight, italic)
+    set_names(font, family, weight)
     tmp = os.path.join(work_dir, out)
     font.save(tmp)
     args = [
@@ -168,7 +123,7 @@ for src, location, out, family, weight, italic in JOBS:
     if not hinting:
         args.append("--no-hinting")
     subset.main(args)  # pyftsubset
-    print(f"built {out} from {src} {location or ''} (rvrn glyphs baked: {baked})")
+    print(f"built {out} from {src} {location or ''}")
 '@
 
 $VerifyPy = @'
@@ -178,20 +133,18 @@ import sys
 from fontTools.ttLib import TTFont
 
 out_dir = sys.argv[1]
-# file -> (family, typographic subfamily, legacy subfamily, weight, italic)
+# file -> (family, typographic subfamily, legacy subfamily, weight); all upright
 EXPECT = {
-    "Fraunces-Italic-400.ttf": ("Fraunces", "Italic", "Italic", 400, True),
-    "Fraunces-Italic-500.ttf": ("Fraunces", "Medium Italic", "Italic", 500, True),
-    "DMSans-400.ttf": ("DM Sans", "Regular", "Regular", 400, False),
-    "DMSans-500.ttf": ("DM Sans", "Medium", "Regular", 500, False),
-    "DMSans-600.ttf": ("DM Sans", "SemiBold", "Regular", 600, False),
-    "DMMono-400.ttf": ("DM Mono", "Regular", "Regular", 400, False),
-    "DMMono-500.ttf": ("DM Mono", "Medium", "Regular", 500, False),
+    "DMSans-400.ttf": ("DM Sans", "Regular", "Regular", 400),
+    "DMSans-500.ttf": ("DM Sans", "Medium", "Regular", 500),
+    "DMSans-600.ttf": ("DM Sans", "SemiBold", "Regular", 600),
+    "DMMono-400.ttf": ("DM Mono", "Regular", "Regular", 400),
+    "DMMono-500.ttf": ("DM Mono", "Medium", "Regular", 500),
 }
 LIMIT = 370 * 1024
 
 errors, total = [], 0
-for file, (family, typo_sub, legacy_sub, weight, italic) in EXPECT.items():
+for file, (family, typo_sub, legacy_sub, weight) in EXPECT.items():
     path = os.path.join(out_dir, file)
     size = os.path.getsize(path)
     total += size
@@ -211,8 +164,8 @@ for file, (family, typo_sub, legacy_sub, weight, italic) in EXPECT.items():
             errors.append(f"{file}: name {i} is {ids[i]!r}, expected {value!r}")
     if os2.usWeightClass != weight:
         errors.append(f"{file}: usWeightClass {os2.usWeightClass}, expected {weight}")
-    if bool(os2.fsSelection & 1) != italic or bool(head.macStyle & 2) != italic:
-        errors.append(f"{file}: italic bits do not match italic={italic}")
+    if os2.fsSelection & 1 or head.macStyle & 2:
+        errors.append(f"{file}: italic bit set")
     if os2.fsSelection & (1 << 5) or head.macStyle & 1:
         errors.append(f"{file}: bold bit set")
     if "fvar" in font:
@@ -287,7 +240,6 @@ $hint = if ($NoHinting) { '0' } else { '1' }
 Invoke-Native $Py @('-I', $build, $SrcDir, $InstDir, $OutDir, $hint)
 
 $ofl = @(
-    @{ File = 'Fraunces-OFL.txt'; Title = 'Fraunces (Undercase Type): Fraunces-Italic-400.ttf, Fraunces-Italic-500.ttf' }
     @{ File = 'DMSans-OFL.txt'; Title = 'DM Sans (Colophon Foundry, Google Fonts): DMSans-400.ttf, DMSans-500.ttf, DMSans-600.ttf' }
     @{ File = 'DMMono-OFL.txt'; Title = 'DM Mono (Colophon Foundry, Google Fonts): DMMono-400.ttf, DMMono-500.ttf' }
 )

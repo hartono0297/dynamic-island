@@ -16,8 +16,9 @@ the note it links to.
   `config.json` are aliased, not reset. [[studio-palette-accent-aliases]]
 - **Contrast beats the mock-up.** Light secondary text was nudged to pass
   4.5:1; re-check any pasted design value. [[studio-light-secondary-text-contrast]]
-- **Typefaces.** Fraunces Italic, DM Sans, DM Mono, embedded and subset by a
-  pinned, reproducible script. [[studio-font-sources]]
+- **Typefaces.** DM Sans (text and titles, 600 upright for titles since v3.1)
+  and DM Mono, embedded and subset by a pinned, reproducible script.
+  [[studio-font-sources]]
 - **Loading them.** DirectWrite and GDI each need their own path, with
   fallbacks. [[studio-font-loading]]
 - **Tabular figures on digits only**, or DM Sans widens word gaps.
@@ -59,7 +60,7 @@ the note it links to.
 
 - `--demo` scenes are built around the current time; check early and late.
   [[demo-data-time-of-day]]
-- Still open: the screenshots in `assets/screenshots` show v2.2 and need a
-  fresh capture for 3.0 ([[studio-font-sources]]).
+- Still open: the 3.0 screenshots in `assets/screenshots` show the old
+  italic titles and need a fresh capture for 3.1 ([[studio-font-sources]]).
 
 Listed in [[index]].
