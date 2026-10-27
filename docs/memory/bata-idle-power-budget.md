@@ -33,6 +33,7 @@ Motion policy (`Motion`, config `robot_animation`):
 
 Robot off: nothing of this runs; widths, timers and drawing are as before.
 
-Related: [[bata-robot-expressions]], [[studio-media-progress-timer]]
+Related: [[bata-robot-expressions]], [[studio-media-progress-timer]],
+[[lyric-notch-width]] (a long lyric line's one-shot scroll timer follows the same rule)
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

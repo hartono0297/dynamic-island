@@ -47,7 +47,8 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     let (w, h) = match kind {
         ShapeKind::Idle | ShapeKind::MediaCompact => (190.0, 34.0),
         ShapeKind::PomodoroCompact => (210.0, 34.0),
-        ShapeKind::MediaLyric => (300.0, 34.0),
+        // Sized by its line (`lyric_shape`); without one, the narrowest.
+        ShapeKind::MediaLyric => (LYRIC_MIN_W, 34.0),
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::Panel => (560.0, 290.0),
         ShapeKind::PanelTall => (560.0, 440.0),
@@ -90,8 +91,7 @@ pub fn robot_extra(kind: ShapeKind) -> f32 {
     match kind {
         // The art (22 px, text from +38) becomes the robot (26 px, text from +40).
         ShapeKind::MediaCompact => 2.0,
-        // The line started 20 px in; now after the robot, 40 px in.
-        ShapeKind::MediaLyric => 20.0,
+        // `lyric_width` already counts the robot in its lead.
         // The ring started 14 px in; now after the robot, 40 px in.
         ShapeKind::PomodoroCompact => 26.0,
         _ => 0.0,
@@ -362,10 +362,111 @@ pub fn compact_layout(s: ShapeRect) -> CompactLayout {
 }
 
 /// The lyric line's box: the shape less its side padding (wider than the
-/// corner radius, so trimmed text never runs into the rounded ends).
+/// corner radius, so the text never runs into the rounded ends).
 pub fn lyric_layout(s: ShapeRect) -> Rect {
-    const PAD_X: f32 = 20.0;
-    text_box(s.x + PAD_X, s.x + s.w - PAD_X, s.y, s.h)
+    text_box(s.x + LYRIC_PAD, s.x + s.w - LYRIC_PAD, s.y, s.h)
+}
+
+/// The lyric notch is as wide as its line, between these (logical px).
+pub const LYRIC_MIN_W: f32 = 220.0;
+pub const LYRIC_MAX_W: f32 = 560.0;
+/// On a small screen the notch takes at most this share of its width.
+pub const LYRIC_SCREEN_SHARE: f32 = 0.45;
+/// A new line this much shorter (or more) shrinks the notch; less keeps it,
+/// so it does not wobble on every line.
+pub const LYRIC_SHRINK_SLACK: f32 = 40.0;
+/// A width change while the lyric view stays.
+pub const LYRIC_RESIZE_MS: u64 = 180;
+/// A line too long for the widest notch waits this long, then scrolls.
+pub const LYRIC_HOLD_MS: u64 = 1000;
+/// How fast a long line scrolls.
+pub const LYRIC_SCROLL_PX_PER_S: f32 = 30.0;
+/// The faded strip at the right of a line running past its box. The scroll
+/// stops with the line's end just left of it.
+pub const LYRIC_FADE_W: f32 = 32.0;
+/// The line's box: this far from the shape's sides (no robot).
+const LYRIC_PAD: f32 = 20.0;
+/// Room for the measure's rounding, so a measured line never trims.
+const LYRIC_SLACK: f32 = 1.0;
+
+/// Where the line's box starts, from the shape's left edge: after the side
+/// padding, or after the robot (`lyric_layout_robot`).
+fn lyric_lead(robot: bool) -> f32 {
+    if robot {
+        ROBOT_INSET + ROBOT_COMPACT + ROBOT_GAP
+    } else {
+        LYRIC_PAD
+    }
+}
+
+/// The widest lyric notch on a screen `screen_w` logical px wide.
+pub fn lyric_max_w(screen_w: f32) -> f32 {
+    (LYRIC_SCREEN_SHARE * screen_w).clamp(LYRIC_MIN_W, LYRIC_MAX_W)
+}
+
+/// The notch's width for a line measured `text_w` px wide (`None`: the
+/// instrumental rest "♪" or nothing, which takes the minimum).
+pub fn lyric_width(text_w: Option<f32>, robot: bool, max_w: f32) -> f32 {
+    let max_w = max_w.max(LYRIC_MIN_W);
+    match text_w {
+        Some(w) if w > 0.0 => {
+            (w.ceil() + LYRIC_SLACK + lyric_lead(robot) + LYRIC_PAD).clamp(LYRIC_MIN_W, max_w)
+        }
+        _ => LYRIC_MIN_W,
+    }
+}
+
+/// The line's box width in a lyric notch `w` wide.
+pub fn lyric_box_w(w: f32, robot: bool) -> f32 {
+    (w - lyric_lead(robot) - LYRIC_PAD).max(0.0)
+}
+
+/// Hysteresis: the width to show after `current` (`None` when the lyric
+/// view just opened) for a line that wants `wanted`. Grows at once; shrinks
+/// only by `LYRIC_SHRINK_SLACK` or more.
+pub fn lyric_target_w(current: Option<f32>, wanted: f32) -> f32 {
+    match current {
+        Some(c) if wanted < c && c - wanted < LYRIC_SHRINK_SLACK => c,
+        _ => wanted,
+    }
+}
+
+/// The lyric notch `w` wide, centred, as tall and round as the compact shapes.
+pub fn lyric_shape(style: Style, w: f32) -> ShapeRect {
+    let s = shape_for(style, ShapeKind::MediaLyric);
+    ShapeRect {
+        x: (WINDOW_W - w) / 2.0,
+        w,
+        ..s
+    }
+}
+
+/// A line `text_w` wide runs past its box `box_w` wide.
+pub fn lyric_overflow(text_w: f32, box_w: f32) -> bool {
+    text_w > box_w
+}
+
+/// How far a long line scrolls in all: until its end sits just left of the fade.
+fn lyric_scroll_max(text_w: f32, box_w: f32) -> f32 {
+    if lyric_overflow(text_w, box_w) {
+        text_w - box_w + LYRIC_FADE_W
+    } else {
+        0.0
+    }
+}
+
+/// How far the line is scrolled left `ms_since_line` after it showed: 0
+/// through the hold, then `LYRIC_SCROLL_PX_PER_S` until its end; 0 for a
+/// line that fits.
+pub fn lyric_scroll_offset(text_w: f32, box_w: f32, ms_since_line: u64) -> f32 {
+    let moving = ms_since_line.saturating_sub(LYRIC_HOLD_MS) as f32 / 1000.0;
+    (moving * LYRIC_SCROLL_PX_PER_S).min(lyric_scroll_max(text_w, box_w))
+}
+
+/// When, after the line showed, its scroll ends; `None` when it fits.
+pub fn lyric_scroll_end_ms(text_w: f32, box_w: f32) -> Option<u64> {
+    let max = lyric_scroll_max(text_w, box_w);
+    (max > 0.0).then(|| LYRIC_HOLD_MS + (max / LYRIC_SCROLL_PX_PER_S * 1000.0).ceil() as u64)
 }
 
 /// `action`: room for the chip naming what a click does ("Selesai",
@@ -627,7 +728,8 @@ mod tests {
             let m = shape_for(style, ShapeKind::MediaLyric);
             let text = lyric_layout(m);
             assert!(inside(m, text), "{style:?} lyric {text:?}");
-            assert_eq!((text.w, text.h), (260.0, 34.0));
+            // Without a line: the narrowest notch.
+            assert_eq!((text.w, text.h), (180.0, 34.0));
             assert!(text.x - m.x >= corner_radius(style, m));
 
             let n = shape_for(style, ShapeKind::Notice);
@@ -715,14 +817,28 @@ mod tests {
                     .w
             );
 
+            // The lyric notch counts the robot in its width: the same line
+            // gets the same box with or without it.
+            for text_w in [None, Some(120.0), Some(300.0), Some(480.0)] {
+                let on = lyric_shape(style, lyric_width(text_w, true, LYRIC_MAX_W));
+                let off = lyric_shape(style, lyric_width(text_w, false, LYRIC_MAX_W));
+                let (robot, text) = lyric_layout_robot(on);
+                head_inside(on, robot);
+                assert!(inside(on, text) && !intersects(robot, text));
+                let plain = lyric_layout(off);
+                assert!(inside(off, plain));
+                if let Some(t) = text_w {
+                    assert!(text.w >= t && plain.w >= t, "{style:?} {t}");
+                    // Above the minimum, the robot only adds its own room.
+                    if off.w > LYRIC_MIN_W {
+                        assert_eq!(text.w, plain.w, "{style:?} {t}");
+                    }
+                }
+            }
             let s = shape_with_robot(style, ShapeKind::MediaLyric, true);
             let (robot, text) = lyric_layout_robot(s);
             head_inside(s, robot);
             assert!(inside(s, text) && !intersects(robot, text));
-            assert_eq!(
-                text.w,
-                lyric_layout(shape_for(style, ShapeKind::MediaLyric)).w
-            );
 
             let s = shape_with_robot(style, ShapeKind::PomodoroCompact, true);
             let (robot, (cx, cy), r, text) =
@@ -773,7 +889,8 @@ mod tests {
             let w = |kind| shape_with_robot(style, kind, true).w;
             assert_eq!(w(ShapeKind::Idle), 190.0);
             assert_eq!(w(ShapeKind::MediaCompact), 192.0);
-            assert_eq!(w(ShapeKind::MediaLyric), 320.0);
+            // Sized by its line, robot included (`lyric_width`).
+            assert_eq!(w(ShapeKind::MediaLyric), LYRIC_MIN_W);
             assert_eq!(w(ShapeKind::PomodoroCompact), 236.0);
             assert_eq!(w(ShapeKind::Notice), 360.0);
             assert_eq!(w(ShapeKind::Panel), 560.0, "never in the panel");
@@ -939,7 +1056,7 @@ mod tests {
             assert_eq!(size(ShapeKind::Idle), (190.0, 34.0));
             assert_eq!(size(ShapeKind::MediaCompact), (190.0, 34.0));
             assert_eq!(size(ShapeKind::PomodoroCompact), (210.0, 34.0));
-            assert_eq!(size(ShapeKind::MediaLyric), (300.0, 34.0));
+            assert_eq!(size(ShapeKind::MediaLyric), (220.0, 34.0));
             assert_eq!(size(ShapeKind::Notice), (360.0, 76.0));
             assert_eq!(size(ShapeKind::Panel), (560.0, 290.0));
         }
@@ -1018,5 +1135,136 @@ mod tests {
         assert_eq!(m.x * 2.0 + m.w, WINDOW_W);
         assert_eq!(lerp_shape(a, b, 0.0), a);
         assert_eq!(lerp_shape(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn lyric_width_stays_between_min_and_max() {
+        for robot in [false, true] {
+            // Instrumental "♪", nothing, or a failed measure: the minimum.
+            assert_eq!(lyric_width(None, robot, LYRIC_MAX_W), LYRIC_MIN_W);
+            assert_eq!(lyric_width(Some(0.0), robot, LYRIC_MAX_W), LYRIC_MIN_W);
+            // A short line keeps the minimum; a huge one caps at the maximum.
+            assert_eq!(lyric_width(Some(40.0), robot, LYRIC_MAX_W), LYRIC_MIN_W);
+            assert_eq!(lyric_width(Some(2000.0), robot, LYRIC_MAX_W), LYRIC_MAX_W);
+            assert_eq!(lyric_width(Some(2000.0), robot, 450.0), 450.0);
+            // In between, the notch hugs its line: text, 1 px slack, lead, padding.
+            let lead = if robot { 40.0 } else { 20.0 };
+            assert_eq!(
+                lyric_width(Some(300.4), robot, LYRIC_MAX_W),
+                301.0 + 1.0 + lead + 20.0
+            );
+            for i in 0..200 {
+                let w = lyric_width(Some(i as f32 * 4.0), robot, LYRIC_MAX_W);
+                assert!((LYRIC_MIN_W..=LYRIC_MAX_W).contains(&w), "{w}");
+            }
+        }
+        // A maximum below the minimum (a tiny screen) never undercuts it.
+        assert_eq!(lyric_width(Some(500.0), false, 100.0), LYRIC_MIN_W);
+    }
+
+    #[test]
+    fn lyric_max_follows_the_screen() {
+        assert_eq!(lyric_max_w(1000.0), 450.0);
+        // Wide screens cap at 560; tiny ones never go below 220.
+        assert_eq!(lyric_max_w(1920.0), LYRIC_MAX_W);
+        assert_eq!(lyric_max_w(3840.0), LYRIC_MAX_W);
+        assert_eq!(lyric_max_w(400.0), LYRIC_MIN_W);
+        assert_eq!(lyric_max_w(0.0), LYRIC_MIN_W);
+        // 1366 × 0.45 = 614.7: still 560.
+        assert_eq!(lyric_max_w(1366.0), LYRIC_MAX_W);
+        assert!((lyric_max_w(1100.0) - 495.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn lyric_width_shrinks_only_by_the_slack() {
+        // Just opened: whatever the line wants.
+        assert_eq!(lyric_target_w(None, 300.0), 300.0);
+        assert_eq!(lyric_target_w(None, LYRIC_MIN_W), LYRIC_MIN_W);
+        // Longer: grows at once, by any amount.
+        assert_eq!(lyric_target_w(Some(300.0), 301.0), 301.0);
+        assert_eq!(lyric_target_w(Some(300.0), 560.0), 560.0);
+        // Up to 40 px shorter keeps the width; 40 or more shrinks.
+        assert_eq!(lyric_target_w(Some(300.0), 300.0), 300.0);
+        assert_eq!(lyric_target_w(Some(300.0), 265.0), 300.0);
+        assert_eq!(lyric_target_w(Some(300.0), 260.5), 300.0);
+        assert_eq!(lyric_target_w(Some(300.0), 260.0), 260.0);
+        assert_eq!(lyric_target_w(Some(300.0), 220.0), 220.0);
+    }
+
+    #[test]
+    fn lyric_shape_is_a_centred_compact_shape() {
+        for style in [Style::Pill, Style::Notch] {
+            let base = shape_for(style, ShapeKind::MediaLyric);
+            for w in [LYRIC_MIN_W, 333.0, LYRIC_MAX_W] {
+                let s = lyric_shape(style, w);
+                assert_eq!(s.w, w);
+                assert_eq!(s.x * 2.0 + s.w, WINDOW_W);
+                assert_eq!((s.y, s.h, s.radius), (base.y, base.h, base.radius));
+                assert_eq!(s.h, 34.0);
+            }
+            // The widest notch, overshooting, still fits the window.
+            let peak = (0..=100)
+                .map(|i| ease_out_back(i as f32 / 100.0))
+                .fold(0.0, f32::max);
+            let grown = lerp_shape(
+                lyric_shape(style, LYRIC_MIN_W),
+                lyric_shape(style, LYRIC_MAX_W),
+                peak,
+            );
+            assert!(grown.x >= SHOULDER && grown.x + grown.w <= WINDOW_W - SHOULDER);
+        }
+    }
+
+    #[test]
+    fn a_line_that_fits_the_widest_box_is_never_trimmed() {
+        for style in [Style::Pill, Style::Notch] {
+            for robot in [false, true] {
+                let room = lyric_box_w(LYRIC_MAX_W, robot) - 1.0;
+                for i in 0..=100 {
+                    let text_w = room * i as f32 / 100.0 + 0.37;
+                    let s = lyric_shape(style, lyric_width(Some(text_w), robot, LYRIC_MAX_W));
+                    let area = if robot {
+                        lyric_layout_robot(s).1
+                    } else {
+                        lyric_layout(s)
+                    };
+                    assert!(area.w >= text_w, "{style:?} {robot} {text_w} in {area:?}");
+                    assert!((area.w - lyric_box_w(s.w, robot)).abs() < 1e-3);
+                    assert!(!lyric_overflow(text_w, area.w));
+                    assert_eq!(lyric_scroll_end_ms(text_w, area.w), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_line_holds_then_scrolls_to_its_end() {
+        let (text_w, box_w) = (700.0, 500.0);
+        assert!(lyric_overflow(text_w, box_w));
+        // Held still for the first second.
+        for ms in [0, 500, LYRIC_HOLD_MS] {
+            assert_eq!(lyric_scroll_offset(text_w, box_w, ms), 0.0);
+        }
+        // Then 30 px/s.
+        let after = lyric_scroll_offset(text_w, box_w, LYRIC_HOLD_MS + 1000);
+        assert!((after - LYRIC_SCROLL_PX_PER_S).abs() < 1e-3);
+        // Rising, never past the end, then resting there.
+        let end = lyric_scroll_end_ms(text_w, box_w).expect("scrolls");
+        let max = text_w - box_w + LYRIC_FADE_W;
+        let mut last = 0.0;
+        for ms in (0..end + 3000).step_by(37) {
+            let o = lyric_scroll_offset(text_w, box_w, ms);
+            assert!(o >= last && o <= max, "{ms}: {o}");
+            last = o;
+        }
+        assert_eq!(lyric_scroll_offset(text_w, box_w, end), max);
+        assert_eq!(lyric_scroll_offset(text_w, box_w, end + 60_000), max);
+        assert!(lyric_scroll_offset(text_w, box_w, end - 100) < max);
+        // At its end the line's last letter is left of the fade.
+        assert!(box_w - (text_w - max) >= LYRIC_FADE_W - 1e-3);
+        // A line that fits never moves.
+        assert_eq!(lyric_scroll_offset(400.0, box_w, 10_000), 0.0);
+        assert_eq!(lyric_scroll_end_ms(400.0, box_w), None);
+        assert_eq!(lyric_scroll_end_ms(box_w, box_w), None);
     }
 }

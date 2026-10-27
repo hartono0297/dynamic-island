@@ -26,6 +26,8 @@ pub struct IslandWindow {
     origin: POINT,
     size: SIZE,
     tall: bool,
+    /// The primary monitor's width in logical px (the lyric notch's cap).
+    screen_w: f32,
 }
 
 impl IslandWindow {
@@ -47,7 +49,12 @@ impl IslandWindow {
                     return Err(error);
                 }
             }
-            let (origin, size, scale) = placement(false);
+            let Placement {
+                origin,
+                size,
+                scale,
+                screen_w,
+            } = placement(false);
             let ex_style: WINDOW_EX_STYLE =
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
             let hwnd = CreateWindowExW(
@@ -72,6 +79,7 @@ impl IslandWindow {
                 origin,
                 size,
                 tall: false,
+                screen_w,
             })
         }
     }
@@ -96,13 +104,24 @@ impl IslandWindow {
         self.scale
     }
 
+    /// The primary monitor's width in logical px, as of the last placement.
+    pub fn screen_w(&self) -> f32 {
+        self.screen_w
+    }
+
     /// Re-centers on the primary monitor at its current DPI. Call on
     /// `WM_DPICHANGED` and `WM_DISPLAYCHANGE`, then redraw.
     pub fn reposition(&mut self) {
-        let (origin, size, scale) = placement(self.tall);
+        let Placement {
+            origin,
+            size,
+            scale,
+            screen_w,
+        } = placement(self.tall);
         self.origin = origin;
         self.size = size;
         self.scale = scale;
+        self.screen_w = screen_w;
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
@@ -145,7 +164,16 @@ fn height(tall: bool) -> f32 {
     if tall { TALL_WINDOW_H } else { WINDOW_H }
 }
 
-fn placement(tall: bool) -> (POINT, SIZE, f32) {
+/// Where the window goes and what it learned about the monitor.
+struct Placement {
+    origin: POINT,
+    size: SIZE,
+    scale: f32,
+    /// The monitor's width in logical px.
+    screen_w: f32,
+}
+
+fn placement(tall: bool) -> Placement {
     unsafe {
         let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
         let mut info = MONITORINFO {
@@ -167,6 +195,11 @@ fn placement(tall: bool) -> (POINT, SIZE, f32) {
             x: rc.left + (rc.right - rc.left - size.cx) / 2,
             y: rc.top,
         };
-        (origin, size, scale)
+        Placement {
+            origin,
+            size,
+            scale,
+            screen_w: (rc.right - rc.left) as f32 / scale,
+        }
     }
 }

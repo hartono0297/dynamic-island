@@ -18,6 +18,12 @@
 //! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
 //!   LRC (`DEMO_LRC`); `DI_DEMO_FADE=0.5` freezes the crossfade from the
 //!   previous line at that progress.
+//! - `DI_LYRIC_SCROLL=ms` freezes a line too long for the notch that long
+//!   after it showed (held for the first `LYRIC_HOLD_MS`, then scrolling);
+//!   without it the line scrolls live from the step's start.
+//!
+//! The lyric scenes size the notch as the island does: the line measured
+//! by the renderer, capped by this screen's width (`lyric_max_w`).
 //!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
@@ -33,7 +39,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
-use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_with_robot};
+use super::geometry::{
+    ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
+    lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
+};
 use super::render::{CliView, Frame, Progress, Renderer, RobotFrame};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -175,12 +184,13 @@ const fn bata(name: &'static str, kind: ShapeKind, view: View0, expr: Expr) -> S
 }
 
 /// Made-up lyrics: a metadata tag, an offset, a line timed twice, an
-/// instrumental gap and a line too long for the notch.
+/// instrumental gap, a line too long for the notch and a short one.
 const DEMO_LRC: &str = "[ar:Demo]\n[ti:Jalan Pulang]\n[offset:+0]\n\
 [00:01.00][00:24.00] Lampu kota menyala satu per satu\n\
 [00:05.20] Kita pulang lewat jalan yang biasa\n\
 [00:10.00]\n\
-[00:16.00] Langit sore memeluk atap-atap rumah di sepanjang jalan menuju pantai yang jauh di sana\n";
+[00:16.00] Langit sore memeluk atap-atap rumah di sepanjang jalan menuju pantai yang jauh di sana\n\
+[00:26.00] Tanpa kata\n";
 
 const fn lyric(name: &'static str, lyric_at: u64) -> Scene {
     Scene {
@@ -224,7 +234,7 @@ const fn cli(name: &'static str, which: CliDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 51] = [
+const SCENES: [Scene; 53] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -316,9 +326,12 @@ const SCENES: [Scene; 51] = [
         strip: true,
         ..panel("strip", Page::Calendar)
     },
+    // A medium line hugged by the notch, one capped and scrolling, the
+    // instrumental rest and a short line (both the minimum).
     lyric("lyric", 6_000),
     lyric("lyric-long", 17_000),
     lyric("lyric-instrumental", 11_000),
+    lyric("lyric-short", 27_000),
     Scene {
         lyrics_on: true,
         ..panel("media-lyrics-on", Page::Media)
@@ -367,6 +380,16 @@ const SCENES: [Scene; 51] = [
         lyrics_on: true,
         ..bata(
             "bata-lirik",
+            ShapeKind::MediaLyric,
+            View0::MediaLyric,
+            Expr::Sing,
+        )
+    },
+    Scene {
+        lyric_at: 17_000,
+        lyrics_on: true,
+        ..bata(
+            "bata-lirik-long",
             ShapeKind::MediaLyric,
             View0::MediaLyric,
             Expr::Sing,
@@ -508,6 +531,7 @@ fn run_scenes(scenes: &[Scene]) {
     let clock_on = std::env::var("DI_CLOCK").map_or(true, |v| v != "0");
     let lyric_at: Option<u64> = env("DI_LYRIC_AT");
     let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
+    let lyric_scroll: Option<u64> = env("DI_LYRIC_SCROLL");
     let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -537,8 +561,25 @@ fn run_scenes(scenes: &[Scene]) {
             std::thread::sleep(Duration::from_millis(16));
             continue;
         }
-        // The equalizer animates; everything else redraws only while morphing.
-        let animated = scene.view == View0::MediaCompact;
+        let now = Instant::now();
+        let at = lyric_at.unwrap_or(scene.lyric_at);
+        let lyric_state = demo_lyrics(at, lyric_fade, now);
+        let to = scene_shape(&renderer, &win, style, &scene, at);
+        // How far a long line has scrolled: frozen, or live from the step's start.
+        let scroll = match scene.view {
+            View0::MediaLyric => {
+                let text = lyric_state.shown(now).map_or("", |l| l.text);
+                let box_w = lyric_box_w(to.w, scene.robot.is_some());
+                renderer.lyric_text_width(text).map_or(0.0, |text_w| {
+                    lyric_scroll_offset(text_w, box_w, lyric_scroll.unwrap_or(into as u64))
+                })
+            }
+            _ => 0.0,
+        };
+        // The equalizer and a scrolling line animate; everything else redraws
+        // only while morphing.
+        let animated = scene.view == View0::MediaCompact
+            || (scene.view == View0::MediaLyric && lyric_scroll.is_none() && scroll > 0.0);
         if step != settled || animated {
             if t >= 1.0 {
                 if settled != step {
@@ -547,10 +588,9 @@ fn run_scenes(scenes: &[Scene]) {
                 settled = step;
             }
             let (prev_style, prev) = self::scene(scenes, (step + steps - 1) % steps);
-            let from = shape_with_robot(prev_style, prev.kind, prev.robot.is_some());
-            let to = shape_with_robot(style, scene.kind, scene.robot.is_some());
+            let prev_at = lyric_at.unwrap_or(prev.lyric_at);
+            let from = scene_shape(&renderer, &win, prev_style, &prev, prev_at);
             let shape = lerp_shape(from, to, ease_out_back(t));
-            let now = Instant::now();
             let pomodoro = demo_pomodoro(scene.pomo, now);
             let view = match scene.view {
                 View0::Idle => View::Idle,
@@ -560,7 +600,6 @@ fn run_scenes(scenes: &[Scene]) {
                 View0::Notice(which) => View::Notice(demo_notice(which)),
                 View0::MediaLyric => View::MediaLyric,
             };
-            let lyric_state = demo_lyrics(lyric_at.unwrap_or(scene.lyric_at), lyric_fade, now);
             let page = match scene.view {
                 View0::Panel(page) => page,
                 _ => Page::Calendar,
@@ -606,6 +645,8 @@ fn run_scenes(scenes: &[Scene]) {
                     None => clock_on.then(|| Local::now().format("%H:%M").to_string()),
                 },
                 lyric: lyric_state.shown(now),
+                lyric_scroll: scroll,
+                lyric_prev_scroll: 0.0,
                 lyrics_on: scene.lyrics_on,
                 cli: cli.view(),
                 progress: Some(DEMO_PROGRESS),
@@ -863,6 +904,27 @@ fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
         },
         tall: which == CliDemo::Tall,
     }
+}
+
+/// The scene's shape; a lyric scene's notch fits its line at `lyric_at` as
+/// the island fits it on entering the view (measured, capped by the screen).
+fn scene_shape(
+    renderer: &Renderer,
+    win: &IslandWindow,
+    style: Style,
+    scene: &Scene,
+    lyric_at: u64,
+) -> ShapeRect {
+    let robot = scene.robot.is_some();
+    if scene.kind != ShapeKind::MediaLyric {
+        return shape_with_robot(style, scene.kind, robot);
+    }
+    let state = demo_lyrics(lyric_at, None, Instant::now());
+    let text_w = state
+        .shown(Instant::now())
+        .and_then(|l| renderer.lyric_text_width(l.text));
+    let w = lyric_width(text_w, robot, lyric_max_w(win.screen_w()));
+    lyric_shape(style, w)
 }
 
 fn scene(scenes: &[Scene], step: usize) -> (Style, Scene) {
