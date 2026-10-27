@@ -177,6 +177,16 @@ $shots = @(
     @{ name = 'cleaner'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner' } }
     @{ name = 'cleaner-confirm'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-confirm' } }
     @{ name = 'cleaner-done'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:cleaner-done' } }
+    # The cleaner's "Otomatis · Mole" mode with the design's fixed data: Mole
+    # is never looked for or run. Its preview, the armed button, the log while
+    # it cleans, the measured result, the "Cara memasang" card when Mole is
+    # missing, and the done notice beside its "Log" chip.
+    @{ name = 'cleaner-mole'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-mole' } }
+    @{ name = 'cleaner-mole-confirm'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-mole-confirm' } }
+    @{ name = 'cleaner-mole-log'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-mole-log' } }
+    @{ name = 'cleaner-mole-result'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-mole-result' } }
+    @{ name = 'cleaner-mole-missing'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-mole-missing' } }
+    @{ name = 'cleaner-mole-done'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:mole-done' } }
     # A lyric line too long for the notch, mid-scroll with its right edge faded.
     @{ name = 'lyric-long'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-lirik-long'; DI_LYRIC_SCROLL = '4000' } }
     @{ name = 'cli'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-done' } }

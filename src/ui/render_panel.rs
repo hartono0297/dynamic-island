@@ -1025,21 +1025,23 @@ impl Renderer {
         self.text_colored(label, &self.fonts.button_center, r, p.text, alpha);
     }
 
-    /// Mole's log on the terminal surface (`--term`), DM Mono 9.5, the
-    /// newest line at the bottom: section headers bright, the rest quiet.
+    /// Mole's log on the terminal surface (`--term`), DM Mono 9.5, from
+    /// the top like the design's; once it is longer than the box, its last
+    /// lines (the newest at the bottom). Section headers bright, the rest
+    /// quiet.
     fn paint_mole_log(&self, area: Rect, log: &std::collections::VecDeque<String>, running: bool) {
         let p = self.palette;
         self.set_color(theme::TERMINAL_BG, 1.0);
         self.fill_round(area, MOLE_LOG_RADIUS);
         let inner = Rect {
             x: area.x + MOLE_LOG_PAD,
-            y: area.y + MOLE_LOG_PAD / 2.0,
+            y: area.y + MOLE_LOG_PAD,
             w: area.w - 2.0 * MOLE_LOG_PAD,
-            h: area.h - MOLE_LOG_PAD,
+            h: area.h - 2.0 * MOLE_LOG_PAD,
         };
         let rows = (inner.h / MOLE_LOG_LINE_H).floor().max(0.0) as usize;
         let row = |k: usize| Rect {
-            y: inner.bottom() - (k + 1) as f32 * MOLE_LOG_LINE_H,
+            y: inner.y + k as f32 * MOLE_LOG_LINE_H,
             h: MOLE_LOG_LINE_H,
             ..inner
         };
@@ -1055,7 +1057,8 @@ impl Renderer {
             );
             return;
         }
-        for (k, line) in log.iter().rev().take(rows).enumerate() {
+        let skip = log.len().saturating_sub(rows);
+        for (k, line) in log.iter().skip(skip).enumerate() {
             let ink = if crate::mole::is_section(line) {
                 theme::TERMINAL_TEXT
             } else {

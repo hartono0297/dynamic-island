@@ -1976,10 +1976,14 @@ pub fn mole_layout(
         (Vec::new(), Vec::new(), None, None, None);
     match look.body {
         MoleBody::Rows => {
-            let opt_y = body_bottom - MOLE_OPT_H;
-            let rows_bottom = opt_y - MOLE_BODY_GAP;
+            // The options sit 8 px under the rows (`margin: 8px 8px 0`),
+            // as high as the footer leaves room for.
+            let lowest_opt = body_bottom - MOLE_OPT_H;
             let n = MoleGroup::ALL.len() as f32;
-            let pitch = CLEAN_ROW_PITCH.min((rows_bottom - body_top + CLEAN_ROW_GAP) / n);
+            let room = lowest_opt - MOLE_BODY_GAP - body_top + CLEAN_ROW_GAP;
+            let pitch = CLEAN_ROW_PITCH.min(room / n);
+            let rows_bottom = body_top + n * pitch - CLEAN_ROW_GAP;
+            let opt_y = (rows_bottom + MOLE_BODY_GAP).min(lowest_opt);
             for (i, group) in MoleGroup::ALL.into_iter().enumerate() {
                 let row = rect(l, body_top + i as f32 * pitch, r - l, pitch - CLEAN_ROW_GAP);
                 let mid = row.y + row.h / 2.0;

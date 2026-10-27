@@ -30,7 +30,8 @@
 //! The cleaner's scenes (`cleaner`, `cleaner-confirm`, `cleaner-done`)
 //! use fixed sizes and never start the scanner or the cleaner. Its Mole
 //! scenes (`cleaner-mole`, `cleaner-mole-scanning`, `cleaner-mole-confirm`,
-//! `cleaner-mole-log`, `cleaner-mole-unreadable`, `cleaner-mole-missing`)
+//! `cleaner-mole-log`, `cleaner-mole-result`, `cleaner-mole-unreadable`,
+//! `cleaner-mole-missing`)
 //! and the notices `mole-done` and `mole-failed` use the design's fixed
 //! data; they never look for Mole, let alone run it.
 //!
@@ -140,6 +141,8 @@ enum CleanDemo {
     MoleArmed,
     /// Mole cleaning: the design's log lines.
     MoleLog,
+    /// Mole done: the measured result over its log, "Pratinjau lagi".
+    MoleResult,
     /// Mole's preview with one group it could not read ("lihat log").
     MoleUnreadable,
     /// Mole not installed: the "Cara memasang" card.
@@ -302,7 +305,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 70] = [
+const SCENES: [Scene; 71] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -423,6 +426,7 @@ const SCENES: [Scene; 70] = [
     cleaner("cleaner-mole-scanning", CleanDemo::MoleScanning),
     cleaner("cleaner-mole-confirm", CleanDemo::MoleArmed),
     cleaner("cleaner-mole-log", CleanDemo::MoleLog),
+    cleaner("cleaner-mole-result", CleanDemo::MoleResult),
     cleaner("cleaner-mole-unreadable", CleanDemo::MoleUnreadable),
     cleaner("cleaner-mole-missing", CleanDemo::MoleMissing),
     Scene {
@@ -753,6 +757,7 @@ fn run_scenes(scenes: &[Scene]) {
     let scan = demo_scan();
     let (mole_summary, mole_unreadable) = (demo_mole_summary(false), demo_mole_summary(true));
     let mole_log = demo_mole_log();
+    let mole_report = demo_mole_report(false);
     let no_log = std::collections::VecDeque::new();
     let strip = Notice {
         key: "demo-wait".into(),
@@ -873,8 +878,10 @@ fn run_scenes(scenes: &[Scene]) {
                     }
                     CleanDemo::MoleScanning => MolePhase::Scanning(opts),
                     CleanDemo::MoleLog => MolePhase::Running,
+                    CleanDemo::MoleResult => MolePhase::Finished { ok: true },
                     CleanDemo::MoleMissing => MolePhase::Missing,
                 };
+                let with_log = matches!(which, CleanDemo::MoleLog | CleanDemo::MoleResult);
                 let mole_mode = phase != MolePhase::Unknown;
                 CleanerView {
                     mode: if mole_mode {
@@ -897,12 +904,8 @@ fn run_scenes(scenes: &[Scene]) {
                             CleanDemo::MoleUnreadable => Some(&mole_unreadable),
                             _ => Some(&mole_summary),
                         },
-                        log: if which == CleanDemo::MoleLog {
-                            &mole_log
-                        } else {
-                            &no_log
-                        },
-                        report: None,
+                        log: if with_log { &mole_log } else { &no_log },
+                        report: (which == CleanDemo::MoleResult).then_some(&mole_report),
                     },
                 }
             });
