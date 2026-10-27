@@ -1720,7 +1720,7 @@ mod tests {
         let mut s = st();
         open_on(&mut s, Page::Cli, t0);
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Media));
+        assert_eq!(s.view(), View::Panel(Page::System));
     }
 
     #[test]

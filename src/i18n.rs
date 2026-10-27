@@ -564,12 +564,14 @@ fn one_decimal(lang: Lang, value: f64) -> String {
 /// A size as the System page shows it: "512 MB" under 1 GB, "47,2 GB"
 /// ("47.2 GB"), "1,8 TB" from 1000 GB. Binary units, as Explorer counts.
 pub fn format_size(lang: Lang, bytes: u64) -> String {
-    if bytes < GIB {
-        let mb = (bytes as f64 / MIB as f64).round();
+    let mb = (bytes as f64 / MIB as f64).round();
+    // Just under 1 GB rounds up to 1024 MB: "1,0 GB" instead.
+    if mb < 1024.0 {
         return format!("{mb:.0} MB");
     }
     let gb = bytes as f64 / GIB as f64;
-    if gb >= 1000.0 {
+    // Compared as shown (one decimal), so 999.96 GB is not "1000,0 GB".
+    if (gb * 10.0).round() >= 10_000.0 {
         return format!("{} TB", one_decimal(lang, gb / 1024.0));
     }
     format!("{} GB", one_decimal(lang, gb))
@@ -1970,6 +1972,10 @@ mod tests {
         assert_eq!(format_size(Lang::Id, gb(3.1)), "3,1 GB");
         assert_eq!(format_size(Lang::Id, 512 * MIB), "512 MB");
         assert_eq!(format_size(Lang::En, 0), "0 MB");
+        assert_eq!(format_size(Lang::Id, GIB - 1), "1,0 GB");
+        assert_eq!(format_size(Lang::En, 1023 * MIB), "1023 MB");
+        assert_eq!(format_size(Lang::En, gb(999.96)), "1.0 TB");
+        assert_eq!(format_size(Lang::En, gb(999.9)), "999.9 GB");
         assert_eq!(format_size(Lang::Id, gb(1863.0)), "1,8 TB");
         assert_eq!(
             disk_free(Lang::Id, gb(47.2), gb(338.4)),
@@ -2000,7 +2006,10 @@ mod tests {
             disk_low_title(Lang::Id, 'C', gb(9.6)),
             "Disk C: tinggal 9,6 GB"
         );
-        assert_eq!(disk_low_title(Lang::En, 'C', gb(9.6)), "Disk C: 9.6 GB left");
+        assert_eq!(
+            disk_low_title(Lang::En, 'C', gb(9.6)),
+            "Disk C: 9.6 GB left"
+        );
         assert_eq!(ram_high_title(Lang::Id, 93), "RAM terpakai 93%");
         assert_eq!(ram_high_title(Lang::En, 93), "RAM 93% used");
         assert_eq!(text(Lang::Id, Key::System), "Sistem");

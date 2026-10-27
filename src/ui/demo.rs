@@ -45,9 +45,7 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::render::{
-    CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
-};
+use super::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
@@ -61,9 +59,7 @@ use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
-use crate::system::{
-    Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice,
-};
+use crate::system::{Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice};
 use crate::theme::{self, Accent, Palette, Surface};
 
 const PHASE: Duration = Duration::from_millis(2000);
@@ -471,8 +467,8 @@ const SCENES: [Scene; 59] = [
 
 /// The design's CPU line: 30 points (60 s), ending on the ring's 33 %.
 const DEMO_CPU: [f32; 30] = [
-    22.0, 26.0, 30.0, 27.0, 25.0, 33.0, 41.0, 39.0, 38.0, 45.0, 52.0, 44.0, 35.0, 30.0, 28.0,
-    31.0, 33.0, 40.0, 47.0, 42.0, 31.0, 29.0, 33.0, 36.0, 31.0, 28.0, 30.0, 35.0, 31.0, 33.0,
+    22.0, 26.0, 30.0, 27.0, 25.0, 33.0, 41.0, 39.0, 38.0, 45.0, 52.0, 44.0, 35.0, 30.0, 28.0, 31.0,
+    33.0, 40.0, 47.0, 42.0, 31.0, 29.0, 33.0, 36.0, 31.0, 28.0, 30.0, 35.0, 31.0, 33.0,
 ];
 
 /// The System page's fixed figures (keputusan-v3.1.html `sysPanel`): CPU

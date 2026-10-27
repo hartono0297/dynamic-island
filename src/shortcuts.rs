@@ -88,14 +88,14 @@ pub fn delay_ms(action: Action) -> u32 {
     }
 }
 
-/// Carries `action` out. May pump messages (the shell), so the caller must
-/// not hold the app state.
 /// `rel` under `%SystemRoot%`.
 fn system_path(rel: &str) -> std::path::PathBuf {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
     std::path::Path::new(&root).join(rel)
 }
 
+/// Carries `action` out. May pump messages (the shell), so the caller must
+/// not hold the app state.
 pub fn run(action: Action) {
     match action {
         Action::Open(target) => unsafe {

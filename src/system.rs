@@ -15,8 +15,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{CloseHandle, FILETIME};
 use windows::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-    TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::SystemInformation::{
@@ -93,7 +92,9 @@ pub fn percent(part: u64, whole: u64) -> u8 {
     if whole == 0 {
         return 0;
     }
-    ((part as f64 / whole as f64) * 100.0).round().clamp(0.0, 100.0) as u8
+    ((part as f64 / whole as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8
 }
 
 /// One process's times as the walk read them.
@@ -390,8 +391,11 @@ fn filetime(f: FILETIME) -> u64 {
 }
 
 pub fn read_cpu_times() -> Option<CpuTimes> {
-    let (mut idle, mut kernel, mut user) =
-        (FILETIME::default(), FILETIME::default(), FILETIME::default());
+    let (mut idle, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
     unsafe { GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)) }.ok()?;
     Some(CpuTimes {
         idle: filetime(idle),
@@ -407,7 +411,10 @@ pub fn read_memory() -> Option<(u64, u64)> {
         ..Default::default()
     };
     unsafe { GlobalMemoryStatusEx(&mut m) }.ok()?;
-    Some((m.ullTotalPhys.saturating_sub(m.ullAvailPhys), m.ullTotalPhys))
+    Some((
+        m.ullTotalPhys.saturating_sub(m.ullAvailPhys),
+        m.ullTotalPhys,
+    ))
 }
 
 /// Fixed drives only: removable, network and CD drives are skipped (and
@@ -577,10 +584,7 @@ fn sample_page(baseline: &mut Option<Baseline>) -> SystemSample {
     let prev = baseline.replace(cur).expect("baseline taken above");
     let cur = baseline.as_ref().expect("just set");
     let delta = cur.cpu.total().saturating_sub(prev.cpu.total());
-    let procs = top_processes(
-        process_usage(&prev.procs, &cur.procs, delta),
-        TOP_PROCESSES,
-    );
+    let procs = top_processes(process_usage(&prev.procs, &cur.procs, delta), TOP_PROCESSES);
     let (ram_used, ram_total) = read_memory().unwrap_or_default();
     SystemSample {
         kind: SampleKind::Page,
@@ -707,7 +711,10 @@ mod tests {
             proc(40, "new.exe", 900, 10),
         ];
         let apps = process_usage(&prev, &cur, 1_000);
-        let chrome = apps.iter().find(|a| a.name == "Chrome").expect("one Chrome");
+        let chrome = apps
+            .iter()
+            .find(|a| a.name == "Chrome")
+            .expect("one Chrome");
         assert_eq!(apps.iter().filter(|a| a.name == "Chrome").count(), 1);
         // 60 + 60 (the new process has no delta yet) of 1000.
         assert!((chrome.cpu - 12.0).abs() < 0.01);
@@ -776,7 +783,10 @@ mod tests {
     fn disk_alerts_once_per_drive_and_rearms_above_the_margin() {
         let t0 = Instant::now();
         let mut m = WarnMonitor::new(10, 90);
-        assert_eq!(m.update(&[drive('C', 12.0)], None, t0), WarnCheck::default());
+        assert_eq!(
+            m.update(&[drive('C', 12.0)], None, t0),
+            WarnCheck::default()
+        );
         let low = m.update(&[drive('C', 9.6), drive('D', 33.0)], None, t0);
         assert_eq!(
             low.alerts,
@@ -810,7 +820,11 @@ mod tests {
         let t0 = Instant::now();
         let s = |n: u64| t0 + Duration::from_secs(n);
         let mut m = WarnMonitor::new(10, 90);
-        assert_eq!(m.update(&[], Some(90), s(0)), WarnCheck::default(), "at the limit");
+        assert_eq!(
+            m.update(&[], Some(90), s(0)),
+            WarnCheck::default(),
+            "at the limit"
+        );
         // Above: no alert yet, a recheck when the minute is up.
         let first = m.update(&[], Some(93), s(0));
         assert!(first.alerts.is_empty());

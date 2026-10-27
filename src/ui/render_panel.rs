@@ -21,9 +21,7 @@ use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{
-    CliView, FolderMenuView, Frame, Progress, Renderer, SystemView, color, d2d_rect, mix,
-};
+use super::{CliView, FolderMenuView, Frame, Progress, Renderer, SystemView, color, d2d_rect, mix};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
@@ -427,7 +425,13 @@ impl Renderer {
         self.set_color(p.raised, 1.0);
         self.fill_round(l.uptime, l.uptime.h / 2.0);
         let uptime = system_uptime(lang, sample);
-        self.text_colored(&uptime, &self.fonts.small_center, l.uptime, p.secondary, 1.0);
+        self.text_colored(
+            &uptime,
+            &self.fonts.small_center,
+            l.uptime,
+            p.secondary,
+            1.0,
+        );
         self.paint_clean_button(l.clean, lang);
 
         let cpu = sample.map(|s| s.cpu);
@@ -449,7 +453,8 @@ impl Renderer {
         self.text_colored(&caption, &self.fonts.micro_center, l.caption, ink, 1.0);
         self.paint_spark(l.spark, view.map_or(&[], |v| v.history))?;
 
-        let (disk_limit, ram_limit) = view.map_or((0, 100), |v| (v.disk_warn_gb, v.ram_warn_percent));
+        let (disk_limit, ram_limit) =
+            view.map_or((0, 100), |v| (v.disk_warn_gb, v.ram_warn_percent));
         let ram = sample.and_then(|s| s.ram_percent().map(|pct| (s, pct)));
         let (value, fraction, warn) = match ram {
             Some((s, pct)) => (

@@ -1587,7 +1587,12 @@ pub fn system_layout(
         .iter()
         .take(shown)
         .enumerate()
-        .map(|(i, letter)| (*letter, meter(body + (i + 1) as f32 * (METER_H + METER_GAP))))
+        .map(|(i, letter)| {
+            (
+                *letter,
+                meter(body + (i + 1) as f32 * (METER_H + METER_GAP)),
+            )
+        })
         .collect();
     let meters_bottom = body + meters_h(shown + 1);
     let busiest = rect(x, meters_bottom + BUSIEST_GAP, w, BUSIEST_H);
