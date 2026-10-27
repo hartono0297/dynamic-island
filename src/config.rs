@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::cli::Shell;
+use crate::cli_folders::CliStart;
 use crate::i18n::Lang;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
@@ -41,6 +42,9 @@ pub struct Config {
     pub lyrics: bool,
     /// The shell the CLI page runs commands in.
     pub cli_shell: Shell,
+    /// Where the CLI page starts when it opens: the last active Explorer
+    /// window's folder, or the last folder (by name; a typo is Explorer).
+    pub cli_start: CliStart,
     /// Bata, the robot, beside the clock and on the island's own notices.
     pub robot: bool,
     /// How much Bata moves: Full, Saver or Off (by name; a typo is Full).
@@ -98,6 +102,7 @@ impl Default for Config {
             idle_clock: true,
             lyrics: false,
             cli_shell: Shell::PowerShell,
+            cli_start: CliStart::Explorer,
             robot: true,
             robot_animation: Motion::Full,
             robot_sleep_minutes: 10,
@@ -151,7 +156,7 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language, theme, idle clock, lyrics, CLI shell, the robot, its greeting
+/// language, theme, idle clock, lyrics, CLI shell and start folder, the robot, its greeting
 /// and the day it last greeted) over everything else as it
 /// is on disk (Google client, muted apps, battery threshold), which the owner
 /// may have edited by hand while the island ran.
@@ -168,6 +173,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         idle_clock: mem.idle_clock,
         lyrics: mem.lyrics,
         cli_shell: mem.cli_shell,
+        cli_start: mem.cli_start,
         robot: mem.robot,
         robot_animation: mem.robot_animation,
         robot_sleep_minutes: mem.robot_sleep_minutes,
@@ -431,6 +437,33 @@ mod tests {
     }
 
     #[test]
+    fn cli_start_reads_old_files_typos_and_round_trips() {
+        assert_eq!(Config::default().cli_start, CliStart::Explorer);
+        // A config.json from before the field: Explorer.
+        let old = parse(r#"{"style":"Notch","cli_shell":"cmd"}"#);
+        assert_eq!(
+            (old.style, old.cli_shell, old.cli_start),
+            (Style::Notch, Shell::Cmd, CliStart::Explorer)
+        );
+        let last = Config {
+            cli_start: CliStart::Last,
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&last).unwrap();
+        assert!(json.contains(r#""cli_start":"Last""#), "{json}");
+        assert_eq!(parse(&json), last);
+        // A typo keeps the rest of the file: only this field falls back.
+        let typo = parse(r#"{"style":"Notch","cli_start":"terakhir"}"#);
+        assert_eq!(
+            (typo.style, typo.cli_start),
+            (Style::Notch, CliStart::Explorer)
+        );
+        // The island's own value wins over a stale copy on disk.
+        let disk = Config::default();
+        assert_eq!(merge_owned(disk, &last).cli_start, CliStart::Last);
+    }
+
+    #[test]
     fn round_trips_through_json() {
         let c = Config {
             style: Style::Notch,
@@ -453,6 +486,7 @@ mod tests {
             idle_clock: false,
             lyrics: true,
             cli_shell: Shell::Cmd,
+            cli_start: CliStart::Last,
             robot: false,
             robot_animation: Motion::Off,
             robot_sleep_minutes: 5,
@@ -585,7 +619,7 @@ mod tests {
         WindowTheme,
         bool,
         bool,
-        Shell,
+        (Shell, CliStart),
         (bool, Motion, u32, bool, Option<NaiveDate>),
     );
 
@@ -601,7 +635,7 @@ mod tests {
             c.window_theme,
             c.idle_clock,
             c.lyrics,
-            c.cli_shell,
+            (c.cli_shell, c.cli_start),
             (
                 c.robot,
                 c.robot_animation,
@@ -647,6 +681,7 @@ mod tests {
             idle_clock: false,
             lyrics: true,
             cli_shell: Shell::Cmd,
+            cli_start: CliStart::Last,
             robot: false,
             robot_animation: Motion::Saver,
             robot_sleep_minutes: 30,

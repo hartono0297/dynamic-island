@@ -487,8 +487,9 @@ pub fn save_cwd(path: &Path, cwd: &Path) -> io::Result<()> {
     write_atomic(path, &cwd.to_string_lossy())
 }
 
-/// A sibling `.tmp` file renamed over `path`.
-fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+/// A sibling `.tmp` file renamed over `path`. Also writes the folder
+/// menu's lists (`cli_folders`).
+pub(crate) fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

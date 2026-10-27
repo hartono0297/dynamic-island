@@ -245,6 +245,16 @@ keys! {
     CliStopped => "dihentikan", "stopped";
     CliBusy => "Masih ada perintah berjalan — Ctrl+C untuk menghentikan",
         "A command is still running — Ctrl+C to stop it";
+    // The CLI page's folder: the chip after an Explorer switch, and the menu.
+    CliFromExplorer => "dari Explorer", "from Explorer";
+    CliMenuExplorer => "Jendela Explorer terbuka", "Open Explorer windows";
+    CliMenuFavorites => "Favorit", "Favorites";
+    CliMenuRecent => "Terakhir dipakai di CLI", "Recently used in CLI";
+    CliLastActive => "aktif terakhir", "last active";
+    CliUnpinHint => "klik kanan = lepas", "right-click = unpin";
+    CliMenuEmpty => "Belum ada folder — buka Explorer atau cd dulu",
+        "No folders yet — open Explorer or cd first";
+    CliJustNow => "baru saja", "just now";
 
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
@@ -356,6 +366,10 @@ keys! {
     ShellCliDesc => "Untuk perintah di halaman CLI", "Runs the CLI page's commands";
     ShellPowerShell => "PowerShell", "PowerShell";
     ShellCmd => "cmd", "cmd";
+    CliStartFolder => "Folder awal CLI", "CLI start folder";
+    CliStartFolderDesc => "Saat halaman CLI dibuka", "When the CLI page opens";
+    CliStartExplorer => "Ikuti Explorer", "Follow Explorer";
+    CliStartLast => "Folder terakhir", "Last folder";
     FocusDesc => "Lama satu sesi fokus", "Length of one focus session";
     BreakDesc => "Jeda di antara sesi", "Pause between sessions";
     LongBreakDesc => "Setelah sesi terakhir", "After the last session";
@@ -549,6 +563,34 @@ pub fn cli_start_failed(lang: Lang, error: &str) -> String {
     match lang {
         Lang::Id => format!("Gagal menjalankan: {error}"),
         Lang::En => format!("Couldn't run it: {error}"),
+    }
+}
+
+/// The CLI's quiet line after it followed Explorer: "↳ pindah ke D:\x
+/// (folder Explorer terakhir)".
+pub fn cli_moved_to(lang: Lang, path: &str) -> String {
+    match lang {
+        Lang::Id => format!("\u{21B3} pindah ke {path} (folder Explorer terakhir)"),
+        Lang::En => format!("\u{21B3} moved to {path} (last Explorer folder)"),
+    }
+}
+
+/// When a recent folder was used, at the right of its menu row: "baru
+/// saja", "2 mnt lalu", "3 jam lalu", "kemarin", "20 Okt" (and in English).
+pub fn folder_ago(lang: Lang, ago: crate::cli_folders::Ago) -> String {
+    use crate::cli_folders::Ago;
+    match ago {
+        Ago::JustNow => text(lang, Key::CliJustNow).to_owned(),
+        Ago::Minutes(n) => match lang {
+            Lang::Id => format!("{n} mnt lalu"),
+            Lang::En => format!("{n} min ago"),
+        },
+        Ago::Hours(n) => match lang {
+            Lang::Id => format!("{n} jam lalu"),
+            Lang::En => format!("{n} h ago"),
+        },
+        Ago::Yesterday => near_word(lang, Near::Yesterday, false).to_owned(),
+        Ago::On(d) => short_date(lang, d),
     }
 }
 
@@ -1496,25 +1538,140 @@ mod tests {
 
     /// Common Indonesian words, never in English text.
     const INDONESIAN: &[&str] = &[
-        "ada", "acara", "atau", "atas", "baru", "batal", "baterai", "belum", "berikutnya",
-        "berjalan", "besok", "bisa", "buka", "bulan", "catatan", "cek", "dan", "dari", "di",
-        "dengan", "dihentikan", "dtk", "dulu", "fokus", "gagal", "gaya", "hapus", "hari", "ini",
-        "istirahat", "itu", "izin", "jalankan", "jam", "jeda", "kalender", "ke", "keluar",
-        "kembali", "kemarin", "klik", "lagi", "lewat", "lihat", "lirik", "malam", "menit",
-        "minggu", "mnt", "mulai", "pagi", "pengaturan", "pengingat", "perintah", "pintasan",
-        "saat", "sekali", "selesai", "sesi", "setelah", "siap", "simpan", "sisa", "sore",
-        "sudah", "tambah", "tanggal", "tanpa", "terhubung", "tiap", "tidak", "tutup", "ulangi",
-        "untuk", "warna", "yang",
+        "ada",
+        "acara",
+        "atau",
+        "atas",
+        "baru",
+        "batal",
+        "baterai",
+        "belum",
+        "berikutnya",
+        "berjalan",
+        "besok",
+        "bisa",
+        "buka",
+        "bulan",
+        "catatan",
+        "cek",
+        "dan",
+        "dari",
+        "di",
+        "dengan",
+        "dihentikan",
+        "dtk",
+        "dulu",
+        "fokus",
+        "gagal",
+        "gaya",
+        "hapus",
+        "hari",
+        "ini",
+        "istirahat",
+        "itu",
+        "izin",
+        "jalankan",
+        "jam",
+        "jeda",
+        "kalender",
+        "ke",
+        "keluar",
+        "kembali",
+        "kemarin",
+        "klik",
+        "lagi",
+        "lewat",
+        "lihat",
+        "lirik",
+        "malam",
+        "menit",
+        "minggu",
+        "mnt",
+        "mulai",
+        "pagi",
+        "pengaturan",
+        "pengingat",
+        "perintah",
+        "pintasan",
+        "saat",
+        "sekali",
+        "selesai",
+        "sesi",
+        "setelah",
+        "siap",
+        "simpan",
+        "sisa",
+        "sore",
+        "sudah",
+        "tambah",
+        "tanggal",
+        "tanpa",
+        "terhubung",
+        "tiap",
+        "tidak",
+        "tutup",
+        "ulangi",
+        "untuk",
+        "warna",
+        "yang",
     ];
 
     /// Common English words, never in Indonesian text.
     const ENGLISH: &[&str] = &[
-        "add", "and", "are", "at", "back", "break", "cancel", "check", "click", "close",
-        "connect", "date", "day", "delete", "done", "edit", "end", "event", "events", "failed",
-        "for", "from", "is", "minutes", "month", "more", "new", "next", "not", "note", "notes",
-        "of", "open", "ready", "reminder", "reminders", "repeat", "save", "saved", "settings",
-        "show", "start", "stop", "the", "time", "title", "to", "today", "tomorrow", "week",
-        "with", "yesterday", "you", "your",
+        "add",
+        "and",
+        "are",
+        "at",
+        "back",
+        "break",
+        "cancel",
+        "check",
+        "click",
+        "close",
+        "connect",
+        "date",
+        "day",
+        "delete",
+        "done",
+        "edit",
+        "end",
+        "event",
+        "events",
+        "failed",
+        "for",
+        "from",
+        "is",
+        "minutes",
+        "month",
+        "more",
+        "new",
+        "next",
+        "not",
+        "note",
+        "notes",
+        "of",
+        "open",
+        "ready",
+        "reminder",
+        "reminders",
+        "repeat",
+        "save",
+        "saved",
+        "settings",
+        "show",
+        "start",
+        "stop",
+        "the",
+        "time",
+        "title",
+        "to",
+        "today",
+        "tomorrow",
+        "week",
+        "with",
+        "yesterday",
+        "you",
+        "your",
     ];
 
     /// Words both languages use as they are: brand and product names, loans
@@ -1522,8 +1679,23 @@ mod tests {
     /// "Stop"), key names and units. "edit", "notes" and "stop" are also in
     /// ENGLISH, so by design they are never flagged in either language.
     const SHARED_WORDS: &[&str] = &[
-        "bata", "claude", "cli", "cmd", "edit", "github", "google", "notch", "notes", "ok",
-        "pill", "pomodoro", "powershell", "readme", "spotify", "stop", "windows",
+        "bata",
+        "claude",
+        "cli",
+        "cmd",
+        "edit",
+        "github",
+        "google",
+        "notch",
+        "notes",
+        "ok",
+        "pill",
+        "pomodoro",
+        "powershell",
+        "readme",
+        "spotify",
+        "stop",
+        "windows",
     ];
 
     /// Brand names written the same in both languages.
@@ -1625,6 +1797,7 @@ mod tests {
                 cd_not_found(lang, r"D:\x"),
                 cli_start_failed(lang, "0x80070002"),
                 cli_running(lang, Duration::from_secs(42)),
+                cli_moved_to(lang, r"D:\github\project-a"),
                 save_failed_because(lang, text(lang, Key::ReasonOffline)),
                 google_refused(lang, "403"),
                 unreadable_reply(lang, 200),
@@ -1649,6 +1822,18 @@ mod tests {
             }
             for minutes in [30, 60, 90] {
                 all.push(duration_label(lang, minutes));
+            }
+            {
+                use crate::cli_folders::Ago;
+                for ago in [
+                    Ago::JustNow,
+                    Ago::Minutes(2),
+                    Ago::Hours(3),
+                    Ago::Yesterday,
+                    Ago::On(today),
+                ] {
+                    all.push(folder_ago(lang, ago));
+                }
             }
             for d in today.iter_days().take(7) {
                 all.push(day_long(lang, d).to_owned());

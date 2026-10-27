@@ -4,6 +4,7 @@ mod app;
 mod calendar;
 mod claude;
 mod cli;
+mod cli_folders;
 mod cli_panel;
 mod config;
 mod google;

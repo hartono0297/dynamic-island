@@ -26,6 +26,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[settings-appearance-scroll]]
 - [[media-click-guards]]
 - [[media-diagnosis-log]]
+- [[cli-explorer-folder]]
 
 ## Gotchas
 
@@ -35,6 +36,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[studio-tabular-figures-word-gaps]]
 - [[cli-panel-keyboard-focus]]
 - [[media-external-pause-causes]]
+- [[cli-explorer-com]]
 
 ## Conventions
 
