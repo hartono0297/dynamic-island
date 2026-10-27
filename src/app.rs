@@ -23,7 +23,9 @@ use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::RemoteDesktop::{
-    NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification, WTSUnRegisterSessionNotification,
+    NOTIFY_FOR_THIS_SESSION, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK,
+    WTS_SESSIONSTATE_UNLOCK, WTSFreeMemory, WTSINFOEXW, WTSQuerySessionInformationW,
+    WTSRegisterSessionNotification, WTSSessionInfoEx, WTSUnRegisterSessionNotification,
 };
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -38,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
@@ -90,7 +92,8 @@ const PBT_APMRESUMESUSPEND: usize = 0x0007;
 const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
 /// The power source or battery state changed (Energy Saver too).
 const PBT_APMPOWERSTATUSCHANGE: usize = 0x000A;
-/// `WM_WTSSESSION_CHANGE`: the user unlocked the session.
+/// `WM_WTSSESSION_CHANGE`: the session was locked, or the user unlocked it.
+const WTS_SESSION_LOCK: usize = 0x7;
 const WTS_SESSION_UNLOCK: usize = 0x8;
 /// How long the pointer must rest on the island before it expands. Long
 /// enough that a pointer crossing the notch on its way elsewhere doesn't
@@ -241,6 +244,7 @@ pub fn run() {
             bata: Bata::new(Instant::now()),
             greet_pending: true,
             greet_ready: false,
+            session_locked: false,
         });
     });
     with_app(|app| {
@@ -404,6 +408,9 @@ struct App {
     greet_pending: bool,
     /// That data arrived: greet after this drain.
     greet_ready: bool,
+    /// The last lock or unlock `WM_WTSSESSION_CHANGE` said locked; used when
+    /// asking Windows for the session's state fails.
+    session_locked: bool,
 }
 
 /// What the island keeps for the robot besides its `Brain`.
@@ -447,7 +454,7 @@ impl App {
         self.note_cli_output(now);
         self.refresh(now);
         if std::mem::take(&mut self.greet_ready) {
-            self.maybe_greet();
+            self.maybe_greet(GreetTrigger::Startup);
         }
     }
 
@@ -534,21 +541,28 @@ impl App {
             return None;
         }
         let motion = self.motion();
+        let spot = Spot::of(view);
         let inputs = self
             .bata
             .brain
-            .inputs(Spot::of(view), now, self.sleep_after(), motion);
+            .inputs(spot, now, self.sleep_after(), motion);
         let expr = choose_expr(&inputs)?;
         let pose = self
             .bata
             .brain
-            .pose(now, motion.moves(), self.bata.blinking);
+            .pose(spot, now, motion.moves(), self.bata.blinking);
         Some(RobotFrame { expr, pose })
     }
 
-    /// A lift or bounce is moving: the frame clock runs for it.
+    /// A lift or bounce of a robot on screen is moving: the frame clock runs
+    /// for it. No robot drawn (panel, hidden, an app's notice): nothing moves.
     fn robot_moving(&self, now: Instant) -> bool {
-        self.config.robot && self.bata.brain.moving(now, self.motion().moves())
+        let view = self.state.view();
+        self.robot_frame(&view, now).is_some()
+            && self
+                .bata
+                .brain
+                .moving(Spot::of(&view), now, self.motion().moves())
     }
 
     /// Arms or stops Bata's one-shot timers for what shows now.
@@ -611,10 +625,20 @@ impl App {
         }
     }
 
-    /// Once a day before noon, at startup, wake or unlock: "Selamat pagi"
-    /// with today's events and reminders, for 4 s. Not over a fullscreen
-    /// app: then it waits for the next chance. The day is saved when it shows.
-    fn maybe_greet(&mut self) {
+    /// The session is locked now: Windows' answer, or the last lock/unlock
+    /// message when it gives none.
+    fn session_locked(&self) -> bool {
+        query_session_locked().unwrap_or(self.session_locked)
+    }
+
+    /// Once a day before noon, at startup, a wake by the user or unlock:
+    /// "Selamat pagi" with today's events and reminders, for 4 s. Not on a
+    /// locked session (`greet_may_try`) nor over a fullscreen app: then it
+    /// waits for the next chance. The day is saved when it shows.
+    fn maybe_greet(&mut self, trigger: GreetTrigger) {
+        if !greet_may_try(trigger, self.session_locked()) {
+            return;
+        }
         let local = Local::now();
         let today = local.date_naive();
         let settings = GreetSettings {
@@ -2173,6 +2197,62 @@ fn progress_wait(view: &View, progress: Option<Progress>, playing: bool) -> Opti
     (*view == View::Panel(Page::Media) && playing).then(|| 1001 - (p.position_ms % 1000) as u32)
 }
 
+/// When the island tries the morning greeting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GreetTrigger {
+    /// The first calendar data after startup.
+    Startup,
+    /// Back from sleep. `by_user`: `PBT_APMRESUMESUSPEND`; only
+    /// `PBT_APMRESUMEAUTOMATIC` also comes on unattended wakes (maintenance,
+    /// Modern Standby).
+    Wake { by_user: bool },
+    /// `WTS_SESSION_UNLOCK`: someone just signed in to the screen.
+    Unlock,
+}
+
+/// Whether `trigger` may greet while the session is `locked`. A locked
+/// session shows the secure desktop, where nobody sees the greeting, and
+/// Windows locks on wake by default: the day is kept for the unlock. A wake
+/// that nobody asked for never greets.
+fn greet_may_try(trigger: GreetTrigger, locked: bool) -> bool {
+    match trigger {
+        GreetTrigger::Unlock => true,
+        GreetTrigger::Startup => !locked,
+        GreetTrigger::Wake { by_user } => by_user && !locked,
+    }
+}
+
+/// Whether Windows says this session is locked; `None` when it cannot tell.
+fn query_session_locked() -> Option<bool> {
+    let mut buffer = PWSTR::null();
+    let mut bytes = 0u32;
+    // SAFETY: on success Windows hands back a `WTSINFOEXW` it allocated,
+    // read only within `bytes` and freed with `WTSFreeMemory`.
+    let flags = unsafe {
+        WTSQuerySessionInformationW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            WTS_CURRENT_SESSION,
+            WTSSessionInfoEx,
+            &mut buffer,
+            &mut bytes,
+        )
+        .ok()?;
+        if buffer.is_null() {
+            return None;
+        }
+        let info = buffer.0 as *const WTSINFOEXW;
+        let flags = (bytes as usize >= std::mem::size_of::<WTSINFOEXW>() && (*info).Level == 1)
+            .then(|| (*info).Data.WTSInfoExLevel1.SessionFlags);
+        WTSFreeMemory(buffer.0 as *mut c_void);
+        flags?
+    };
+    match u32::try_from(flags).ok()? {
+        WTS_SESSIONSTATE_LOCK => Some(true),
+        WTS_SESSIONSTATE_UNLOCK => Some(false),
+        _ => None,
+    }
+}
+
 /// Messages after which the wall clock may have jumped.
 fn is_clock_jump(msg: u32, wparam: WPARAM) -> bool {
     match msg {
@@ -2796,7 +2876,10 @@ unsafe extern "system" fn wnd_proc(
                 match wparam.0 {
                     // Back from sleep: the first screen of the day may greet.
                     PBT_APMRESUMESUSPEND | PBT_APMRESUMEAUTOMATIC => {
-                        with_app(App::maybe_greet);
+                        let trigger = GreetTrigger::Wake {
+                            by_user: wparam.0 == PBT_APMRESUMESUSPEND,
+                        };
+                        with_app(|app| app.maybe_greet(trigger));
                     }
                     // Charger or Energy Saver changed: the robot follows now.
                     PBT_APMPOWERSTATUSCHANGE => {
@@ -2808,8 +2891,17 @@ unsafe extern "system" fn wnd_proc(
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_WTSSESSION_CHANGE => {
-            if wparam.0 == WTS_SESSION_UNLOCK {
-                with_app(App::maybe_greet);
+            match wparam.0 {
+                WTS_SESSION_LOCK => {
+                    with_app(|app| app.session_locked = true);
+                }
+                WTS_SESSION_UNLOCK => {
+                    with_app(|app| {
+                        app.session_locked = false;
+                        app.maybe_greet(GreetTrigger::Unlock);
+                    });
+                }
+                _ => {}
             }
             LRESULT(0)
         }
@@ -2929,6 +3021,33 @@ unsafe extern "system" fn wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn greeting_waits_for_someone_at_an_unlocked_screen() {
+        use GreetTrigger::*;
+        // Windows locks on wake by default: the wake keeps the day, the
+        // unlock that follows greets.
+        assert!(!greet_may_try(Wake { by_user: true }, true));
+        assert!(
+            greet_may_try(Unlock, true),
+            "the unlock message itself counts"
+        );
+        assert!(greet_may_try(Unlock, false));
+        // No lock on wake: the user's wake greets at once.
+        assert!(greet_may_try(Wake { by_user: true }, false));
+        // An unattended wake (maintenance, Modern Standby) never greets.
+        assert!(!greet_may_try(Wake { by_user: false }, false));
+        assert!(!greet_may_try(Wake { by_user: false }, true));
+        assert!(greet_may_try(Startup, false));
+        assert!(!greet_may_try(Startup, true));
+    }
+
+    #[test]
+    fn session_lock_query_runs() {
+        // Desktop or CI service session: whatever it answers, reading and
+        // freeing Windows' buffer must not crash.
+        let _ = query_session_locked();
+    }
 
     fn morph(start: Instant) -> Anim {
         Anim {

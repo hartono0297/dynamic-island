@@ -25,8 +25,10 @@ scrolls instead of growing the window.
 The robot rows fade and take no clicks when the robot is off (`enabled`
 on `Toggle` / `Segmented`, the stepper's existing flag); the sleep stepper
 is also off for Mati. The design's "Hemat: tanpa kedip dan gerak, ekspresi
-tetap" was shortened to "Hemat: tanpa gerak, ekspresi tetap" to fit beside
-the three segments with the layout's width estimate.
+tetap" is too wide for one line beside the three segments with the
+layout's width estimate, so it wraps (`Builder::wrap`, `row_text_lines`)
+and the Animasi row grows by `DESC_LINE_H` per extra line
+(`wrapped_row_h`). Do not shorten design copy to fit; wrap it.
 
 Related: [[bata-robot-expressions]], [[bata-idle-power-budget]]
 

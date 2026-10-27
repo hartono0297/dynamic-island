@@ -269,8 +269,9 @@ fn note_heads() -> [Part; 2] {
     [dot(57.0 - 1.6, 9.0, 1.9), dot(57.0 + 3.4, 9.0 - 1.5, 1.9)]
 }
 
-/// The marks of `expr`; with `blink`, open eyes (pills and round ones) close
-/// to the design's 7 × 2.4 slits one unit lower. Arcs (happy, asleep) stay.
+/// The marks of `expr`; with `blink`, open eyes (pills and round ones) become
+/// the design's `blink` eyes: 7 × 2.4 slits at (L, Y + 1) and (R, Y + 1),
+/// wherever the open eyes sat. Arcs (happy, asleep) stay.
 pub fn face(expr: Expr, blink: bool) -> Face {
     let happy = Part::Stroke(Line::Happy);
     let (mut parts, bob, tilt) = match expr {
@@ -332,17 +333,10 @@ pub fn face(expr: Expr, blink: bool) -> Face {
         Expr::Wave => (vec![happy], 0.0, -9.0),
     };
     if blink && expr.blinks() {
-        // Only the two eyes (the first two marks), never the extras.
-        for part in parts.iter_mut().take(2) {
-            let centre = match *part {
-                Part::Pill { x, y, w, h, .. } => Some((x + w / 2.0, y + h / 2.0)),
-                Part::Dot { cx, cy, .. } if cy > 20.0 => Some((cx, cy)),
-                _ => None,
-            };
-            if let Some((cx, cy)) = centre {
-                *part = eye(cx, cy + 1.0, 7.0, 2.4, 1.2);
-            }
-        }
+        // Every blinking face starts with its two eyes; brows, dots and
+        // other extras stay. The design's `case 'blink'` uses fixed spots.
+        parts[0] = eye(L, Y + 1.0, 7.0, 2.4, 1.2);
+        parts[1] = eye(R, Y + 1.0, 7.0, 2.4, 1.2);
     }
     Face { parts, bob, tilt }
 }
@@ -567,6 +561,15 @@ impl Spot {
             View::MediaLyric => Spot::Lyric,
             View::Notice(n) => Spot::Notice(NoticeSort::of(&n.kind)),
         }
+    }
+
+    /// A compact island: the pointer over it turns the face Happy and lifts
+    /// it. Notices keep their face, the panel and hidden show no robot.
+    pub fn compact(self) -> bool {
+        matches!(
+            self,
+            Spot::Idle | Spot::Pomodoro | Spot::Media | Spot::Lyric
+        )
     }
 }
 
@@ -894,8 +897,15 @@ impl Brain {
         started
     }
 
-    /// Lift and bounce at `now` (none without motion), and the blink.
-    pub fn pose(&self, now: Instant, moves: bool, blink: bool) -> Pose {
+    /// When the hover lift began, if it applies at `spot`: only a compact
+    /// island lifts (its face turns Happy); a notice keeps its face still.
+    fn lift_since(&self, spot: Spot) -> Option<Instant> {
+        self.hover.filter(|_| spot.compact())
+    }
+
+    /// Lift and bounce at `spot` and `now` (none without motion), and the
+    /// blink.
+    pub fn pose(&self, spot: Spot, now: Instant, moves: bool, blink: bool) -> Pose {
         if !moves {
             return Pose {
                 blink: false,
@@ -905,7 +915,7 @@ impl Brain {
         Pose {
             blink,
             lift_px: self
-                .hover
+                .lift_since(spot)
                 .map_or(0.0, |at| lift_offset(now.saturating_duration_since(at))),
             bounce_px: self
                 .bounce
@@ -913,12 +923,13 @@ impl Brain {
         }
     }
 
-    /// A lift or bounce is still moving: the frame clock must run.
-    pub fn moving(&self, now: Instant, moves: bool) -> bool {
+    /// A lift or bounce at `spot` is still moving: the frame clock must run.
+    pub fn moving(&self, spot: Spot, now: Instant, moves: bool) -> bool {
         let within = |at: Option<Instant>, ms: u64| {
             at.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_millis(ms))
         };
-        moves && (within(self.hover, LIFT_MS) || within(self.bounce, BOUNCE_MS * BOUNCES))
+        moves
+            && (within(self.lift_since(spot), LIFT_MS) || within(self.bounce, BOUNCE_MS * BOUNCES))
     }
 
     /// The next moment the face may change by itself (falling asleep, a
@@ -1048,6 +1059,18 @@ mod tests {
             rx: 2.6,
             ry: 2.0
         }));
+        // Every open-eyed face blinks to the same two slits at Y + 1, as the
+        // design's `case 'blink'` draws them.
+        for expr in [Expr::Idle, Expr::Focus, Expr::Alert, Expr::Think, Expr::Sad] {
+            assert_eq!(
+                face(expr, true).parts[..2],
+                [
+                    eye(L, Y + 1.0, 7.0, 2.4, 1.2),
+                    eye(R, Y + 1.0, 7.0, 2.4, 1.2)
+                ],
+                "{expr:?}"
+            );
+        }
         // Arcs do not blink; thinking dots never close.
         assert_eq!(face(Expr::Happy, true), face(Expr::Happy, false));
         assert_eq!(
@@ -1300,33 +1323,66 @@ mod tests {
         let mut b = Brain::new(t0);
         assert!(b.observe(Some(Expr::Alert), t0, true));
         assert!(!b.observe(Some(Expr::Alert), t0, true), "already showing");
-        assert!(b.moving(t0 + ms(100), true));
-        assert!(!b.moving(t0 + ms(2 * BOUNCE_MS), true));
+        let alert = Spot::Notice(NoticeSort::Reminder);
+        assert!(b.moving(alert, t0 + ms(100), true));
+        assert!(!b.moving(alert, t0 + ms(2 * BOUNCE_MS), true));
         b.observe(Some(Expr::Idle), t0, true);
         assert!(!b.observe(Some(Expr::Alert), t0, false), "Hemat: no bounce");
-        assert!(!b.moving(t0, true));
+        assert!(!b.moving(alert, t0, true));
     }
 
     #[test]
     fn hover_lifts_two_pixels() {
         let t0 = Instant::now();
+        let idle = Spot::Idle;
         let mut b = Brain::new(t0);
         b.hover(true, t0);
-        assert_eq!(b.pose(t0, true, false).lift_px, 0.0);
-        let up = b.pose(t0 + Duration::from_millis(LIFT_MS), true, false);
+        assert_eq!(b.pose(idle, t0, true, false).lift_px, 0.0);
+        let up = b.pose(idle, t0 + Duration::from_millis(LIFT_MS), true, false);
         assert_eq!(up.lift_px, LIFT_PX);
-        assert!(b.moving(t0, true) && !b.moving(t0 + Duration::from_millis(LIFT_MS), true));
+        assert!(
+            b.moving(idle, t0, true) && !b.moving(idle, t0 + Duration::from_millis(LIFT_MS), true)
+        );
         // No motion: no lift, no blink.
         assert_eq!(
-            b.pose(t0 + Duration::from_secs(1), false, true),
+            b.pose(idle, t0 + Duration::from_secs(1), false, true),
             Pose::default()
         );
         // A second move while hovering keeps the first arrival.
         b.hover(true, t0 + Duration::from_secs(1));
         assert_eq!(
-            b.pose(t0 + Duration::from_secs(1), true, true).lift_px,
+            b.pose(idle, t0 + Duration::from_secs(1), true, true)
+                .lift_px,
             LIFT_PX
         );
+    }
+
+    #[test]
+    fn hover_lifts_only_a_compact_island() {
+        let t0 = Instant::now();
+        let mut b = Brain::new(t0);
+        b.hover(true, t0);
+        let later = t0 + Duration::from_millis(LIFT_MS);
+        for spot in [Spot::Idle, Spot::Pomodoro, Spot::Media, Spot::Lyric] {
+            assert_eq!(
+                b.pose(spot, later, true, false).lift_px,
+                LIFT_PX,
+                "{spot:?}"
+            );
+            assert!(b.moving(spot, t0, true), "{spot:?}");
+        }
+        // A notice keeps its own face, still; the panel draws no robot, so
+        // re-entering the island there starts no frame clock.
+        for spot in [
+            Spot::Notice(NoticeSort::Reminder),
+            Spot::Notice(NoticeSort::Greeting),
+            Spot::Notice(NoticeSort::BatteryLow),
+            Spot::Panel,
+            Spot::Hidden,
+        ] {
+            assert_eq!(b.pose(spot, later, true, false).lift_px, 0.0, "{spot:?}");
+            assert!(!b.moving(spot, t0, true), "{spot:?}");
+        }
     }
 
     #[test]

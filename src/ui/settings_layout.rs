@@ -79,6 +79,8 @@ const LINK_PAD: f32 = 8.0;
 /// Space taken by the glyph after a link's label.
 pub const LINK_GLYPH_W: f32 = 18.0;
 const GAP: f32 = 8.0;
+/// A description that wraps: each further line adds this to its row.
+const DESC_LINE_H: f32 = 14.0;
 const LOGO: f32 = 28.0;
 const NAV_X: f32 = 10.0;
 const NAV_W: f32 = SIDEBAR_W - 2.0 * NAV_X;
@@ -802,7 +804,7 @@ impl Builder<'_> {
         control_x: f32,
     ) -> Option<usize> {
         let x = card.x + INSET;
-        let w = (control_x - 2.0 * GAP - x).max(0.0);
+        let w = row_text_w(card, control_x);
         let Some((desc, tone)) = desc else {
             let rect = Rect {
                 x,
@@ -840,6 +842,78 @@ impl Builder<'_> {
         Some(self.text(desc_rect, desc, Font::Desc, tone, Align::Left))
     }
 
+    /// `row_text` with a description already broken into `lines` (`wrap`):
+    /// each line one `DESC_LINE_H` under the last, in a row
+    /// `wrapped_row_h(lines.len())` tall.
+    fn row_text_lines(
+        &mut self,
+        card: Rect,
+        y: f32,
+        label: String,
+        lines: Vec<String>,
+        tone: Tone,
+        control_x: f32,
+    ) {
+        let x = card.x + INSET;
+        let w = row_text_w(card, control_x);
+        let label_rect = Rect {
+            x,
+            y: y + 7.0,
+            w,
+            h: 20.0,
+        };
+        self.text(label_rect, label, Font::Label, Tone::Primary, Align::Left);
+        for (i, line) in lines.into_iter().enumerate() {
+            let rect = Rect {
+                x,
+                y: y + 28.0 + i as f32 * DESC_LINE_H,
+                w,
+                h: 16.0,
+            };
+            self.text(rect, line, Font::Desc, tone, Align::Left);
+        }
+    }
+
+    /// `s` broken at spaces into lines no wider than `w` in `font`; a word
+    /// wider than `w` keeps a line of its own.
+    fn wrap(&self, s: &str, font: Font, w: f32) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for word in s.split_whitespace() {
+            match lines.last_mut() {
+                Some(line) if self.w(&format!("{line} {word}"), font) <= w => {
+                    line.push(' ');
+                    line.push_str(word);
+                }
+                _ => lines.push(word.to_owned()),
+            }
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
+    }
+
+    /// The width a segmented control of `items` takes (see `segmented_if`).
+    fn segmented_w(&self, items: &[(Hit, String)]) -> f32 {
+        self.segment_widths(items).iter().sum::<f32>() + 2.0 * SEG_PAD
+    }
+
+    /// Each segment's width: all the widest one's, unless that runs past
+    /// `SEG_EQUAL_MAX`; then each its own.
+    fn segment_widths(&self, items: &[(Hit, String)]) -> Vec<f32> {
+        let natural: Vec<f32> = items
+            .iter()
+            .map(|(_, s)| (self.w(s, Font::Control) + 2.0 * SEG_TEXT_PAD).max(SEG_MIN_W))
+            .collect();
+        let widest = natural.iter().copied().fold(0.0, f32::max);
+        let equal = widest * items.len() as f32 + 2.0 * SEG_PAD <= SEG_EQUAL_MAX;
+        if equal {
+            vec![widest; items.len()]
+        } else {
+            natural
+        }
+    }
+
     /// A segmented control right-aligned at `right`, centered on `cy`.
     fn segmented(
         &mut self,
@@ -862,17 +936,7 @@ impl Builder<'_> {
         selected: usize,
         enabled: bool,
     ) -> f32 {
-        let natural: Vec<f32> = items
-            .iter()
-            .map(|(_, s)| (self.w(s, Font::Control) + 2.0 * SEG_TEXT_PAD).max(SEG_MIN_W))
-            .collect();
-        let widest = natural.iter().copied().fold(0.0, f32::max);
-        let equal = widest * items.len() as f32 + 2.0 * SEG_PAD <= SEG_EQUAL_MAX;
-        let widths: Vec<f32> = if equal {
-            vec![widest; items.len()]
-        } else {
-            natural
-        };
+        let widths = self.segment_widths(&items);
         let total = widths.iter().sum::<f32>() + 2.0 * SEG_PAD;
         let track = Rect {
             x: right - total,
@@ -1251,37 +1315,63 @@ fn appearance(b: &mut Builder, s: &State) {
     robot_card(b, s);
 }
 
+/// The width left for a row's label and description, left of `control_x`.
+fn row_text_w(card: Rect, control_x: f32) -> f32 {
+    (control_x - 2.0 * GAP - (card.x + INSET)).max(0.0)
+}
+
+/// A row whose description takes `lines` lines.
+fn wrapped_row_h(lines: usize) -> f32 {
+    ROW_H + lines.saturating_sub(1) as f32 * DESC_LINE_H
+}
+
 /// Bata's four rows under Tampilan; with the robot off the other three
-/// stay visible but faded and take no clicks.
+/// stay visible but faded and take no clicks. The Animasi description wraps
+/// beside its three segments (the design's full sentence), and that row
+/// grows by a line.
 fn robot_card(b: &mut Builder, s: &State) {
-    let card = b.card(4.0 * ROW_H);
-    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
-    let cy = |y: f32| y + ROW_H / 2.0;
-    let on = s.robot;
-
-    let x = b.toggle(Hit::Robot, RIGHT, cy(rows[0]), on);
-    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
-
     let modes = [
         (Motion::Full, Key::MotionFull),
         (Motion::Saver, Key::MotionSaver),
         (Motion::Off, Key::MotionOff),
     ];
-    let items = modes
+    let items: Vec<(Hit, String)> = modes
         .iter()
         .map(|(v, k)| (Hit::Motion(*v), b.t(*k)))
         .collect();
+    let probe = Rect {
+        x: CONTENT_X,
+        y: 0.0,
+        w: CONTENT_W,
+        h: 0.0,
+    };
+    let desc_w = row_text_w(probe, RIGHT - b.segmented_w(&items));
+    let motion_desc = b.wrap(&b.t(Key::RobotMotionDesc), Font::Desc, desc_w);
+    let motion_h = wrapped_row_h(motion_desc.len());
+
+    let card = b.card(3.0 * ROW_H + motion_h);
+    let heights = [ROW_H, motion_h, ROW_H, ROW_H];
+    let mut rows = [card.y; 4];
+    for i in 1..4 {
+        rows[i] = rows[i - 1] + heights[i - 1];
+    }
+    let cy = |i: usize| rows[i] + heights[i] / 2.0;
+    let on = s.robot;
+
+    let x = b.toggle(Hit::Robot, RIGHT, cy(0), on);
+    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
+
     let selected = index_of(Motion::ALL, &s.robot_motion);
-    let x = b.segmented_if(Group::Motion, RIGHT, cy(rows[1]), items, selected, on);
-    let desc = Some((b.t(Key::RobotMotionDesc), Tone::Secondary));
-    b.row_text(card, rows[1], b.t(Key::RobotMotion), desc, false, x);
+    let x = b.segmented_if(Group::Motion, RIGHT, cy(1), items, selected, on);
+    let label = b.t(Key::RobotMotion);
+    b.row_text_lines(card, rows[1], label, motion_desc, Tone::Secondary, x);
     b.divider(card, rows[1]);
 
     let m = s.robot_sleep;
     let x = b.stepper(
         RIGHT,
-        cy(rows[2]),
+        cy(2),
         sleep_value(b.lang, m),
         Hit::RobotSleep(-1),
         Hit::RobotSleep(1),
@@ -1292,7 +1382,7 @@ fn robot_card(b: &mut Builder, s: &State) {
     b.row_text(card, rows[2], b.t(Key::RobotSleep), desc, false, x);
     b.divider(card, rows[2]);
 
-    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(rows[3]), s.greeting, on);
+    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(3), s.greeting, on);
     let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
     b.row_text(card, rows[3], b.t(Key::MorningGreeting), desc, false, x);
     b.divider(card, rows[3]);
@@ -2054,6 +2144,13 @@ mod tests {
                 _ => None,
             });
             assert_eq!(value.as_deref(), Some(sleep_value(lang, 10).as_str()));
+            // A wrapped description is its lines in order, joined by spaces.
+            let shown = l
+                .texts
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             for key in [
                 Key::RobotInNotch,
                 Key::RobotInNotchDesc,
@@ -2064,7 +2161,7 @@ mod tests {
                 Key::MorningGreeting,
                 Key::MorningGreetingDesc,
             ] {
-                assert!(l.texts.iter().any(|t| t.text == text(lang, key)), "{key:?}");
+                assert!(shown.contains(text(lang, key)), "{key:?}");
             }
             // Off: only the main toggle still takes clicks.
             let off = State {
@@ -2093,6 +2190,68 @@ mod tests {
         }
         assert_eq!(sleep_value(Lang::Id, 10), "10 mnt");
         assert_eq!(sleep_value(Lang::En, 10), "10 min");
+    }
+
+    /// The design's full "Hemat: tanpa kedip dan gerak, ekspresi tetap"
+    /// wraps beside the segments; its row grows by the extra line and the
+    /// rows under it follow, clear of the segmented control.
+    #[test]
+    fn motion_description_wraps_beside_the_segments() {
+        assert_eq!(
+            text(Lang::Id, Key::RobotMotionDesc),
+            "Hemat: tanpa kedip dan gerak, ekspresi tetap"
+        );
+        for lang in [Lang::Id, Lang::En] {
+            let s = State {
+                lang,
+                robot: true,
+                scroll: 1e6,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let label = l
+                .texts
+                .iter()
+                .position(|t| t.text == text(lang, Key::RobotMotion))
+                .expect("Animasi label");
+            let sleep = l
+                .texts
+                .iter()
+                .position(|t| t.text == text(lang, Key::RobotSleep))
+                .expect("sleep label");
+            let lines = &l.texts[label + 1..sleep];
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|t| t.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                text(lang, Key::RobotMotionDesc)
+            );
+            let (track, _, _) = l.segmented(Group::Motion).expect("segments");
+            for t in lines {
+                assert!(t.rect.right() + 2.0 * GAP <= track.x + 0.01, "{:?}", t.text);
+            }
+            // The sleep row starts below the last line, with the usual gap.
+            let last = lines.last().expect("a line");
+            let sleep_label = &l.texts[sleep];
+            assert!(sleep_label.rect.y - last.rect.bottom() >= 15.0 - 0.01);
+            assert_eq!(
+                last.rect.y - lines[0].rect.y,
+                (lines.len() - 1) as f32 * DESC_LINE_H
+            );
+        }
+        let b = Builder {
+            m: &Estimate,
+            lang: Lang::Id,
+            l: Layout::default(),
+            y: 0.0,
+        };
+        assert_eq!(b.wrap("a b", Font::Desc, 1.0), ["a", "b"]);
+        assert_eq!(b.wrap("a b", Font::Desc, 100.0), ["a b"]);
+        assert_eq!(b.wrap("", Font::Desc, 100.0), [""]);
+        assert_eq!(wrapped_row_h(1), ROW_H);
+        assert_eq!(wrapped_row_h(2), ROW_H + DESC_LINE_H);
     }
 
     #[test]

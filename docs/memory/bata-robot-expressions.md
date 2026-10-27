@@ -17,7 +17,9 @@ face; its priority, highest first:
    own messages (config invalid, DND hint) also use `App { app_id: None }`
    and so keep their badge too; they cannot be told apart.
 3. Pointer over a compact island → Happy (+ 2 px lift), before the dwell
-   opens the panel. It also wakes a sleeping robot.
+   opens the panel. It also wakes a sleeping robot. The lift only applies
+   where the hover sets the face (`Spot::compact`): a notice keeps its face
+   still, and no frame clock runs for a robot that is not drawn.
 4. Pomodoro → Focus, media → Music (the robot replaces the album art),
    lyric line → Sing.
 5. Idle only: CLI just done/failed (4 s) → Happy/Sad; Claude working or a
@@ -33,7 +35,8 @@ unchanged: the 40 px robot sits exactly in the badge's square. With the
 robot off every width is as before (`shape_with_robot(.., false)`).
 
 Blink only shows on open eyes (Idle, Focus, Alert, Think, Sad); the
-`blink` eyes of the design replace the first two marks.
+design's `blink` eyes, fixed at (L, Y + 1) and (R, Y + 1) whatever face
+blinks, replace the first two marks.
 
 Related: [[bata-idle-power-budget]], [[bata-morning-greeting]],
 [[studio-bata-logo-sources]]

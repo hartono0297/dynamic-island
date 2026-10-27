@@ -409,10 +409,9 @@ keys! {
     RobotInNotchDesc => "Tampilkan Bata di samping jam dan notice",
         "Show Bata beside the clock and notices";
     RobotMotion => "Animasi", "Animation";
-    // The design's "Hemat: tanpa kedip dan gerak, ekspresi tetap" is too
-    // long beside the three segments; blinking is motion too.
-    RobotMotionDesc => "Hemat: tanpa gerak, ekspresi tetap",
-        "Saver: no motion, faces still change";
+    // The design's sentence; it wraps beside the three segments.
+    RobotMotionDesc => "Hemat: tanpa kedip dan gerak, ekspresi tetap",
+        "Saver: no blinking or motion, faces stay";
     MotionFull => "Penuh", "Full";
     MotionSaver => "Hemat", "Saver";
     MotionOff => "Mati", "Off";
