@@ -56,6 +56,18 @@ page, which it never did before. Same family of gotchas as
 - **Robot.** A running CLI command shows Bata's Think face, a finished one
   Happy or Sad for 4 s, see [[bata-robot-expressions]].
 
+- **A second input: the Clipboard search.** `CliInput::create_with` makes
+  another hidden 1 × 1 EDIT (id 202, 256 chars); each EDIT carries its own
+  key callback in its subclass data, and the IME position is kept per EDIT,
+  so the CLI's behaviour is unchanged. The same rules hold: only a click on
+  the search field (`Hit::ClipSearch` → `Effect::FocusClipSearch`) activates
+  the island; `ClipFocus` holds the panel; a page change, the panel
+  collapsing, Blur or Alt+Tab let go (`Effect::ReleaseClipFocus`, the same
+  `cli_prev` / `return_keyboard`). Typing filters, ↑↓ move the selection,
+  Enter copies it, closes the panel (`Event::ClipCommit`) and gives the
+  foreground back; Esc clears the text first and lets go on the next. The
+  global hotkey opens the page without activating. See [[clipboard-history]].
+
 Related: [[studio-font-loading]], [[studio-icons]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

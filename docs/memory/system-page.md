@@ -49,8 +49,9 @@ the warning logic live in `src/system.rs`; the page in
   older config still loads. Like the battery threshold, the file owns them
   (`merge_owned`). Settings → Umum shows them in a second card, so General
   now scrolls like [[settings-appearance-scroll]].
-- **Order.** `Page::System` sits before CLI for now. Run 9 sets the final
-  order and the page settings.
+- **Order.** `Page::System` sits between Clipboard ([[clipboard-history]])
+  and CLI for now (nine pages). Run 9 sets the final order and the page
+  settings.
 
 Demo: `system`, `system-low` and `bata-sistem` use fixed figures
 ([[demo-data-time-of-day]]). Shots `system` and `system-warning` are in

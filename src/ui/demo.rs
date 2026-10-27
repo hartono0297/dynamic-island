@@ -54,8 +54,8 @@ use super::geometry::{
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
 use super::render::{
-    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
-    SystemView,
+    CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
+    RobotFrame, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -64,6 +64,9 @@ use crate::clean::{self, AdminOutcome, CatSize, CleanCat, CleanMode, CleanReport
 use crate::cli::{self, Output, Shell};
 use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
+use crate::clipboard::image::Thumb;
+use crate::clipboard::store::ClipImage;
+use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
@@ -124,6 +127,8 @@ struct Scene {
     system_low: bool,
     /// The cleaner over the System page, and how its button stands.
     clean: Option<CleanDemo>,
+    /// What the Clipboard page shows.
+    clip: ClipDemo,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -133,7 +138,7 @@ enum CleanDemo {
     Ticks,
     /// The button armed: "Yakin? Hapus 2,3 GB".
     Armed,
-    /// Mole mode, its preview done: 1,8 / 0,4 / 0,1 / 0,1 GB, Â± 2,4 GB.
+    /// Mole mode, its preview done: 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB.
     MolePreview,
     /// Mole mode while the dry-run runs.
     MoleScanning,
@@ -147,6 +152,20 @@ enum CleanDemo {
     MoleUnreadable,
     /// Mole not installed: the "Cara memasang" card.
     MoleMissing,
+}
+
+/// The Clipboard page's states, after keputusan-v3.1.html §5. Fixed data
+/// and a fixed "now": never the real clipboard, never the clock.
+#[derive(Clone, Copy, PartialEq)]
+enum ClipDemo {
+    /// The design: six cards of 48, the first pinned and selected.
+    Design,
+    /// "denah" typed in the focused search field.
+    Search,
+    /// Nothing copied yet.
+    Empty,
+    /// "Riwayat clipboard" off.
+    Off,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -207,6 +226,8 @@ enum DemoNotice {
     MoleDone,
     /// Mole failed with exit 1.
     MoleFailed,
+    /// "Disalin" after copying the first Clipboard card.
+    Copied,
 }
 
 const BASE: Scene = Scene {
@@ -229,7 +250,17 @@ const BASE: Scene = Scene {
     sheet: false,
     system_low: false,
     clean: None,
+    clip: ClipDemo::Design,
 };
+
+const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
+    Scene {
+        name,
+        view: View0::Panel(Page::Clipboard),
+        clip: which,
+        ..BASE
+    }
+}
 
 /// A scene of Bata in the notch (studio-robot.html p3).
 const fn bata(name: &'static str, kind: ShapeKind, view: View0, expr: Expr) -> Scene {
@@ -305,7 +336,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 71] = [
+const SCENES: [Scene; 76] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -447,6 +478,17 @@ const SCENES: [Scene; 71] = [
     cli("cli-from-explorer", CliDemo::FromExplorer),
     cli("cli-folder-menu", CliDemo::FolderMenu),
     panel("shortcuts", Page::Shortcuts),
+    clipboard("clipboard", ClipDemo::Design),
+    clipboard("clipboard-search", ClipDemo::Search),
+    clipboard("clipboard-empty", ClipDemo::Empty),
+    clipboard("clipboard-off", ClipDemo::Off),
+    // keputusan-v3.1 §5 "Saat menyalin": Bata happy over the preview.
+    bata(
+        "clipboard-copied",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::Copied),
+        Expr::Happy,
+    ),
     Scene {
         name: "bata-sheet",
         sheet: true,
@@ -590,7 +632,7 @@ fn demo_system(low: bool) -> SystemSample {
 }
 
 /// The cleaner's sizes in the design: 0,1 / 1,8 / 0,4 / 0,1 GB, the rest
-/// not measured ("â€”").
+/// not measured ("—").
 fn demo_scan() -> ScanResult {
     let gb = |x: f64| CatSize {
         bytes: (x * GIB as f64) as u64,
@@ -612,7 +654,7 @@ fn demo_scan() -> ScanResult {
     }
 }
 
-/// Mole's preview in the design (`MG`): 1,8 / 0,4 / 0,1 / 0,1 GB, Â± 2,4 GB
+/// Mole's preview in the design (`MG`): 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB
 /// in 29 entries; `unreadable` leaves the app caches as "lihat log".
 fn demo_mole_summary(unreadable: bool) -> PreviewSummary {
     let gb = |x: f64| (x * GIB as f64) as u64;
@@ -759,6 +801,7 @@ fn run_scenes(scenes: &[Scene]) {
     let mole_log = demo_mole_log();
     let mole_report = demo_mole_report(false);
     let no_log = std::collections::VecDeque::new();
+    let clips = demo_clips();
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -945,6 +988,7 @@ fn run_scenes(scenes: &[Scene]) {
                 lyric_prev_scroll: 0.0,
                 lyrics_on: scene.lyrics_on,
                 cli: cli.view(),
+                clip: clip_view(&clips, scene.clip),
                 progress: Some(DEMO_PROGRESS),
                 robot: scene.robot.map(|expr| RobotFrame {
                     expr,
@@ -958,6 +1002,140 @@ fn run_scenes(scenes: &[Scene]) {
             }
         }
         std::thread::sleep(Duration::from_millis(if animated { 33 } else { 16 }));
+    }
+}
+
+/// The design's `CLIPS2`: kind, pinned, value. The image card's value is
+/// unused (its meta comes from the size).
+const DEMO_CLIPS: [(ClipKind, bool, &str); 6] = [
+    (
+        ClipKind::Text,
+        true,
+        "Denah lantai 2 sudah saya revisi, tolong dicek bagian tangga",
+    ),
+    (ClipKind::Link, false, "github.com/tw93/mole/tree/windows"),
+    (ClipKind::Image, false, ""),
+    (ClipKind::Code, false, "cargo test --locked -- --nocapture"),
+    (ClipKind::Color, false, "#E2683C"),
+    (
+        ClipKind::Text,
+        false,
+        "Jl. Kemang Raya No. 12, Jakarta Selatan",
+    ),
+];
+/// "Cari di 48 item…": the six cards are the newest of 48.
+const DEMO_CLIP_TOTAL: usize = 48;
+
+/// The fixed "now" the cards' ages count from (never the clock).
+fn demo_clip_now() -> NaiveDateTime {
+    NaiveDate::from_ymd_opt(2026, 10, 27)
+        .and_then(|d| d.and_hms_opt(14, 32, 0))
+        .expect("valid time")
+}
+
+/// The six cards, copied a few minutes apart before `demo_clip_now`; the
+/// screenshot 2 minutes ago, its thumbnail the design's terracotta
+/// gradient with a pale frame.
+fn demo_clips() -> Vec<Clip> {
+    let now = demo_clip_now();
+    let unix = |mins: i64| {
+        Local
+            .from_local_datetime(&(now - chrono::Duration::minutes(mins)))
+            .earliest()
+            .map_or(0, |t| t.timestamp())
+    };
+    DEMO_CLIPS
+        .iter()
+        .enumerate()
+        .map(|(i, &(kind, pinned, value))| {
+            let data = match kind {
+                ClipKind::Image => ClipData::Image(ClipImage {
+                    width: 1280,
+                    height: 720,
+                    thumb: demo_thumb(),
+                    fingerprint: 1,
+                    screenshot: true,
+                    full: None,
+                }),
+                _ => ClipData::Text(value.into()),
+            };
+            Clip {
+                id: i as u64 + 1,
+                kind,
+                data,
+                pinned,
+                at: unix(i as i64 * 2),
+            }
+        })
+        .collect()
+}
+
+/// `.clip.img .th`: a 160° gradient #E2683C → #5A2A1C, a pale inner frame.
+fn demo_thumb() -> Thumb {
+    let (w, h) = (184u32, 104u32);
+    let mut bgra = Vec::with_capacity((w * h * 4) as usize);
+    let (a, b) = ([0xE2, 0x68, 0x3C], [0x5A, 0x2A, 0x1C]);
+    let inset = 28.0;
+    for y in 0..h {
+        for x in 0..w {
+            let t = ((x as f32 * 0.34 + y as f32 * 0.94) / (w as f32 * 0.34 + h as f32 * 0.94))
+                .clamp(0.0, 1.0);
+            let mut rgb = [0f32; 3];
+            for c in 0..3 {
+                rgb[c] = a[c] as f32 + (b[c] as f32 - a[c] as f32) * t;
+            }
+            let (fx, fy) = (x as f32, y as f32);
+            let on_frame = |v: f32, lo: f32, hi: f32| (v - lo).abs() < 1.5 || (v - hi).abs() < 1.5;
+            let inside_x = fx >= inset - 1.5 && fx <= w as f32 - inset + 1.5;
+            let inside_y = fy >= inset - 1.5 && fy <= h as f32 - inset + 1.5;
+            let frame = (on_frame(fx, inset, w as f32 - inset) && inside_y)
+                || (on_frame(fy, inset, h as f32 - inset) && inside_x);
+            if frame {
+                for (c, pale) in rgb.iter_mut().zip([0xF4, 0xED, 0xE4]) {
+                    *c += (pale as f32 - *c) * 0.55;
+                }
+            }
+            bgra.extend([rgb[2] as u8, rgb[1] as u8, rgb[0] as u8, 255]);
+        }
+    }
+    Thumb { w, h, bgra }
+}
+
+/// The Clipboard page for `which`, from `clips` (`demo_clips`).
+fn clip_view(clips: &[Clip], which: ClipDemo) -> ClipView<'_> {
+    let now = demo_clip_now();
+    match which {
+        ClipDemo::Design => ClipView {
+            items: clips.iter().collect(),
+            total: DEMO_CLIP_TOTAL,
+            selected: clips.first().map(|c| c.id),
+            ..ClipView::empty(now)
+        },
+        ClipDemo::Search => {
+            let query = "denah";
+            let end = query.encode_utf16().count();
+            let items: Vec<&Clip> = clips
+                .iter()
+                .filter(|c| {
+                    c.plain_text()
+                        .is_some_and(|t| t.to_lowercase().contains(query))
+                })
+                .collect();
+            ClipView {
+                selected: items.first().map(|c| c.id),
+                items,
+                total: DEMO_CLIP_TOTAL,
+                query,
+                selection: (end, end),
+                focused: true,
+                ..ClipView::empty(now)
+            }
+        }
+        ClipDemo::Empty => ClipView::empty(now),
+        ClipDemo::Off => ClipView {
+            enabled: false,
+            ..ClipView::empty(now)
+        },
     }
 }
 
@@ -979,7 +1157,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             tr(Key::SourceReminder),
             "Kirim revisi denah ke klien",
             format!(
-                "{} Â· {}",
+                "{} · {}",
                 tr(Key::Missed),
                 crate::i18n::time_label(
                     crate::i18n::lang(),
@@ -997,7 +1175,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::Claude => notice(
             "Claude",
             tr(Key::ClaudeWaiting),
-            format!("dynamic-island Â· {}", tr(Key::DemoClaudeAsks)),
+            format!("dynamic-island · {}", tr(Key::DemoClaudeAsks)),
             NoticeKind::ClaudeWaiting {
                 session_id: "demo".into(),
             },
@@ -1010,7 +1188,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         ),
         DemoNotice::App => notice(
             "Mail",
-            "Rani Â· Mail",
+            "Rani · Mail",
             "Denah lantai 2 sudah saya kirim, cek ya".into(),
             NoticeKind::App { app_id: None },
         ),
@@ -1020,10 +1198,16 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             crate::i18n::greeting_body(crate::i18n::lang(), 3, 2),
             NoticeKind::Greeting,
         ),
+        DemoNotice::Copied => notice(
+            tr(Key::ClipboardTitle),
+            tr(Key::ClipCopied),
+            crate::clipboard::store::preview(DEMO_CLIPS[0].2, 120),
+            NoticeKind::Copied,
+        ),
         DemoNotice::ClaudeWorking => notice(
             "Claude",
             tr(Key::DemoClaudeWorking),
-            format!("dynamic-island Â· {}", tr(Key::DemoFilesChanged)),
+            format!("dynamic-island · {}", tr(Key::DemoFilesChanged)),
             NoticeKind::ClaudeDone {
                 session_id: "demo".into(),
             },
@@ -1137,7 +1321,7 @@ fn demo_cli(which: CliDemo, now: Instant) -> DemoCli {
         command(
             output,
             "git status",
-            &["On branch main Â· nothing to commit, working tree clean"],
+            &["On branch main · nothing to commit, working tree clean"],
         );
         command(
             output,
@@ -1325,12 +1509,12 @@ fn demo_pomodoro(which: Pomo, now: Instant) -> Pomodoro {
         return p;
     }
     if which == Pomo::Break {
-        // Focus 1 â†’ short break, 1:40 in.
+        // Focus 1 → short break, 1:40 in.
         p.skip(now);
         p.start_pause(now.checked_sub(Duration::from_secs(100)).unwrap_or(now));
         return p;
     }
-    // Focus 1 â†’ short break â†’ focus 2.
+    // Focus 1 → short break → focus 2.
     p.skip(now);
     p.skip(now);
     let started = now.checked_sub(Duration::from_secs(378)).unwrap_or(now);
@@ -1505,7 +1689,7 @@ fn demo_notes(today: NaiveDate) -> Vec<Note> {
         ),
         note(
             "n2",
-            "Daftar material\nBata ekspos, terakota lantai 30Ã—30, kaca low-e, baja ringan.",
+            "Daftar material\nBata ekspos, terakota lantai 30×30, kaca low-e, baja ringan.",
             now - 3600,
         ),
         note(
@@ -1615,7 +1799,7 @@ fn many_reminders(today: NaiveDate) -> Vec<Reminder> {
         .collect()
 }
 
-/// A 240Ã—192 cover like the design's: a terracotta sky darkening downwards,
+/// A 240×192 cover like the design's: a terracotta sky darkening downwards,
 /// a pale sun, a thin horizon. Not square, to exercise the crop.
 fn test_art() -> Vec<u8> {
     const W: u32 = 240;

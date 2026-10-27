@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -80,6 +80,56 @@ pub struct Config {
     /// That was done once: an entry the user removes later is never added
     /// back.
     pub mole_defaults_added: bool,
+    /// The clipboard history and its page.
+    pub clipboard: ClipboardSettings,
+}
+
+crate::theme::named_enum! {
+    /// "Pintasan" of the Clipboard page: none by default. Ctrl+Shift+V is
+    /// never offered (it is "paste as plain text" in browsers, VS Code and
+    /// Office); any other name, that one included, reads as `Off`.
+    ClipHotkey { Off, CtrlAltV, WinAltV }
+}
+
+/// Settings → Clipboard.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct ClipboardSettings {
+    /// "Riwayat clipboard": keep what is copied.
+    pub enabled: bool,
+    /// "Jumlah item", kept in 10–200 (pins come on top).
+    #[serde(deserialize_with = "clip_items")]
+    pub max_items: u32,
+    /// "Simpan setelah restart": the history goes to an encrypted file; off,
+    /// it lives in memory only.
+    pub persist: bool,
+    /// "Hapus saat layar dikunci": unpinned entries go when the screen locks.
+    pub clear_on_lock: bool,
+    pub hotkey: ClipHotkey,
+    /// "Disalin" also for copies made in other apps.
+    pub copied_feedback_all: bool,
+}
+
+impl Default for ClipboardSettings {
+    fn default() -> Self {
+        ClipboardSettings {
+            enabled: true,
+            max_items: crate::clipboard::store::DEFAULT_ITEMS,
+            persist: true,
+            clear_on_lock: false,
+            hotkey: ClipHotkey::Off,
+            copied_feedback_all: false,
+        }
+    }
+}
+
+/// Any number, kept in range; a non-number is the default.
+fn clip_items<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64()
+        .map_or(crate::clipboard::store::DEFAULT_ITEMS, |n| {
+            crate::clipboard::store::clamp_items(n.clamp(0.0, f64::from(u32::MAX)) as u32)
+        }))
 }
 
 /// The disk limit's (min, max, step) in GB.
@@ -155,6 +205,7 @@ impl Default for Config {
             clean_mode: CleanMode::Own,
             mole_protect_defaults: true,
             mole_defaults_added: false,
+            clipboard: ClipboardSettings::default(),
         }
     }
 }
@@ -229,6 +280,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         clean_mode: mem.clean_mode,
         mole_protect_defaults: mem.mole_protect_defaults,
         mole_defaults_added: mem.mole_defaults_added,
+        clipboard: mem.clipboard,
         ..disk
     }
 }
@@ -548,6 +600,14 @@ mod tests {
             clean_mode: CleanMode::Mole,
             mole_protect_defaults: false,
             mole_defaults_added: true,
+            clipboard: ClipboardSettings {
+                enabled: false,
+                max_items: 120,
+                persist: false,
+                clear_on_lock: true,
+                hotkey: ClipHotkey::WinAltV,
+                copied_feedback_all: true,
+            },
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -618,6 +678,47 @@ mod tests {
         };
         let merged = merge_owned(disk, &Config::default());
         assert_eq!((merged.disk_warn_gb, merged.ram_warn_percent), (30, 80));
+    }
+
+    #[test]
+    fn clipboard_defaults_and_hand_edits() {
+        let d = ClipboardSettings::default();
+        assert!(d.enabled && d.persist && !d.clear_on_lock && !d.copied_feedback_all);
+        assert_eq!((d.max_items, d.hotkey), (50, ClipHotkey::Off));
+        // An older config.json without the group loads the defaults.
+        let old = parse(r#"{"style":"Notch","robot":false,"lyrics":true}"#);
+        assert_eq!(old.clipboard, ClipboardSettings::default());
+        assert_eq!(old.style, Style::Notch);
+        // A group with some fields: the others are defaults.
+        let some = parse(r#"{"clipboard":{"clear_on_lock":true}}"#);
+        assert!(some.clipboard.clear_on_lock && some.clipboard.enabled);
+        // The count is clamped; a non-number is the default.
+        let big = parse(r#"{"clipboard":{"max_items":5000}}"#);
+        assert_eq!(big.clipboard.max_items, 200);
+        let small = parse(r#"{"clipboard":{"max_items":1}}"#);
+        assert_eq!(small.clipboard.max_items, 10);
+        let word = parse(r#"{"clipboard":{"max_items":"banyak"}}"#);
+        assert_eq!(word.clipboard.max_items, 50);
+        // Hotkeys by name; an unknown one, Ctrl+Shift+V too, is none.
+        let alt = parse(r#"{"clipboard":{"hotkey":"CtrlAltV"}}"#);
+        assert_eq!(alt.clipboard.hotkey, ClipHotkey::CtrlAltV);
+        for name in ["CtrlShiftV", "Ctrl+Shift+V", "F13", ""] {
+            let json = format!(r#"{{"style":"Notch","clipboard":{{"hotkey":"{name}"}}}}"#);
+            let c = parse(&json);
+            assert_eq!(
+                (c.style, c.clipboard.hotkey),
+                (Style::Notch, ClipHotkey::Off)
+            );
+        }
+        // The island's own settings win over a stale copy on disk.
+        let mem = Config {
+            clipboard: ClipboardSettings {
+                persist: false,
+                ..ClipboardSettings::default()
+            },
+            ..Config::default()
+        };
+        assert!(!merge_owned(Config::default(), &mem).clipboard.persist);
     }
 
     #[test]
@@ -707,6 +808,8 @@ mod tests {
             (c.accent, c.surface, c.window_theme),
             (Accent::Terracotta, Surface::Espresso, WindowTheme::System)
         );
+        // The clipboard group came later still: defaults.
+        assert_eq!(c.clipboard, ClipboardSettings::default());
         // The robot's fields came later: defaults, and they survive a save.
         assert!(c.robot && c.morning_greeting);
         assert_eq!(

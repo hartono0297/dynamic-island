@@ -42,7 +42,18 @@ The System page adds two one-shots (see [[system-page]]):
   panel is closed. Its reading runs on the sampler thread, and the island
   redraws only if it raises a notice.
 
+The clipboard history ([[clipboard-history]]) adds no repeating timer
+either: the listener costs nothing until a copy; `TIMER_CLIP_RETRY` (20),
+`TIMER_CLIP_SAVE` (21) and `TIMER_CLIP_HOLD` (22) are one-shots; a change
+while the Clipboard page is hidden draws nothing unless a notice shows;
+"Disalin" rides the notice deadline (1.5 s).
+
+Gotcha: the System page and the clipboard were built in parallel runs and
+both took ids 17 and 18; the merge moved the clipboard's to 20–22.
+`app::tests::timer_ids_never_collide` now checks every id.
+
 Related: [[bata-robot-expressions]], [[studio-media-progress-timer]], [[system-page]],
+[[clipboard-history]],
 [[lyric-notch-width]] (a long lyric line's one-shot scroll timer follows the same rule)
 
 Part of [[v3-studio-overview]]. Listed in [[index]].
