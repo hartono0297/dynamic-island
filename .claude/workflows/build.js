@@ -1,6 +1,6 @@
 export const meta = {
   name: 'build',
-  description: 'Opus plans and picks full or lite mode, builders work in parallel worktrees, blind review/fix until SHIP, check, then merge to main and push',
+  description: 'Opus plans and picks full or lite mode, builders work in parallel worktrees, blind review/fix until SHIP, check, then merge to main (the main session pushes)',
   whenToUse: 'Every code change. Pass the request as args, e.g. args: "add login page with email + password"',
   phases: [
     { title: 'Plan', detail: 'pick full/lite, split into independent tasks', model: 'opus' },
@@ -142,7 +142,7 @@ const results = await pipeline(
   }
 )
 
-// Ship — single-branch flow: task branches are temporary, everything lands on main and is pushed.
+// Ship — single-branch flow: task branches are temporary, everything lands on main; the main session pushes once all work is done.
 // Barrier on purpose: merging needs all finished tasks together.
 const done = results.filter(Boolean)
 const ready = done.filter(r => r.verdict === 'SHIP' && r.check.passed)
@@ -160,7 +160,7 @@ if (ready.length) {
     `4. If green, update project memory in docs/memory/ (Obsidian vault): add or update one note per decision, gotcha or convention worth remembering from this work ` +
     `(frontmatter with tags + today's date, [[wikilinks]] to related notes), link new notes from docs/memory/index.md, and commit as "docs(memory): ...". ` +
     `Skip if nothing new is worth remembering. Do not duplicate what the code or git history already says.\n` +
-    `5. Push main to origin, then delete the merged task branches (local + their worktrees).\n\n` +
+    `5. Do NOT push; the main session pushes after all work is finished. Delete the merged task branches (local + their worktrees).\n\n` +
     `Request: ${args}\nTasks:\n${ready.map(r => `- ${r.id}: ${r.summary}`).join('\n')}` + TOOLS,
     { label: 'ship:main', phase: 'Ship', model: 'sonnet', schema: SHIP, ...mode.lowEffort }
   )
