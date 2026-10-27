@@ -22,6 +22,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[bata-robot-expressions]]
 - [[bata-idle-power-budget]]
 - [[bata-morning-greeting]]
+- [[lyric-notch-width]]
 - [[settings-appearance-scroll]]
 - [[media-click-guards]]
 - [[media-diagnosis-log]]

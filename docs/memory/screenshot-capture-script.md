@@ -9,4 +9,5 @@ date: 2026-10-27
 
 - Calls SetProcessDPIAware first, see [[studio-editor-frame]].
 - Demo data depends on the clock, see [[demo-data-time-of-day]].
+- `lyric-long` freezes the long lyric line mid-scroll (`DI_LYRIC_SCROLL`), see [[lyric-notch-width]].
 - Demo titles (events, notes, reminders) stay Indonesian even with `DI_LANG=en`.

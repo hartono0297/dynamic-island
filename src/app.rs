@@ -67,7 +67,9 @@ use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
-    ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, shape_for, shape_with_robot,
+    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect,
+    ease_out_back, lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
+    lyric_shape, lyric_target_w, lyric_width, shape_for, shape_with_robot,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{CliView, Frame, Progress, Renderer, RobotFrame};
@@ -130,6 +132,9 @@ const TIMER_BLINK: usize = 14;
 /// One-shot to the next moment Bata's face changes by itself (falling
 /// asleep, a Claude session going quiet, a CLI face ending).
 const TIMER_ROBOT: usize = 15;
+/// One-shot: a lyric line too long for the notch starts scrolling
+/// (`LYRIC_HOLD_MS` after it showed); the frame clock then runs until its end.
+const TIMER_LYRIC_SCROLL: usize = 16;
 const CLI_MS: u32 = 1000;
 /// Output lines one wheel notch scrolls (Windows' default of three).
 const WHEEL_LINES: i32 = 3;
@@ -228,6 +233,9 @@ pub fn run(media_log_flag: bool) {
             lyrics_worker: None,
             lyric_timer: false,
             lyric_fading: false,
+            lyric_fit: LyricFit::default(),
+            lyric_scroll_timer: false,
+            lyric_scrolling: false,
             config_warned: false,
             cli: Session::default(),
             cli_run: None,
@@ -373,6 +381,12 @@ struct App {
     lyric_timer: bool,
     /// Two lyric lines are crossfading; the frame clock runs until it ends.
     lyric_fading: bool,
+    /// The lyric notch's width and its line's scroll.
+    lyric_fit: LyricFit,
+    /// `TIMER_LYRIC_SCROLL` is set.
+    lyric_scroll_timer: bool,
+    /// A long lyric line is scrolling; the frame clock runs until it ends.
+    lyric_scrolling: bool,
     /// The invalid-config notice was shown this run.
     config_warned: bool,
     /// The CLI's output, last command and running state.
@@ -1336,6 +1350,10 @@ impl App {
         if self.robot_moving(now) {
             self.ensure_clock();
         }
+        if view == View::MediaLyric {
+            let max_w = self.lyric_max_w();
+            self.lyric_fit.refit(self.config.robot, max_w);
+        }
         let kind = match &view {
             View::Hidden => None,
             View::Idle => Some(ShapeKind::Idle),
@@ -1345,9 +1363,13 @@ impl App {
             View::Panel(_) => Some(self.panel_kind()),
             View::Notice(_) => Some(ShapeKind::Notice),
         };
-        // Compact shapes widen to hold the robot at their left.
-        let robot = self.config.robot;
-        let target = kind.map(|kind| shape_with_robot(self.config.style, kind, robot));
+        // Compact shapes widen to hold the robot at their left; the lyric
+        // notch is as wide as its line (robot included).
+        let (style, robot) = (self.config.style, self.config.robot);
+        let target = kind.map(|kind| match kind {
+            ShapeKind::MediaLyric => lyric_shape(style, self.lyric_fit.width()),
+            _ => shape_with_robot(style, kind, robot),
+        });
         let retarget = match target {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
             None => self.anim.to_opacity != 0.0,
@@ -1357,6 +1379,10 @@ impl App {
         if view == View::Hidden || view != self.drawn {
             self.click.clear();
         }
+        // Only the width changes while the lyric view stays: a quicker morph.
+        let resize = view == View::MediaLyric
+            && self.drawn == View::MediaLyric
+            && self.anim.to_opacity == 1.0;
         if view != View::Hidden {
             self.drawn = view;
         }
@@ -1370,6 +1396,7 @@ impl App {
                 to,
                 to_opacity,
                 start: now,
+                ms: if resize { LYRIC_RESIZE_MS } else { ANIM_MS },
                 running: true,
             };
             // The enlarged panel needs the taller canvas before it grows.
@@ -1389,9 +1416,14 @@ impl App {
         self.animating_at(Instant::now())
     }
 
-    /// A morph, page slide, lyric crossfade or robot lift/bounce runs at `now`.
+    /// A morph, page slide, lyric crossfade or scroll, or robot lift/bounce
+    /// runs at `now`.
     fn animating_at(&self, now: Instant) -> bool {
-        self.anim.running || self.slide.is_some() || self.lyric_fading || self.robot_moving(now)
+        self.anim.running
+            || self.slide.is_some()
+            || self.lyric_fading
+            || self.lyric_scrolling
+            || self.robot_moving(now)
     }
 
     /// The window is `TALL_WINDOW_H` tall while the enlarged CLI panel shows
@@ -1449,20 +1481,87 @@ impl App {
             _ => None,
         };
         let Some(pos) = position else {
-            // Fading out (fullscreen) keeps its last line.
+            // Fading out (fullscreen) keeps its last line and width; leaving
+            // the view forgets the width, so the next one starts fresh.
             if view != View::Hidden {
                 self.lyrics.hide();
+                self.lyric_fit = LyricFit::default();
             }
             self.set_lyric_timer(None);
+            self.sync_lyric_scroll(now);
             return false;
         };
         let changed = self.lyrics.advance(pos, now);
+        if changed || self.lyric_fit.width.is_none() {
+            self.fit_lyric_line(now);
+        }
         if self.lyrics.fading(now) {
             self.lyric_fading = true;
             self.ensure_clock();
         }
         self.set_lyric_timer(self.lyrics.wait_ms(pos));
+        self.sync_lyric_scroll(now);
         changed
+    }
+
+    /// The widest lyric notch on this screen.
+    fn lyric_max_w(&self) -> f32 {
+        self.win
+            .as_ref()
+            .map_or(LYRIC_MAX_W, |w| lyric_max_w(w.screen_w()))
+    }
+
+    /// Measures the line now on screen (as the renderer draws it) and works
+    /// out the notch's width for it; `refresh` morphs the shape there.
+    fn fit_lyric_line(&mut self, now: Instant) {
+        let text_w = self
+            .lyrics
+            .shown(now)
+            .and_then(|line| self.renderer.lyric_text_width(line.text));
+        let max_w = self.lyric_max_w();
+        self.lyric_fit.line(text_w, now, self.config.robot, max_w);
+    }
+
+    /// A line too long for the notch: one one-shot to when it starts
+    /// scrolling, then the frame clock until it reaches its end. Nothing
+    /// for a line that fits, outside the lyric view or once it has ended.
+    fn sync_lyric_scroll(&mut self, now: Instant) {
+        let shows = self.state.view() == View::MediaLyric;
+        let span = shows
+            .then(|| self.lyric_fit.scroll_span())
+            .flatten()
+            .filter(|&(_, end)| end > now);
+        let wait = match span {
+            Some((start, _)) if start > now => {
+                self.lyric_scrolling = false;
+                Some(start - now)
+            }
+            Some(_) => {
+                self.lyric_scrolling = true;
+                self.ensure_clock();
+                None
+            }
+            None => {
+                self.lyric_scrolling = false;
+                None
+            }
+        };
+        unsafe {
+            match wait {
+                // `SetTimer` on the same id replaces the pending one.
+                Some(wait) => {
+                    let ms = (wait + Duration::from_millis(1))
+                        .as_millis()
+                        .min(u32::MAX as u128) as u32;
+                    SetTimer(Some(self.hwnd), TIMER_LYRIC_SCROLL, ms, None);
+                }
+                None if self.lyric_scroll_timer => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_LYRIC_SCROLL);
+                }
+                None => {}
+            }
+        }
+        self.lyric_scroll_timer = wait.is_some();
     }
 
     /// One-shot: `SetTimer` on the same id replaces the pending one.
@@ -1652,10 +1751,19 @@ impl App {
             }
             TIMER_LYRIC => {
                 let now = Instant::now();
-                // A crossfade starts the frame clock, which draws it.
-                if self.sync_lyric_line(now) && !self.animating() {
-                    self.draw(now);
+                // A new line may want another width: refresh retargets the
+                // shape, and the crossfade's frame clock draws it.
+                if self.sync_lyric_line(now) {
+                    self.refresh(now);
                 }
+            }
+            TIMER_LYRIC_SCROLL => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_LYRIC_SCROLL);
+                }
+                self.lyric_scroll_timer = false;
+                // Starts the frame clock (or re-arms if it fired early).
+                self.sync_lyric_scroll(Instant::now());
             }
             TIMER_CLOCK => {
                 if !self.animating() {
@@ -1712,6 +1820,15 @@ impl App {
         // Checked at the drawn frame's time, so its last frame was the settled one.
         if self.lyric_fading && !self.lyrics.fading(now) {
             self.lyric_fading = false;
+        }
+        // Likewise the scroll ends on the frame with the line at its end.
+        if self.lyric_scrolling
+            && self
+                .lyric_fit
+                .scroll_span()
+                .is_none_or(|(_, end)| now >= end)
+        {
+            self.lyric_scrolling = false;
         }
         if slide_done {
             self.slide = None;
@@ -2089,6 +2206,12 @@ impl App {
             clock: (self.config.idle_clock && self.drawn == View::Idle)
                 .then(|| Local::now().format("%H:%M").to_string()),
             lyric: self.lyrics.shown(now),
+            lyric_scroll: if self.drawn == View::MediaLyric {
+                self.lyric_fit.scroll(now)
+            } else {
+                0.0
+            },
+            lyric_prev_scroll: self.lyric_fit.prev_scroll,
             lyrics_on: state.lyrics_on(),
             cli: CliView {
                 output: &self.cli.output,
@@ -2179,7 +2302,8 @@ impl ClickPair {
     }
 }
 
-/// Shape and opacity morphing from `from` to `to` over `ANIM_MS`.
+/// Shape and opacity morphing from `from` to `to` over `ms`: `ANIM_MS`
+/// between views, `LYRIC_RESIZE_MS` for the lyric notch's width alone.
 #[derive(Clone, Copy)]
 struct Anim {
     from: ShapeRect,
@@ -2187,6 +2311,7 @@ struct Anim {
     to: ShapeRect,
     to_opacity: f32,
     start: Instant,
+    ms: u64,
     running: bool,
 }
 
@@ -2198,6 +2323,7 @@ impl Anim {
             to: shape,
             to_opacity: opacity,
             start: Instant::now(),
+            ms: ANIM_MS,
             running: false,
         }
     }
@@ -2207,7 +2333,7 @@ impl Anim {
             return 1.0;
         }
         let elapsed = now.saturating_duration_since(self.start).as_secs_f32() * 1000.0;
-        (elapsed / ANIM_MS as f32).min(1.0)
+        (elapsed / self.ms.max(1) as f32).min(1.0)
     }
 
     fn frame(&self, now: Instant) -> (ShapeRect, f32) {
@@ -2218,6 +2344,81 @@ impl Anim {
         let shape = lerp_shape(self.from, self.to, ease_out_back(t));
         let opacity = self.from_opacity + (self.to_opacity - self.from_opacity) * t;
         (shape, opacity)
+    }
+}
+
+/// The lyric notch's width, worked out per line, and the line's scroll.
+/// Reset when the lyric view closes, so the next one starts at its first
+/// line's width.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct LyricFit {
+    /// The notch's width; `None` before the first line.
+    width: Option<f32>,
+    /// When the line on screen showed, and its measured width (`None`: the
+    /// rest sign or nothing).
+    since: Option<Instant>,
+    text_w: Option<f32>,
+    /// The line before's scroll when it was replaced, frozen while it fades.
+    prev_scroll: f32,
+    /// The robot and the cap `width` was worked out with.
+    robot: bool,
+    max_w: f32,
+}
+
+impl LyricFit {
+    /// A new line on screen at `now`: the notch grows to it at once, and
+    /// shrinks only when it is `LYRIC_SHRINK_SLACK` or more narrower.
+    fn line(&mut self, text_w: Option<f32>, now: Instant, robot: bool, max_w: f32) {
+        self.prev_scroll = self.scroll(now);
+        let wanted = lyric_width(text_w, robot, max_w);
+        let current = self
+            .width
+            .filter(|_| self.robot == robot && self.max_w == max_w);
+        self.width = Some(lyric_target_w(current, wanted).min(max_w));
+        self.since = Some(now);
+        self.text_w = text_w;
+        self.robot = robot;
+        self.max_w = max_w;
+    }
+
+    /// The robot was turned on or off, or the screen changed: the same line
+    /// is fitted again.
+    fn refit(&mut self, robot: bool, max_w: f32) {
+        if self.width.is_some() && (self.robot != robot || self.max_w != max_w) {
+            self.width = Some(lyric_width(self.text_w, robot, max_w));
+            self.robot = robot;
+            self.max_w = max_w;
+        }
+    }
+
+    fn width(&self) -> f32 {
+        self.width.unwrap_or(LYRIC_MIN_W)
+    }
+
+    fn box_w(&self) -> f32 {
+        lyric_box_w(self.width(), self.robot)
+    }
+
+    /// The line's scroll at `now` (0 while it holds or when it fits).
+    fn scroll(&self, now: Instant) -> f32 {
+        match (self.since, self.text_w) {
+            (Some(since), Some(text_w)) => {
+                let ms = now.saturating_duration_since(since).as_millis() as u64;
+                lyric_scroll_offset(text_w, self.box_w(), ms)
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// When a line too long for the notch starts and stops scrolling;
+    /// `None` for one that fits.
+    fn scroll_span(&self) -> Option<(Instant, Instant)> {
+        let since = self.since?;
+        let end = lyric_scroll_end_ms(self.text_w?, self.box_w())?;
+        Some((
+            since + Duration::from_millis(LYRIC_HOLD_MS),
+            since + Duration::from_millis(end),
+        ))
     }
 }
 
@@ -2857,7 +3058,8 @@ fn reposition() {
     win.reposition();
     with_app(move |app| {
         app.win = Some(win);
-        app.draw(Instant::now());
+        // The screen's width caps the lyric notch; refresh draws.
+        app.refresh(Instant::now());
     });
 }
 
@@ -3148,6 +3350,7 @@ mod tests {
             to: shape_for(Style::Pill, ShapeKind::Notice),
             to_opacity: 1.0,
             start,
+            ms: ANIM_MS,
             running: true,
         }
     }
@@ -3298,6 +3501,102 @@ mod tests {
         assert_eq!(anim.progress(end), 1.0);
         assert_eq!(anim.frame(end), (anim.to, 1.0));
         assert_eq!(anim.frame(end + Duration::from_secs(5)), (anim.to, 1.0));
+    }
+
+    #[test]
+    fn a_lyric_resize_morphs_quicker_with_the_same_spring() {
+        let t0 = Instant::now();
+        let resize = Anim {
+            from: lyric_shape(Style::Notch, 300.0),
+            to: lyric_shape(Style::Notch, 420.0),
+            from_opacity: 1.0,
+            ms: LYRIC_RESIZE_MS,
+            ..morph(t0)
+        };
+        let half = t0 + Duration::from_millis(LYRIC_RESIZE_MS / 2);
+        assert!((resize.progress(half) - 0.5).abs() < 0.01);
+        let at = |anim: &Anim, ms| anim.progress(t0 + Duration::from_millis(ms));
+        assert_eq!(at(&resize, LYRIC_RESIZE_MS), 1.0);
+        assert!(
+            at(&morph(t0), LYRIC_RESIZE_MS) < 1.0,
+            "views still take ANIM_MS"
+        );
+        assert_eq!(at(&morph(t0), ANIM_MS), 1.0);
+        // The same eased overshoot, only quicker.
+        let (mid, _) = resize.frame(half);
+        let eased = lerp_shape(resize.from, resize.to, ease_out_back(resize.progress(half)));
+        assert_eq!(mid, eased);
+        assert_eq!(
+            resize.frame(t0 + Duration::from_millis(LYRIC_RESIZE_MS)).0,
+            resize.to
+        );
+    }
+
+    #[test]
+    fn lyric_fit_keeps_its_width_for_a_slightly_shorter_line() {
+        let t0 = Instant::now();
+        let mut fit = LyricFit::default();
+        assert_eq!(fit.width(), LYRIC_MIN_W);
+        fit.line(Some(300.0), t0, false, LYRIC_MAX_W);
+        let first = fit.width();
+        assert_eq!(first, lyric_width(Some(300.0), false, LYRIC_MAX_W));
+        // 30 px shorter: the same width, so refresh does not retarget.
+        fit.line(Some(270.0), t0, false, LYRIC_MAX_W);
+        assert_eq!(fit.width(), first);
+        assert_eq!(lyric_shape(Style::Pill, fit.width()).w, first);
+        // 40 px or more shorter shrinks; longer grows at once.
+        fit.line(Some(255.0), t0, false, LYRIC_MAX_W);
+        assert_eq!(fit.width(), lyric_width(Some(255.0), false, LYRIC_MAX_W));
+        fit.line(Some(400.0), t0, false, LYRIC_MAX_W);
+        assert_eq!(fit.width(), lyric_width(Some(400.0), false, LYRIC_MAX_W));
+        // The rest sign after a long line: kept wide only within the slack.
+        fit.line(None, t0, false, LYRIC_MAX_W);
+        assert_eq!(fit.width(), LYRIC_MIN_W);
+        // Leaving the view starts the next one fresh.
+        fit = LyricFit::default();
+        fit.line(Some(100.0), t0, false, LYRIC_MAX_W);
+        assert_eq!(fit.width(), LYRIC_MIN_W);
+    }
+
+    #[test]
+    fn lyric_fit_follows_the_robot_and_the_screen() {
+        let t0 = Instant::now();
+        let mut fit = LyricFit::default();
+        fit.line(Some(300.0), t0, false, LYRIC_MAX_W);
+        fit.refit(true, LYRIC_MAX_W);
+        assert_eq!(fit.width(), lyric_width(Some(300.0), true, LYRIC_MAX_W));
+        // A smaller screen caps the same line lower.
+        fit.line(Some(900.0), t0, true, LYRIC_MAX_W);
+        assert_eq!(fit.width(), LYRIC_MAX_W);
+        fit.refit(true, 450.0);
+        assert_eq!(fit.width(), 450.0);
+        // Nothing to refit before the first line.
+        let mut empty = LyricFit::default();
+        empty.refit(true, 450.0);
+        assert_eq!(empty, LyricFit::default());
+    }
+
+    #[test]
+    fn only_a_long_lyric_line_scrolls_after_its_hold() {
+        let t0 = Instant::now();
+        let mut fit = LyricFit::default();
+        fit.line(Some(300.0), t0, true, LYRIC_MAX_W);
+        assert_eq!(fit.scroll_span(), None, "fits: no timer, no frames");
+        assert_eq!(fit.scroll(t0 + Duration::from_secs(5)), 0.0);
+        fit.line(Some(800.0), t0, true, LYRIC_MAX_W);
+        let (start, end) = fit.scroll_span().expect("too long for 560");
+        assert_eq!(start, t0 + Duration::from_millis(LYRIC_HOLD_MS));
+        assert!(end > start);
+        assert_eq!(fit.scroll(start), 0.0);
+        let moved = fit.scroll(start + Duration::from_millis(500));
+        assert!(moved > 0.0);
+        let rest = fit.scroll(end);
+        assert_eq!(fit.scroll(end + Duration::from_secs(10)), rest);
+        // The next line freezes this one's scroll for its fade-out.
+        let later = end + Duration::from_secs(1);
+        fit.line(Some(200.0), later, true, LYRIC_MAX_W);
+        assert_eq!(fit.prev_scroll, rest);
+        assert_eq!(fit.scroll_span(), None);
     }
 
     fn date(d: u32) -> NaiveDate {

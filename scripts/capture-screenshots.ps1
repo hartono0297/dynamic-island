@@ -168,6 +168,8 @@ $shots = @(
     @{ name = 'notes'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notes-4' } }
     @{ name = 'music'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }
+    # A lyric line too long for the notch, mid-scroll with its right edge faded.
+    @{ name = 'lyric-long'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-lirik-long'; DI_LYRIC_SCROLL = '4000' } }
     @{ name = 'cli'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-done' } }
     @{ name = 'robot'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'bata-sheet' } }
     @{ name = 'greeting'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'bata-sapaan' } }

@@ -1,12 +1,14 @@
 use windows::Win32::Foundation::{COLORREF, D2DERR_RECREATE_TARGET, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
-    D2D1_FIGURE_END_CLOSED, D2D1_PIXEL_FORMAT,
+    D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
     D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
+    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
     D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush,
@@ -17,9 +19,10 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_MEDIUM,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, IDWriteTypography,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_WORD_WRAPPING_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    IDWriteTextLayout, IDWriteTypography,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -37,15 +40,16 @@ use windows::Win32::UI::WindowsAndMessaging::{ULW_ALPHA, UpdateLayeredWindow};
 use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
+use std::mem::ManuallyDrop;
 use std::time::Instant;
 
 use chrono::NaiveDate;
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
+    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
     compact_layout, compact_layout_robot, corner_radius, equalizer_heights, idle_layout,
-    lyric_layout, lyric_layout_robot, notice_action, notice_layout,
+    lyric_layout, lyric_layout_robot, lyric_overflow, notice_action, notice_layout,
 };
 use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
@@ -74,6 +78,8 @@ const ART_SLOTS: usize = 2;
 const LYRIC_REST: &str = "\u{266A}";
 /// How far a lyric line rises while it crossfades into the next.
 const LYRIC_RISE: f32 = 5.0;
+/// Layout width for measuring one line: wider than any line drawn.
+const MEASURE_W: f32 = 4096.0;
 
 /// Everything a frame draws besides the shape: the view and the data behind it.
 pub struct Frame<'a> {
@@ -110,6 +116,11 @@ pub struct Frame<'a> {
     pub clock: Option<String>,
     /// The line drawn while the view is `MediaLyric`.
     pub lyric: Option<ShownLine<'a>>,
+    /// How far a line too long for its box is scrolled left
+    /// (`geometry::lyric_scroll_offset`); 0 while it holds or fits.
+    pub lyric_scroll: f32,
+    /// The fading-out line's scroll, frozen when the line changed.
+    pub lyric_prev_scroll: f32,
     /// "Lirik di notch" is on: the Musik page's button is lit.
     pub lyrics_on: bool,
     /// The CLI page.
@@ -778,7 +789,8 @@ impl Renderer {
                 self.paint_compact(style, shape, m, frame.now, frame.progress, robot)
             }),
             View::MediaLyric => {
-                self.paint_lyric(shape, frame.lyric.as_ref(), robot);
+                let scroll = (frame.lyric_scroll, frame.lyric_prev_scroll);
+                self.paint_lyric(shape, frame.lyric.as_ref(), scroll, robot);
                 Ok(())
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
@@ -869,9 +881,24 @@ impl Renderer {
         Ok(())
     }
 
-    /// The current lyric line, centred and trimmed; while lines change, the
-    /// old one fades out rising and the new one fades in from below.
-    fn paint_lyric(&self, shape: ShapeRect, lyric: Option<&ShownLine>, robot: Option<RobotFrame>) {
+    /// How wide the lyric line `text` is drawn, in logical px; `None` for an
+    /// empty or blank line, which shows the rest sign instead. Measured
+    /// through the same layout as the draw (tabular figures, tracking).
+    pub fn lyric_text_width(&self, text: &str) -> Option<f32> {
+        (!text.trim().is_empty()).then(|| self.text_width(text, &self.fonts.lyric))
+    }
+
+    /// The current lyric line: centred when it fits its box (the notch is
+    /// sized to it), else from the box's left edge, shifted left by its
+    /// `scroll` and faded at the right. While lines change, the old one
+    /// fades out rising and the new one fades in from below.
+    fn paint_lyric(
+        &self,
+        shape: ShapeRect,
+        lyric: Option<&ShownLine>,
+        (scroll, prev_scroll): (f32, f32),
+        robot: Option<RobotFrame>,
+    ) {
         let area = match robot {
             Some(r) => {
                 let (slot, area) = lyric_layout_robot(shape);
@@ -884,25 +911,123 @@ impl Renderer {
         let t = lyric.fade.clamp(0.0, 1.0);
         // Smoothstep: the lines settle gently instead of stopping dead.
         let eased = t * t * (3.0 - 2.0 * t);
-        let line = |text: &str, area: Rect, alpha: f32| {
-            if text.trim().is_empty() {
-                self.text(LYRIC_REST, &self.fonts.lyric_rest, area, alpha * 0.85);
-            } else {
-                self.text(text, &self.fonts.lyric, area, alpha);
-            }
-        };
         if let Some(prev) = lyric.prev.filter(|_| t < 1.0) {
             let up = Rect {
                 y: area.y - LYRIC_RISE * eased,
                 ..area
             };
-            line(prev, up, 1.0 - t);
+            self.lyric_line(prev, up, area, prev_scroll, 1.0 - t);
         }
         let rising = Rect {
             y: area.y + LYRIC_RISE * (1.0 - eased),
             ..area
         };
-        line(lyric.text, rising, t);
+        self.lyric_line(lyric.text, rising, area, scroll, t);
+    }
+
+    /// One lyric line in `area` (`clip`: the box at rest, which the rising
+    /// line may leave vertically). Never trimmed: a line wider than its box
+    /// is laid out whole, clipped to the box and faded at the right.
+    fn lyric_line(&self, text: &str, area: Rect, clip: Rect, scroll: f32, alpha: f32) {
+        if text.trim().is_empty() {
+            self.text(LYRIC_REST, &self.fonts.lyric_rest, area, alpha * 0.85);
+            return;
+        }
+        if area.w <= 0.0 {
+            return;
+        }
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        // As wide as `text_width` measures, so the draw matches the measure.
+        let Ok(layout) = self.layout(&wide, &self.fonts.lyric, MEASURE_W, area.h) else {
+            return;
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        if unsafe { layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING) }.is_err()
+            || unsafe { layout.GetMetrics(&mut metrics) }.is_err()
+        {
+            return;
+        }
+        let text_w = metrics.widthIncludingTrailingWhitespace;
+        unsafe { target.brush.SetColor(&color(self.palette.text, alpha)) };
+        let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT;
+        if !lyric_overflow(text_w, area.w) {
+            // Centred; a box held wider than the line (hysteresis) centres it too.
+            let x = area.x + (area.w - text_w) / 2.0;
+            unsafe {
+                target
+                    .rt
+                    .DrawTextLayout(Vector2::new(x, area.y), &layout, &target.brush, options)
+            };
+            return;
+        }
+        // How much of the line is still hidden past the box sets how strong
+        // the fade is: full while a fade's width or more is, none once the
+        // end has come into the box.
+        let hidden = area.x - scroll + text_w - area.right();
+        let fade = (hidden / LYRIC_FADE_W).clamp(0.0, 1.0);
+        let opacity = (fade > 0.0).then(|| self.fade_brush(clip, fade)).flatten();
+        let params = D2D1_LAYER_PARAMETERS {
+            // The box across, the shape (clipped outside) up and down.
+            contentBounds: D2D_RECT_F {
+                left: clip.x,
+                top: clip.y - LYRIC_RISE * 2.0,
+                right: clip.right(),
+                bottom: clip.bottom() + LYRIC_RISE * 2.0,
+            },
+            geometricMask: ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(opacity),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe {
+            target.rt.PushLayer(&params, &target.layer);
+            target.rt.DrawTextLayout(
+                Vector2::new(area.x - scroll, area.y),
+                &layout,
+                &target.brush,
+                options,
+            );
+            target.rt.PopLayer();
+        }
+        // The layer kept its own reference while pushed.
+        drop(ManuallyDrop::into_inner(params.opacityBrush));
+    }
+
+    /// An opacity brush over `area`: opaque, then over the last
+    /// `LYRIC_FADE_W` px down to `1 - strength` at the right edge.
+    fn fade_brush(&self, area: Rect, strength: f32) -> Option<ID2D1Brush> {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let stops = [
+            D2D1_GRADIENT_STOP {
+                position: 0.0,
+                color: color(0, 1.0),
+            },
+            D2D1_GRADIENT_STOP {
+                position: 1.0,
+                color: color(0, 1.0 - strength),
+            },
+        ];
+        unsafe {
+            let stops = target
+                .rt
+                .CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
+                .ok()?;
+            let brush = target
+                .rt
+                .CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: Vector2::new(area.right() - LYRIC_FADE_W, area.y),
+                        endPoint: Vector2::new(area.right(), area.y),
+                    },
+                    None,
+                    &stops,
+                )
+                .ok()?;
+            brush.cast().ok()
+        }
     }
 
     /// Badge, title over body, and the chip naming what a click does
@@ -1187,7 +1312,7 @@ impl Renderer {
             return 0.0;
         }
         let wide: Vec<u16> = text.encode_utf16().collect();
-        let Ok(layout) = self.layout(&wide, format, 4096.0, 64.0) else {
+        let Ok(layout) = self.layout(&wide, format, MEASURE_W, 64.0) else {
             return 0.0;
         };
         let mut metrics = DWRITE_TEXT_METRICS::default();
