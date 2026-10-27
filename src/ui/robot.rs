@@ -523,6 +523,10 @@ pub enum NoticeSort {
     SystemLow,
     /// The cleaner finished.
     CleanDone,
+    /// A Mole clean finished.
+    MoleDone,
+    /// A Mole clean failed or stopped.
+    MoleFailed,
     Greeting,
 }
 
@@ -537,6 +541,8 @@ impl NoticeSort {
             NoticeKind::BatteryLow => NoticeSort::BatteryLow,
             NoticeKind::SystemLow => NoticeSort::SystemLow,
             NoticeKind::CleanDone => NoticeSort::CleanDone,
+            NoticeKind::MoleDone => NoticeSort::MoleDone,
+            NoticeKind::MoleFailed => NoticeSort::MoleFailed,
             NoticeKind::Greeting => NoticeSort::Greeting,
         }
     }
@@ -602,6 +608,8 @@ pub struct RobotInputs {
     /// A Claude Code session is busy.
     pub claude_working: bool,
     pub cli: Cli,
+    /// A Mole clean runs (the cleaner's "Otomatis · Mole" mode).
+    pub mole_running: bool,
     /// Below the battery threshold and discharging.
     pub battery_low: bool,
 }
@@ -610,14 +618,14 @@ pub struct RobotInputs {
 ///
 /// 1. Hidden and the open panel: no robot.
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
-///    pomodoro phase done, Claude done and a finished clean → Happy, low battery and low disk
-///    or high RAM → Sad, greeting → Wave. Other apps' notifications (`App`) → no robot: they
-///    keep their app badge.
+///    pomodoro phase done, Claude done and a finished clean (own or Mole) → Happy, low
+///    battery, low disk or high RAM and a failed Mole clean → Sad, greeting → Wave. Other
+///    apps' notifications (`App`) → no robot: they keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
 /// 4. Pomodoro → Focus, media → Music, lyric line → Sing.
-/// 5. Idle: CLI just done → Happy, just failed → Sad; Claude working or a
-///    CLI command running → Think; low battery → Sad; asleep → Sleep;
-///    otherwise Idle.
+/// 5. Idle: CLI just done → Happy, just failed → Sad; Claude working, a
+///    CLI command or a Mole clean running → Think; low battery → Sad;
+///    asleep → Sleep; otherwise Idle.
 pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
     let compact = match i.spot {
         Spot::Hidden | Spot::Panel => return None,
@@ -625,10 +633,13 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
             return match sort {
                 NoticeSort::App => None,
                 NoticeSort::Reminder | NoticeSort::ClaudeWaiting => Some(Expr::Alert),
-                NoticeSort::PomodoroDone | NoticeSort::ClaudeDone | NoticeSort::CleanDone => {
-                    Some(Expr::Happy)
+                NoticeSort::PomodoroDone
+                | NoticeSort::ClaudeDone
+                | NoticeSort::CleanDone
+                | NoticeSort::MoleDone => Some(Expr::Happy),
+                NoticeSort::BatteryLow | NoticeSort::SystemLow | NoticeSort::MoleFailed => {
+                    Some(Expr::Sad)
                 }
-                NoticeSort::BatteryLow | NoticeSort::SystemLow => Some(Expr::Sad),
                 NoticeSort::Greeting => Some(Expr::Wave),
             };
         }
@@ -644,7 +655,7 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
         _ => match i.cli {
             Cli::Done => Expr::Happy,
             Cli::Failed => Expr::Sad,
-            _ if i.claude_working || i.cli == Cli::Running => Expr::Think,
+            _ if i.claude_working || i.cli == Cli::Running || i.mole_running => Expr::Think,
             _ if i.battery_low => Expr::Sad,
             _ if i.asleep => Expr::Sleep,
             _ => Expr::Idle,
@@ -785,6 +796,8 @@ pub struct Brain {
     /// Busy Claude sessions and when each was last heard from.
     claude: Vec<(String, Instant)>,
     cli_running: bool,
+    /// A Mole clean runs.
+    pub mole_running: bool,
     /// A finished command's face and until when it shows.
     cli_mood: Option<(Cli, Instant)>,
     pub battery_low: bool,
@@ -802,6 +815,7 @@ impl Brain {
             last_activity: now,
             claude: Vec::new(),
             cli_running: false,
+            mole_running: false,
             cli_mood: None,
             battery_low: false,
             hover: None,
@@ -887,6 +901,7 @@ impl Brain {
             asleep: timed && asleep(self.last_activity, now, sleep_after),
             claude_working: self.claude_working(now),
             cli,
+            mole_running: self.mole_running,
             battery_low: self.battery_low,
         }
     }
@@ -1010,6 +1025,7 @@ mod tests {
             asleep: false,
             claude_working: false,
             cli: Cli::None,
+            mole_running: false,
             battery_low: false,
         }
     }
@@ -1138,6 +1154,8 @@ mod tests {
             (NoticeSort::BatteryLow, Expr::Sad),
             (NoticeSort::SystemLow, Expr::Sad),
             (NoticeSort::CleanDone, Expr::Happy),
+            (NoticeSort::MoleDone, Expr::Happy),
+            (NoticeSort::MoleFailed, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
         ] {
             let spot = Spot::Notice(sort);
@@ -1193,6 +1211,21 @@ mod tests {
             ..busy
         };
         assert_eq!(e(running), Some(Expr::Think));
+        // A Mole clean thinks like a CLI command.
+        let mole = RobotInputs {
+            cli: Cli::None,
+            claude_working: false,
+            mole_running: true,
+            ..busy
+        };
+        assert_eq!(e(mole), Some(Expr::Think));
+        assert_eq!(
+            e(RobotInputs {
+                mole_running: true,
+                ..base
+            }),
+            Some(Expr::Think)
+        );
         let low = RobotInputs {
             cli: Cli::None,
             claude_working: false,

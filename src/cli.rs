@@ -226,7 +226,7 @@ fn raw(handle: &OwnedHandle) -> HANDLE {
 }
 
 /// A job that ends its processes when its last handle closes.
-fn kill_on_close_job() -> Option<OwnedHandle> {
+pub(crate) fn kill_on_close_job() -> Option<OwnedHandle> {
     unsafe {
         let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
         let job = OwnedHandle::from_raw_handle(job.0);

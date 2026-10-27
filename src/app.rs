@@ -53,6 +53,7 @@ use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::media_log;
+use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::notes::NotesStore;
 use crate::pomodoro::PomoStatus;
@@ -76,7 +77,8 @@ use crate::ui::geometry::{
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
-    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
+    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
+    SystemView,
 };
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
@@ -239,6 +241,7 @@ pub fn run(media_log_flag: bool) {
             battery,
             system: SystemState::new(warn),
             clean: CleanState::default(),
+            mole: MoleState::default(),
             hover: HoverTracking::default(),
             click: ClickPair::default(),
             media_click: None,
@@ -287,6 +290,8 @@ pub fn run(media_log_flag: bool) {
         let now = Instant::now();
         let lyrics_on = app.config.lyrics;
         app.apply(Event::LyricsSetting(lyrics_on), now);
+        let clean_mode = app.config.clean_mode;
+        app.apply(Event::CleanModeSetting(clean_mode), now);
         app.check_fullscreen();
         app.check_battery();
         app.draw(now);
@@ -388,6 +393,8 @@ struct App {
     system: SystemState,
     /// The cleaner's thread and its last scan.
     clean: CleanState,
+    /// The cleaner's Mole mode: its thread, what was found, the log.
+    mole: MoleState,
     hover: HoverTracking,
     /// A left press on the island waiting for its release.
     click: ClickPair,
@@ -538,6 +545,24 @@ struct CleanState {
     scanning: bool,
 }
 
+/// The Mole mode (`crate::mole`): its thread (started on first use), the
+/// Mole found, the last finished preview, the run whose output counts and
+/// its log. Nothing runs or redraws while the cleaner is closed, except a
+/// confirmed clean, which goes on.
+#[derive(Default)]
+struct MoleState {
+    worker: Option<MoleWorker>,
+    install: Option<mole::Install>,
+    /// The last dry-run that finished well, for the options it ran with.
+    preview: Option<mole::Preview>,
+    /// The run whose lines and result count; older ones are ignored.
+    run: u64,
+    /// Newest last, at most `mole::LOG_CAP` lines.
+    log: VecDeque<String>,
+    /// The last clean's measured result.
+    report: Option<mole::MoleReport>,
+}
+
 /// What the island keeps for the robot besides its `Brain`.
 struct Bata {
     brain: Brain,
@@ -639,6 +664,10 @@ impl App {
                 }
                 Event::Clean(event) => {
                     self.on_clean_event(event, now);
+                    continue;
+                }
+                Event::Mole(event) => {
+                    self.on_mole_event(event, now);
                     continue;
                 }
                 other => other,
@@ -1032,6 +1061,24 @@ impl App {
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
             Effect::OpenCleaner => self.scan_clean(),
             Effect::CleanDelete(cats) => return self.start_clean(cats),
+            Effect::SaveCleanMode(mode) => {
+                self.config.clean_mode = mode;
+                self.save_config();
+            }
+            Effect::MoleDetect => return self.mole_detect(),
+            Effect::MolePreview(opts) => return self.mole_preview(opts),
+            Effect::MoleStopPreview => self.mole_stop_preview(),
+            Effect::MoleClean(opts) => return self.mole_clean(opts),
+            Effect::MoleWhitelist => {
+                if let Some(install) = &self.mole.install
+                    && let Err(error) = mole::open_whitelist(install)
+                {
+                    eprintln!("dynamic-island: cannot open Mole's whitelist: {error}");
+                }
+            }
+            Effect::OpenMoleInstall => {
+                self.queue_shortcut(shortcuts::Action::Open(mole::README_URL));
+            }
             Effect::FocusCliInput => return self.focus_cli_input(),
             Effect::ReleaseCliFocus => self.return_keyboard(),
             Effect::StopCli => self.stop_cli(),
@@ -1256,13 +1303,136 @@ impl App {
                 // The old sizes are no longer true.
                 self.clean.scan = None;
                 self.apply(Event::CleanFinished, now);
-                self.apply(
-                    Event::Notice(clean::done_notice(i18n::lang(), &report)),
-                    now,
-                );
+                let notice = {
+                    let r = &self.renderer;
+                    let kind = NoticeKind::CleanDone;
+                    let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+                    clean::done_notice(i18n::lang(), &report, &fits)
+                };
+                self.apply(Event::Notice(notice), now);
                 if self.state.cleaner().is_some() {
                     self.scan_clean();
                 }
+            }
+        }
+    }
+
+    /// The Mole thread, started on first use; `None` when it cannot run.
+    fn mole_worker(&mut self) -> Option<&MoleWorker> {
+        if self.mole.worker.is_none() {
+            self.mole.worker = MoleWorker::spawn(self.tx.clone(), poster(self.hwnd, WM_APP_EVENT));
+        }
+        self.mole.worker.as_ref()
+    }
+
+    /// Looks for Mole on the worker (PATH may name slow folders).
+    fn mole_detect(&mut self) -> Option<Event> {
+        if self.mole_worker().is_some_and(MoleWorker::detect) {
+            return None;
+        }
+        self.mole.worker = None;
+        Some(Event::MoleFound(false))
+    }
+
+    /// A new dry-run; one running stops and its output no longer counts.
+    /// The default protections go into Mole's whitelist first, once.
+    fn mole_preview(&mut self, opts: MoleOpts) -> Option<Event> {
+        self.mole_stop_preview();
+        self.mole.log.clear();
+        self.mole.report = None;
+        let failed = Some(Event::MolePreviewed { opts, ok: false });
+        let Some(install) = self.mole.install.clone() else {
+            return failed;
+        };
+        let protect = self.config.mole_protect_defaults && !self.config.mole_defaults_added;
+        let run = self.mole.run;
+        if self
+            .mole_worker()
+            .is_some_and(|w| w.preview(run, install, opts, protect))
+        {
+            return None;
+        }
+        self.mole.worker = None;
+        failed
+    }
+
+    /// The cleaner closed or left Mole mode: a dry-run stops, the preview goes.
+    fn mole_stop_preview(&mut self) {
+        if let Some(worker) = &self.mole.worker {
+            worker.stop_preview();
+        }
+        self.mole.preview = None;
+        self.mole.run += 1;
+    }
+
+    /// The confirmed clean (the reducer's second click), with the finished
+    /// preview for these options; without one nothing runs.
+    fn mole_clean(&mut self, opts: MoleOpts) -> Option<Event> {
+        let preview = self.mole.preview.take().filter(|p| p.opts() == opts);
+        let (Some(install), Some(preview)) = (self.mole.install.clone(), preview) else {
+            return Some(Event::MoleFinished { ok: false });
+        };
+        self.mole.run += 1;
+        self.mole.log.clear();
+        self.mole.report = None;
+        let run = self.mole.run;
+        let sent = self
+            .mole_worker()
+            .is_some_and(|w| w.clean(run, install, preview, opts, Confirmed::second_click()));
+        if !sent {
+            self.mole.worker = None;
+            return Some(Event::MoleFinished { ok: false });
+        }
+        self.bata.brain.mole_running = true;
+        None
+    }
+
+    /// What the Mole thread found, printed or measured.
+    fn on_mole_event(&mut self, event: MoleEvent, now: Instant) {
+        match event {
+            MoleEvent::Detected(found) => {
+                let ok = found.is_some();
+                self.mole.install = found;
+                self.apply(Event::MoleFound(ok), now);
+            }
+            MoleEvent::DefaultsAdded => {
+                self.config.mole_defaults_added = true;
+                self.save_config();
+            }
+            MoleEvent::Lines { run, lines } => {
+                if run == self.mole.run {
+                    self.mole.log.extend(lines);
+                    while self.mole.log.len() > mole::LOG_CAP {
+                        self.mole.log.pop_front();
+                    }
+                }
+            }
+            MoleEvent::Previewed { run, opts, result } => {
+                if run != self.mole.run {
+                    return;
+                }
+                let ok = result.is_ok();
+                self.mole.preview = result.ok();
+                self.apply(Event::MolePreviewed { opts, ok }, now);
+            }
+            MoleEvent::Cleaned { run, report } => {
+                self.bata.brain.mole_running = false;
+                let ok = report.run.ok();
+                let notice = {
+                    let r = &self.renderer;
+                    let kind = if ok {
+                        NoticeKind::MoleDone
+                    } else {
+                        NoticeKind::MoleFailed
+                    };
+                    let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+                    mole::done_notice(i18n::lang(), &report, &fits)
+                };
+                if run == self.mole.run {
+                    self.mole.report = Some(report);
+                }
+                self.apply(Event::MoleFinished { ok }, now);
+                self.apply(Event::Notice(notice), now);
             }
         }
     }
@@ -2606,6 +2776,11 @@ impl App {
                 self.save_config_with(|c| c.ram_warn_percent = percent);
                 self.redraw_system_page();
             }
+            SettingsAction::MoleProtect(on) => {
+                // Read before Mole's next preview.
+                self.config.mole_protect_defaults = on;
+                self.save_config();
+            }
             SettingsAction::Pomo(field, dir) => {
                 // Through the reducer like a click: state, then config.
                 self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
@@ -2676,11 +2851,22 @@ impl App {
             ram_warn_percent: self.config.ram_warn_percent,
         };
         let cleaner = state.cleaner().map(|c| CleanerView {
+            mode: c.mode,
             checked: c.checked,
             armed: c.armed(),
             scan: self.clean.scan.as_ref(),
             scanning: self.clean.scanning,
             busy: state.clean_busy(),
+            mole: MoleView {
+                phase: state.mole_phase(),
+                opts: state.mole_opts(),
+                show_log: c.mole_log,
+                version: self.mole.install.as_ref().and_then(|i| i.version.as_deref()),
+                tested: self.mole.install.as_ref().is_some_and(mole::Install::tested),
+                summary: self.mole.preview.as_ref().map(mole::Preview::summary),
+                log: &self.mole.log,
+                report: self.mole.report.as_ref(),
+            },
         });
         let frame = Frame {
             view: &self.drawn,
@@ -3125,6 +3311,7 @@ fn quiet_face(view: &View, on: bool) -> Option<robot::Expr> {
         asleep: false,
         claude_working: false,
         cli: robot::Cli::None,
+        mole_running: false,
         battery_low: false,
     };
     choose_expr(&inputs).filter(|_| on)

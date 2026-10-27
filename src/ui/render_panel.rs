@@ -22,34 +22,37 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RowSize, SystemView, color,
-    d2d_rect, mix,
+    CleanerView, CliView, FolderMenuView, Frame, GroupShown, Progress, RobotFrame, Renderer,
+    RowSize, SystemView, color, d2d_rect, mix,
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
-use crate::clean::CleanCat;
+use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, RowNote, Section};
 use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
+use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
+use crate::state::MolePhase;
 use crate::shortcuts;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
+use crate::ui::robot::{Expr, Pose};
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CleanFoot, CleanHead,
     CleanerLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS,
-    MenuLayout, MeterLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE,
-    ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, calendar_layout, cleaner_layout,
-    cli_folder_menu, cli_layout, cli_suggestions, media_panel_layout, media_progress_layout,
-    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot,
-    pomodoro_layout, regions, reminders_layout, shortcuts_layout, system_layout, tile_parts,
-    waiting_strip,
+    MOLE_LOG_LINE_H, MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout,
+    PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead,
+    SystemLayout, WEEK_HEAD_H, calendar_layout, cleaner_layout, cli_folder_menu, cli_layout,
+    cli_suggestions, media_panel_layout, media_progress_layout, mole_layout, notes_layout,
+    page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
+    reminders_layout, shortcuts_layout, system_layout, tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -141,6 +144,75 @@ const BACK_ICON: f32 = 14.0;
 const CLEAN_INERT: f32 = 0.5;
 /// What stands for a size not measured.
 const EM_DASH: &str = "\u{2014}";
+/// Mole mode: the ochre "Eksperimental" chip's tint, the log box's and the
+/// install card's corners.
+const MOLE_CHIP_TINT: f32 = 0.15;
+const MOLE_LOG_RADIUS: f32 = 12.0;
+const MOLE_CARD_RADIUS: f32 = 14.0;
+
+/// The Mole groups' names and subtitles (`MG` in deepclean-opsi-d.html).
+fn mole_group_keys(g: MoleGroup) -> (Key, Key) {
+    match g {
+        MoleGroup::Browser => (Key::CleanBrowser, Key::MoleBrowserSub),
+        MoleGroup::Apps => (Key::CleanApps, Key::MoleAppsSub),
+        MoleGroup::Dev => (Key::CleanDev, Key::MoleDevSub),
+        MoleGroup::TempLogs => (Key::CleanTempLogs, Key::MoleTempSub),
+    }
+}
+
+fn mole_group_icon(g: MoleGroup) -> Icon {
+    match g {
+        MoleGroup::Browser => Icon::Globe,
+        MoleGroup::Apps => Icon::Package,
+        MoleGroup::Dev => Icon::Code,
+        MoleGroup::TempLogs => Icon::TempFile,
+    }
+}
+
+/// Mole's footer line: "Pratinjau: ± 2,4 GB" (armed: "± 2,4 GB · 29
+/// item"), the scan, or that the preview failed; nothing while a clean runs
+/// or after it (the result shows above the log).
+fn mole_footer(lang: Lang, view: &CleanerView) -> String {
+    let m = &view.mole;
+    let total = m.summary.and_then(|s| s.total);
+    match m.phase {
+        MolePhase::Unknown | MolePhase::Detecting | MolePhase::Scanning(_) => format!(
+            "{} {}",
+            text(lang, Key::MoleScanning),
+            text(lang, Key::MoleScanTime)
+        ),
+        MolePhase::Previewed { ok: false, .. } => text(lang, Key::MolePreviewFailed).to_owned(),
+        MolePhase::Previewed { .. } => match total {
+            Some((bytes, entries)) if view.armed => i18n::mole_total_items(lang, bytes, entries),
+            _ => i18n::mole_preview(lang, total.map(|t| t.0)),
+        },
+        MolePhase::Missing | MolePhase::Running | MolePhase::Finished { .. } => String::new(),
+    }
+}
+
+/// Mole's button: "Jalankan Mole", armed "Yakin? Hapus permanen", running,
+/// or "Pratinjau lagi" after a run.
+fn mole_go_label(lang: Lang, view: &CleanerView) -> &'static str {
+    let key = match view.mole.phase {
+        MolePhase::Running => Key::MoleRunning,
+        MolePhase::Finished { .. } => Key::MoleAgain,
+        _ if view.armed => Key::MoleConfirm,
+        _ => Key::MoleRun,
+    };
+    text(lang, key)
+}
+
+/// The line over Mole's log after a run: what was freed, measured, or how
+/// it failed.
+fn mole_result(lang: Lang, view: &CleanerView) -> (String, bool) {
+    let ok = matches!(view.mole.phase, MolePhase::Finished { ok: true });
+    match view.mole.report {
+        Some(r) if ok => (i18n::mole_result(lang, r.freed, r.drive), true),
+        Some(r) => (i18n::mole_failed_title(lang, r.run.exit), false),
+        None if ok => (text(lang, Key::MoleAgain).to_owned(), true),
+        None => (i18n::mole_failed_title(lang, None), false),
+    }
+}
 
 /// The cleaner's button label: the total, armed "Yakin? Hapus …", or the
 /// clean running.
@@ -324,7 +396,7 @@ impl Renderer {
             self.paint_strip(s, notice);
         }
         // The cleaner is not a page: its footer takes the dots' place.
-        if !matches!(layout, PageLayout::Cleaner(_)) {
+        if !matches!(layout, PageLayout::Cleaner(_) | PageLayout::Mole(_)) {
             let (dots, active) = page_dots(s, page);
             for (i, dot) in dots.into_iter().enumerate() {
                 let p = &self.palette;
@@ -393,6 +465,15 @@ impl Renderer {
             )),
             Page::Notes => PageLayout::Notes(notes_layout(s, frame.notes, frame.notes_page, strip)),
             Page::Media => PageLayout::Media(media_panel_layout(s, strip)),
+            Page::System
+                if page == frame.page
+                    && frame.cleaner.is_some_and(|c| c.mode == CleanMode::Mole) =>
+            {
+                let view = frame.cleaner.expect("checked above");
+                let head = self.cleaner_head();
+                let foot = self.mole_foot(view);
+                PageLayout::Mole(mole_layout(s, strip, &head, &foot, view.mole_look()))
+            }
             Page::System if page == frame.page && frame.cleaner.is_some() => {
                 let view = frame.cleaner.expect("checked above");
                 let head = self.cleaner_head();
@@ -449,6 +530,12 @@ impl Renderer {
             PageLayout::Cleaner(l) => {
                 if let Some(view) = frame.cleaner {
                     self.paint_cleaner(l, view)?;
+                }
+                Ok(())
+            }
+            PageLayout::Mole(l) => {
+                if let Some(view) = frame.cleaner {
+                    self.paint_mole(l, view);
                 }
                 Ok(())
             }
@@ -703,22 +790,7 @@ impl Renderer {
     fn paint_cleaner(&self, l: &CleanerLayout, view: &CleanerView) -> Result<()> {
         let lang = i18n::lang();
         let p = self.palette;
-        self.set_color(p.raised, 1.0);
-        self.fill_round(l.back, l.back.w / 2.0);
-        self.icon_colored(Icon::ChevL, l.back, BACK_ICON, p.secondary, 1.0, None);
-        self.heading(text(lang, Key::SystemClean), l.header);
-
-        self.set_color(p.raised, 1.0);
-        self.fill_round(l.seg, SEG_RADIUS);
-        self.set_color(p.raised_hi, 1.0);
-        self.fill_round(l.seg_items[0], SEG_ITEM_RADIUS);
-        let (own, mole) = (
-            text(lang, Key::CleanModeOwn),
-            text(lang, Key::CleanModeMole),
-        );
-        let center = &self.fonts.small_center;
-        self.text_colored(own, center, l.seg_items[0], p.text, 1.0);
-        self.text_colored(mole, center, l.seg_items[1], p.secondary, 1.0);
+        self.paint_clean_head(l.back, l.header, l.seg, l.seg_items, CleanMode::Own);
 
         let alpha = if view.busy { CLEAN_INERT } else { 1.0 };
         let browsers = view.scan.map_or(&[][..], |s| &s.skipped_browsers[..]);
@@ -775,6 +847,188 @@ impl Renderer {
         let center = &self.fonts.button_center;
         self.text_colored(&label, center, l.go, p.on_accent, go_alpha);
         Ok(())
+    }
+
+    /// Both modes' header: the back button, "Bersihkan" and the mode
+    /// segment (`segMode`) with `mode` lit.
+    fn paint_clean_head(&self, back: Rect, header: Rect, seg: Rect, items: [Rect; 2], mode: CleanMode) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.set_color(p.raised, 1.0);
+        self.fill_round(back, back.w / 2.0);
+        self.icon_colored(Icon::ChevL, back, BACK_ICON, p.secondary, 1.0, None);
+        self.heading(text(lang, Key::SystemClean), header);
+        self.set_color(p.raised, 1.0);
+        self.fill_round(seg, SEG_RADIUS);
+        let on = usize::from(mode == CleanMode::Mole);
+        self.set_color(p.raised_hi, 1.0);
+        self.fill_round(items[on], SEG_ITEM_RADIUS);
+        let center = &self.fonts.small_center;
+        for (i, key) in [Key::CleanModeOwn, Key::CleanModeMole].into_iter().enumerate() {
+            let ink = if i == on { p.text } else { p.secondary };
+            self.text_colored(text(lang, key), center, items[i], ink, 1.0);
+        }
+    }
+
+    /// The Mole mode, measured: the chip, the options, protect, the footer
+    /// line, the button and "Cara memasang ↗".
+    fn mole_foot(&self, view: &CleanerView) -> MoleFoot {
+        let lang = i18n::lang();
+        let w = |s: &str, format: &IDWriteTextFormat| self.text_width(s, format).ceil();
+        let opt = |key| w(text(lang, key), &self.fonts.small) + 2.0;
+        MoleFoot {
+            chip_w: w(text(lang, Key::MoleChip), &self.fonts.small) + 2.0 * CHIP_PAD_X,
+            opt_w: [opt(Key::MoleOptSystem), opt(Key::MoleOptGame)],
+            protect_w: w(text(lang, Key::MoleProtect), &self.fonts.button) + 2.0 * GO_PAD_X,
+            label_w: w(&mole_footer(lang, view), &self.fonts.small) + 2.0,
+            go_w: w(mole_go_label(lang, view), &self.fonts.button) + 2.0 * GO_PAD_X,
+            howto_w: w(text(lang, Key::MoleHowTo), &self.fonts.button) + 2.0 * GO_PAD_X,
+        }
+    }
+
+    /// deepclean-opsi-d.html `molePanel` and d2: the header, the ochre
+    /// "Eksperimental" chip and its line (ochre for a version not tested);
+    /// the four groups and the two options, Mole's log on the terminal
+    /// surface (with the result after a run), or the install card; the
+    /// footer with "Lindungi folder…", the preview's total and the button.
+    fn paint_mole(&self, l: &MoleLayout, view: &CleanerView) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        let m = &view.mole;
+        self.paint_clean_head(l.back, l.header, l.seg, l.seg_items, CleanMode::Mole);
+
+        self.set_color(p.ochre, MOLE_CHIP_TINT);
+        self.fill_round(l.chip, l.chip.h / 2.0);
+        let chip = text(lang, Key::MoleChip);
+        self.text_colored(chip, &self.fonts.small_center, l.chip, p.ochre, 1.0);
+        let known = matches!(
+            m.phase,
+            MolePhase::Scanning(_)
+                | MolePhase::Previewed { .. }
+                | MolePhase::Running
+                | MolePhase::Finished { .. }
+        );
+        let (intro, ink) = if known {
+            let ink = if m.tested { p.secondary } else { p.ochre };
+            (i18n::mole_intro(lang, m.version, m.tested), ink)
+        } else {
+            (text(lang, Key::MoleIntro).to_owned(), p.secondary)
+        };
+        self.text_colored(&intro, &self.fonts.small, l.intro, ink, 1.0);
+
+        let look = l.look;
+        for (i, row) in l.rows.iter().enumerate() {
+            if i % 2 == 0 {
+                self.set_color(p.text, ROW_STRIPE);
+                self.fill_round(row.row, ROW_RADIUS);
+            }
+            let icon = mole_group_icon(row.group);
+            self.icon_colored(icon, row.icon, ROW_ICON, p.secondary, 1.0, None);
+            let (name, sub) = mole_group_keys(row.group);
+            self.text_colored(text(lang, name), &self.fonts.row_name, row.name, p.text, 1.0);
+            self.text_colored(text(lang, sub), &self.fonts.micro, row.sub, p.secondary, 1.0);
+            match view.group(row.group) {
+                GroupShown::Bytes(b) => {
+                    let size = i18n::clean_size(lang, b);
+                    self.text_colored(&size, &self.fonts.row_size, row.size, p.text, 1.0);
+                }
+                GroupShown::SeeLog => {
+                    let see = text(lang, Key::MoleSeeLog);
+                    self.text_colored(see, &self.fonts.small_right, row.size, p.accent, 1.0);
+                }
+                GroupShown::Scanning => {
+                    let scanning = text(lang, Key::CleanScanning);
+                    let f = &self.fonts.small_right;
+                    self.text_colored(scanning, f, row.size, p.secondary, 1.0);
+                }
+            }
+        }
+        let opt_alpha = if look.opts_live { 1.0 } else { CLEAN_INERT };
+        for o in &l.opts {
+            self.paint_check(o.check, m.opts.get(o.opt), opt_alpha);
+            let key = match o.opt {
+                MoleOpt::System => Key::MoleOptSystem,
+                MoleOpt::GameMedia => Key::MoleOptGame,
+            };
+            self.text_colored(text(lang, key), &self.fonts.small, o.label, p.secondary, opt_alpha);
+        }
+        if let Some(r) = l.result {
+            let (line, ok) = mole_result(lang, view);
+            let ink = if ok { p.sage } else { p.ochre };
+            self.text_colored(&line, &self.fonts.body_medium, r, ink, 1.0);
+        }
+        if let Some(log) = l.log {
+            self.paint_mole_log(log, m.log, m.phase == MolePhase::Running);
+        }
+        if let Some(card) = &l.card {
+            self.set_color(p.raised, 1.0);
+            self.fill_round(card.boxed, MOLE_CARD_RADIUS);
+            let think = RobotFrame {
+                expr: Expr::Think,
+                pose: Pose::default(),
+            };
+            self.paint_robot(card.robot, think);
+            let title = text(lang, Key::MoleMissing);
+            self.text_colored(title, &self.fonts.body_medium, card.title, p.text, 1.0);
+            let sub = text(lang, Key::MoleMissingSub);
+            self.text_colored(sub, &self.fonts.small, card.sub, p.secondary, 1.0);
+            self.paint_ghost(card.button, text(lang, Key::MoleHowTo), 1.0);
+        }
+
+        if let Some(r) = l.protect {
+            self.paint_ghost(r, text(lang, Key::MoleProtect), 1.0);
+        }
+        let label = mole_footer(lang, view);
+        self.text_colored(&label, &self.fonts.small_right, l.label, p.secondary, 1.0);
+        if let Some(go) = l.go {
+            let alpha = if look.go { 1.0 } else { CLEAN_INERT };
+            self.set_color(p.accent, alpha);
+            self.fill_round(go, go.h / 2.0);
+            let label = mole_go_label(lang, view);
+            self.text_colored(label, &self.fonts.button_center, go, p.on_accent, alpha);
+        }
+    }
+
+    /// `.cbtn.ghost`: a raised pill with the label in the text colour.
+    fn paint_ghost(&self, r: Rect, label: &str, alpha: f32) {
+        let p = self.palette;
+        self.set_color(p.track, alpha);
+        self.fill_round(r, r.h / 2.0);
+        self.text_colored(label, &self.fonts.button_center, r, p.text, alpha);
+    }
+
+    /// Mole's log on the terminal surface (`--term`), DM Mono 9.5, the
+    /// newest line at the bottom: section headers bright, the rest quiet.
+    fn paint_mole_log(&self, area: Rect, log: &std::collections::VecDeque<String>, running: bool) {
+        let p = self.palette;
+        self.set_color(theme::TERMINAL_BG, 1.0);
+        self.fill_round(area, MOLE_LOG_RADIUS);
+        let inner = Rect {
+            x: area.x + MOLE_LOG_PAD,
+            y: area.y + MOLE_LOG_PAD / 2.0,
+            w: area.w - 2.0 * MOLE_LOG_PAD,
+            h: area.h - MOLE_LOG_PAD,
+        };
+        let rows = (inner.h / MOLE_LOG_LINE_H).floor().max(0.0) as usize;
+        let row = |k: usize| Rect {
+            y: inner.bottom() - (k + 1) as f32 * MOLE_LOG_LINE_H,
+            h: MOLE_LOG_LINE_H,
+            ..inner
+        };
+        if log.is_empty() && running {
+            let lang = i18n::lang();
+            let line = text(lang, Key::MoleRunning);
+            self.text_colored(line, &self.fonts.mono_log, row(0), theme::TERMINAL_HINT, 1.0);
+            return;
+        }
+        for (k, line) in log.iter().rev().take(rows).enumerate() {
+            let ink = if crate::mole::is_section(line) {
+                theme::TERMINAL_TEXT
+            } else {
+                p.secondary
+            };
+            self.text_colored(line, &self.fonts.mono_log, row(k), ink, 1.0);
+        }
     }
 
     /// `.ck`: an outlined rounded square, or the accent one with a tick.
@@ -2547,15 +2801,137 @@ mod tests {
         }
     }
 
+    fn mole_view<'a>(
+        phase: MolePhase,
+        summary: Option<&'a crate::mole::PreviewSummary>,
+        log: &'a std::collections::VecDeque<String>,
+    ) -> super::super::MoleView<'a> {
+        super::super::MoleView {
+            phase,
+            opts: crate::mole::MoleOpts::default(),
+            show_log: false,
+            version: Some("1.30.0"),
+            tested: true,
+            summary,
+            log,
+            report: None,
+        }
+    }
+
+    #[test]
+    fn mole_mode_shows_what_its_phase_allows() {
+        use crate::mole::{GroupSize, MoleOpts, PreviewSummary};
+        use crate::ui::panel_layout::MoleBody;
+        let log = std::collections::VecDeque::new();
+        let summary = PreviewSummary {
+            groups: [
+                GroupSize::Bytes(18 * GIB / 10),
+                GroupSize::Unreadable,
+                GroupSize::Bytes(GIB / 10),
+                GroupSize::Bytes(GIB / 10),
+            ],
+            total: Some((24 * GIB / 10, 29)),
+        };
+        let opts = MoleOpts::default();
+        let view = |phase, armed| CleanerView {
+            mode: CleanMode::Mole,
+            checked: [false; 7],
+            armed,
+            scan: None,
+            scanning: false,
+            busy: false,
+            mole: mole_view(phase, Some(&summary), &log),
+        };
+        let previewed = MolePhase::Previewed { opts, ok: true };
+        // Before the preview ends: the rows wait, nothing to run.
+        for phase in [MolePhase::Detecting, MolePhase::Scanning(opts)] {
+            let v = view(phase, false);
+            let look = v.mole_look();
+            assert_eq!(look.body, MoleBody::Rows);
+            assert!(!look.go && look.opts_live && look.seg_live);
+            assert_eq!(v.group(MoleGroup::Browser), GroupShown::Scanning);
+            assert_eq!(mole_footer(Lang::Id, &v), "Memindai dengan Mole… ± 30 detik");
+        }
+        // Previewed: sizes, "lihat log" where unreadable, the button live.
+        let v = view(previewed, false);
+        let look = v.mole_look();
+        assert!(look.go && look.protect);
+        assert_eq!(look.unreadable, [false, true, false, false]);
+        assert_eq!(v.group(MoleGroup::Browser), GroupShown::Bytes(18 * GIB / 10));
+        assert_eq!(v.group(MoleGroup::Apps), GroupShown::SeeLog);
+        assert_eq!(mole_footer(Lang::Id, &v), "Pratinjau: ± 2,4 GB");
+        assert_eq!(mole_go_label(Lang::Id, &v), "Jalankan Mole");
+        let armed = view(previewed, true);
+        assert_eq!(mole_footer(Lang::Id, &armed), "± 2,4 GB · 29 item");
+        assert_eq!(mole_go_label(Lang::Id, &armed), "Yakin? Hapus permanen");
+        assert_eq!(mole_go_label(Lang::En, &armed), "Sure? Delete for good");
+        // A preview with other options than ticked, or one that failed,
+        // never makes the button live.
+        let other = MolePhase::Previewed {
+            opts: MoleOpts {
+                system: true,
+                ..opts
+            },
+            ok: true,
+        };
+        assert!(!view(other, false).mole_look().go);
+        let failed = view(MolePhase::Previewed { opts, ok: false }, false);
+        assert!(!failed.mole_look().go);
+        assert_eq!(failed.group(MoleGroup::Dev), GroupShown::SeeLog);
+        let no_summary = CleanerView {
+            mole: mole_view(previewed, None, &log),
+            ..view(previewed, false)
+        };
+        assert_eq!(no_summary.group(MoleGroup::Dev), GroupShown::SeeLog);
+        assert_eq!(mole_footer(Lang::En, &no_summary), "Preview: see log");
+        // The own mode's clean running: Mole's button waits.
+        let busy = CleanerView {
+            busy: true,
+            ..view(previewed, false)
+        };
+        assert!(!busy.mole_look().go && !busy.mole_look().seg_live);
+        // Running: the log, nothing but the way back.
+        let running = view(MolePhase::Running, false).mole_look();
+        assert_eq!(running.body, MoleBody::Log { result: false });
+        assert!(!running.go && !running.opts_live && !running.seg_live && !running.protect);
+        assert_eq!(
+            mole_go_label(Lang::Id, &view(MolePhase::Running, false)),
+            "Mole membersihkan…"
+        );
+        // Finished: the result over the log, "Pratinjau lagi".
+        let done = view(MolePhase::Finished { ok: true }, false);
+        assert_eq!(done.mole_look().body, MoleBody::Log { result: true });
+        assert!(done.mole_look().go);
+        assert_eq!(mole_go_label(Lang::Id, &done), "Pratinjau lagi");
+        // Not installed: the card only.
+        let missing = view(MolePhase::Missing, false).mole_look();
+        assert_eq!(missing.body, MoleBody::Card);
+        assert!(!missing.go && !missing.protect && !missing.opts_live && missing.seg_live);
+        // The preview's log in place of the rows, and back.
+        let shown = CleanerView {
+            mole: super::super::MoleView {
+                show_log: true,
+                ..mole_view(previewed, Some(&summary), &log)
+            },
+            ..view(previewed, false)
+        };
+        assert_eq!(shown.mole_look().body, MoleBody::Log { result: false });
+        assert!(shown.mole_look().log_toggle);
+        assert_eq!(shown.mole_look().unreadable, [false; 4]);
+    }
+
     #[test]
     fn cleaner_totals_and_labels() {
         let scan = design_scan();
+        let no_log = std::collections::VecDeque::new();
         let mut view = CleanerView {
+            mode: CleanMode::Own,
             checked: CleanCat::ALL.map(CleanCat::checked_at_start),
             armed: false,
             scan: Some(&scan),
             scanning: false,
             busy: false,
+            mole: mole_view(MolePhase::Unknown, None, &no_log),
         };
         // The top three: 0,1 + 1,8 + 0,4.
         let top3 = GIB / 10 + 18 * GIB / 10 + 4 * GIB / 10;
@@ -2591,6 +2967,130 @@ mod tests {
         assert_eq!(fresh.size(CleanCat::TempLogs), RowSize::Unknown);
         assert_eq!(fresh.picked_bytes(), 0);
         assert_eq!(clean_icon(CleanCat::WindowsUpdate), Icon::Windows);
+        // A Mole clean running: the own mode's button waits.
+        let mole_running = CleanerView {
+            mole: mole_view(MolePhase::Running, None, &no_log),
+            ..view
+        };
+        assert!(!mole_running.go_live());
+    }
+
+    /// The island's own notices about cleaning, measured with the embedded
+    /// DM Sans as drawn (`Renderer::text_width`: the title's 12.5 medium,
+    /// the body's 10.5, tabular figures), fit the notice's text boxes in
+    /// both languages, for realistic worst cases. The 360 × 76 notice keeps
+    /// its size; what would not fit in a body is left out, least
+    /// important first, never cut with "…".
+    #[test]
+    fn cleaning_notices_fit_the_notice() {
+        use crate::clean::{AdminOutcome, CleanReport};
+        use crate::mole::{CleanRun, MoleReport};
+        use crate::ui::fonts;
+        use crate::ui::geometry::{ShapeKind, notice_action_w, notice_layout};
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let r = Renderer::new().expect("renderer");
+        assert!(
+            fonts::embedded(&r.dwrite).loaded.dm_sans,
+            "the test binary carries the embedded fonts"
+        );
+        let gb = |x: f64| (x * GIB as f64) as u64;
+        // A notice of `kind` drawn: title and body inside their boxes.
+        let check = |n: &crate::model::Notice| {
+            for style in [Style::Pill, Style::Notch] {
+                let s = shape_for(style, ShapeKind::Notice);
+                assert_eq!((s.w, s.h), (360.0, 76.0));
+                let chip = crate::ui::geometry::notice_action(
+                    &n.kind,
+                    crate::pomodoro::PomoStatus::Idle,
+                )
+                .map(|_| notice_action_w(&n.kind));
+                let l = notice_layout(s, chip);
+                let tw = r.text_width(&n.title, &r.fonts.title);
+                assert!(tw <= l.title.w, "{:?}: {tw} px in {}", n.title, l.title.w);
+                let bw = r.text_width(&n.body, &r.fonts.small);
+                assert!(bw <= l.body.w, "{:?}: {bw} px in {}", n.body, l.body.w);
+            }
+        };
+        // The old body was cut off: the test can tell.
+        let body_w = notice_layout(shape_for(Style::Pill, ShapeKind::Notice), None).body.w;
+        let old = "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)";
+        assert!(r.text_width(old, &r.fonts.small) > body_w);
+
+        let browsers: [&[&'static str]; 3] = [
+            &[],
+            &["Chrome"],
+            &["Chrome", "Edge", "Firefox", "Brave", "Opera"],
+        ];
+        for lang in [Lang::Id, Lang::En] {
+            let kind = NoticeKind::CleanDone;
+            let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+            for freed in [gb(2.3), gb(12.3), gb(98.7)] {
+                for (drive, skipped) in [(49.5, 3), (12.3, 123), (99.9, 250)] {
+                    for open in browsers {
+                        for admin in [AdminOutcome::NotAsked, AdminOutcome::Cancelled] {
+                            let report = CleanReport {
+                                freed,
+                                drive: Some(('C', gb(drive))),
+                                skipped,
+                                skipped_browsers: open.to_vec(),
+                                admin,
+                            };
+                            let n = crate::clean::done_notice(lang, &report, &fits);
+                            check(&n);
+                            // The drive and what was skipped always stay.
+                            let free = i18n::format_size(lang, gb(drive));
+                            assert!(n.body.starts_with("C: "), "{:?}", n.body);
+                            assert!(n.body.contains(&free), "{:?}", n.body);
+                            assert!(n.body.contains(&skipped.to_string()), "{:?}", n.body);
+                        }
+                    }
+                }
+            }
+            // The design's case keeps everything.
+            let design = CleanReport {
+                freed: gb(2.3),
+                drive: Some(('C', gb(49.5))),
+                skipped: 3,
+                skipped_browsers: vec![],
+                admin: AdminOutcome::NotAsked,
+            };
+            let n = crate::clean::done_notice(lang, &design, &fits);
+            let want = match lang {
+                Lang::Id => "C: sisa 49,5 GB · 3 item dilewati",
+                Lang::En => "C: 49.5 GB free · 3 items skipped",
+            };
+            assert_eq!(n.body, want);
+
+            // Mole: done (two-digit GB, the system part skipped), failed
+            // with a code (an NTSTATUS one too) or stopped.
+            for freed in [gb(2.4), gb(12.4), gb(99.9)] {
+                for (exit, admin) in [
+                    (Some(0), AdminOutcome::NotAsked),
+                    (Some(0), AdminOutcome::Cancelled),
+                    (Some(1), AdminOutcome::NotAsked),
+                    (Some(-1_073_741_510), AdminOutcome::NotAsked),
+                    (None, AdminOutcome::NotAsked),
+                    (Some(0), AdminOutcome::Failed),
+                ] {
+                    let report = MoleReport {
+                        run: CleanRun { exit, admin },
+                        freed,
+                        drive: Some(('C', gb(47.2), gb(49.6))),
+                    };
+                    let kind = if report.run.ok() {
+                        NoticeKind::MoleDone
+                    } else {
+                        NoticeKind::MoleFailed
+                    };
+                    let fits = |s: &str| r.notice_text_fits(&kind, false, s);
+                    let n = crate::mole::done_notice(lang, &report, &fits);
+                    assert_eq!(n.kind, kind);
+                    check(&n);
+                }
+            }
+        }
     }
 
     #[test]

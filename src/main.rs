@@ -11,6 +11,7 @@ mod config;
 mod google;
 mod i18n;
 mod lyrics;
+mod mole;
 mod media_log;
 mod model;
 mod notes;

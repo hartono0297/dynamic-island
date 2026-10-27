@@ -285,6 +285,8 @@ pub enum Hit {
     /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
     DiskWarn(i32),
     RamWarn(i32),
+    /// "Lindungi cache Cargo & Autodesk di Mole".
+    MoleProtect,
     DndHelp,
     Pomo(PomoField, i32),
     GoogleSave,
@@ -609,6 +611,9 @@ pub struct State<'a> {
     /// The System page's warnings: GB free and percent used.
     pub disk_warn_gb: u32,
     pub ram_warn_percent: u8,
+    /// Mole's whitelist gets the Cargo and Autodesk caches before its
+    /// first preview.
+    pub mole_protect: bool,
     pub pomodoro: PomoSettings,
     /// A phase runs or is paused: the steppers are off.
     pub pomodoro_locked: bool,
@@ -1525,11 +1530,12 @@ fn general(b: &mut Builder, s: &State) {
     warnings_card(b, s);
 }
 
-/// The System page's warnings (keputusan-v3.1.html p4), in a second card
-/// under Umum's seven rows; the section scrolls to reach it, like Tampilan.
+/// The System page's warnings (keputusan-v3.1.html p4) and the cleaner's
+/// Mole protection, in a second card under Umum's seven rows; the section
+/// scrolls to reach it, like Tampilan.
 fn warnings_card(b: &mut Builder, s: &State) {
-    let card = b.card(2.0 * ROW_H);
-    let rows = [card.y, card.y + ROW_H];
+    let card = b.card(3.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let (min, max, _) = DISK_WARN_RANGE;
@@ -1560,6 +1566,11 @@ fn warnings_card(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
     b.row_text(card, rows[1], b.t(Key::RamAlert), desc, false, x);
     b.divider(card, rows[1]);
+
+    let x = b.toggle(Hit::MoleProtect, RIGHT, cy(rows[2]), s.mole_protect);
+    let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::MoleProtectSetting), desc, false, x);
+    b.divider(card, rows[2]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -1897,6 +1908,7 @@ mod tests {
                         has_battery: battery,
                         disk_warn_gb: if locked { 100 } else { 5 },
                         ram_warn_percent: if locked { 98 } else { 70 },
+                        mole_protect: !locked,
                         pomodoro: PomoSettings {
                             focus_min: 120,
                             short_break_min: 30,
@@ -2285,11 +2297,21 @@ mod tests {
                 })
                 .collect();
             assert_eq!(values, ["10 GB", "90%"]);
+            // The Mole protection's toggle is the card's last row.
+            let mole: Vec<Hit> = l
+                .hits()
+                .into_iter()
+                .map(|(h, _)| h)
+                .filter(|h| *h == Hit::MoleProtect)
+                .collect();
+            assert_eq!(mole, [Hit::MoleProtect]);
             for key in [
                 Key::DiskAlert,
                 Key::DiskAlertDesc,
                 Key::RamAlert,
                 Key::RamAlertDesc,
+                Key::MoleProtectSetting,
+                Key::MoleProtectSettingDesc,
             ] {
                 assert!(
                     l.texts.iter().any(|t| t.text == text(lang, key)),

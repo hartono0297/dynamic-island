@@ -484,24 +484,37 @@ pub fn lyric_scroll_end_ms(text_w: f32, box_w: f32) -> Option<u64> {
     (max > 0.0).then(|| LYRIC_HOLD_MS + (max / LYRIC_SCROLL_PX_PER_S * 1000.0).ceil() as u64)
 }
 
-/// `action`: room for the chip naming what a click does ("Selesai",
-/// "Mulai") at the right, the text stopping short of it.
-pub fn notice_layout(s: ShapeRect, action: bool) -> NoticeLayout {
+/// The chip naming what a click does ("Selesai", "Mulai", "Buka").
+pub const ACTION_W: f32 = 66.0;
+/// The Mole notices' "Log" chip: narrower, so their longer titles keep
+/// the room ("Mole selesai · 12,4 GB dibebaskan").
+pub const LOG_ACTION_W: f32 = 46.0;
+
+/// How wide `kind`'s chip is (`notice_action` says whether it has one).
+pub fn notice_action_w(kind: &NoticeKind) -> f32 {
+    match kind {
+        NoticeKind::MoleDone | NoticeKind::MoleFailed => LOG_ACTION_W,
+        _ => ACTION_W,
+    }
+}
+
+/// `action`: room for a chip this wide naming what a click does at the
+/// right, the text stopping short of it.
+pub fn notice_layout(s: ShapeRect, action: Option<f32>) -> NoticeLayout {
     // The robot takes exactly the badge's place.
     const BADGE: f32 = ROBOT_NOTICE;
     const PAD_L: f32 = 18.0;
     const PAD_R: f32 = 20.0;
-    const ACTION_W: f32 = 66.0;
     const ACTION_H: f32 = 24.0;
     const ACTION_GAP: f32 = 10.0;
     let badge = square(s.x + PAD_L, s.y + (s.h - BADGE) / 2.0, BADGE);
     let left = badge.right() + 12.0;
     let mid = s.y + s.h / 2.0;
     let edge = s.x + s.w - PAD_R;
-    let action = action.then(|| Rect {
-        x: edge - ACTION_W,
+    let action = action.map(|w| Rect {
+        x: edge - w,
         y: mid - ACTION_H / 2.0,
-        w: ACTION_W,
+        w,
         h: ACTION_H,
     });
     let right = action.map_or(edge, |a| a.x - ACTION_GAP);
@@ -582,7 +595,9 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         // Drawn by the robot (low); the badge shows when it is off.
         NoticeKind::SystemLow => tint(p.ochre, Icon::Activity),
         // Drawn by the robot (happy); the badge shows when it is off.
-        NoticeKind::CleanDone => tint(p.sage, Icon::Sparkle),
+        NoticeKind::CleanDone | NoticeKind::MoleDone => tint(p.sage, Icon::Sparkle),
+        // Drawn by the robot (low); the badge shows when it is off.
+        NoticeKind::MoleFailed => tint(p.ochre, Icon::Activity),
         // Drawn by the robot; this badge only shows if it is turned off meanwhile.
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
@@ -615,6 +630,8 @@ pub fn notice_action(kind: &NoticeKind, pomo: PomoStatus) -> Option<Key> {
         NoticeKind::Pomodoro if pomo == PomoStatus::Ready => Some(Key::Start),
         // The click opens the panel on the System page.
         NoticeKind::SystemLow => Some(Key::Open),
+        // The click opens the cleaner on Mole's log.
+        NoticeKind::MoleDone | NoticeKind::MoleFailed => Some(Key::MoleLog),
         _ => None,
     }
 }
@@ -779,7 +796,7 @@ mod tests {
             assert!(text.x - m.x >= corner_radius(style, m));
 
             let n = shape_for(style, ShapeKind::Notice);
-            let l = notice_layout(n, false);
+            let l = notice_layout(n, None);
             for r in [l.badge, l.title, l.body] {
                 assert!(inside(n, r), "{style:?} notice {r:?}");
             }
@@ -787,12 +804,23 @@ mod tests {
             assert!(l.title.x >= l.badge.right() && l.title.bottom() <= l.body.y);
             assert_eq!(l.action, None);
             // With an action chip the text stops short of it.
-            let a = notice_layout(n, true);
+            let a = notice_layout(n, Some(ACTION_W));
             let chip = a.action.expect("action chip");
+            assert_eq!(chip.w, 66.0);
             assert!(inside(n, chip), "{style:?} chip {chip:?}");
             assert!(a.title.right() < chip.x && a.body.right() < chip.x);
             assert!(chip.right() <= n.x + n.w - corner_radius(style, n) / 2.0);
             assert_eq!((a.badge, a.title.x), (l.badge, l.title.x));
+            // Mole's "Log" chip is narrower: its text box is wider, the rest
+            // as every other notice (360 × 76).
+            let m = notice_layout(n, Some(LOG_ACTION_W));
+            let log = m.action.expect("log chip");
+            assert!(inside(n, log) && log.right() == chip.right());
+            assert_eq!(m.title.w, a.title.w + ACTION_W - LOG_ACTION_W);
+            assert_eq!((n.w, n.h), (360.0, 76.0));
+            assert_eq!(notice_action_w(&NoticeKind::MoleDone), LOG_ACTION_W);
+            assert_eq!(notice_action_w(&NoticeKind::CleanDone), ACTION_W);
+            assert_eq!(notice_action_w(&NoticeKind::SystemLow), ACTION_W);
         }
     }
 
@@ -904,7 +932,7 @@ mod tests {
 
             // A notice's robot is its badge: same 40 px square, text after it.
             let n = shape_with_robot(style, ShapeKind::Notice, true);
-            let l = notice_layout(n, true);
+            let l = notice_layout(n, Some(ACTION_W));
             assert_eq!((l.badge.w, l.badge.h), (ROBOT_NOTICE, ROBOT_NOTICE));
             head_inside(n, l.badge);
             assert!(l.title.x >= l.badge.right());
@@ -1021,6 +1049,11 @@ mod tests {
         let clean = notice("Bersihkan", NoticeKind::CleanDone);
         assert_eq!(fill(&clean), (0x9DB59A, 0x9DB59A, Some(Icon::Sparkle)));
         assert!(style(&clean).alpha < 0.5, "a tint");
+        // Mole: done like a clean, failed like a low disk.
+        let mole = notice("Bersihkan", NoticeKind::MoleDone);
+        assert_eq!(fill(&mole), (0x9DB59A, 0x9DB59A, Some(Icon::Sparkle)));
+        let failed = notice("Bersihkan", NoticeKind::MoleFailed);
+        assert_eq!(fill(&failed), (0xD9A441, 0xD9A441, Some(Icon::Activity)));
         // Pomodoro: the colour of the phase a click starts.
         let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
         assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
@@ -1080,6 +1113,10 @@ mod tests {
             notice_action(&NoticeKind::CleanDone, PomoStatus::Idle),
             None
         );
+        // Mole's notices open its log.
+        for kind in [NoticeKind::MoleDone, NoticeKind::MoleFailed] {
+            assert_eq!(notice_action(&kind, PomoStatus::Idle), Some(Key::MoleLog));
+        }
     }
 
     #[test]

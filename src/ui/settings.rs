@@ -107,6 +107,8 @@ pub enum Action {
     DiskWarn(u32),
     /// "Peringatan RAM": percent used.
     RamWarn(u8),
+    /// "Lindungi cache Cargo & Autodesk di Mole".
+    MoleProtect(bool),
     DndHelp,
     Pomo(PomoField, i32),
     SaveGoogle {
@@ -148,6 +150,7 @@ pub struct Model {
     pub battery_threshold: u8,
     pub disk_warn_gb: u32,
     pub ram_warn_percent: u8,
+    pub mole_protect: bool,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
     pub pomodoro_locked: bool,
@@ -176,6 +179,7 @@ impl Model {
             battery_threshold: cfg.battery_threshold,
             disk_warn_gb: cfg.disk_warn_gb,
             ram_warn_percent: cfg.ram_warn_percent,
+            mole_protect: cfg.mole_protect_defaults,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
             calendar: CalStatus::NotConfigured,
@@ -892,6 +896,7 @@ impl Settings {
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
             ram_warn_percent: m.ram_warn_percent,
+            mole_protect: m.mole_protect,
             pomodoro: m.pomodoro,
             pomodoro_locked: m.pomodoro_locked,
             google: GoogleState {
@@ -1023,6 +1028,10 @@ impl Settings {
         if old.greeting != new.greeting {
             self.anims
                 .slide_toggle(Hit::Greeting, old.greeting, new.greeting, now);
+        }
+        if old.mole_protect != new.mole_protect {
+            self.anims
+                .slide_toggle(Hit::MoleProtect, old.mole_protect, new.mole_protect, now);
         }
         let mut changes = ModelChanges {
             title: None,
@@ -1201,6 +1210,7 @@ impl Settings {
                     post(Action::RamWarn(v))
                 }
             }
+            Hit::MoleProtect => post(Action::MoleProtect(!m.mole_protect)),
             Hit::DndHelp => post(Action::DndHelp),
             Hit::Pomo(field, dir) => post(Action::Pomo(field, dir)),
             Hit::GoogleSave => {
@@ -1799,6 +1809,7 @@ pub fn run_demo(args: &[String]) {
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::DiskWarn(v) => m.disk_warn_gb = v,
             Action::RamWarn(v) => m.ram_warn_percent = v,
+            Action::MoleProtect(v) => m.mole_protect = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
                 let v = match field {

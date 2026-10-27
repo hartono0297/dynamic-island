@@ -292,6 +292,38 @@ keys! {
     CleanCredit => "Ukuran dari pemindaian · daftar lokasi: Mole Windows (MIT)",
         "Sizes from the scan · location list: Mole Windows (MIT)";
 
+    // The cleaner's "Otomatis · Mole" mode (deepclean-opsi-d.html d1, d2).
+    MoleChip => "Eksperimental", "Experimental";
+    MoleIntro => "Mole memilih sendiri apa yang dibersihkan · hapus permanen",
+        "Mole picks what it cleans · deleted for good";
+    MoleBrowserSub => "Chrome, Edge, Firefox, Brave, Opera", "Chrome, Edge, Firefox, Brave, Opera";
+    MoleAppsSub => "VS Code, Teams, Discord, Zoom, Adobe, Autodesk, Steam",
+        "VS Code, Teams, Discord, Zoom, Adobe, Autodesk, Steam";
+    MoleDevSub => "npm, pip, NuGet, Go, Cargo, Docker, Git, IDE",
+        "npm, pip, NuGet, Go, Cargo, Docker, Git, IDE";
+    MoleTempSub => "Temp, log, prefetch, thumbnail, laporan error",
+        "Temp, logs, prefetch, thumbnails, error reports";
+    MoleOptSystem => "+ Sistem (admin)", "+ System (admin)";
+    MoleOptGame => "+ Media game > 90 hari", "+ Game media > 90 days";
+    MoleProtect => "Lindungi folder…", "Protect folders…";
+    MoleRun => "Jalankan Mole", "Run Mole";
+    MoleConfirm => "Yakin? Hapus permanen", "Sure? Delete for good";
+    MoleRunning => "Mole membersihkan…", "Mole is cleaning…";
+    MoleAgain => "Pratinjau lagi", "Preview again";
+    MoleScanning => "Memindai dengan Mole…", "Scanning with Mole…";
+    MoleScanTime => "± 30 detik", "± 30 seconds";
+    MoleSeeLog => "lihat log", "see log";
+    MolePreviewFailed => "Pratinjau Mole gagal · lihat log", "Mole's preview failed · see log";
+    MoleMissing => "Mole belum terpasang", "Mole is not installed";
+    MoleMissingSub => "Mode otomatis butuh Mole Windows (eksperimental).",
+        "Automatic mode needs Mole for Windows (experimental).";
+    MoleHowTo => "Cara memasang \u{2197}", "How to install \u{2197}";
+    MoleLog => "Log", "Log";
+    MoleProtectSetting => "Lindungi cache Cargo & Autodesk di Mole",
+        "Protect Cargo & Autodesk caches in Mole";
+    MoleProtectSettingDesc => "Masuk whitelist Mole sekali, sebelum pratinjau pertama",
+        "Added to Mole's whitelist once, before its first preview";
+
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
     ShortcutScreenshot => "Screenshot", "Screenshot";
@@ -739,38 +771,189 @@ pub struct CleanNote<'a> {
     pub admin_skipped: bool,
 }
 
-/// "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)",
-/// "Drive C: now 49.5 GB free · 3 items skipped (in use)".
-pub fn clean_done_body(lang: Lang, note: &CleanNote) -> String {
+/// Joins `parts` (each a list of ways to say it, longest first) with
+/// " · " in their order of importance: each part takes the first way that
+/// still `fits`, and a part none of whose ways fit is left out.
+fn fit_parts(parts: &[Vec<String>], fits: &dyn Fn(&str) -> bool) -> String {
+    let mut line = String::new();
+    for ways in parts {
+        for way in ways {
+            let next = if line.is_empty() {
+                way.clone()
+            } else {
+                format!("{line} · {way}")
+            };
+            if fits(&next) {
+                line = next;
+                break;
+            }
+        }
+    }
+    line
+}
+
+/// "C: sisa 49,5 GB · 3 item dilewati", "C: 49.5 GB free · 3 items
+/// skipped", then the open browsers and a skipped Windows Update, as far
+/// as `fits` allows (the notice is 360 px wide).
+pub fn clean_done_body(lang: Lang, note: &CleanNote, fits: &dyn Fn(&str) -> bool) -> String {
     let mut parts = Vec::new();
     if let Some((letter, free)) = note.drive {
-        let (name, f) = (disk_name(letter), format_size(lang, free));
-        parts.push(match lang {
-            Lang::Id => format!("{name} sekarang sisa {f}"),
-            Lang::En => format!("{name} now {f} free"),
-        });
+        let f = format_size(lang, free);
+        parts.push(vec![match lang {
+            Lang::Id => format!("{letter}: sisa {f}"),
+            Lang::En => format!("{letter}: {f} free"),
+        }]);
     }
     if note.skipped > 0 {
         let n = note.skipped;
-        parts.push(match lang {
-            Lang::Id => format!("{n} item dilewati (sedang dipakai)"),
-            Lang::En if n == 1 => "1 item skipped (in use)".to_string(),
-            Lang::En => format!("{n} items skipped (in use)"),
-        });
+        parts.push(vec![match lang {
+            Lang::Id => format!("{n} item dilewati"),
+            Lang::En if n == 1 => "1 item skipped".to_string(),
+            Lang::En => format!("{n} items skipped"),
+        }]);
     }
     if !note.browsers.is_empty() {
-        parts.push(clean_browsers_open(lang, note.browsers));
+        let names = note.browsers.join(", ");
+        let n = note.browsers.len();
+        let mut ways = vec![match lang {
+            Lang::Id => format!("{names} terbuka"),
+            Lang::En => format!("{names} open"),
+        }];
+        if n > 1 {
+            ways.push(match lang {
+                Lang::Id => format!("{n} browser terbuka"),
+                Lang::En => format!("{n} browsers open"),
+            });
+        }
+        parts.push(ways);
     }
     if note.admin_skipped {
-        parts.push(
+        parts.push(vec![
             match lang {
                 Lang::Id => "Windows Update dilewati",
                 Lang::En => "Windows Update skipped",
             }
             .to_string(),
-        );
+        ]);
     }
-    parts.join(" · ")
+    fit_parts(&parts, fits)
+}
+
+/// The Mole notice's title: "Mole selesai · 2,4 GB dibebaskan".
+pub fn mole_done_title(lang: Lang, freed: u64) -> String {
+    let size = clean_size(lang, freed);
+    match lang {
+        Lang::Id => format!("Mole selesai · {size} dibebaskan"),
+        Lang::En => format!("Mole done · {size} freed"),
+    }
+}
+
+/// "Diukur dari sisa disk C:", and that the system part was skipped (UAC
+/// refused) when it fits.
+pub fn mole_done_body(
+    lang: Lang,
+    letter: char,
+    admin_skipped: bool,
+    fits: &dyn Fn(&str) -> bool,
+) -> String {
+    let mut parts = vec![vec![match lang {
+        Lang::Id => format!("Diukur dari sisa disk {letter}:"),
+        Lang::En => format!("Measured from free space on {letter}:"),
+    }]];
+    if admin_skipped {
+        parts.push(vec![
+            match lang {
+                Lang::Id => "Sistem dilewati",
+                Lang::En => "System part skipped",
+            }
+            .to_string(),
+        ]);
+    }
+    fit_parts(&parts, fits)
+}
+
+/// "Mole gagal · kode 1"; "Mole berhenti" without a code (killed).
+pub fn mole_failed_title(lang: Lang, code: Option<i32>) -> String {
+    match (lang, code) {
+        (Lang::Id, Some(c)) => format!("Mole gagal · kode {c}"),
+        (Lang::En, Some(c)) => format!("Mole failed · code {c}"),
+        (Lang::Id, None) => "Mole berhenti".into(),
+        (Lang::En, None) => "Mole stopped".into(),
+    }
+}
+
+/// What a failed clean still freed, measured: "0,4 GB dibebaskan sebelum
+/// berhenti", or "Lihat log di Bersihkan".
+pub fn mole_failed_body(lang: Lang, freed: u64) -> String {
+    let mb = (freed as f64 / MIB as f64).round();
+    if mb < 1.0 {
+        return match lang {
+            Lang::Id => "Lihat log di Bersihkan".into(),
+            Lang::En => "See the log in Clean up".into(),
+        };
+    }
+    let size = clean_size(lang, freed);
+    match lang {
+        Lang::Id => format!("{size} dibebaskan sebelum berhenti"),
+        Lang::En => format!("{size} freed before it stopped"),
+    }
+}
+
+/// Under the Mole mode's title: who picks, and that it is permanent; a
+/// warning when the version is not the tested 1.30.x.
+pub fn mole_intro(lang: Lang, version: Option<&str>, tested: bool) -> String {
+    match (lang, version, tested) {
+        (Lang::Id, Some(v), true) => {
+            format!("Mole {v} memilih sendiri apa yang dibersihkan · hapus permanen")
+        }
+        (Lang::En, Some(v), true) => format!("Mole {v} picks what it cleans · deleted for good"),
+        (Lang::Id, Some(v), false) => {
+            format!("Mole {v} belum diuji (dibuat untuk 1.30.x) · hapus permanen")
+        }
+        (Lang::En, Some(v), false) => {
+            format!("Mole {v} is untested (made for 1.30.x) · deleted for good")
+        }
+        (Lang::Id, None, _) => {
+            "Versi Mole tak dikenal (dibuat untuk 1.30.x) · hapus permanen".into()
+        }
+        (Lang::En, None, _) => "Unknown Mole version (made for 1.30.x) · deleted for good".into(),
+    }
+}
+
+/// The Mole footer: "Pratinjau: ± 2,4 GB", or "Pratinjau: lihat log" when
+/// nothing could be read.
+pub fn mole_preview(lang: Lang, total: Option<u64>) -> String {
+    let what = match total {
+        Some(b) => format!("± {}", clean_size(lang, b)),
+        None => text(lang, Key::MoleSeeLog).to_owned(),
+    };
+    match lang {
+        Lang::Id => format!("Pratinjau: {what}"),
+        Lang::En => format!("Preview: {what}"),
+    }
+}
+
+/// Beside the armed button: "± 2,4 GB · 29 item".
+pub fn mole_total_items(lang: Lang, bytes: u64, entries: usize) -> String {
+    let size = clean_size(lang, bytes);
+    match lang {
+        Lang::Id => format!("± {size} · {entries} item"),
+        Lang::En if entries == 1 => format!("± {size} · 1 item"),
+        Lang::En => format!("± {size} · {entries} items"),
+    }
+}
+
+/// After a clean: "2,4 GB dibebaskan · C: 47,2 GB → 49,6 GB".
+pub fn mole_result(lang: Lang, freed: u64, drive: Option<(char, u64, u64)>) -> String {
+    let freed = clean_freed(lang, freed);
+    match drive {
+        Some((letter, before, after)) => format!(
+            "{freed} · {letter}: {} \u{2192} {}",
+            format_size(lang, before),
+            format_size(lang, after)
+        ),
+        None => freed,
+    }
 }
 
 /// The RAM notice: "RAM terpakai 93%", "RAM 93% used".
@@ -2079,6 +2262,30 @@ mod tests {
             all.push(disk_low_title(lang, 'C', 9 * GIB));
             all.push(ram_high_title(lang, 93));
             {
+                let all_fit = |_: &str| true;
+                let note = CleanNote {
+                    drive: Some(('C', 49 * GIB)),
+                    skipped: 3,
+                    browsers: &["Chrome", "Edge"],
+                    admin_skipped: true,
+                };
+                all.push(clean_done_body(lang, &note, &all_fit));
+                all.push(clean_done_body(lang, &note, &|s| s.len() < 40));
+                all.push(mole_done_title(lang, 2 * GIB));
+                all.push(mole_done_body(lang, 'C', true, &all_fit));
+                all.push(mole_failed_title(lang, Some(1)));
+                all.push(mole_failed_title(lang, None));
+                all.push(mole_failed_body(lang, 0));
+                all.push(mole_failed_body(lang, GIB));
+                for (v, tested) in [(Some("1.30.0"), true), (Some("1.31.0"), false), (None, false)] {
+                    all.push(mole_intro(lang, v, tested));
+                }
+                all.push(mole_preview(lang, Some(GIB)));
+                all.push(mole_preview(lang, None));
+                all.push(mole_total_items(lang, GIB, 29));
+                all.push(mole_result(lang, GIB, Some(('C', 47 * GIB, 49 * GIB))));
+            }
+            {
                 use crate::cli_folders::Ago;
                 for ago in [
                     Ago::JustNow,
@@ -2130,13 +2337,14 @@ mod tests {
             skipped: 3,
             ..CleanNote::default()
         };
+        let all = |_: &str| true;
         assert_eq!(
-            clean_done_body(Lang::Id, &note),
-            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)"
+            clean_done_body(Lang::Id, &note, &all),
+            "C: sisa 49,5 GB · 3 item dilewati"
         );
         assert_eq!(
-            clean_done_body(Lang::En, &note),
-            "Disk C: now 49.5 GB free · 3 items skipped (in use)"
+            clean_done_body(Lang::En, &note, &all),
+            "C: 49.5 GB free · 3 items skipped"
         );
         let more = CleanNote {
             drive: None,
@@ -2145,10 +2353,54 @@ mod tests {
             admin_skipped: true,
         };
         assert_eq!(
-            clean_done_body(Lang::En, &more),
-            "1 item skipped (in use) · Chrome, Edge open · skipped · Windows Update skipped"
+            clean_done_body(Lang::En, &more, &all),
+            "1 item skipped · Chrome, Edge open · Windows Update skipped"
         );
-        assert_eq!(clean_done_body(Lang::Id, &CleanNote::default()), "");
+        assert_eq!(clean_done_body(Lang::Id, &CleanNote::default(), &all), "");
+        // What does not fit goes, the least important first; a long list
+        // of browsers becomes a count.
+        let short = |s: &str| s.chars().count() <= 40;
+        let many = CleanNote {
+            drive: Some(('C', gb(49.5))),
+            skipped: 123,
+            browsers: &["Chrome", "Edge", "Firefox"],
+            admin_skipped: true,
+        };
+        assert_eq!(
+            clean_done_body(Lang::Id, &many, &short),
+            "C: sisa 49,5 GB · 123 item dilewati"
+        );
+        let wider = |s: &str| s.chars().count() <= 58;
+        assert_eq!(
+            clean_done_body(Lang::Id, &many, &wider),
+            "C: sisa 49,5 GB · 123 item dilewati · 3 browser terbuka"
+        );
+        // Mole's texts.
+        assert_eq!(mole_done_title(Lang::Id, gb(2.4)), "Mole selesai · 2,4 GB dibebaskan");
+        assert_eq!(mole_done_title(Lang::En, gb(2.4)), "Mole done · 2.4 GB freed");
+        assert_eq!(mole_done_body(Lang::Id, 'C', false, &all), "Diukur dari sisa disk C:");
+        assert_eq!(
+            mole_done_body(Lang::En, 'C', true, &all),
+            "Measured from free space on C: · System part skipped"
+        );
+        assert_eq!(mole_failed_title(Lang::Id, Some(1)), "Mole gagal · kode 1");
+        assert_eq!(mole_failed_title(Lang::En, None), "Mole stopped");
+        assert_eq!(mole_failed_body(Lang::Id, 0), "Lihat log di Bersihkan");
+        assert_eq!(
+            mole_failed_body(Lang::En, gb(0.4)),
+            "0.4 GB freed before it stopped"
+        );
+        assert_eq!(
+            mole_intro(Lang::Id, Some("1.30.0"), true),
+            "Mole 1.30.0 memilih sendiri apa yang dibersihkan · hapus permanen"
+        );
+        assert_eq!(mole_preview(Lang::Id, Some(gb(2.4))), "Pratinjau: ± 2,4 GB");
+        assert_eq!(mole_preview(Lang::En, None), "Preview: see log");
+        assert_eq!(mole_total_items(Lang::Id, gb(2.4), 29), "± 2,4 GB · 29 item");
+        assert_eq!(
+            mole_result(Lang::Id, gb(2.4), Some(('C', gb(47.2), gb(49.6)))),
+            "2,4 GB dibebaskan · C: 47,2 GB \u{2192} 49,6 GB"
+        );
         assert_eq!(
             text(Lang::Id, clean_cat(CleanCat::TempLogs).0),
             "File sementara & log"

@@ -28,7 +28,11 @@
 //! by the renderer, capped by this screen's width (`lyric_max_w`).
 //!
 //! The cleaner's scenes (`cleaner`, `cleaner-confirm`, `cleaner-done`)
-//! use fixed sizes and never start the scanner or the cleaner.
+//! use fixed sizes and never start the scanner or the cleaner. Its Mole
+//! scenes (`cleaner-mole`, `cleaner-mole-scanning`, `cleaner-mole-confirm`,
+//! `cleaner-mole-log`, `cleaner-mole-unreadable`, `cleaner-mole-missing`)
+//! and the notices `mole-done` and `mole-failed` use the design's fixed
+//! data; they never look for Mole, let alone run it.
 //!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
@@ -49,22 +53,25 @@ use super::geometry::{
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
 use super::render::{
-    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
+    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
+    SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
-use crate::clean::{self, AdminOutcome, CatSize, CleanCat, CleanReport, ScanResult};
+use crate::clean::{self, AdminOutcome, CatSize, CleanCat, CleanMode, CleanReport, ScanResult};
 use crate::cli::{self, Output, Shell};
 use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
+use crate::mole::{CleanRun, GroupSize, MoleOpts, MoleReport, PreviewSummary};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::notes::Note;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
+use crate::state::MolePhase;
 use crate::system::{Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice};
 use crate::theme::{self, Accent, Palette, Surface};
 
@@ -125,6 +132,18 @@ enum CleanDemo {
     Ticks,
     /// The button armed: "Yakin? Hapus 2,3 GB".
     Armed,
+    /// Mole mode, its preview done: 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB.
+    MolePreview,
+    /// Mole mode while the dry-run runs.
+    MoleScanning,
+    /// Mole mode armed: "Yakin? Hapus permanen".
+    MoleArmed,
+    /// Mole cleaning: the design's log lines.
+    MoleLog,
+    /// Mole's preview with one group it could not read ("lihat log").
+    MoleUnreadable,
+    /// Mole not installed: the "Cara memasang" card.
+    MoleMissing,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -181,6 +200,10 @@ enum DemoNotice {
     System,
     /// The cleaner finished (deepclean-opsi-d.html p10 "Selesai").
     CleanDone,
+    /// Mole finished: 2,4 GB, measured on C: (d2 "Notch selama mode Mole").
+    MoleDone,
+    /// Mole failed with exit 1.
+    MoleFailed,
 }
 
 const BASE: Scene = Scene {
@@ -279,7 +302,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 62] = [
+const SCENES: [Scene; 70] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -394,6 +417,21 @@ const SCENES: [Scene; 62] = [
     Scene {
         robot: Some(Expr::Happy),
         ..notice("cleaner-done", DemoNotice::CleanDone)
+    },
+    // Mole mode with the design's data; Mole is never looked for or run.
+    cleaner("cleaner-mole", CleanDemo::MolePreview),
+    cleaner("cleaner-mole-scanning", CleanDemo::MoleScanning),
+    cleaner("cleaner-mole-confirm", CleanDemo::MoleArmed),
+    cleaner("cleaner-mole-log", CleanDemo::MoleLog),
+    cleaner("cleaner-mole-unreadable", CleanDemo::MoleUnreadable),
+    cleaner("cleaner-mole-missing", CleanDemo::MoleMissing),
+    Scene {
+        robot: Some(Expr::Happy),
+        ..notice("mole-done", DemoNotice::MoleDone)
+    },
+    Scene {
+        robot: Some(Expr::Sad),
+        ..notice("mole-failed", DemoNotice::MoleFailed)
     },
     cli("cli-empty", CliDemo::Empty),
     cli("cli-ready", CliDemo::Ready),
@@ -570,6 +608,56 @@ fn demo_scan() -> ScanResult {
     }
 }
 
+/// Mole's preview in the design (`MG`): 1,8 / 0,4 / 0,1 / 0,1 GB, ± 2,4 GB
+/// in 29 entries; `unreadable` leaves the app caches as "lihat log".
+fn demo_mole_summary(unreadable: bool) -> PreviewSummary {
+    let gb = |x: f64| (x * GIB as f64) as u64;
+    let apps = if unreadable {
+        GroupSize::Unreadable
+    } else {
+        GroupSize::Bytes(gb(0.4))
+    };
+    PreviewSummary {
+        groups: [
+            GroupSize::Bytes(gb(1.8)),
+            apps,
+            GroupSize::Bytes(gb(0.1)),
+            GroupSize::Bytes(gb(0.1)),
+        ],
+        total: Some((gb(if unreadable { 2.0 } else { 2.4 }), 29)),
+    }
+}
+
+/// Mole's log while it cleans (`logLines` in deepclean-opsi-d.html).
+fn demo_mole_log() -> std::collections::VecDeque<String> {
+    [
+        "Clean Your Windows",
+        "Free space: 47,24 GB",
+        "\u{25B8} User essentials",
+        "  User temp files (34 items, 61 MB)",
+        "\u{25B8} Browser caches",
+        "  Chrome CacheStorage (\u{2026} 922 MB)",
+        "  Chrome Code Cache (\u{2026} 507 MB)",
+        "\u{25B8} Developer tools \u{2026}",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// Mole finished: 2,4 GB freed, C: from 47,2 to 49,6 GB; `failed`: exit 1.
+fn demo_mole_report(failed: bool) -> MoleReport {
+    let gb = |x: f64| (x * GIB as f64) as u64;
+    MoleReport {
+        run: CleanRun {
+            exit: Some(if failed { 1 } else { 0 }),
+            admin: AdminOutcome::NotAsked,
+        },
+        freed: gb(if failed { 0.4 } else { 2.4 }),
+        drive: Some(('C', gb(47.2), gb(49.6))),
+    }
+}
+
 /// The finished clean: 2,3 GB freed, C: now at 49,5 GB, 3 files in use.
 fn demo_clean_report() -> CleanReport {
     let gb = |x: f64| (x * GIB as f64) as u64;
@@ -663,6 +751,9 @@ fn run_scenes(scenes: &[Scene]) {
     let reminders12 = many_reminders(today);
     let (system_ok, system_low) = (demo_system(false), demo_system(true));
     let scan = demo_scan();
+    let (mole_summary, mole_unreadable) = (demo_mole_summary(false), demo_mole_summary(true));
+    let mole_log = demo_mole_log();
+    let no_log = std::collections::VecDeque::new();
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -746,7 +837,7 @@ fn run_scenes(scenes: &[Scene]) {
                 View0::MediaCompact => View::MediaCompact,
                 View0::PomodoroCompact => View::PomodoroCompact,
                 View0::Panel(page) => View::Panel(page),
-                View0::Notice(which) => View::Notice(demo_notice(which)),
+                View0::Notice(which) => View::Notice(demo_notice(which, &renderer)),
                 View0::MediaLyric => View::MediaLyric,
             };
             let page = match scene.view {
@@ -772,12 +863,48 @@ fn run_scenes(scenes: &[Scene]) {
                 disk_warn_gb: 10,
                 ram_warn_percent: 90,
             };
-            let cleaner = scene.clean.map(|which| CleanerView {
-                checked: CleanCat::ALL.map(CleanCat::checked_at_start),
-                armed: which == CleanDemo::Armed,
-                scan: Some(&scan),
-                scanning: false,
-                busy: false,
+            let cleaner = scene.clean.map(|which| {
+                let opts = MoleOpts::default();
+                let previewed = MolePhase::Previewed { opts, ok: true };
+                let phase = match which {
+                    CleanDemo::Ticks | CleanDemo::Armed => MolePhase::Unknown,
+                    CleanDemo::MolePreview | CleanDemo::MoleArmed | CleanDemo::MoleUnreadable => {
+                        previewed
+                    }
+                    CleanDemo::MoleScanning => MolePhase::Scanning(opts),
+                    CleanDemo::MoleLog => MolePhase::Running,
+                    CleanDemo::MoleMissing => MolePhase::Missing,
+                };
+                let mole_mode = phase != MolePhase::Unknown;
+                CleanerView {
+                    mode: if mole_mode {
+                        CleanMode::Mole
+                    } else {
+                        CleanMode::Own
+                    },
+                    checked: CleanCat::ALL.map(CleanCat::checked_at_start),
+                    armed: matches!(which, CleanDemo::Armed | CleanDemo::MoleArmed),
+                    scan: Some(&scan),
+                    scanning: false,
+                    busy: false,
+                    mole: MoleView {
+                        phase,
+                        opts,
+                        show_log: false,
+                        version: Some("1.30.0"),
+                        tested: true,
+                        summary: match which {
+                            CleanDemo::MoleUnreadable => Some(&mole_unreadable),
+                            _ => Some(&mole_summary),
+                        },
+                        log: if which == CleanDemo::MoleLog {
+                            &mole_log
+                        } else {
+                            &no_log
+                        },
+                        report: None,
+                    },
+                }
             });
             let frame = Frame {
                 view: &view,
@@ -831,8 +958,10 @@ fn run_scenes(scenes: &[Scene]) {
     }
 }
 
-/// One notice per badge style, with the design's texts.
-fn demo_notice(which: DemoNotice) -> Notice {
+/// One notice per badge style, with the design's texts; the cleaner's are
+/// fitted to the notice by `renderer` as the island does.
+fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
+    let fits = |kind: NoticeKind| move |s: &str| renderer.notice_text_fits(&kind, false, s);
     let notice = |source: &str, title: &str, body: String, kind| Notice {
         key: "demo".into(),
         source: source.into(),
@@ -901,7 +1030,21 @@ fn demo_notice(which: DemoNotice) -> Notice {
                 free: (9.6 * GIB as f64) as u64,
             },
         ),
-        DemoNotice::CleanDone => clean::done_notice(crate::i18n::lang(), &demo_clean_report()),
+        DemoNotice::CleanDone => clean::done_notice(
+            crate::i18n::lang(),
+            &demo_clean_report(),
+            &fits(NoticeKind::CleanDone),
+        ),
+        DemoNotice::MoleDone => crate::mole::done_notice(
+            crate::i18n::lang(),
+            &demo_mole_report(false),
+            &fits(NoticeKind::MoleDone),
+        ),
+        DemoNotice::MoleFailed => crate::mole::done_notice(
+            crate::i18n::lang(),
+            &demo_mole_report(true),
+            &fits(NoticeKind::MoleFailed),
+        ),
     }
 }
 

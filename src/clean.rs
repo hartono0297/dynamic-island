@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, SystemTime};
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, WAIT_OBJECT_0};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Com::{
@@ -62,6 +64,13 @@ const ADMIN_WAIT_MS: u32 = 10 * 60 * 1000;
 const DAY: u64 = 24 * 60 * 60;
 /// `FILE_ATTRIBUTE_REPARSE_POINT`: symlinks, junctions, cloud placeholders.
 const REPARSE_POINT: u32 = 0x400;
+
+crate::theme::named_enum! {
+    /// The cleaner's two modes (the segment in its header): the island's
+    /// own ("Pilih sendiri", the default) or Mole's ("Otomatis · Mole",
+    /// `crate::mole`). The last one used is remembered (`clean_mode`).
+    CleanMode { Own, Mole }
+}
 
 /// The panel's rows, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -907,7 +916,7 @@ pub fn run_admin(job: Option<&str>) -> i32 {
 }
 
 /// Free bytes on `letter`'s drive.
-fn drive_free(letter: char) -> Option<u64> {
+pub(crate) fn drive_free(letter: char) -> Option<u64> {
     let root = HSTRING::from(format!("{letter}:\\"));
     let mut free = 0u64;
     unsafe { GetDiskFreeSpaceExW(&root, Some(&mut free), None, None) }.ok()?;
@@ -951,8 +960,9 @@ pub fn measure_freed(drives: &[(char, u64, u64)]) -> (u64, Option<(char, u64)>) 
 }
 
 /// The notice after a clean (Bata happy): what was freed, the drive's free
-/// space now, and what was left.
-pub fn done_notice(lang: Lang, report: &CleanReport) -> Notice {
+/// space now, and what was left. `fits` says whether a body fits the
+/// notice; what would not fit is left out, the least important first.
+pub fn done_notice(lang: Lang, report: &CleanReport, fits: &dyn Fn(&str) -> bool) -> Notice {
     let note = CleanNote {
         drive: report.drive,
         skipped: report.skipped,
@@ -963,7 +973,7 @@ pub fn done_notice(lang: Lang, report: &CleanReport) -> Notice {
         key: "clean-done".into(),
         source: text(lang, Key::SystemClean).into(),
         title: i18n::clean_freed(lang, report.freed),
-        body: i18n::clean_done_body(lang, &note),
+        body: i18n::clean_done_body(lang, &note, fits),
         kind: NoticeKind::CleanDone,
     }
 }
@@ -1529,13 +1539,11 @@ mod tests {
             skipped_browsers: vec![],
             admin: AdminOutcome::NotAsked,
         };
-        let n = done_notice(Lang::Id, &report);
+        let all = |_: &str| true;
+        let n = done_notice(Lang::Id, &report, &all);
         assert_eq!(n.kind, NoticeKind::CleanDone);
         assert_eq!(n.title, "2,3 GB dibebaskan");
-        assert_eq!(
-            n.body,
-            "Disk C: sekarang sisa 49,5 GB · 3 item dilewati (sedang dipakai)"
-        );
+        assert_eq!(n.body, "C: sisa 49,5 GB · 3 item dilewati");
         assert_eq!(n.source, "Bersihkan");
         let refused = CleanReport {
             skipped: 0,
@@ -1543,12 +1551,9 @@ mod tests {
             skipped_browsers: vec!["Edge"],
             ..report
         };
-        let n = done_notice(Lang::En, &refused);
+        let n = done_notice(Lang::En, &refused, &all);
         assert_eq!(n.title, "2.3 GB freed");
-        assert_eq!(
-            n.body,
-            "Disk C: now 49.5 GB free · Edge open · skipped · Windows Update skipped"
-        );
+        assert_eq!(n.body, "C: 49.5 GB free · Edge open · Windows Update skipped");
     }
 
     #[test]
