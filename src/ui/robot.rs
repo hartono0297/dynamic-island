@@ -521,6 +521,8 @@ pub enum NoticeSort {
     BatteryLow,
     /// A drive low on space or RAM high for a minute.
     SystemLow,
+    /// The cleaner finished.
+    CleanDone,
     Greeting,
 }
 
@@ -534,6 +536,7 @@ impl NoticeSort {
             NoticeKind::ClaudeDone { .. } => NoticeSort::ClaudeDone,
             NoticeKind::BatteryLow => NoticeSort::BatteryLow,
             NoticeKind::SystemLow => NoticeSort::SystemLow,
+            NoticeKind::CleanDone => NoticeSort::CleanDone,
             NoticeKind::Greeting => NoticeSort::Greeting,
         }
     }
@@ -607,7 +610,7 @@ pub struct RobotInputs {
 ///
 /// 1. Hidden and the open panel: no robot.
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
-///    pomodoro phase done and Claude done → Happy, low battery and low disk
+///    pomodoro phase done, Claude done and a finished clean → Happy, low battery and low disk
 ///    or high RAM → Sad, greeting → Wave. Other apps' notifications (`App`) → no robot: they
 ///    keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
@@ -622,7 +625,9 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
             return match sort {
                 NoticeSort::App => None,
                 NoticeSort::Reminder | NoticeSort::ClaudeWaiting => Some(Expr::Alert),
-                NoticeSort::PomodoroDone | NoticeSort::ClaudeDone => Some(Expr::Happy),
+                NoticeSort::PomodoroDone | NoticeSort::ClaudeDone | NoticeSort::CleanDone => {
+                    Some(Expr::Happy)
+                }
                 NoticeSort::BatteryLow | NoticeSort::SystemLow => Some(Expr::Sad),
                 NoticeSort::Greeting => Some(Expr::Wave),
             };
@@ -1132,6 +1137,7 @@ mod tests {
             (NoticeSort::ClaudeDone, Expr::Happy),
             (NoticeSort::BatteryLow, Expr::Sad),
             (NoticeSort::SystemLow, Expr::Sad),
+            (NoticeSort::CleanDone, Expr::Happy),
             (NoticeSort::Greeting, Expr::Wave),
         ] {
             let spot = Spot::Notice(sort);

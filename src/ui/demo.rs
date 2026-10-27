@@ -27,6 +27,9 @@
 //! The lyric scenes size the notch as the island does: the line measured
 //! by the renderer, capped by this screen's width (`lyric_max_w`).
 //!
+//! The cleaner's scenes (`cleaner`, `cleaner-confirm`, `cleaner-done`)
+//! use fixed sizes and never start the scanner or the cleaner.
+//!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
 //! fixed ("14:32", "23:48"), so nothing depends on the time of day.
@@ -45,10 +48,13 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::render::{CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView};
+use super::render::{
+    CleanerView, CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame, SystemView,
+};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
+use crate::clean::{self, AdminOutcome, CatSize, CleanCat, CleanReport, ScanResult};
 use crate::cli::{self, Output, Shell};
 use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
@@ -108,6 +114,17 @@ struct Scene {
     sheet: bool,
     /// The System page with drive C: under the 10 GB warning (ochre).
     system_low: bool,
+    /// The cleaner over the System page, and how its button stands.
+    clean: Option<CleanDemo>,
+}
+
+/// The cleaner's states (deepclean-opsi-d.html p10 and d1).
+#[derive(Clone, Copy, PartialEq)]
+enum CleanDemo {
+    /// The top three ticked, the button showing the total.
+    Ticks,
+    /// The button armed: "Yakin? Hapus 2,3 GB".
+    Armed,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -162,6 +179,8 @@ enum DemoNotice {
     ClaudeWorking,
     /// Disk C: low (keputusan-v3.1.html p4): Bata low, "Buka".
     System,
+    /// The cleaner finished (deepclean-opsi-d.html p10 "Selesai").
+    CleanDone,
 }
 
 const BASE: Scene = Scene {
@@ -183,6 +202,7 @@ const BASE: Scene = Scene {
     clock: None,
     sheet: false,
     system_low: false,
+    clean: None,
 };
 
 /// A scene of Bata in the notch (studio-robot.html p3).
@@ -248,7 +268,18 @@ const fn cli(name: &'static str, which: CliDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 59] = [
+/// The cleaner over the System page.
+const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
+    Scene {
+        name,
+        kind: ShapeKind::PanelClean,
+        view: View0::Panel(Page::System),
+        clean: Some(which),
+        ..BASE
+    }
+}
+
+const SCENES: [Scene; 62] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -356,6 +387,13 @@ const SCENES: [Scene; 59] = [
     Scene {
         system_low: true,
         ..panel("system-low", Page::System)
+    },
+    // Fixed sizes (deepclean-opsi-d.html); never a real scan.
+    cleaner("cleaner", CleanDemo::Ticks),
+    cleaner("cleaner-confirm", CleanDemo::Armed),
+    Scene {
+        robot: Some(Expr::Happy),
+        ..notice("cleaner-done", DemoNotice::CleanDone)
     },
     cli("cli-empty", CliDemo::Empty),
     cli("cli-ready", CliDemo::Ready),
@@ -509,6 +547,41 @@ fn demo_system(low: bool) -> SystemSample {
     }
 }
 
+/// The cleaner's sizes in the design: 0,1 / 1,8 / 0,4 / 0,1 GB, the rest
+/// not measured ("—").
+fn demo_scan() -> ScanResult {
+    let gb = |x: f64| CatSize {
+        bytes: (x * GIB as f64) as u64,
+        files: 1,
+        measured: true,
+    };
+    let unknown = CatSize::default();
+    ScanResult {
+        cats: [
+            gb(0.1),
+            gb(1.8),
+            gb(0.4),
+            gb(0.1),
+            unknown,
+            unknown,
+            unknown,
+        ],
+        skipped_browsers: Vec::new(),
+    }
+}
+
+/// The finished clean: 2,3 GB freed, C: now at 49,5 GB, 3 files in use.
+fn demo_clean_report() -> CleanReport {
+    let gb = |x: f64| (x * GIB as f64) as u64;
+    CleanReport {
+        freed: gb(2.3),
+        drive: Some(('C', gb(49.5))),
+        skipped: 3,
+        skipped_browsers: Vec::new(),
+        admin: AdminOutcome::NotAsked,
+    }
+}
+
 /// `DI_DEMO_STEP`: a step number, or a scene's name (Pill), or
 /// `notch:` and a name.
 fn held_step(scenes: &[Scene], value: &str) -> Option<usize> {
@@ -589,6 +662,7 @@ fn run_scenes(scenes: &[Scene]) {
     let reminders5 = demo_reminders(today);
     let reminders12 = many_reminders(today);
     let (system_ok, system_low) = (demo_system(false), demo_system(true));
+    let scan = demo_scan();
     let strip = Notice {
         key: "demo-wait".into(),
         source: "Claude".into(),
@@ -698,6 +772,13 @@ fn run_scenes(scenes: &[Scene]) {
                 disk_warn_gb: 10,
                 ram_warn_percent: 90,
             };
+            let cleaner = scene.clean.map(|which| CleanerView {
+                checked: CleanCat::ALL.map(CleanCat::checked_at_start),
+                armed: which == CleanDemo::Armed,
+                scan: Some(&scan),
+                scanning: false,
+                busy: false,
+            });
             let frame = Frame {
                 view: &view,
                 media: Some(if scene.long_media {
@@ -740,6 +821,7 @@ fn run_scenes(scenes: &[Scene]) {
                     pose: Pose::default(),
                 }),
                 system: Some(&system),
+                cleaner: cleaner.as_ref(),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -819,6 +901,7 @@ fn demo_notice(which: DemoNotice) -> Notice {
                 free: (9.6 * GIB as f64) as u64,
             },
         ),
+        DemoNotice::CleanDone => clean::done_notice(crate::i18n::lang(), &demo_clean_report()),
     }
 }
 

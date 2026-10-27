@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use chrono::{Days, Months, NaiveDate};
 
 use crate::calendar::range_for;
+use crate::clean::CleanCat;
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
@@ -31,6 +32,43 @@ fn duration_of(notice: &Notice) -> Duration {
 /// on its way to a browser tab must not land on play/pause as the panel
 /// grows under it.
 pub const MEDIA_HOVER_GUARD: Duration = Duration::from_millis(ANIM_MS + 300);
+
+/// How long the cleaner's armed button ("Yakin? Hapus …") waits for the
+/// second click before it turns back.
+pub const CLEAN_CONFIRM: Duration = Duration::from_secs(4);
+
+/// The cleaner over the System page: which rows are ticked and whether its
+/// button is armed. Opened by "Bersihkan"; gone when the panel closes, the
+/// page changes or its back button is clicked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CleanerUi {
+    /// By `CleanCat::index`.
+    pub checked: [bool; 7],
+    /// The first click armed the button until then; a second click before
+    /// it cleans. Anything else disarms it.
+    pub armed_until: Option<Instant>,
+}
+
+impl CleanerUi {
+    fn new() -> Self {
+        Self {
+            checked: CleanCat::ALL.map(CleanCat::checked_at_start),
+            armed_until: None,
+        }
+    }
+
+    pub fn armed(&self) -> bool {
+        self.armed_until.is_some()
+    }
+
+    /// The ticked categories, in row order.
+    pub fn picked(&self) -> Vec<CleanCat> {
+        CleanCat::ALL
+            .into_iter()
+            .filter(|c| self.checked[c.index()])
+            .collect()
+    }
+}
 
 /// One mouse-wheel notch, as Windows reports it.
 const WHEEL_STEP: i32 = 120;
@@ -93,6 +131,11 @@ pub struct IslandState {
     cal_view: CalView,
     cal_anchor: NaiveDate,
     cal_selected: NaiveDate,
+    /// The cleaner, while it shows over the System page.
+    cleaner: Option<CleanerUi>,
+    /// A clean asked for has not finished: the cleaner's rows and button
+    /// take no clicks meanwhile.
+    clean_busy: bool,
 }
 
 impl IslandState {
@@ -124,6 +167,8 @@ impl IslandState {
             cal_view: CalView::Month,
             cal_anchor: today,
             cal_selected: today,
+            cleaner: None,
+            clean_busy: false,
         }
     }
 
@@ -140,6 +185,7 @@ impl IslandState {
             self.phase_done(done, &mut effects);
         }
         self.advance(now);
+        self.expire_confirm(now);
         match event {
             Event::Media(media) => self.set_media(media, now),
             Event::MediaTimeline(timeline) => self.timeline = timeline,
@@ -164,6 +210,7 @@ impl IslandState {
                 NoticeKind::App { .. }
                 | NoticeKind::BatteryLow
                 | NoticeKind::SystemLow
+                | NoticeKind::CleanDone
                 | NoticeKind::Pomodoro => self.queue.push_back(notice),
                 // Never over a fullscreen app (`App` checks first and tries
                 // again later; this only guards a race).
@@ -207,7 +254,9 @@ impl IslandState {
             | Event::Cli(_)
             | Event::ExplorerFolders { .. }
             | Event::SystemSample(_)
+            | Event::Clean(_)
             | Event::Tick => {}
+            Event::CleanFinished => self.clean_busy = false,
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
         self.advance(now);
@@ -216,6 +265,10 @@ impl IslandState {
         if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
             self.cli_focused = false;
             effects.push(Effect::ReleaseCliFocus);
+        }
+        // The cleaner belongs to the System page of an open panel.
+        if self.cleaner.is_some() && (self.page != Page::System || !self.panel_open()) {
+            self.cleaner = None;
         }
         // The menu belongs to the CLI page of an open panel.
         if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
@@ -349,9 +402,48 @@ impl IslandState {
     /// the caller should deliver a `Tick` then.
     pub fn next_deadline(&self) -> Option<Instant> {
         let notice = self.current.as_ref().map(|(_, expires)| *expires);
-        match (notice, self.pomodoro.next_deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+        let armed = self.cleaner.and_then(|c| c.armed_until);
+        [notice, self.pomodoro.next_deadline(), armed]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// The armed cleaner button turns back once `CLEAN_CONFIRM` has passed.
+    fn expire_confirm(&mut self, now: Instant) {
+        if let Some(c) = &mut self.cleaner
+            && c.armed_until.is_some_and(|until| until <= now)
+        {
+            c.armed_until = None;
+        }
+    }
+
+    /// The cleaner is what the panel shows.
+    fn cleaner_shown(&self) -> bool {
+        self.cleaner.is_some() && self.view() == View::Panel(Page::System)
+    }
+
+    /// The cleaner's button: the first click arms it, a second one before
+    /// `CLEAN_CONFIRM` runs out asks for the clean. Nothing while a clean
+    /// runs or nothing is ticked.
+    fn clean_go(&mut self, now: Instant, effects: &mut Vec<Effect>) {
+        if !self.cleaner_shown() || self.clean_busy {
+            return;
+        }
+        let Some(c) = &mut self.cleaner else {
+            return;
+        };
+        let picked = c.picked();
+        if picked.is_empty() {
+            c.armed_until = None;
+            return;
+        }
+        match c.armed_until.take() {
+            Some(until) if now < until => {
+                self.clean_busy = true;
+                effects.push(Effect::CleanDelete(picked));
+            }
+            _ => c.armed_until = Some(now + CLEAN_CONFIRM),
         }
     }
 
@@ -376,6 +468,12 @@ impl IslandState {
     fn click(&mut self, hit: Hit, now: Instant, effects: &mut Vec<Effect>) {
         if is_media_hit(&hit) && self.media_guarded(now) {
             return;
+        }
+        // Any click but the button's own disarms it.
+        if hit != Hit::CleanGo
+            && let Some(c) = &mut self.cleaner
+        {
+            c.armed_until = None;
         }
         match hit {
             Hit::Body => match self.view() {
@@ -470,10 +568,25 @@ impl IslandState {
             }
             Hit::SystemDrive(letter) => self.collapse_for(Effect::OpenDrive(letter), effects),
             Hit::SystemClean => {
-                if self.view() == View::Panel(Page::System) {
+                if self.view() == View::Panel(Page::System) && self.cleaner.is_none() {
+                    self.cleaner = Some(CleanerUi::new());
                     effects.push(Effect::OpenCleaner);
                 }
             }
+            Hit::CleanBack => {
+                if self.cleaner_shown() {
+                    self.cleaner = None;
+                }
+            }
+            Hit::CleanToggle(cat) => {
+                if self.cleaner_shown()
+                    && !self.clean_busy
+                    && let Some(c) = &mut self.cleaner
+                {
+                    c.checked[cat.index()] = !c.checked[cat.index()];
+                }
+            }
+            Hit::CleanGo => self.clean_go(now, effects),
             Hit::CliInput
             | Hit::CliStop
             | Hit::CliExpand
@@ -725,6 +838,16 @@ impl IslandState {
     /// panel opened; the layout wraps it around the list.
     pub fn reminders_page(&self) -> usize {
         self.reminders_page
+    }
+
+    /// The cleaner over the System page, while it is open.
+    pub fn cleaner(&self) -> Option<&CleanerUi> {
+        self.cleaner.as_ref()
+    }
+
+    /// A clean is running.
+    pub fn clean_busy(&self) -> bool {
+        self.clean_busy
     }
 }
 
@@ -1437,12 +1560,13 @@ mod tests {
         assert_eq!(s.view(), View::Idle);
         s.apply(Event::Hover(false), t0);
         s.apply(Event::Hover(true), t0);
-        // "Bersihkan" asks for the cleaner (no region draws it yet).
+        // "Bersihkan" opens the cleaner over the page.
         assert_eq!(
             s.apply(Event::Click(Hit::SystemClean), t0),
             vec![Effect::OpenCleaner]
         );
         assert_eq!(s.view(), View::Panel(Page::System));
+        assert!(s.cleaner().is_some());
         // Off the page, or with the panel shut, nothing.
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
@@ -1450,6 +1574,165 @@ mod tests {
         s.apply(Event::Hover(false), t0);
         assert!(s.apply(Event::Click(Hit::SystemProcess), t0).is_empty());
         assert!(s.apply(Event::Click(Hit::SystemDrive('C')), t0).is_empty());
+    }
+
+    /// The System page with the cleaner open over it.
+    fn cleaner_open(now: Instant) -> IslandState {
+        let mut s = st();
+        open_on(&mut s, Page::System, now);
+        assert_eq!(
+            s.apply(Event::Click(Hit::SystemClean), now),
+            vec![Effect::OpenCleaner]
+        );
+        s
+    }
+
+    fn default_picks() -> Vec<crate::clean::CleanCat> {
+        use crate::clean::CleanCat;
+        vec![
+            CleanCat::TempLogs,
+            CleanCat::BrowserCache,
+            CleanCat::AppCache,
+        ]
+    }
+
+    #[test]
+    fn cleaner_opens_over_the_system_page_and_goes_with_it() {
+        use crate::clean::CleanCat;
+        let t0 = Instant::now();
+        let mut s = cleaner_open(t0);
+        // A sub-view: the page is still Sistem.
+        assert_eq!(s.view(), View::Panel(Page::System));
+        let c = *s.cleaner().expect("open");
+        assert_eq!(c.picked(), default_picks());
+        assert!(!c.armed() && !s.clean_busy());
+        // A second "Bersihkan" (no region over the cleaner) changes nothing.
+        assert!(s.apply(Event::Click(Hit::SystemClean), t0).is_empty());
+        // Ticks toggle.
+        s.apply(Event::Click(Hit::CleanToggle(CleanCat::DevCache)), t0);
+        s.apply(Event::Click(Hit::CleanToggle(CleanCat::TempLogs)), t0);
+        assert_eq!(
+            s.cleaner().unwrap().picked(),
+            [
+                CleanCat::BrowserCache,
+                CleanCat::AppCache,
+                CleanCat::DevCache
+            ]
+        );
+        // Back: the System page again.
+        assert!(s.apply(Event::Click(Hit::CleanBack), t0).is_empty());
+        assert!(s.cleaner().is_none());
+        assert_eq!(s.view(), View::Panel(Page::System));
+        // Reopened, it starts from the default ticks.
+        s.apply(Event::Click(Hit::SystemClean), t0);
+        assert_eq!(s.cleaner().unwrap().picked(), default_picks());
+        // Closing the panel closes it, like another page.
+        s.apply(Event::Hover(false), t0);
+        assert!(s.cleaner().is_none());
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::System));
+        assert!(s.cleaner().is_none());
+        // So does scrolling to another page.
+        s.apply(Event::Click(Hit::SystemClean), t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert!(s.cleaner().is_none());
+        // Cleaner clicks off the cleaner do nothing.
+        for hit in [
+            Hit::CleanGo,
+            Hit::CleanBack,
+            Hit::CleanToggle(CleanCat::TempLogs),
+        ] {
+            assert!(s.apply(Event::Click(hit), t0).is_empty());
+        }
+        assert!(s.cleaner().is_none());
+        // Scan and clean results mean nothing to the reducer.
+        let scan = crate::clean::CleanEvent::Scanned(Default::default());
+        assert!(s.apply(Event::Clean(scan), t0).is_empty());
+    }
+
+    #[test]
+    fn a_single_click_never_cleans() {
+        use crate::clean::CleanCat;
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut s = cleaner_open(t0);
+        // The first click only arms the button.
+        assert!(s.apply(Event::Click(Hit::CleanGo), t0).is_empty());
+        assert!(s.cleaner().unwrap().armed());
+        assert_eq!(s.next_deadline(), Some(t0 + CLEAN_CONFIRM));
+        assert!(s.apply(Event::Click(Hit::Body), t0).is_empty());
+        assert!(!s.cleaner().unwrap().armed());
+        // Any other click disarms it: a tick, the body, the strip.
+        for other in [Hit::CleanToggle(CleanCat::DevCache), Hit::Body, Hit::Strip] {
+            s.apply(Event::Click(Hit::CleanGo), ms(10));
+            assert!(s.cleaner().unwrap().armed());
+            assert!(s.apply(Event::Click(other.clone()), ms(20)).is_empty());
+            assert!(!s.cleaner().unwrap().armed(), "{other:?}");
+            // The next click on the button arms again, never cleans.
+            assert!(s.apply(Event::Click(Hit::CleanGo), ms(30)).is_empty());
+            assert!(s.apply(Event::Click(Hit::Body), ms(40)).is_empty());
+        }
+        // The timeout disarms it (a one-shot deadline, then the Tick).
+        s.apply(Event::Click(Hit::CleanGo), ms(100));
+        let deadline = ms(100) + CLEAN_CONFIRM;
+        assert_eq!(s.next_deadline(), Some(deadline));
+        s.apply(Event::Tick, deadline);
+        assert!(!s.cleaner().unwrap().armed());
+        assert_eq!(s.next_deadline(), None);
+        // A second click exactly at the deadline is too late: it arms again.
+        let late = ms(200) + CLEAN_CONFIRM;
+        s.apply(Event::Click(Hit::CleanGo), ms(200));
+        assert!(s.apply(Event::Click(Hit::CleanGo), late).is_empty());
+        assert!(s.cleaner().unwrap().armed());
+        // Closing the panel disarms (and closes) it.
+        s.apply(Event::Hover(false), late);
+        assert!(s.cleaner().is_none());
+        assert_eq!(s.next_deadline(), None);
+        // Nothing ticked: the button does nothing at all.
+        let mut s = cleaner_open(t0);
+        for cat in default_picks() {
+            s.apply(Event::Click(Hit::CleanToggle(cat)), t0);
+        }
+        assert!(s.apply(Event::Click(Hit::CleanGo), t0).is_empty());
+        assert!(s.apply(Event::Click(Hit::CleanGo), ms(1)).is_empty());
+        assert!(!s.cleaner().unwrap().armed());
+    }
+
+    #[test]
+    fn two_clicks_clean_the_ticked_rows_once() {
+        use crate::clean::CleanCat;
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut s = cleaner_open(t0);
+        s.apply(Event::Click(Hit::CleanToggle(CleanCat::OldInstallers)), t0);
+        assert!(s.apply(Event::Click(Hit::CleanGo), ms(10)).is_empty());
+        let mut picks = default_picks();
+        picks.push(CleanCat::OldInstallers);
+        assert_eq!(
+            s.apply(Event::Click(Hit::CleanGo), ms(900)),
+            vec![Effect::CleanDelete(picks)]
+        );
+        assert!(s.clean_busy());
+        assert!(!s.cleaner().unwrap().armed());
+        // While it runs: no ticks, no second clean.
+        s.apply(Event::Click(Hit::CleanToggle(CleanCat::TempLogs)), ms(950));
+        assert!(s.cleaner().unwrap().checked[CleanCat::TempLogs.index()]);
+        for n in [1000, 1100, 1200] {
+            assert!(s.apply(Event::Click(Hit::CleanGo), ms(n)).is_empty());
+        }
+        // It may be closed meanwhile; reopened it still waits for the end.
+        s.apply(Event::Click(Hit::CleanBack), ms(1300));
+        s.apply(Event::Click(Hit::SystemClean), ms(1400));
+        assert!(s.clean_busy());
+        s.apply(Event::CleanFinished, ms(5000));
+        assert!(!s.clean_busy());
+        // Afterwards the same two clicks clean again.
+        s.apply(Event::Click(Hit::CleanGo), ms(5100));
+        assert_eq!(
+            s.apply(Event::Click(Hit::CleanGo), ms(5200)),
+            vec![Effect::CleanDelete(default_picks())]
+        );
     }
 
     #[test]

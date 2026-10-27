@@ -40,9 +40,10 @@ the warning logic live in `src/system.rs`; the page in
 - **Clicks.** A drive meter opens Explorer on its root
   (`shortcuts::Action::Drive`, ShellExecuteW). A process row opens Task
   Manager. Both collapse the panel first, as the shortcut tiles do.
-- **"Bersihkan"** stays the dimmed ghost button with a "segera" tag and
-  registers no region until the cleaner exists (`CLEANER_READY`, Runs 5–6).
-  Nothing on this page deletes anything.
+- **"Bersihkan"** is the accent button (`CLEANER_READY` is true since
+  Run 5) and opens the cleaner over this page, see [[cleaner]]. The page
+  itself deletes nothing, and it stops sampling while the cleaner covers it
+  (`system_sample_wanted(view, cleaner)`).
 - **Config.** `disk_warn_gb` (5–100 by 5, default 10) and
   `ram_warn_percent` (70–98, default 90). Both are serde defaults, so an
   older config still loads. Like the battery threshold, the file owns them
@@ -55,7 +56,7 @@ Demo: `system`, `system-low` and `bata-sistem` use fixed figures
 ([[demo-data-time-of-day]]). Shots `system` and `system-warning` are in
 [[screenshot-capture-script]].
 
-Related: [[bata-idle-power-budget]], [[bata-robot-expressions]],
+Related: [[cleaner]], [[bata-idle-power-budget]], [[bata-robot-expressions]],
 [[studio-tabular-figures-word-gaps]], [[media-click-guards]]
 
 Listed in [[index]].

@@ -172,6 +172,11 @@ $shots = @(
     # low-disk notice with Bata looking low.
     @{ name = 'system'; args = '--demo'; env = @{ DI_DEMO_STEP = 'system' } }
     @{ name = 'system-warning'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-sistem' } }
+    # The cleaner over the System page with the design's sizes (never a real
+    # scan), its button armed, and the happy notice when it is done.
+    @{ name = 'cleaner'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner' } }
+    @{ name = 'cleaner-confirm'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner-confirm' } }
+    @{ name = 'cleaner-done'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:cleaner-done' } }
     # A lyric line too long for the notch, mid-scroll with its right edge faded.
     @{ name = 'lyric-long'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-lirik-long'; DI_LYRIC_SCROLL = '4000' } }
     @{ name = 'cli'; args = '--demo-cli'; env = @{ DI_DEMO_STEP = 'cli-done' } }
