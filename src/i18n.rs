@@ -433,6 +433,7 @@ keys! {
     ExprSleep => "Tidur", "Asleep";
     ExprSad => "Lesu", "Low";
     ExprWave => "Menyapa", "Waving";
+    ExprBlink => "Kedip", "Blink";
 }
 
 /// `key` in `lang`.

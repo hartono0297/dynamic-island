@@ -577,15 +577,17 @@ impl Renderer {
         }
         // Sizes: a blink, 48 → 20 px, then three faces at the notch's 26 px.
         let base = card.y + 56.0 + 2.0 * 118.0 + 70.0;
+        let face = |expr: Expr| i18n::text(lang, expr.key());
+        let blinking = i18n::text(lang, i18n::Key::ExprBlink);
         let items: [(Expr, bool, f32, &str); 8] = [
-            (Expr::Idle, true, 48.0, "kedip"),
+            (Expr::Idle, true, 48.0, blinking),
             (Expr::Idle, false, 48.0, "48 px"),
             (Expr::Idle, false, 32.0, "32 px"),
             (Expr::Idle, false, ROBOT_COMPACT, "26 px"),
             (Expr::Idle, false, 20.0, "20 px"),
-            (Expr::Happy, false, ROBOT_COMPACT, "senang"),
-            (Expr::Alert, false, ROBOT_COMPACT, "waspada"),
-            (Expr::Sleep, false, ROBOT_COMPACT, "tidur"),
+            (Expr::Happy, false, ROBOT_COMPACT, face(Expr::Happy)),
+            (Expr::Alert, false, ROBOT_COMPACT, face(Expr::Alert)),
+            (Expr::Sleep, false, ROBOT_COMPACT, face(Expr::Sleep)),
         ];
         let step = (card.w - 40.0) / items.len() as f32;
         for (i, (expr, blink, size, label)) in items.into_iter().enumerate() {
