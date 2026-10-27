@@ -48,7 +48,7 @@ the note it links to.
 
 - **Faces** follow one priority list; panel open means no robot.
   [[bata-robot-expressions]]
-- **Power.** Only one-shot timers; idle and asleep cost nothing.
+- **Power.** Only one-shot timers (a blink every 4–7 s while awake); asleep with nothing pending runs none.
   [[bata-idle-power-budget]]
 - **Morning greeting**, once a day before noon, never spent on a locked
   screen. [[bata-morning-greeting]]

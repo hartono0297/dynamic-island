@@ -15,7 +15,7 @@ Mapping:
 
 - Accent: Blue and Red to Terracotta, Green to Sage, Orange to Ochre, Pink to
   Clay, Purple to Plum. Olive is new and has no old name.
-- Surface: Black to Espresso (Graphite is new).
+- Surface: Black to Espresso; Graphite keeps its name with new values.
 
 Unknown names still fall back to the default. When a variant is renamed or
 dropped again, add an alias instead of deleting the old name; the same macro
