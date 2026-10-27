@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
@@ -763,12 +763,13 @@ impl App {
                 date,
                 time,
                 repeat,
+                days,
             } => {
                 let unix = Local::now().timestamp();
                 // Keeps the time as set, even on a day a DST change skips it.
                 if self
                     .reminders
-                    .upsert_local(id.as_deref(), &text, date, time, repeat, unix)
+                    .upsert_local(id.as_deref(), &text, date, time, repeat, &days, unix)
                     .is_some()
                 {
                     self.persist_reminders(now);
@@ -1835,6 +1836,11 @@ fn reminder_editor_kind(
     if let Some(r) = existing
         && let Some(due) = reminders::local_time(r.due_unix)
     {
+        // A weekly one saved without days rings on its due date's weekday.
+        let days = match (r.repeat, r.days.is_empty()) {
+            (reminders::Repeat::Weekly, true) => vec![due.date().weekday()],
+            _ => r.days.clone(),
+        };
         return EditorKind::Reminder {
             id: Some(r.id.clone()),
             text: r.text.clone(),
@@ -1842,6 +1848,7 @@ fn reminder_editor_kind(
             // The time as set: on a day DST skips it, `due_unix` shows another.
             time: reminders.wall_time(&r.id).unwrap_or(due.time()),
             repeat: r.repeat,
+            days,
         };
     }
     let next_hour =
@@ -1852,6 +1859,7 @@ fn reminder_editor_kind(
         date: next_hour.date(),
         time: next_hour.time(),
         repeat: reminders::Repeat::Once,
+        days: Vec::new(),
     }
 }
 
@@ -2652,6 +2660,7 @@ mod tests {
             due_unix: due,
             repeat: reminders::Repeat::Daily,
             done: false,
+            days: Vec::new(),
         }
     }
 
@@ -2707,9 +2716,10 @@ mod tests {
         let mut store = RemindersStore::open(dir.join("reminders.json"));
         let due = local_unix(date(27), 7, 15);
         let id = store
-            .upsert(None, "Telepon ibu", due, reminders::Repeat::Weekly, 1)
+            .upsert(None, "Telepon ibu", due, reminders::Repeat::Weekly, &[], 1)
             .unwrap();
         let now = date(26).and_hms_opt(22, 40, 0).unwrap();
+        // Saved without days: the weekday of its date (a Tuesday).
         assert_eq!(
             reminder_editor_kind(&store, Some(&id), now),
             EditorKind::Reminder {
@@ -2718,8 +2728,24 @@ mod tests {
                 date: date(27),
                 time: NaiveTime::from_hms_opt(7, 15, 0).unwrap(),
                 repeat: reminders::Repeat::Weekly,
+                days: vec![chrono::Weekday::Tue],
             }
         );
+        use chrono::Weekday::{Fri, Tue};
+        let several = store
+            .upsert(
+                None,
+                "Backup",
+                due,
+                reminders::Repeat::Weekly,
+                &[Fri, Tue],
+                1,
+            )
+            .unwrap();
+        match reminder_editor_kind(&store, Some(&several), now) {
+            EditorKind::Reminder { days, .. } => assert_eq!(days, [Tue, Fri]),
+            other => panic!("{other:?}"),
+        }
         let new = |now| match reminder_editor_kind(&store, Some("r0-gone"), now) {
             EditorKind::Reminder {
                 id: None,
@@ -2727,7 +2753,8 @@ mod tests {
                 date,
                 time,
                 repeat: reminders::Repeat::Once,
-            } if text.is_empty() => (date, time),
+                days,
+            } if text.is_empty() && days.is_empty() => (date, time),
             other => panic!("{other:?}"),
         };
         assert_eq!(

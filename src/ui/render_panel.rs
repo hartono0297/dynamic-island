@@ -1548,6 +1548,7 @@ mod tests {
             due_unix: unix(at(today, 8, 5)),
             repeat: Repeat::Daily,
             done: false,
+            days: Vec::new(),
         };
         assert_eq!(reminder_row(Lang::Id, &r), ("08.05".into(), "Minum obat"));
         assert_eq!(reminder_row(Lang::En, &r), ("08:05".into(), "Minum obat"));

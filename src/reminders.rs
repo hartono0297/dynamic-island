@@ -1,9 +1,13 @@
 //! Reminders kept in a local JSON file, and the time arithmetic behind them:
 //! which are due, when the next one is, and when a repeating one comes back.
 //! Times are Unix seconds; repeats keep the local wall-clock time across
-//! offset changes (DST), so a daily 08:00 stays 08:00.
+//! offset changes (DST), so a daily 08:00 stays 08:00. A weekly reminder may
+//! ring on several weekdays (`Reminder::days`); `next_repeat` is the one rule
+//! for when a repeating reminder comes next, shared with the editor's summary.
 
-use chrono::{DateTime, Days, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{
+    DateTime, Datelike, Days, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Weekday,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -44,6 +48,12 @@ pub struct Reminder {
     /// move on to their next occurrence instead.
     #[serde(default)]
     pub done: bool,
+    /// Only for `Weekly`: the weekdays it rings on, Monday first, each once.
+    /// Empty means the weekday of the due date, as before the field existed
+    /// (and always for `Once` and `Daily`), so such a reminder saves without
+    /// the key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub days: Vec<Weekday>,
 }
 
 /// Done reminders are dropped once they are this old (seconds past due).
@@ -155,7 +165,8 @@ impl RemindersStore {
     /// `due_unix` (prefer `upsert_local`, which also knows the intended time
     /// when it falls in a skipped DST hour). Text that is empty after trimming
     /// creates or changes nothing and returns `None`. An unknown `id` is
-    /// treated as a new reminder.
+    /// treated as a new reminder. `days` as in `Reminder::days`; it is kept
+    /// only for `Weekly`.
     #[cfg_attr(not(test), allow(dead_code))] // The island saves through `upsert_local`.
     pub fn upsert(
         &mut self,
@@ -163,16 +174,19 @@ impl RemindersStore {
         text: &str,
         due_unix: i64,
         repeat: Repeat,
+        days: &[Weekday],
         now: i64,
     ) -> Option<String> {
         let wall = wall_of(&chrono::Local, due_unix);
-        self.put(id, text, due_unix, wall, repeat, now)
+        self.put(id, text, due_unix, wall, repeat, days, now)
     }
 
     /// `upsert` for a reminder set to local `date` and `time`: a repeating one
-    /// set in the past starts at its next occurrence (`first_due_at`), and the
-    /// intended `time` is kept even when that day skips it. `None` also when
-    /// the local time cannot be worked out.
+    /// starts at its first occurrence from `date` that is still to come
+    /// (`first_due_at`; a weekly one on one of its `days`), and the intended
+    /// `time` is kept even when that day skips it. `None` also when the
+    /// local time cannot be worked out.
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_local(
         &mut self,
         id: Option<&str>,
@@ -180,14 +194,16 @@ impl RemindersStore {
         date: NaiveDate,
         time: NaiveTime,
         repeat: Repeat,
+        days: &[Weekday],
         now: i64,
     ) -> Option<String> {
         let tz = chrono::Local;
         let due = at_local(&tz, date.and_time(time))?;
-        let due = first_due_at(&tz, due, Some(time), repeat, now);
-        self.put(id, text, due, Some(time), repeat, now)
+        let due = first_due_at(&tz, due, Some(time), repeat, days, now);
+        self.put(id, text, due, Some(time), repeat, days, now)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn put(
         &mut self,
         id: Option<&str>,
@@ -195,18 +211,25 @@ impl RemindersStore {
         due_unix: i64,
         wall: Option<NaiveTime>,
         repeat: Repeat,
+        days: &[Weekday],
         now: i64,
     ) -> Option<String> {
         let text = text.trim();
         if text.is_empty() {
             return None;
         }
+        let due_day = chrono::Local
+            .timestamp_opt(due_unix, 0)
+            .single()
+            .map(|t| t.date_naive().weekday());
+        let days = stored_days(repeat, days, due_day);
         let id = match id.and_then(|id| self.items.iter_mut().find(|r| r.id == id)) {
             Some(r) => {
                 r.text = text.to_owned();
                 r.due_unix = due_unix;
                 r.repeat = repeat;
                 r.done = false;
+                r.days = days;
                 r.id.clone()
             }
             None => {
@@ -217,6 +240,7 @@ impl RemindersStore {
                     due_unix,
                     repeat,
                     done: false,
+                    days,
                 });
                 id
             }
@@ -252,7 +276,7 @@ impl RemindersStore {
         // From the intended wall time, not the one `due_unix` shows: an
         // occurrence moved by a skipped hour must not move the next ones.
         let wall = self.wall.get(id).copied();
-        match advance_in(&chrono::Local, r.due_unix, wall, r.repeat, now) {
+        match advance_in(&chrono::Local, r.due_unix, wall, r.repeat, &r.days, now) {
             Some(next) => r.due_unix = next,
             None => r.done = true,
         }
@@ -334,33 +358,103 @@ pub fn due_now(reminders: &[Reminder], now: i64) -> Vec<String> {
     due.into_iter().map(|r| r.id.clone()).collect()
 }
 
+/// `days` Monday first, each once.
+pub fn sorted_days(days: &[Weekday]) -> Vec<Weekday> {
+    let mut days = days.to_vec();
+    days.sort_by_key(|d| d.num_days_from_monday());
+    days.dedup();
+    days
+}
+
+/// The `days` a reminder keeps: none unless it is `Weekly`, and none when
+/// they are just the weekday it is due on (`due_day`), so a reminder that
+/// rings on one day keeps the shape of the file before `days` existed.
+fn stored_days(repeat: Repeat, days: &[Weekday], due_day: Option<Weekday>) -> Vec<Weekday> {
+    if repeat != Repeat::Weekly {
+        return Vec::new();
+    }
+    let days = sorted_days(days);
+    if days.len() == 1 && Some(days[0]) == due_day {
+        Vec::new()
+    } else {
+        days
+    }
+}
+
+/// The rule for when a repeating reminder rings next, shared by the store
+/// (in a time zone) and the editor's summary (in local dates): the first
+/// date from `start` on (`inclusive`) or after it that is one of its days
+/// and for which `ring` gives a value (an occurrence still to come), with
+/// that value. Its days: every day for `Daily`; for `Weekly` the weekdays in
+/// `days`, or `start`'s own weekday when `days` is empty. `today` is the
+/// local date of now: the dates before yesterday cannot ring after now and
+/// are skipped by whole periods. `None` for a one-off, or at the end of the
+/// calendar.
+pub fn next_repeat<T>(
+    repeat: Repeat,
+    start: NaiveDate,
+    days: &[Weekday],
+    inclusive: bool,
+    today: NaiveDate,
+    mut ring: impl FnMut(NaiveDate) -> Option<T>,
+) -> Option<(NaiveDate, T)> {
+    let step = repeat.step_days()?;
+    let rings_on = |d: NaiveDate| match repeat {
+        Repeat::Weekly if days.is_empty() => d.weekday() == start.weekday(),
+        Repeat::Weekly => days.contains(&d.weekday()),
+        _ => true,
+    };
+    let mut date = if inclusive { start } else { start.succ_opt()? };
+    // Whole periods (a day, a week) whose dates all lie before yesterday:
+    // the pattern repeats each period, so the dates left are the same days.
+    let behind = (today - date).num_days() - 1;
+    if behind >= step as i64 {
+        date = date.checked_add_days(Days::new(behind as u64 / step * step))?;
+    }
+    loop {
+        if rings_on(date)
+            && let Some(value) = ring(date)
+        {
+            return Some((date, value));
+        }
+        date = date.succ_opt()?;
+    }
+}
+
+/// The occurrence of a repeating reminder in `tz` at wall time `time` after
+/// `now`, from `start` (`inclusive`) or the day after (`next_repeat`).
+fn next_in<Tz: TimeZone>(
+    tz: &Tz,
+    start: NaiveDate,
+    time: NaiveTime,
+    repeat: Repeat,
+    days: &[Weekday],
+    inclusive: bool,
+    now: i64,
+) -> Option<i64> {
+    let today = tz.timestamp_opt(now, 0).single()?.naive_local().date();
+    let ring = |d: NaiveDate| at_local(tz, d.and_time(time)).filter(|&at| at > now);
+    next_repeat(repeat, start, days, inclusive, today, ring).map(|(_, at)| at)
+}
+
 /// The next occurrence of a repeating reminder (`None` for a one-off) after
 /// both `due` and `now` in time zone `tz`, on the days after `due`'s local
-/// date at the wall-clock time `wall` (`None`: the wall time of `due`). Pass
-/// the intended time: when `due` fell in a skipped DST hour, its own wall
-/// time is an hour late.
+/// date that are its `days` (`Reminder::days`; empty: `due`'s weekday for a
+/// weekly one), at the wall-clock time `wall` (`None`: the wall time of
+/// `due`). Pass the intended time: when `due` fell in a skipped DST hour,
+/// its own wall time is an hour late.
 pub fn advance_in<Tz: TimeZone>(
     tz: &Tz,
     due: i64,
     wall: Option<NaiveTime>,
     repeat: Repeat,
+    days: &[Weekday],
     now: i64,
 ) -> Option<i64> {
-    let step = repeat.step_days()?;
+    repeat.step_days()?;
     let shown = tz.timestamp_opt(due, 0).single()?.naive_local();
     let (base, time) = (shown.date(), wall.unwrap_or(shown.time()));
-    let today = tz.timestamp_opt(now, 0).single()?.naive_local().date();
-    // Skip the whole steps that are surely past; the loop finds the exact one.
-    let behind = (today - base).num_days().max(0) as u64;
-    let mut k = (behind / step).saturating_sub(1).max(1);
-    loop {
-        let date = base.checked_add_days(Days::new(k * step))?;
-        let at = at_local(tz, date.and_time(time))?;
-        if at > now {
-            return Some(at);
-        }
-        k += 1;
-    }
+    next_in(tz, base, time, repeat, days, false, now)
 }
 
 /// Unix seconds of a local date and time. In a fold (clocks turned back) the
@@ -385,19 +479,29 @@ pub fn local_time(unix: i64) -> Option<NaiveDateTime> {
 
 /// The due time to store for a reminder set to `due` in `tz`: a repeating one
 /// set in the past starts at its next occurrence instead of firing at once,
-/// repeating at wall-clock time `wall` (see `advance_in`).
+/// repeating at wall-clock time `wall` (see `advance_in`). A weekly one
+/// whose `days` leave out `due`'s weekday starts on the first of them from
+/// `due`'s date on.
 fn first_due_at<Tz: TimeZone>(
     tz: &Tz,
     due: i64,
     wall: Option<NaiveTime>,
     repeat: Repeat,
+    days: &[Weekday],
     now: i64,
 ) -> i64 {
-    if repeat == Repeat::Once || due > now {
-        due
-    } else {
-        advance_in(tz, due, wall, repeat, now).unwrap_or(due)
+    if repeat == Repeat::Once {
+        return due;
     }
+    let Some(shown) = tz.timestamp_opt(due, 0).single().map(|t| t.naive_local()) else {
+        return due;
+    };
+    let (start, time) = (shown.date(), wall.unwrap_or(shown.time()));
+    let on_its_day = repeat == Repeat::Daily || days.is_empty() || days.contains(&start.weekday());
+    if due > now && on_its_day {
+        return due;
+    }
+    next_in(tz, start, time, repeat, days, true, now).unwrap_or(due)
 }
 
 #[cfg(test)]
@@ -508,12 +612,13 @@ mod tests {
             due_unix: due,
             repeat,
             done: false,
+            days: Vec::new(),
         }
     }
 
     #[test]
     fn once_never_advances() {
-        assert_eq!(advance_in(&Utc, 1000, None, Repeat::Once, 5000), None);
+        assert_eq!(advance_in(&Utc, 1000, None, Repeat::Once, &[], 5000), None);
     }
 
     #[test]
@@ -522,40 +627,40 @@ mod tests {
         let due = at(1, 8);
         // Dismissed a minute after it fired: tomorrow at the same time.
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Daily, due + 60),
+            advance_in(&Utc, due, None, Repeat::Daily, &[], due + 60),
             Some(at(2, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Weekly, due + 60),
+            advance_in(&Utc, due, None, Repeat::Weekly, &[], due + 60),
             Some(at(8, 8))
         );
         // Off for days: the first occurrence still to come, not one per day missed.
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Daily, at(10, 9)),
+            advance_in(&Utc, due, None, Repeat::Daily, &[], at(10, 9)),
             Some(at(11, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Daily, at(10, 7)),
+            advance_in(&Utc, due, None, Repeat::Daily, &[], at(10, 7)),
             Some(at(10, 8))
         );
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Weekly, at(20, 12)),
+            advance_in(&Utc, due, None, Repeat::Weekly, &[], at(20, 12)),
             Some(at(22, 8))
         );
         // Exactly at an occurrence: the next one (strictly after now).
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Weekly, at(8, 8)),
+            advance_in(&Utc, due, None, Repeat::Weekly, &[], at(8, 8)),
             Some(at(15, 8))
         );
         // Not due yet (dismissed early): still the occurrence after this one.
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Daily, due - 3600),
+            advance_in(&Utc, due, None, Repeat::Daily, &[], due - 3600),
             Some(at(2, 8))
         );
         // A year away still lands on the right day.
         let later = utc(2027, 6, 1, 9, 0).and_utc().timestamp();
         assert_eq!(
-            advance_in(&Utc, due, None, Repeat::Daily, later),
+            advance_in(&Utc, due, None, Repeat::Daily, &[], later),
             Some(utc(2027, 6, 2, 8, 0).and_utc().timestamp())
         );
     }
@@ -564,17 +669,17 @@ mod tests {
     fn repeats_keep_the_local_time_across_dst() {
         // 08:00 the day before clocks go forward: the next day is 23 h later.
         let due = cet(2026, 3, 28, 8, 0);
-        let next = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Daily, &[], due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 3, 29, 8, 0));
         assert_eq!(next - due, 23 * 3600);
         // ...and back in autumn: 25 h.
         let due = cet(2026, 10, 24, 8, 0);
-        let next = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Daily, &[], due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 10, 25, 8, 0));
         assert_eq!(next - due, 25 * 3600);
         // Weekly across the change.
         let due = cet(2026, 3, 25, 19, 30);
-        let next = advance_in(&Cet, due, None, Repeat::Weekly, due + 60).unwrap();
+        let next = advance_in(&Cet, due, None, Repeat::Weekly, &[], due + 60).unwrap();
         assert_eq!(wall(next), utc(2026, 4, 1, 19, 30));
     }
 
@@ -584,22 +689,22 @@ mod tests {
         // the day after at 02:30 again.
         let half_two = NaiveTime::from_hms_opt(2, 30, 0);
         let due = cet(2026, 3, 28, 2, 30);
-        let gap = advance_in(&Cet, due, half_two, Repeat::Daily, due + 60).unwrap();
+        let gap = advance_in(&Cet, due, half_two, Repeat::Daily, &[], due + 60).unwrap();
         assert_eq!(wall(gap), utc(2026, 3, 29, 3, 30));
         // Advancing from the stored (moved) instant goes back to 02:30...
-        let after = advance_in(&Cet, gap, half_two, Repeat::Daily, gap + 60).unwrap();
+        let after = advance_in(&Cet, gap, half_two, Repeat::Daily, &[], gap + 60).unwrap();
         assert_eq!(wall(after), utc(2026, 3, 30, 2, 30));
-        let weekly = advance_in(&Cet, gap, half_two, Repeat::Weekly, gap + 60).unwrap();
+        let weekly = advance_in(&Cet, gap, half_two, Repeat::Weekly, &[], gap + 60).unwrap();
         assert_eq!(wall(weekly), utc(2026, 4, 5, 2, 30));
         // ...which the instant alone cannot tell: it reads 03:30.
-        let drifted = advance_in(&Cet, gap, None, Repeat::Daily, gap + 60).unwrap();
+        let drifted = advance_in(&Cet, gap, None, Repeat::Daily, &[], gap + 60).unwrap();
         assert_eq!(wall(drifted), utc(2026, 3, 30, 3, 30));
         // Set at 02:30 on that very day and already past: next day 02:30.
-        let first = first_due_at(&Cet, gap, half_two, Repeat::Daily, gap + 60);
+        let first = first_due_at(&Cet, gap, half_two, Repeat::Daily, &[], gap + 60);
         assert_eq!(wall(first), utc(2026, 3, 30, 2, 30));
         // 02:30 happens twice on 25 Oct: the first one.
         let due = cet(2026, 10, 24, 2, 30);
-        let fold = advance_in(&Cet, due, None, Repeat::Daily, due + 60).unwrap();
+        let fold = advance_in(&Cet, due, None, Repeat::Daily, &[], due + 60).unwrap();
         assert_eq!(wall(fold), utc(2026, 10, 25, 2, 30));
         assert_eq!(fold, utc(2026, 10, 25, 0, 30).and_utc().timestamp());
     }
@@ -609,22 +714,237 @@ mod tests {
         let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
         let now = at(5, 10);
         assert_eq!(
-            first_due_at(&Utc, at(5, 8), None, Repeat::Daily, now),
+            first_due_at(&Utc, at(5, 8), None, Repeat::Daily, &[], now),
             at(6, 8)
         );
         assert_eq!(
-            first_due_at(&Utc, at(5, 8), None, Repeat::Weekly, now),
+            first_due_at(&Utc, at(5, 8), None, Repeat::Weekly, &[], now),
             at(12, 8)
         );
         assert_eq!(
-            first_due_at(&Utc, at(5, 12), None, Repeat::Daily, now),
+            first_due_at(&Utc, at(5, 12), None, Repeat::Daily, &[], now),
             at(5, 12)
         );
         // A past one-off stays as it is (the editor refuses it).
         assert_eq!(
-            first_due_at(&Utc, at(5, 8), None, Repeat::Once, now),
+            first_due_at(&Utc, at(5, 8), None, Repeat::Once, &[], now),
             at(5, 8)
         );
+    }
+
+    use chrono::Weekday::{Fri, Mon, Sat, Sun, Thu, Tue, Wed};
+
+    #[test]
+    fn multi_day_weekly_steps_through_its_days() {
+        // 1 June 2026 is a Monday.
+        let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
+        let days = [Mon, Wed, Fri];
+        let step = |due: i64| advance_in(&Utc, due, None, Repeat::Weekly, &days, due + 60);
+        let wed = step(at(1, 8)).unwrap();
+        assert_eq!(wed, at(3, 8));
+        let fri = step(wed).unwrap();
+        assert_eq!(fri, at(5, 8));
+        assert_eq!(step(fri), Some(at(8, 8)), "then the next Monday");
+        // Dismissed early, before it rang: still the day after its own.
+        assert_eq!(
+            advance_in(&Utc, at(3, 8), None, Repeat::Weekly, &days, at(3, 7)),
+            Some(at(5, 8))
+        );
+    }
+
+    #[test]
+    fn multi_day_weekly_jumps_over_missed_weeks() {
+        let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
+        let days = [Mon, Wed, Fri];
+        let due = at(1, 8);
+        let next = |now| advance_in(&Utc, due, None, Repeat::Weekly, &days, now);
+        // Off for three weeks: the first one still to come.
+        assert_eq!(next(at(25, 12)), Some(at(26, 8)));
+        assert_eq!(next(at(26, 9)), Some(at(29, 8)));
+        assert_eq!(next(at(24, 7)), Some(at(24, 8)), "later that day");
+        // A year on lands on the right weekday.
+        let later = utc(2027, 6, 2, 9, 0).and_utc().timestamp(); // a Wednesday
+        assert_eq!(
+            next(later),
+            Some(utc(2027, 6, 4, 8, 0).and_utc().timestamp())
+        );
+    }
+
+    #[test]
+    fn weekly_with_no_days_is_the_old_weekly() {
+        let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
+        let due = at(3, 8); // a Wednesday
+        for now in (0..40).map(|i| due - 86_400 + i * 43_200 + 1_800) {
+            let old = advance_in(&Utc, due, None, Repeat::Weekly, &[], now);
+            let own = advance_in(&Utc, due, None, Repeat::Weekly, &[Wed], now);
+            assert_eq!(old, own, "{now}");
+            assert_eq!(
+                wall_of(&Utc, old.unwrap()),
+                NaiveTime::from_hms_opt(8, 0, 0)
+            );
+            assert_eq!(
+                first_due_at(&Utc, due, None, Repeat::Weekly, &[], now),
+                first_due_at(&Utc, due, None, Repeat::Weekly, &[Wed], now)
+            );
+        }
+    }
+
+    #[test]
+    fn weekly_starting_on_a_day_it_skips() {
+        let at = |d, h| utc(2026, 6, d, h, 0).and_utc().timestamp();
+        // Set for Tuesday 2 June, but only on Mondays and Thursdays.
+        let start = at(2, 8);
+        let days = [Mon, Thu];
+        assert_eq!(
+            first_due_at(&Utc, start, None, Repeat::Weekly, &days, at(1, 0)),
+            at(4, 8)
+        );
+        // Set in the past: the first of its days still to come.
+        assert_eq!(
+            first_due_at(&Utc, start, None, Repeat::Weekly, &days, at(4, 9)),
+            at(8, 8)
+        );
+        // A start on one of its days, still ahead: that very day.
+        assert_eq!(
+            first_due_at(&Utc, at(4, 8), None, Repeat::Weekly, &days, at(1, 0)),
+            at(4, 8)
+        );
+        // Later the same day it was set for, on one of its days.
+        assert_eq!(
+            first_due_at(&Utc, at(4, 8), None, Repeat::Weekly, &days, at(4, 7)),
+            at(4, 8)
+        );
+    }
+
+    #[test]
+    fn multi_day_weekly_across_dst() {
+        // Spring: Sunday 29 Mar skips 02:00-03:00. Wed and Sun at 19:30.
+        let due = cet(2026, 3, 25, 19, 30);
+        let sun = advance_in(&Cet, due, None, Repeat::Weekly, &[Wed, Sun], due + 60).unwrap();
+        assert_eq!(wall(sun), utc(2026, 3, 29, 19, 30));
+        assert_eq!(sun - due, 4 * 86_400 - 3600, "an hour shorter");
+        // Autumn: 02:30 happens twice on Sunday 25 Oct; the first one rings.
+        let half_two = NaiveTime::from_hms_opt(2, 30, 0);
+        let due = cet(2026, 10, 23, 2, 30);
+        let fold = advance_in(&Cet, due, half_two, Repeat::Weekly, &[Fri, Sun], due + 60);
+        let fold = fold.unwrap();
+        assert_eq!(wall(fold), utc(2026, 10, 25, 2, 30));
+        assert_eq!(fold, utc(2026, 10, 25, 0, 30).and_utc().timestamp());
+        // Not again at the second 02:30: on to Friday.
+        let fri = advance_in(&Cet, fold, half_two, Repeat::Weekly, &[Fri, Sun], fold + 60);
+        assert_eq!(wall(fri.unwrap()), utc(2026, 10, 30, 2, 30));
+    }
+
+    #[test]
+    fn multi_day_weekly_keeps_its_time_after_a_skipped_hour() {
+        // Saturday, Sunday and Monday at 02:30; Sunday 29 Mar skips 02:30.
+        let half_two = NaiveTime::from_hms_opt(2, 30, 0);
+        let days = [Sat, Sun, Mon];
+        let due = cet(2026, 3, 28, 2, 30);
+        let gap = advance_in(&Cet, due, half_two, Repeat::Weekly, &days, due + 60).unwrap();
+        assert_eq!(wall(gap), utc(2026, 3, 29, 3, 30));
+        let mon = advance_in(&Cet, gap, half_two, Repeat::Weekly, &days, gap + 60).unwrap();
+        assert_eq!(wall(mon), utc(2026, 3, 30, 2, 30), "back at 02:30");
+        let drifted = advance_in(&Cet, gap, None, Repeat::Weekly, &days, gap + 60).unwrap();
+        assert_eq!(wall(drifted), utc(2026, 3, 30, 3, 30));
+        // Set for that Sunday at 02:30 and already past: Monday 02:30.
+        let first = first_due_at(&Cet, gap, half_two, Repeat::Weekly, &days, gap + 60);
+        assert_eq!(wall(first), utc(2026, 3, 30, 2, 30));
+    }
+
+    #[test]
+    fn next_repeat_is_none_for_a_one_off() {
+        let d = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        assert_eq!(next_repeat(Repeat::Once, d, &[], true, d, Some), None);
+        let daily = next_repeat(Repeat::Daily, d, &[], false, d, Some);
+        assert_eq!(daily.map(|(d, _)| d), d.succ_opt());
+    }
+
+    #[test]
+    fn days_are_kept_sorted_and_only_for_weekly() {
+        assert_eq!(sorted_days(&[Fri, Mon, Wed, Mon]), [Mon, Wed, Fri]);
+        assert_eq!(sorted_days(&[Sun, Mon]), [Mon, Sun], "Monday first");
+        let tmp = TempDir::new("days");
+        let mut store = RemindersStore::open(tmp.file());
+        // Tuesday 4 June 2030, an hour from now.
+        let tue = NaiveDate::from_ymd_opt(2030, 6, 4).unwrap();
+        let nine = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let now = local_unix(tue, nine).unwrap() - 3600;
+        let put = |store: &mut RemindersStore, repeat, days: &[Weekday]| {
+            let id = store
+                .upsert_local(None, "x", tue, nine, repeat, days, now)
+                .unwrap();
+            store.get(&id).unwrap().clone()
+        };
+        let r = put(&mut store, Repeat::Weekly, &[Fri, Mon, Fri]);
+        assert_eq!(r.days, [Mon, Fri]);
+        // Starts on the first of them: Friday 7 June.
+        let first = local_time(r.due_unix).unwrap();
+        assert_eq!(first.date(), NaiveDate::from_ymd_opt(2030, 6, 7).unwrap());
+        assert_eq!(first.time(), nine);
+        // Just the day it starts on: stored as an old weekly one.
+        assert!(put(&mut store, Repeat::Weekly, &[Tue]).days.is_empty());
+        // One other day: the first due is that day, so the same.
+        let thu = put(&mut store, Repeat::Weekly, &[Thu]);
+        assert!(thu.days.is_empty());
+        assert_eq!(local_time(thu.due_unix).unwrap().date().weekday(), Thu);
+        // Days mean nothing to a daily or one-off reminder.
+        assert!(put(&mut store, Repeat::Daily, &[Mon, Wed]).days.is_empty());
+        assert!(put(&mut store, Repeat::Once, &[Mon]).days.is_empty());
+        // Dismissing moves it to its next day.
+        let id = store
+            .upsert_local(None, "y", tue, nine, Repeat::Weekly, &[Tue, Fri], now)
+            .unwrap();
+        let due = store.get(&id).unwrap().due_unix;
+        assert!(store.mark_done_or_advance(&id, due + 60));
+        let next = local_time(store.get(&id).unwrap().due_unix).unwrap();
+        assert_eq!(next.date(), NaiveDate::from_ymd_opt(2030, 6, 7).unwrap());
+    }
+
+    #[test]
+    fn old_reminders_file_loads_and_saves_without_days() {
+        let tmp = TempDir::new("old-file");
+        let old = serde_json::to_string_pretty(&serde_json::json!([
+            {"id": "r1-0", "text": "Backup", "due_unix": 1_780_000_000_i64,
+             "repeat": "weekly", "done": false, "time": "09:00:00"},
+            {"id": "r1-1", "text": "Obat", "due_unix": 1_780_100_000_i64,
+             "repeat": "daily", "done": false, "time": "08:00:00"},
+        ]))
+        .unwrap();
+        std::fs::write(tmp.file(), &old).unwrap();
+        let mut store = RemindersStore::open(tmp.file());
+        assert!(!store.load_failed());
+        let r = store.get("r1-0").unwrap();
+        assert_eq!((r.repeat, r.days.is_empty()), (Repeat::Weekly, true));
+        assert_eq!(store.wall_time("r1-0"), NaiveTime::from_hms_opt(9, 0, 0));
+        assert_eq!(store.get("r1-1").unwrap().repeat, Repeat::Daily);
+        store.save().unwrap();
+        let saved = std::fs::read_to_string(tmp.file()).unwrap();
+        assert_eq!(saved, old, "the same file, no `days` key");
+    }
+
+    #[test]
+    fn new_reminders_file_with_days_round_trips() {
+        let tmp = TempDir::new("new-file");
+        let new = serde_json::to_string_pretty(&serde_json::json!([
+            {"id": "r1-0", "text": "Backup", "due_unix": 1_780_000_000_i64,
+             "repeat": "weekly", "done": false, "days": ["Mon", "Wed", "Fri"],
+             "time": "09:00:00"},
+        ]))
+        .unwrap();
+        std::fs::write(tmp.file(), &new).unwrap();
+        let mut store = RemindersStore::open(tmp.file());
+        assert!(!store.load_failed());
+        assert_eq!(store.get("r1-0").unwrap().days, [Mon, Wed, Fri]);
+        store.save().unwrap();
+        assert_eq!(std::fs::read_to_string(tmp.file()).unwrap(), new);
+        // Day names load in any case or length, as chrono reads them.
+        let (items, keep) = load(Ok(
+            r#"[{"id":"a","text":"x","due_unix":1,"repeat":"weekly","days":["tuesday","SAT"]}]"#
+                .into(),
+        ));
+        assert!(!keep);
+        assert_eq!(items[0].reminder.days, [Tue, Sat]);
     }
 
     #[test]
@@ -649,13 +969,13 @@ mod tests {
         let tmp = TempDir::new("missed");
         let mut store = RemindersStore::open(tmp.file());
         let yesterday = store
-            .upsert(None, "kemarin", 1_000, Repeat::Once, 1)
+            .upsert(None, "kemarin", 1_000, Repeat::Once, &[], 1)
             .unwrap();
         let daily = store
-            .upsert(None, "harian", 2_000, Repeat::Daily, 1)
+            .upsert(None, "harian", 2_000, Repeat::Daily, &[], 1)
             .unwrap();
         let later = store
-            .upsert(None, "nanti", 90_000, Repeat::Once, 1)
+            .upsert(None, "nanti", 90_000, Repeat::Once, &[], 1)
             .unwrap();
         store.save().unwrap();
         // The island starts again long after both were due.
@@ -676,8 +996,12 @@ mod tests {
     fn mark_done_finishes_once_and_drops_old_done() {
         let tmp = TempDir::new("done");
         let mut store = RemindersStore::open(tmp.file());
-        let old = store.upsert(None, "lama", 100, Repeat::Once, 1).unwrap();
-        let new = store.upsert(None, "baru", 200, Repeat::Once, 1).unwrap();
+        let old = store
+            .upsert(None, "lama", 100, Repeat::Once, &[], 1)
+            .unwrap();
+        let new = store
+            .upsert(None, "baru", 200, Repeat::Once, &[], 1)
+            .unwrap();
         assert!(store.mark_done_or_advance(&old, 150));
         assert!(store.get(&old).unwrap().done);
         assert!(!store.mark_done_or_advance(&old, 150), "already done");
@@ -697,10 +1021,12 @@ mod tests {
         let tmp = TempDir::new("upsert");
         let mut store = RemindersStore::open(tmp.file());
         let b = store
-            .upsert(None, " minum obat ", 300, Repeat::Daily, 7)
+            .upsert(None, " minum obat ", 300, Repeat::Daily, &[], 7)
             .unwrap();
         assert!(b.starts_with("r7-"), "{b}");
-        let a = store.upsert(None, "telepon", 100, Repeat::Once, 7).unwrap();
+        let a = store
+            .upsert(None, "telepon", 100, Repeat::Once, &[], 7)
+            .unwrap();
         assert_ne!(a, b);
         let ids: Vec<&str> = store.upcoming().iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, [a.as_str(), b.as_str()]);
@@ -708,15 +1034,15 @@ mod tests {
         // Editing moves it and keeps the id; an edited done reminder is live again.
         store.mark_done_or_advance(&a, 150);
         assert_eq!(
-            store.upsert(Some(&a), "telepon ibu", 400, Repeat::Weekly, 8),
+            store.upsert(Some(&a), "telepon ibu", 400, Repeat::Weekly, &[], 8),
             Some(a.clone())
         );
         let r = store.get(&a).unwrap();
         assert_eq!((r.due_unix, r.repeat, r.done), (400, Repeat::Weekly, false));
         assert_eq!(store.upcoming()[1].id, a);
         // Empty text changes nothing.
-        assert_eq!(store.upsert(Some(&a), "  ", 1, Repeat::Once, 9), None);
-        assert_eq!(store.upsert(None, "\n", 1, Repeat::Once, 9), None);
+        assert_eq!(store.upsert(Some(&a), "  ", 1, Repeat::Once, &[], 9), None);
+        assert_eq!(store.upsert(None, "\n", 1, Repeat::Once, &[], 9), None);
         assert_eq!(store.list().len(), 2);
         assert_eq!(store.get(&a).unwrap().text, "telepon ibu");
         assert!(store.delete(&a));
@@ -728,9 +1054,9 @@ mod tests {
         let tmp = TempDir::new("roundtrip");
         let mut store = RemindersStore::open(tmp.file());
         let a = store
-            .upsert(None, "a \"kutip\"", 5, Repeat::Once, 1)
+            .upsert(None, "a \"kutip\"", 5, Repeat::Once, &[], 1)
             .unwrap();
-        store.upsert(None, "b", 9, Repeat::Weekly, 1).unwrap();
+        store.upsert(None, "b", 9, Repeat::Weekly, &[], 1).unwrap();
         store.mark_done_or_advance(&a, 6);
         store.save().unwrap();
         assert!(!tmp.0.join("reminders.json.tmp").exists());
@@ -739,7 +1065,7 @@ mod tests {
         assert!(!reopened.load_failed());
         // The id counter never collides with saved ids from the same second.
         let mut reopened = reopened;
-        let c = reopened.upsert(None, "c", 7, Repeat::Once, 1).unwrap();
+        let c = reopened.upsert(None, "c", 7, Repeat::Once, &[], 1).unwrap();
         assert!(store.get(&c).is_none(), "id {c} collided");
     }
 
@@ -752,7 +1078,7 @@ mod tests {
         // Set in the past: a repeating one starts at its next time.
         let now = local_unix(date, eight).unwrap() + 3600;
         let id = store
-            .upsert_local(None, "obat", date, eight, Repeat::Daily, now)
+            .upsert_local(None, "obat", date, eight, Repeat::Daily, &[], now)
             .unwrap();
         let r = store.get(&id).unwrap().clone();
         assert!(r.due_unix > now);
@@ -770,7 +1096,9 @@ mod tests {
         // `upsert` takes the wall time of the instant; delete forgets it.
         let mut store = reopened;
         let nine = local_unix(date, NaiveTime::from_hms_opt(9, 15, 0).unwrap()).unwrap();
-        let other = store.upsert(None, "lain", nine, Repeat::Weekly, 1).unwrap();
+        let other = store
+            .upsert(None, "lain", nine, Repeat::Weekly, &[], 1)
+            .unwrap();
         assert_eq!(store.wall_time(&other), NaiveTime::from_hms_opt(9, 15, 0));
         assert!(store.delete(&other));
         assert_eq!(store.wall_time(&other), None);
@@ -804,7 +1132,7 @@ mod tests {
         let mut store = RemindersStore::open(tmp.file());
         assert!(store.list().is_empty());
         assert!(store.load_failed());
-        store.upsert(None, "baru", 1, Repeat::Once, 1);
+        store.upsert(None, "baru", 1, Repeat::Once, &[], 1);
         assert_eq!(std::fs::read_to_string(tmp.file()).unwrap(), "{not json");
         store.save().unwrap();
         assert!(!store.load_failed());

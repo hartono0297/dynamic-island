@@ -7,10 +7,10 @@
 //! or a notice is made, so a change shows on the next redraw; notices already
 //! made keep their text. Hook and CLI output stays Indonesian.
 
-use chrono::{Datelike, Days, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::reminders::Repeat;
+use crate::reminders::{self, Repeat};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Lang {
@@ -289,6 +289,21 @@ keys! {
     PeriodNoon => "siang", "noon";
     PeriodAfternoon => "sore", "afternoon";
     PeriodEvening => "malam", "evening";
+    // The reminder's quick-time pills.
+    QuickHalfHour => "30 mnt lagi", "In 30 min";
+    QuickHour => "1 jam lagi", "In 1 hour";
+    QuickTonight => "Nanti malam", "Tonight";
+    QuickTomorrowMorning => "Besok pagi", "Tomorrow morning";
+    ReminderPickHint => "Pilih tanggal dan jam, atau pakai pintasan.",
+        "Pick a date and time, or use a shortcut.";
+    // The weekly reminder's day chips, Monday first.
+    DayLetterMon => "S", "M";
+    DayLetterTue => "S", "T";
+    DayLetterWed => "R", "W";
+    DayLetterThu => "K", "T";
+    DayLetterFri => "J", "F";
+    DayLetterSat => "S", "S";
+    DayLetterSun => "M", "S";
 
     // Tray menu.
     MenuStylePill => "Gaya: Pill", "Style: Pill";
@@ -592,7 +607,31 @@ fn weekday(d: NaiveDate) -> usize {
 
 /// "Sen", "Mon".
 pub fn day_short(lang: Lang, d: NaiveDate) -> &'static str {
-    pick(lang, DAYS_SHORT_ID, DAYS_SHORT_EN)[weekday(d)]
+    weekday_short(lang, d.weekday())
+}
+
+/// "Sen", "Mon".
+pub fn weekday_short(lang: Lang, d: Weekday) -> &'static str {
+    pick(lang, DAYS_SHORT_ID, DAYS_SHORT_EN)[d.num_days_from_monday() as usize]
+}
+
+/// "Senin", "Monday".
+pub fn weekday_long(lang: Lang, d: Weekday) -> &'static str {
+    pick(lang, DAYS_ID, DAYS_EN)[d.num_days_from_monday() as usize]
+}
+
+/// A weekly reminder's day chip: "S S R K J S M" / "M T W T F S S".
+pub fn weekday_letter(lang: Lang, d: Weekday) -> &'static str {
+    let key = match d {
+        Weekday::Mon => Key::DayLetterMon,
+        Weekday::Tue => Key::DayLetterTue,
+        Weekday::Wed => Key::DayLetterWed,
+        Weekday::Thu => Key::DayLetterThu,
+        Weekday::Fri => Key::DayLetterFri,
+        Weekday::Sat => Key::DayLetterSat,
+        Weekday::Sun => Key::DayLetterSun,
+    };
+    text(lang, key)
 }
 
 /// "25 Okt", "25 Oct".
@@ -756,27 +795,20 @@ impl ReminderSummary {
     }
 }
 
-/// The first `start + k * step_days` (k ≥ 0) whose `time` is after `now`:
-/// when a repeating reminder rings next. Mirrors how the store moves a
-/// repeating reminder set in the past to its next occurrence.
+/// The date a repeating reminder starting on `start` rings next: the first
+/// of its days from `start` on whose `time` is after `now`, by the store's
+/// own rule (`reminders::next_repeat`): every day for `Daily`, the weekdays
+/// in `days` (or `start`'s when empty) for `Weekly`. A one-off rings on
+/// `start`.
 pub fn next_occurrence(
+    repeat: Repeat,
     start: NaiveDate,
+    days: &[Weekday],
     time: NaiveTime,
-    step_days: u64,
     now: NaiveDateTime,
 ) -> NaiveDate {
-    let step = step_days.max(1);
-    let behind = now.date().signed_duration_since(start).num_days().max(0) as u64;
-    let mut k = (behind / step).saturating_sub(1);
-    loop {
-        let Some(d) = start.checked_add_days(Days::new(k * step)) else {
-            return start;
-        };
-        if d.and_time(time) > now {
-            return d;
-        }
-        k += 1;
-    }
+    let ring = |d: NaiveDate| (d.and_time(time) > now).then_some(());
+    reminders::next_repeat(repeat, start, days, true, now.date(), ring).map_or(start, |(d, ())| d)
 }
 
 /// "4 jam lagi", "25 menit lagi" / "in 4 hours", "in 1 hour", "in 25 min":
@@ -805,18 +837,23 @@ fn due_in(lang: Lang, seconds: i64) -> Option<String> {
 /// "Sekali, **hari ini jam 16.30** · 4 jam lagi",
 /// "Sekali, **kemarin jam 16.30** · sudah lewat",
 /// "Tiap hari jam **08.00** · berikutnya besok",
-/// "Tiap **Rabu jam 09.00** · berikutnya Rab, 28 Okt" (and in English).
+/// "Tiap **Rabu jam 09.00** · berikutnya Rab, 28 Okt",
+/// "Tiap **Sen, Rab, Jum jam 09.00** · berikutnya Rab, 28 Okt" (and in
+/// English). `days` are a weekly reminder's weekdays (`Reminder::days`;
+/// empty: `date`'s).
 pub fn reminder_summary(
     lang: Lang,
     repeat: Repeat,
     date: NaiveDate,
+    days: &[Weekday],
     time: NaiveTime,
     now: NaiveDateTime,
 ) -> ReminderSummary {
     let today = now.date();
     let at = time_label(lang, time);
-    let next = |step: u64| {
-        let d = next_occurrence(date, time, step, now);
+    let days = reminders::sorted_days(days);
+    let next = || {
+        let d = next_occurrence(repeat, date, &days, time, now);
         let word = pick(lang, "berikutnya", "next");
         format!(" · {word} {}", day_phrase(lang, d, today))
     };
@@ -845,18 +882,27 @@ pub fn reminder_summary(
         Repeat::Daily => ReminderSummary {
             lead: pick(lang, "Tiap hari jam ", "Every day at ").to_owned(),
             bold: at,
-            tail: next(1),
+            tail: next(),
             passed: false,
         },
         Repeat::Weekly => {
-            let weekday = day_long(lang, date);
+            // One day by its full name, several by their short ones.
+            let weekdays = match days[..] {
+                [] => day_long(lang, date).to_owned(),
+                [one] => weekday_long(lang, one).to_owned(),
+                _ => days
+                    .iter()
+                    .map(|d| weekday_short(lang, *d))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
             ReminderSummary {
                 lead: pick(lang, "Tiap ", "Every ").to_owned(),
                 bold: match lang {
-                    Lang::Id => format!("{weekday} jam {at}"),
-                    Lang::En => format!("{weekday} at {at}"),
+                    Lang::Id => format!("{weekdays} jam {at}"),
+                    Lang::En => format!("{weekdays} at {at}"),
                 },
-                tail: next(7),
+                tail: next(),
                 passed: false,
             }
         }
@@ -972,7 +1018,7 @@ mod tests {
     }
 
     fn summary(lang: Lang, repeat: Repeat, d: NaiveDate, t: NaiveTime) -> ReminderSummary {
-        reminder_summary(lang, repeat, d, t, monday_noon())
+        reminder_summary(lang, repeat, d, &[], t, monday_noon())
     }
 
     #[test]
@@ -1077,9 +1123,9 @@ mod tests {
         assert_eq!(tail(Lang::En, hm(14, 30)), " · in 2 hours");
         // Under a minute still reads as one.
         let now = mon.and_hms_opt(12, 30, 30).unwrap();
-        let s = reminder_summary(Lang::Id, Repeat::Once, mon, hm(12, 31), now);
+        let s = reminder_summary(Lang::Id, Repeat::Once, mon, &[], hm(12, 31), now);
         assert_eq!(s.tail, " · 1 menit lagi");
-        let s = reminder_summary(Lang::En, Repeat::Once, mon, hm(12, 31), now);
+        let s = reminder_summary(Lang::En, Repeat::Once, mon, &[], hm(12, 31), now);
         assert_eq!(s.tail, " · in 1 min");
     }
 
@@ -1159,24 +1205,123 @@ mod tests {
     fn next_occurrence_steps_from_the_start() {
         let now = monday_noon();
         let wed = date(2026, 10, 21);
-        assert_eq!(next_occurrence(wed, hm(9, 0), 7, now), date(2026, 10, 28));
-        assert_eq!(next_occurrence(wed, hm(9, 0), 1, now), date(2026, 10, 27));
-        assert_eq!(next_occurrence(wed, hm(13, 0), 1, now), date(2026, 10, 26));
+        assert_eq!(
+            next_occurrence(Repeat::Weekly, wed, &[], hm(9, 0), now),
+            date(2026, 10, 28)
+        );
+        assert_eq!(
+            next_occurrence(Repeat::Daily, wed, &[], hm(9, 0), now),
+            date(2026, 10, 27)
+        );
+        assert_eq!(
+            next_occurrence(Repeat::Daily, wed, &[], hm(13, 0), now),
+            date(2026, 10, 26)
+        );
         // At exactly now it has rung: the next one.
         assert_eq!(
-            next_occurrence(date(2026, 10, 26), hm(12, 30), 1, now),
+            next_occurrence(Repeat::Daily, date(2026, 10, 26), &[], hm(12, 30), now),
             date(2026, 10, 27)
         );
         // Over a year end.
         let eve = at(date(2026, 12, 31), 23, 0);
         assert_eq!(
-            next_occurrence(date(2026, 12, 3), hm(22, 0), 7, eve),
+            next_occurrence(Repeat::Weekly, date(2026, 12, 3), &[], hm(22, 0), eve),
             date(2027, 1, 7)
         );
         // A start still ahead is itself the next.
         assert_eq!(
-            next_occurrence(date(2026, 11, 4), hm(9, 0), 7, now),
+            next_occurrence(Repeat::Weekly, date(2026, 11, 4), &[], hm(9, 0), now),
             date(2026, 11, 4)
+        );
+    }
+
+    #[test]
+    fn multi_day_weekly_summaries_list_the_days() {
+        use Weekday::{Fri, Mon, Wed};
+        let now = monday_noon();
+        let mon = date(2026, 10, 26);
+        let s = reminder_summary(
+            Lang::Id,
+            Repeat::Weekly,
+            mon,
+            &[Mon, Wed, Fri],
+            hm(9, 0),
+            now,
+        );
+        assert_eq!(s.lead, "Tiap ");
+        assert_eq!(s.bold, "Sen, Rab, Jum jam 09.00");
+        assert_eq!(s.tail, " · berikutnya Rab, 28 Okt");
+        assert!(!s.passed);
+        let s = reminder_summary(
+            Lang::En,
+            Repeat::Weekly,
+            mon,
+            &[Fri, Mon, Wed],
+            hm(9, 0),
+            now,
+        );
+        assert_eq!(s.plain(), "Every Mon, Wed, Fri at 09:00 · next Wed, 28 Oct");
+        assert_eq!(s.bold, "Mon, Wed, Fri at 09:00");
+        // Later today it is still today's.
+        let s = reminder_summary(Lang::Id, Repeat::Weekly, mon, &[Mon, Fri], hm(16, 0), now);
+        assert_eq!(s.plain(), "Tiap Sen, Jum jam 16.00 · berikutnya hari ini");
+        // One day reads as before, by its full name; the list beats the date.
+        let s = reminder_summary(Lang::Id, Repeat::Weekly, mon, &[Mon], hm(9, 0), now);
+        assert_eq!(s.plain(), "Tiap Senin jam 09.00 · berikutnya Sen, 2 Nov");
+        let s = reminder_summary(Lang::En, Repeat::Weekly, mon, &[Fri], hm(9, 0), now);
+        assert_eq!(s.plain(), "Every Friday at 09:00 · next Fri, 30 Oct");
+        // Days mean nothing to a daily reminder.
+        let s = reminder_summary(Lang::Id, Repeat::Daily, mon, &[Wed], hm(8, 0), now);
+        assert_eq!(s.plain(), "Tiap hari jam 08.00 · berikutnya besok");
+    }
+
+    #[test]
+    fn next_occurrence_follows_the_stores_rule() {
+        use Weekday::{Fri, Mon, Thu, Wed};
+        let now = monday_noon();
+        let days = [Mon, Wed, Fri];
+        let next = |start, t| next_occurrence(Repeat::Weekly, start, &days, t, now);
+        // From today: past 09:00, so Wednesday; at 13:00 still today.
+        assert_eq!(next(date(2026, 10, 26), hm(9, 0)), date(2026, 10, 28));
+        assert_eq!(next(date(2026, 10, 26), hm(13, 0)), date(2026, 10, 26));
+        // A start weeks back jumps to the coming one.
+        assert_eq!(next(date(2026, 9, 2), hm(9, 0)), date(2026, 10, 28));
+        // A start ahead on a day it skips: its first day from then.
+        assert_eq!(next(date(2026, 11, 3), hm(9, 0)), date(2026, 11, 4));
+        // The empty list is the start's weekday, as before.
+        let thu = date(2026, 10, 22);
+        assert_eq!(
+            next_occurrence(Repeat::Weekly, thu, &[], hm(9, 0), now),
+            next_occurrence(Repeat::Weekly, thu, &[Thu], hm(9, 0), now)
+        );
+        assert_eq!(
+            next_occurrence(Repeat::Weekly, thu, &[], hm(9, 0), now),
+            date(2026, 10, 29)
+        );
+        // A one-off is its own date.
+        assert_eq!(next_occurrence(Repeat::Once, thu, &[], hm(9, 0), now), thu);
+    }
+
+    #[test]
+    fn weekday_chips_and_quick_times_in_both_languages() {
+        let week = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+            Weekday::Sun,
+        ];
+        let letters = |lang| week.map(|d| weekday_letter(lang, d)).join(" ");
+        assert_eq!(letters(Lang::Id), "S S R K J S M");
+        assert_eq!(letters(Lang::En), "M T W T F S S");
+        assert_eq!(weekday_long(Lang::Id, Weekday::Wed), "Rabu");
+        assert_eq!(weekday_short(Lang::En, Weekday::Sun), "Sun");
+        assert_eq!(text(Lang::Id, Key::QuickHalfHour), "30 mnt lagi");
+        assert_eq!(
+            text(Lang::En, Key::QuickTomorrowMorning),
+            "Tomorrow morning"
         );
     }
 

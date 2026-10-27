@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use chrono::{NaiveDate, NaiveTime, Timelike};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Weekday};
 use windows::Win32::Foundation::{
     COLORREF, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
     WPARAM,
@@ -69,7 +69,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use super::editor_layout::{
-    CHEVRON, DANGER_PAD, Form, Item, Labels, Layout, ROW_ICON, Shortcut, Spec, Text, layout,
+    CHEVRON, DANGER_PAD, Form, Item, Labels, Layout, QuickTime, ROW_ICON, Shortcut, Spec, Text,
+    WEEK, layout,
 };
 use super::editor_paint::{Align, Gfx, Painter, Target};
 use super::editor_popover::{
@@ -112,13 +113,15 @@ pub enum EditorKind {
         draft: EventDraft,
         read_only: bool,
     },
-    /// `id` is `None` for a new reminder.
+    /// `id` is `None` for a new reminder. `days`: a weekly one's weekdays
+    /// (an old one saved without them: its date's weekday).
     Reminder {
         id: Option<String>,
         text: String,
         date: NaiveDate,
         time: NaiveTime,
         repeat: Repeat,
+        days: Vec<Weekday>,
     },
 }
 
@@ -138,13 +141,15 @@ pub enum EditorResult {
         calendar_id: Option<String>,
         draft: EventDraft,
     },
-    /// Validated: text not empty, and a one-off not in the past.
+    /// Validated: text not empty, and a one-off not in the past. `days`
+    /// only for a weekly one (Monday first), else empty.
     ReminderSaved {
         id: Option<String>,
         text: String,
         date: NaiveDate,
         time: NaiveTime,
         repeat: Repeat,
+        days: Vec<Weekday>,
     },
     ReminderDeleted {
         id: String,
@@ -312,10 +317,74 @@ enum Mode {
         date: NaiveDate,
         time: NaiveTime,
         repeat: Repeat,
+        /// The weekly day chips that are on, Monday first.
+        days: Vec<Weekday>,
+        /// A new reminder whose date, time and repeat are untouched: the
+        /// summary invites a pick instead.
+        fresh: bool,
     },
 }
 
 impl Mode {
+    /// A reminder's date moves to `new`. A weekly one that rang only on the
+    /// old date's weekday follows it (the old weekly), other days stay.
+    fn set_reminder_date(&mut self, new: NaiveDate) {
+        if let Mode::Reminder {
+            date, days, fresh, ..
+        } = self
+        {
+            if days[..] == [date.weekday()] {
+                days[0] = new.weekday();
+            }
+            *date = new;
+            *fresh = false;
+        }
+    }
+
+    /// A quick-time pill: its date and time as of `now`; the repeat stays.
+    fn apply_quick(&mut self, q: QuickTime, now: NaiveDateTime) {
+        let (d, t) = q.target(now);
+        self.set_reminder_date(d);
+        if let Mode::Reminder { time, .. } = self {
+            *time = t;
+        }
+    }
+
+    /// A repeat segment; Weekly with no day on starts with the date's.
+    fn set_repeat(&mut self, r: Repeat) {
+        if let Mode::Reminder {
+            date,
+            repeat,
+            days,
+            fresh,
+            ..
+        } = self
+        {
+            *repeat = r;
+            if r == Repeat::Weekly && days.is_empty() {
+                days.push(date.weekday());
+            }
+            *fresh = false;
+        }
+    }
+
+    /// A day chip: on or off. The last one on stays on (false).
+    fn toggle_day(&mut self, day: Weekday) -> bool {
+        let Mode::Reminder { days, fresh, .. } = self else {
+            return false;
+        };
+        if let Some(i) = days.iter().position(|d| *d == day) {
+            if days.len() == 1 {
+                return false;
+            }
+            days.remove(i);
+        } else {
+            days.push(day);
+            *days = crate::reminders::sorted_days(days);
+        }
+        *fresh = false;
+        true
+    }
     fn form(&self) -> Form {
         match self {
             Mode::Note { .. } => Form::Note,
@@ -374,6 +443,42 @@ impl Mode {
             calendar_id: calendar_id.clone(),
             draft,
         }))
+    }
+
+    /// What a reminder's Simpan posts at Unix time `now`: `None` when this
+    /// is not a reminder, else the checked `ReminderSaved` (its days only
+    /// when it repeats weekly).
+    fn reminder_save(
+        &self,
+        title: &str,
+        now: i64,
+    ) -> Option<std::result::Result<EditorResult, Key>> {
+        let Mode::Reminder {
+            id,
+            date,
+            time,
+            repeat,
+            days,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let due = local_unix(*date, *time);
+        Some(
+            validate_reminder(title, due, *repeat, now).map(|()| EditorResult::ReminderSaved {
+                id: id.clone(),
+                text: title.trim().to_owned(),
+                date: *date,
+                time: *time,
+                repeat: *repeat,
+                days: if *repeat == Repeat::Weekly {
+                    days.clone()
+                } else {
+                    Vec::new()
+                },
+            }),
+        )
     }
 
     /// The item is usable (read-only events allow only the text and Tutup).
@@ -853,16 +958,25 @@ pub fn open_editor(owner: HWND, anchor_bottom_center: POINT, kind: EditorKind) -
             date,
             time,
             repeat,
-        } => (
-            Mode::Reminder {
-                id,
-                date,
-                time,
-                repeat,
-            },
-            Some(text),
-            None,
-        ),
+            days,
+        } => {
+            let mut days = crate::reminders::sorted_days(&days);
+            if repeat == Repeat::Weekly && days.is_empty() {
+                days.push(date.weekday());
+            }
+            (
+                Mode::Reminder {
+                    fresh: id.is_none(),
+                    id,
+                    date,
+                    time,
+                    repeat,
+                    days,
+                },
+                Some(text),
+                None,
+            )
+        }
     };
     let form = mode.form();
     let error = match &mode {
@@ -1093,6 +1207,20 @@ struct LabelText {
     end: String,
     time: String,
     pills: [String; 4],
+    /// The reminder's quick-time pills.
+    quick: [&'static str; 4],
+}
+
+/// A quick-time pill's text: "30 mnt lagi", "1 jam lagi", "Nanti malam",
+/// "Besok pagi".
+fn quick_label(lang: Lang, q: QuickTime) -> &'static str {
+    let key = match q {
+        QuickTime::HalfHour => Key::QuickHalfHour,
+        QuickTime::Hour => Key::QuickHour,
+        QuickTime::Tonight => Key::QuickTonight,
+        QuickTime::TomorrowMorning => Key::QuickTomorrowMorning,
+    };
+    text(lang, key)
 }
 
 fn label_text(mode: &Mode, lang: Lang) -> LabelText {
@@ -1123,6 +1251,7 @@ fn label_text(mode: &Mode, lang: Lang) -> LabelText {
         end: t(end),
         time: t(time),
         pills: Shortcut::ALL.map(|s| pill_label(lang, s, today)),
+        quick: QuickTime::ALL.map(|q| quick_label(lang, q)),
     }
 }
 
@@ -1155,6 +1284,13 @@ fn compute_layout(mode: &Mode, error: bool, lang: Lang, gfx: &Gfx) -> Layout {
         all_day,
         error,
         delete,
+        weekly: matches!(
+            mode,
+            Mode::Reminder {
+                repeat: Repeat::Weekly,
+                ..
+            }
+        ),
         labels: Labels {
             date: &labels.date,
             start: &labels.start,
@@ -1172,6 +1308,7 @@ fn compute_layout(mode: &Mode, error: bool, lang: Lang, gfx: &Gfx) -> Layout {
                 text(lang, Key::RepeatDaily),
                 text(lang, Key::RepeatWeekly),
             ],
+            quick: labels.quick,
             delete: text(lang, Key::Delete),
             cancel: text(lang, cancel),
             save: text(lang, Key::Save),
@@ -1274,28 +1411,14 @@ impl Editor {
     /// Reminder "Simpan": the validated result, or `None` with the reason
     /// under the repeat row.
     fn save_reminder(&mut self) -> Option<EditorResult> {
-        let Mode::Reminder {
-            id,
-            date,
-            time,
-            repeat,
-        } = &self.mode
-        else {
-            return None;
-        };
-        let due = local_unix(*date, *time);
         let now = chrono::Local::now().timestamp();
-        if let Err(message) = validate_reminder(&self.title, due, *repeat, now) {
-            self.error = Some(message);
-            return None;
+        match self.mode.reminder_save(&self.title, now)? {
+            Ok(result) => Some(result),
+            Err(message) => {
+                self.error = Some(message);
+                None
+            }
         }
-        Some(EditorResult::ReminderSaved {
-            id: id.clone(),
-            text: self.title.trim().to_owned(),
-            date: *date,
-            time: *time,
-            repeat: *repeat,
-        })
     }
 
     /// Simpan: validates, posts `EventSave` and waits for the status.
@@ -1327,8 +1450,13 @@ impl Editor {
                 ev.start = t;
             }
             (Mode::Event { ev, .. }, Item::EndChip, Pick::Time(t)) => ev.end = t,
-            (Mode::Reminder { date, .. }, Item::DateChip, Pick::Date(d)) => *date = d,
-            (Mode::Reminder { time, .. }, Item::TimeChip, Pick::Time(t)) => *time = t,
+            (mode @ Mode::Reminder { .. }, Item::DateChip, Pick::Date(d)) => {
+                mode.set_reminder_date(d)
+            }
+            (Mode::Reminder { time, fresh, .. }, Item::TimeChip, Pick::Time(t)) => {
+                *time = t;
+                *fresh = false;
+            }
             _ => return,
         }
         self.after_change();
@@ -1555,10 +1683,66 @@ impl Editor {
                 }
             }
             Mode::Reminder {
-                date, time, repeat, ..
+                date,
+                time,
+                repeat,
+                days,
+                fresh,
+                ..
             } => {
                 chip(Item::DateChip, &labels.date, true, false);
                 chip(Item::TimeChip, &labels.time, true, false);
+                // `.quick`: the pill whose time is the one set reads as on.
+                let now = chrono::Local::now().naive_local();
+                for (q, label) in QuickTime::ALL.into_iter().zip(labels.quick) {
+                    let item = Item::Quick(q);
+                    let Some(r) = l.item(item) else {
+                        continue;
+                    };
+                    let full = r.h / 2.0;
+                    let ink = if q.target(now) == (*date, *time) {
+                        pt.fill_rgba(r, full, p.selection, 1.0);
+                        p.accent
+                    } else {
+                        if hovered(item) {
+                            pt.fill_round(r, full, p.hover, 1.0);
+                        }
+                        pt.hairline(r, full, p.border, 1.0);
+                        p.secondary
+                    };
+                    pt.text(label, Text::Mini, Align::Center, r, ink, 1.0);
+                    if ring_on(item) {
+                        focus_ring(pt, r, full);
+                    }
+                }
+                // `.days`: accent circles for the days on, rings for the rest.
+                for day in WEEK {
+                    let item = Item::Day(day);
+                    let Some(r) = l.item(item) else {
+                        continue;
+                    };
+                    let radius = r.w / 2.0;
+                    let on = days.contains(&day);
+                    let letter = i18n::weekday_letter(lang, day);
+                    if on {
+                        let fill = if hovered(item) {
+                            mix(p.accent, p.text, 0.1)
+                        } else {
+                            p.accent
+                        };
+                        pt.fill_round(r, radius, fill, 1.0);
+                        pt.text(letter, Text::MiniBold, Align::Center, r, p.on_accent, 1.0);
+                    } else {
+                        if hovered(item) {
+                            pt.fill_round(r, radius, p.hover, 1.0);
+                        }
+                        pt.hairline(r, radius, p.border, 1.0);
+                        pt.text(letter, Text::Mini, Align::Center, r, p.secondary, 1.0);
+                    }
+                    if ring_on(item) {
+                        focus_ring(pt, r, radius);
+                    }
+                }
                 if let Some(track) = l.repeat_track {
                     // `.seg`: a field-filled track with a hairline.
                     pt.fill_round(track, radius::CONTROL, p.field, 1.0);
@@ -1589,9 +1773,13 @@ impl Editor {
                         }
                     }
                 }
-                if let Some(line) = l.summary {
-                    let now = chrono::Local::now().naive_local();
-                    let s = i18n::reminder_summary(lang, *repeat, *date, *time, now);
+                if let Some(line) = l.summary
+                    && *fresh
+                {
+                    let hint = text(lang, Key::ReminderPickHint);
+                    pt.text(hint, Text::Small, Align::Left, line, p.secondary, 1.0);
+                } else if let Some(line) = l.summary {
+                    let s = i18n::reminder_summary(lang, *repeat, *date, days, *time, now);
                     let (ink, strong) = if s.passed {
                         (p.error, p.error)
                     } else {
@@ -1909,12 +2097,23 @@ fn activate(hwnd: HWND, item: Item, keyboard: bool) {
                 ed.after_change();
                 Next::Refresh
             }
+            // The window grows or shrinks with the day row: `refresh` resizes
+            // it once the editor is released.
             Item::Repeat(r) => {
-                if let Mode::Reminder { repeat, .. } = &mut ed.mode {
-                    *repeat = r;
-                }
+                ed.mode.set_repeat(r);
                 ed.after_change();
                 Next::Refresh
+            }
+            Item::Quick(q) => {
+                ed.mode.apply_quick(q, chrono::Local::now().naive_local());
+                ed.after_change();
+                Next::Refresh
+            }
+            Item::Day(day) => {
+                if ed.mode.toggle_day(day) {
+                    ed.after_change();
+                }
+                Next::Nothing
             }
             Item::DateChip | Item::StartChip | Item::EndChip | Item::TimeChip => {
                 let recently = ed
@@ -2754,6 +2953,7 @@ pub fn run_demo(which: Option<&str>) {
             date,
             time: hm(8, 0),
             repeat: Repeat::Daily,
+            days: Vec::new(),
         },
         "reminder-new" => {
             // Like the panel's "+ Baru": the next full hour.
@@ -2765,14 +2965,17 @@ pub fn run_demo(which: Option<&str>) {
                 date: next.date(),
                 time: next.time(),
                 repeat: Repeat::Once,
+                days: Vec::new(),
             }
         }
+        // The design's state 3: Mon, Wed, Fri at 09:00 from this week's Monday.
         "reminder-weekly" => EditorKind::Reminder {
             id: Some("demo-reminder".into()),
             text: "Backup file proyek".into(),
-            date: date - chrono::Days::new(5),
+            date: date - chrono::Days::new(u64::from(date.weekday().num_days_from_monday())),
             time: hm(9, 0),
             repeat: Repeat::Weekly,
+            days: vec![Weekday::Mon, Weekday::Wed, Weekday::Fri],
         },
         "reminder-past" => EditorKind::Reminder {
             id: Some("demo-reminder".into()),
@@ -2780,6 +2983,7 @@ pub fn run_demo(which: Option<&str>) {
             date: date - chrono::Days::new(1),
             time: hm(16, 30),
             repeat: Repeat::Once,
+            days: Vec::new(),
         },
         other => {
             eprintln!(
@@ -3227,6 +3431,7 @@ mod tests {
             date: NaiveDate::from_ymd_opt(2026, 10, 27).unwrap(),
             time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
             repeat: Repeat::Daily,
+            days: Vec::new(),
         }
     }
 
@@ -3283,7 +3488,136 @@ mod tests {
             date,
             time,
             repeat,
+            days: Vec::new(),
+            fresh: true,
         }
+    }
+
+    fn reminder_days(mode: &Mode) -> Vec<Weekday> {
+        match mode {
+            Mode::Reminder { days, .. } => days.clone(),
+            _ => panic!("not a reminder"),
+        }
+    }
+
+    #[test]
+    fn weekly_days_toggle_but_the_last_one_stays() {
+        use Weekday::{Fri, Mon, Wed};
+        // Monday 26 October.
+        let mut mode = reminder_mode(date(26), t(9, 0), Repeat::Once);
+        // Weekly with no day on starts with the date's weekday.
+        mode.set_repeat(Repeat::Weekly);
+        assert_eq!(reminder_days(&mode), [Mon]);
+        assert!(matches!(mode, Mode::Reminder { fresh: false, .. }));
+        // Several may be on, kept Monday first.
+        assert!(mode.toggle_day(Fri));
+        assert!(mode.toggle_day(Wed));
+        assert_eq!(reminder_days(&mode), [Mon, Wed, Fri]);
+        // Off again, down to one; that one stays on.
+        assert!(mode.toggle_day(Mon));
+        assert!(mode.toggle_day(Fri));
+        assert_eq!(reminder_days(&mode), [Wed]);
+        assert!(!mode.toggle_day(Wed), "the last day is refused");
+        assert_eq!(reminder_days(&mode), [Wed]);
+        // Back to once and weekly again: the days are kept.
+        mode.set_repeat(Repeat::Once);
+        mode.set_repeat(Repeat::Weekly);
+        assert_eq!(reminder_days(&mode), [Wed]);
+        assert!(!Mode::Note { id: None }.toggle_day(Mon));
+    }
+
+    #[test]
+    fn a_single_weekly_day_follows_the_date() {
+        use Weekday::{Fri, Mon, Thu};
+        let mut mode = reminder_mode(date(26), t(9, 0), Repeat::Weekly);
+        mode.set_repeat(Repeat::Weekly);
+        // The old weekly: its day moves with the date (Thursday 29).
+        mode.set_reminder_date(date(29));
+        assert_eq!(reminder_days(&mode), [Thu]);
+        // Days picked on purpose stay where they are.
+        mode.toggle_day(Mon);
+        mode.set_reminder_date(date(28));
+        assert_eq!(reminder_days(&mode), [Mon, Thu]);
+        let mut other = reminder_mode(date(26), t(9, 0), Repeat::Weekly);
+        other.toggle_day(Fri);
+        other.set_reminder_date(date(28));
+        assert_eq!(reminder_days(&other), [Fri], "Friday was not Monday's");
+    }
+
+    #[test]
+    fn quick_pill_fills_the_date_and_time_and_keeps_the_repeat() {
+        let mut mode = reminder_mode(date(26), t(9, 0), Repeat::Daily);
+        let now = date(26).and_hms_opt(21, 10, 0).unwrap();
+        mode.apply_quick(QuickTime::Tonight, now);
+        match &mode {
+            Mode::Reminder {
+                date: d,
+                time,
+                repeat,
+                fresh,
+                ..
+            } => {
+                assert_eq!((*d, *time, *repeat), (date(27), t(20, 0), Repeat::Daily));
+                assert!(!fresh);
+            }
+            _ => unreachable!(),
+        }
+        mode.apply_quick(QuickTime::HalfHour, now);
+        assert!(matches!(
+            mode,
+            Mode::Reminder { date: d, time, .. } if d == date(26) && time == t(21, 40)
+        ));
+    }
+
+    #[test]
+    fn reminder_saved_carries_its_days() {
+        use Weekday::{Fri, Mon, Wed};
+        let mut mode = Mode::Reminder {
+            id: Some("r1".into()),
+            date: date(26),
+            time: t(9, 0),
+            repeat: Repeat::Weekly,
+            days: vec![Mon, Wed, Fri],
+            fresh: false,
+        };
+        // Long before: a weekly one saves whatever its start.
+        let saved = mode.reminder_save("  Backup file proyek ", 0);
+        assert_eq!(
+            saved,
+            Some(Ok(EditorResult::ReminderSaved {
+                id: Some("r1".into()),
+                text: "Backup file proyek".into(),
+                date: date(26),
+                time: t(9, 0),
+                repeat: Repeat::Weekly,
+                days: vec![Mon, Wed, Fri],
+            }))
+        );
+        // Not weekly: no days are sent.
+        mode.set_repeat(Repeat::Daily);
+        match mode.reminder_save("Backup", 0) {
+            Some(Ok(EditorResult::ReminderSaved { days, repeat, .. })) => {
+                assert_eq!(repeat, Repeat::Daily);
+                assert!(days.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(mode.reminder_save(" ", 0), Some(Err(Key::TextRequired)));
+        assert_eq!(Mode::Note { id: None }.reminder_save("x", 0), None);
+    }
+
+    #[test]
+    fn quick_pills_read_in_both_languages() {
+        let id = QuickTime::ALL.map(|q| quick_label(Lang::Id, q));
+        assert_eq!(
+            id,
+            ["30 mnt lagi", "1 jam lagi", "Nanti malam", "Besok pagi"]
+        );
+        let en = QuickTime::ALL.map(|q| quick_label(Lang::En, q));
+        assert_eq!(
+            en,
+            ["In 30 min", "In 1 hour", "Tonight", "Tomorrow morning"]
+        );
     }
 
     #[test]
@@ -3383,6 +3717,8 @@ mod tests {
             date: date(27),
             time: t(8, 0),
             repeat: Repeat::Once,
+            days: Vec::new(),
+            fresh: false,
         };
         assert_eq!(mode.form(), Form::Reminder);
         assert_eq!(title_key(&mode), Key::EditorEditReminder);

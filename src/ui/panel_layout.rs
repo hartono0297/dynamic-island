@@ -1333,6 +1333,7 @@ mod tests {
                 due_unix: 1000 + i as i64 * 60,
                 repeat: Default::default(),
                 done: false,
+                days: Vec::new(),
             })
             .collect()
     }
@@ -1949,6 +1950,7 @@ mod tests {
                 .timestamp(),
             repeat: Default::default(),
             done: false,
+            days: Vec::new(),
         };
         let all = [
             due("late", at(date(2026, 10, 24), 8, 0)),
