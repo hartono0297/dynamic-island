@@ -11,4 +11,4 @@ pub mod store;
 pub mod win;
 
 pub use kinds::ClipKind;
-pub use store::{Clip, ClipData, History, Ingested};
+pub use store::{Clip, ClipData, History};

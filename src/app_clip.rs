@@ -121,9 +121,7 @@ fn copied_notice(clip: &Clip) -> Notice {
                 .unwrap_or_default();
             i18n::clip_files(lang, paths.len(), &first)
         }
-        ClipData::Image(img) => {
-            i18n::clip_image_meta(lang, img.screenshot, img.width, img.height)
-        }
+        ClipData::Image(img) => i18n::clip_image_meta(lang, img.screenshot, img.width, img.height),
     };
     Notice {
         key: "clip-copied".into(),
@@ -176,7 +174,12 @@ impl App {
         };
         self.clip.hotkey_failed = match mods {
             Some(m) => unsafe {
-                RegisterHotKey(Some(self.hwnd), HOTKEY_CLIP, m | MOD_NOREPEAT, u32::from(b'V'))
+                RegisterHotKey(
+                    Some(self.hwnd),
+                    HOTKEY_CLIP,
+                    m | MOD_NOREPEAT,
+                    u32::from(b'V'),
+                )
             }
             .is_err(),
             None => false,
@@ -194,7 +197,10 @@ impl App {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_CLIP);
         }
         if std::mem::take(&mut self.clip.save_due) && self.config.clipboard.persist {
-            persist::write_now(&persist::path(), Write::Save(self.clip.history.items().to_vec()));
+            persist::write_now(
+                &persist::path(),
+                Write::Save(self.clip.history.items().to_vec()),
+            );
         }
     }
 
@@ -343,7 +349,11 @@ impl App {
                 let next = items
                     .iter()
                     .position(|c| c.id == id)
-                    .and_then(|i| items.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| items.get(j))))
+                    .and_then(|i| {
+                        items
+                            .get(i + 1)
+                            .or_else(|| i.checked_sub(1).and_then(|j| items.get(j)))
+                    })
                     .map(|c| c.id);
                 if self.clip.history.delete(id) {
                     self.clip.selected = next;

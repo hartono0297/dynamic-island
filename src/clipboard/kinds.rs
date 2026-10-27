@@ -52,10 +52,44 @@ impl ClipKind {
 /// Shell and tool commands that start a one-line command. Words that also
 /// start ordinary sentences ("go", "start", "copy", "make") are left out.
 const COMMANDS: &[&str] = &[
-    "cargo", "git", "npm", "npx", "pnpm", "yarn", "pip", "python", "py", "rustup", "rustc",
-    "docker", "kubectl", "cd", "ls", "winget", "curl", "wget", "ssh", "scp", "sudo", "choco",
-    "scoop", "gh", "dotnet", "cmake", "mkdir", "rm", "grep", "rg", "powershell", "pwsh",
-    "taskkill", "ipconfig", "netsh", "rtk", "uv", "deno",
+    "cargo",
+    "git",
+    "npm",
+    "npx",
+    "pnpm",
+    "yarn",
+    "pip",
+    "python",
+    "py",
+    "rustup",
+    "rustc",
+    "docker",
+    "kubectl",
+    "cd",
+    "ls",
+    "winget",
+    "curl",
+    "wget",
+    "ssh",
+    "scp",
+    "sudo",
+    "choco",
+    "scoop",
+    "gh",
+    "dotnet",
+    "cmake",
+    "mkdir",
+    "rm",
+    "grep",
+    "rg",
+    "powershell",
+    "pwsh",
+    "taskkill",
+    "ipconfig",
+    "netsh",
+    "rtk",
+    "uv",
+    "deno",
 ];
 
 /// Marks that only code has, even on one line.
@@ -122,7 +156,10 @@ fn is_link(t: &str) -> bool {
         }
     }
     if let Some(rest) = lower.strip_prefix("www.") {
-        return is_host(&format!("www.{}", rest.split(['/', '?', '#']).next().unwrap_or("")));
+        return is_host(&format!(
+            "www.{}",
+            rest.split(['/', '?', '#']).next().unwrap_or("")
+        ));
     }
     // A bare domain counts only with a path after it: "notes.txt" or "v1.2"
     // alone are not links.
@@ -214,7 +251,10 @@ pub enum Rule {
 /// Formats password managers and other apps set so clipboard monitors leave
 /// their content alone (Windows' own history honours the same ones).
 pub const EXCLUDED_FORMATS: [(&str, Rule); 4] = [
-    ("ExcludeClipboardContentFromMonitorProcessing", Rule::Present),
+    (
+        "ExcludeClipboardContentFromMonitorProcessing",
+        Rule::Present,
+    ),
     ("Clipboard Viewer Ignore", Rule::Present),
     ("CanIncludeInClipboardHistory", Rule::ZeroDword),
     ("CanUploadToCloudClipboard", Rule::ZeroDword),
@@ -232,11 +272,13 @@ pub fn excluded_rule(name: &str) -> Option<Rule> {
 /// `ZeroDword` one when it could be read) say: store nothing. A present
 /// `Present` format skips; a `ZeroDword` one skips when 0 or unreadable.
 pub fn should_skip(formats: &[(String, Option<u32>)]) -> bool {
-    formats.iter().any(|(name, dword)| match excluded_rule(name) {
-        Some(Rule::Present) => true,
-        Some(Rule::ZeroDword) => dword.is_none_or(|v| v == 0),
-        None => false,
-    })
+    formats
+        .iter()
+        .any(|(name, dword)| match excluded_rule(name) {
+            Some(Rule::Present) => true,
+            Some(Rule::ZeroDword) => dword.is_none_or(|v| v == 0),
+            None => false,
+        })
 }
 
 /// The change came from the island itself: the sequence number it recorded
@@ -251,8 +293,14 @@ mod tests {
 
     #[test]
     fn design_examples() {
-        assert_eq!(detect_kind("github.com/tw93/mole/tree/windows"), ClipKind::Link);
-        assert_eq!(detect_kind("cargo test --locked -- --nocapture"), ClipKind::Code);
+        assert_eq!(
+            detect_kind("github.com/tw93/mole/tree/windows"),
+            ClipKind::Link
+        );
+        assert_eq!(
+            detect_kind("cargo test --locked -- --nocapture"),
+            ClipKind::Code
+        );
         assert_eq!(detect_kind("#E2683C"), ClipKind::Color);
         assert_eq!(detect_kind("#fff"), ClipKind::Color);
         assert_eq!(detect_kind("#E2683C80"), ClipKind::Color);
@@ -349,7 +397,10 @@ mod tests {
             excluded_rule("ExcludeClipboardContentFromMonitorProcessing"),
             Some(Rule::Present)
         );
-        assert_eq!(excluded_rule("Clipboard Viewer Ignore"), Some(Rule::Present));
+        assert_eq!(
+            excluded_rule("Clipboard Viewer Ignore"),
+            Some(Rule::Present)
+        );
         assert_eq!(
             excluded_rule("CanIncludeInClipboardHistory"),
             Some(Rule::ZeroDword)
@@ -384,7 +435,10 @@ mod tests {
             None
         )])));
         // Bitwarden (Electron): history flag 0 only.
-        assert!(should_skip(&set(&[("CanIncludeInClipboardHistory", Some(0))])));
+        assert!(should_skip(&set(&[(
+            "CanIncludeInClipboardHistory",
+            Some(0)
+        )])));
         // A marker that cannot be read counts as 0.
         assert!(should_skip(&set(&[("CanUploadToCloudClipboard", None)])));
     }

@@ -187,8 +187,7 @@ impl IslandState {
                 NoticeKind::Copied => {
                     if !self.fullscreen {
                         self.queue.retain(|n| n.kind != NoticeKind::Copied);
-                        if matches!(&self.current, Some((n, _)) if n.kind == NoticeKind::Copied)
-                        {
+                        if matches!(&self.current, Some((n, _)) if n.kind == NoticeKind::Copied) {
                             self.current = None;
                         }
                         self.queue.push_back(notice);
@@ -1495,7 +1494,11 @@ mod tests {
         open_on(&mut s, Page::Clipboard, t0);
         s.apply(Event::ClipFocus(true), t0);
         assert_eq!(s.apply(Event::Hover(false), t0), vec![]);
-        assert_eq!(s.view(), View::Panel(Page::Clipboard), "held by the keyboard");
+        assert_eq!(
+            s.view(),
+            View::Panel(Page::Clipboard),
+            "held by the keyboard"
+        );
         // Enter copied: the panel closes and the keyboard goes back.
         let effects = s.apply(Event::ClipCommit, t0);
         assert_eq!(effects, vec![Effect::ReleaseClipFocus]);
@@ -1831,7 +1834,7 @@ mod tests {
         let mut s = st();
         open_on(&mut s, Page::Cli, t0);
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Media));
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
     }
 
     #[test]

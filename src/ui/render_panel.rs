@@ -22,14 +22,14 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
-use super::{ClipView, CliView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use super::{CliView, ClipView, FolderMenuView, Frame, Progress, Renderer, color, d2d_rect, mix};
+use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
+use crate::cli_folders::{MenuItem, RowNote, Section};
+use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::clipboard::image::Thumb;
 use crate::clipboard::kinds::hex_rgb;
 use crate::clipboard::store::ClipImage;
 use crate::clipboard::{Clip, ClipData, ClipKind};
-use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
-use crate::cli_folders::{MenuItem, RowNote, Section};
-use crate::cli_panel::{LineKind, RunState, echo_command, line_kind, visible_range};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
@@ -42,10 +42,10 @@ use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeKind, ShapeRect, sh
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_THUMB_W, CalendarLayout, ClipButton,
-    ClipLayout, clipboard_layout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
-    MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD,
-    ShortcutsLayout, WEEK_HEAD_H, calendar_layout, cli_folder_menu, cli_layout, cli_suggestions,
+    CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_THUMB_W, CalendarLayout, CliHead, CliLayout,
+    ClipButton, ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MenuLayout,
+    PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, ShortcutsLayout, WEEK_HEAD_H,
+    calendar_layout, cli_folder_menu, cli_layout, cli_suggestions, clipboard_layout,
     media_panel_layout, media_progress_layout, notes_layout, page_dots, pomodoro_compact_layout,
     pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, shortcuts_layout,
     tile_parts, waiting_strip,

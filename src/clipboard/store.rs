@@ -118,9 +118,14 @@ pub enum Ingested {
     Skipped,
     /// Nothing the history keeps (an unknown format, too big, empty).
     Nothing,
-    Added { id: u64, image: bool },
+    Added {
+        id: u64,
+        image: bool,
+    },
     /// The same content was already there: moved to the front.
-    Bumped { id: u64 },
+    Bumped {
+        id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -165,6 +170,7 @@ impl History {
         self.items.len()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -306,7 +312,8 @@ impl History {
             .iter()
             .filter(|c| {
                 label(c.kind).to_lowercase().contains(&q)
-                    || c.plain_text().is_some_and(|t| t.to_lowercase().contains(&q))
+                    || c.plain_text()
+                        .is_some_and(|t| t.to_lowercase().contains(&q))
             })
             .collect()
     }
@@ -489,7 +496,8 @@ pub mod tests {
             ClipKind::Files => "File",
             _ => "Teks",
         };
-        let found = |q: &str| -> Vec<ClipKind> { h.search(q, label).iter().map(|c| c.kind).collect() };
+        let found =
+            |q: &str| -> Vec<ClipKind> { h.search(q, label).iter().map(|c| c.kind).collect() };
         assert_eq!(found("DENAH"), [ClipKind::Text]);
         assert_eq!(found("laporan"), [ClipKind::Files]);
         assert_eq!(found("warna"), [ClipKind::Color]);
@@ -506,12 +514,18 @@ pub mod tests {
             files: vec![PathBuf::from(r"C:\a.txt")],
             ..ClipSnapshot::default()
         };
-        assert!(matches!(ingest(&mut h, both, 0), Ingested::Added { image: false, .. }));
+        assert!(matches!(
+            ingest(&mut h, both, 0),
+            Ingested::Added { image: false, .. }
+        ));
         assert_eq!(h.items()[0].kind, ClipKind::Files);
         let huge = "a".repeat(MAX_TEXT_BYTES + 1);
         assert_eq!(ingest(&mut h, text(&huge), 1), Ingested::Nothing);
         assert_eq!(ingest(&mut h, text("   "), 1), Ingested::Nothing);
-        assert_eq!(ingest(&mut h, ClipSnapshot::default(), 1), Ingested::Nothing);
+        assert_eq!(
+            ingest(&mut h, ClipSnapshot::default(), 1),
+            Ingested::Nothing
+        );
     }
 
     #[test]
@@ -543,7 +557,10 @@ pub mod tests {
         assert_eq!((img.width, img.height), (1280, 720));
         assert!(img.thumb.w <= image::THUMB_MAX_W && img.thumb.h <= image::THUMB_MAX_H);
         assert!(img.screenshot && img.full.is_some());
-        assert!(matches!(ingest(&mut h, image(1280, 720), 1), Ingested::Bumped { .. }));
+        assert!(matches!(
+            ingest(&mut h, image(1280, 720), 1),
+            Ingested::Bumped { .. }
+        ));
         assert_eq!(h.len(), 1);
         let bad = ClipSnapshot {
             dib: Some(b"not a bitmap".to_vec()),

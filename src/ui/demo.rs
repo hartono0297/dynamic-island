@@ -45,16 +45,16 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::render::{ClipView, CliView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
-use crate::clipboard::image::Thumb;
-use crate::clipboard::store::ClipImage;
-use crate::clipboard::{Clip, ClipData, ClipKind};
+use super::render::{CliView, ClipView, FolderMenuView, Frame, Progress, Renderer, RobotFrame};
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::cli::{self, Output, Shell};
 use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
+use crate::clipboard::image::Thumb;
+use crate::clipboard::store::ClipImage;
+use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
@@ -730,7 +730,11 @@ const DEMO_CLIPS: [(ClipKind, bool, &str); 6] = [
     (ClipKind::Image, false, ""),
     (ClipKind::Code, false, "cargo test --locked -- --nocapture"),
     (ClipKind::Color, false, "#E2683C"),
-    (ClipKind::Text, false, "Jl. Kemang Raya No. 12, Jakarta Selatan"),
+    (
+        ClipKind::Text,
+        false,
+        "Jl. Kemang Raya No. 12, Jakarta Selatan",
+    ),
 ];
 /// "Cari di 48 item…": the six cards are the newest of 48.
 const DEMO_CLIP_TOTAL: usize = 48;

@@ -36,9 +36,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetForegroundWindow, GetMessageW,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
-    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_ENDSESSION, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-    WM_CLIPBOARDUPDATE, WM_HOTKEY, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
+    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
     WM_WTSSESSION_CHANGE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
@@ -194,10 +194,14 @@ pub fn run(media_log_flag: bool) {
     let cli_input = CliInput::create(hwnd, deliver_cli_key)
         .inspect_err(|e| eprintln!("dynamic-island: no CLI input: {e}"))
         .ok();
-    let clip_input =
-        CliInput::create_with(hwnd, cli_input::ID_CLIP_SEARCH, SEARCH_LIMIT, deliver_clip_key)
-            .inspect_err(|e| eprintln!("dynamic-island: no Clipboard search: {e}"))
-            .ok();
+    let clip_input = CliInput::create_with(
+        hwnd,
+        cli_input::ID_CLIP_SEARCH,
+        SEARCH_LIMIT,
+        deliver_clip_key,
+    )
+    .inspect_err(|e| eprintln!("dynamic-island: no Clipboard search: {e}"))
+    .ok();
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
@@ -2309,6 +2313,7 @@ impl App {
             pomodoro: self.state.pomodoro().settings(),
             pomodoro_locked: !matches!(status, PomoStatus::Idle | PomoStatus::Ready),
             calendar: self.calendar.status,
+            clip_hotkey_failed: self.clip_hotkey_failed(),
             ..settings::Model::from_config(&self.config)
         }
     }
@@ -2408,6 +2413,17 @@ impl App {
                 }
             }
             SettingsAction::DisconnectGoogle => self.disconnect_google(),
+            SettingsAction::ClipEnabled(on) => self.on_clip_setting(ClipSetting::Enabled(on)),
+            SettingsAction::ClipItems(n) => self.on_clip_setting(ClipSetting::Items(n)),
+            SettingsAction::ClipPersist(on) => self.on_clip_setting(ClipSetting::Persist(on)),
+            SettingsAction::ClipClearOnLock(on) => {
+                self.on_clip_setting(ClipSetting::ClearOnLock(on))
+            }
+            SettingsAction::ClipHotkey(h) => self.on_clip_setting(ClipSetting::Hotkey(h)),
+            SettingsAction::ClipFeedbackAll(on) => {
+                self.on_clip_setting(ClipSetting::FeedbackAll(on))
+            }
+            SettingsAction::ClipClear => self.on_clip_setting(ClipSetting::Clear),
             // Handled outside the app borrow (`deliver_settings_action`).
             SettingsAction::DndHelp | SettingsAction::Closed => {}
         }

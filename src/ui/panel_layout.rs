@@ -1901,6 +1901,11 @@ mod tests {
             l.menu = Some(cli_folder_menu(&l, &items));
             out.push((format!("cli menu {n}"), PageLayout::Cli(l)));
         }
+        for (n, scroll) in [(0, 0), (5, 0), (48, 0), (48, 30)] {
+            let ids: Vec<u64> = (1..=n).collect();
+            let l = clipboard_layout(s, strip, &ids, ids.get(4).copied(), scroll, |id| id == 2);
+            out.push((format!("clipboard {n} s{scroll}"), PageLayout::Clipboard(l)));
+        }
         out.push((
             "shortcuts".into(),
             PageLayout::Shortcuts(shortcuts_layout(s, strip)),
@@ -2021,7 +2026,7 @@ mod tests {
 
     #[test]
     fn month_cells_42_starting_monday() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let l = calendar_layout(
             s,
             CalView::Month,
@@ -2097,7 +2102,7 @@ mod tests {
 
     #[test]
     fn week_columns_monday_to_sunday() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let events = many_events(9, date(2026, 10, 21));
         let l = calendar_layout(
             s,
@@ -2146,7 +2151,7 @@ mod tests {
 
     #[test]
     fn day_list_overflow_shows_more_count() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let events = many_events(20, oct25());
         let l = calendar_layout(
             s,
@@ -2199,7 +2204,7 @@ mod tests {
 
     #[test]
     fn connect_button_26_high_in_every_view() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         for view in [CalView::Day, CalView::Week, CalView::Month] {
             let l = calendar_layout(
                 s,
@@ -2217,7 +2222,7 @@ mod tests {
 
     #[test]
     fn day_list_pages_through_chunks_and_wraps() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let events = many_events(20, oct25());
         let day = |page| {
             calendar_layout(
@@ -2260,7 +2265,7 @@ mod tests {
 
     #[test]
     fn day_timeline_places_blocks_by_time_and_marks_now() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let d = date(2026, 10, 26);
         let mut events = vec![all_day("expo", d)];
         events.push(timed("review", at(d, 10, 0), at(d, 11, 30)));
@@ -2344,7 +2349,7 @@ mod tests {
 
     #[test]
     fn day_lanes_split_only_overlapping_blocks() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let d = date(2026, 10, 26);
         let day = |events: &[CalEvent], page| {
             super::calendar_layout(
@@ -2418,7 +2423,7 @@ mod tests {
 
     #[test]
     fn notes_list_caps_rows() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let all = notes(30);
         let l = notes_layout(s, &all, 0, false);
         let k = l.rows.len();
@@ -2490,7 +2495,7 @@ mod tests {
     #[test]
     fn reminders_group_by_day_with_overdue_under_today() {
         use chrono::{Local, TimeZone};
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let today = oct25();
         let due = |id: &str, t: NaiveDateTime| Reminder {
             id: id.into(),
@@ -2571,7 +2576,7 @@ mod tests {
 
     #[test]
     fn strip_region_maps_to_strip_hit() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let layout = PageLayout::Pomodoro(pomodoro_layout(s, true));
         let with = regions(s, &layout, true);
         assert!(with.contains(&Region {
@@ -2588,7 +2593,7 @@ mod tests {
 
     #[test]
     fn regions_map_to_page_hits() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let has = |regions: &[Region], hit: Hit| regions.iter().any(|r| r.hit == hit);
 
         let events = many_events(20, oct25());
@@ -2986,7 +2991,7 @@ mod tests {
 
     #[test]
     fn cli_suggestions_sit_just_above_the_input() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let l = cli_layout(s, false, &cli_heads()[0]);
         let (boxed, rows) = cli_suggestions(&l, 3);
         assert_eq!(rows.len(), 3);
@@ -3014,6 +3019,28 @@ mod tests {
                     if let Some(i) = r.iter().position(|r| r.hit == Hit::CliMenuDismiss) {
                         assert_eq!(i, r.len() - 1, "{name}: the backdrop is last");
                         r.pop();
+                    }
+                    // A Clipboard card's buttons sit on it and come first;
+                    // the cards themselves must not overlap anything else.
+                    if let PageLayout::Clipboard(l) = &layout {
+                        let buttons = l.buttons.len();
+                        let first = r.iter().position(|x| {
+                            matches!(
+                                x.hit,
+                                Hit::ClipPin(_) | Hit::ClipPlain(_) | Hit::ClipDelete(_)
+                            )
+                        });
+                        if let Some(i) = first {
+                            let button = l.buttons[0].2;
+                            let host = l.cards.iter().find(|c| c.0 == l.buttons[0].1).unwrap().2;
+                            assert!(
+                                button.x >= host.x && button.bottom() <= host.bottom(),
+                                "{name}"
+                            );
+                            let cards = r.iter().position(|x| matches!(x.hit, Hit::ClipCard(_)));
+                            assert!(cards.is_none_or(|c| c > i), "{name}: buttons before cards");
+                            r.drain(i..i + buttons);
+                        }
                     }
                     for (i, a) in r.iter().enumerate() {
                         for b in &r[i + 1..] {
@@ -3096,6 +3123,11 @@ mod tests {
                                 drawn.push(m.boxed);
                                 drawn.extend(m.rows.iter().map(|(_, r)| *r));
                             }
+                        }
+                        PageLayout::Clipboard(l) => {
+                            drawn.extend([l.header, l.search, l.list]);
+                            drawn.extend(l.cards.iter().map(|c| c.2));
+                            drawn.extend(l.buttons.iter().map(|b| b.2));
                         }
                         PageLayout::Shortcuts(l) => {
                             drawn.push(l.header);
@@ -3269,7 +3301,7 @@ mod media_tests {
     #[test]
     fn clipboard_cards_two_columns_sixty_four_tall() {
         for style in [Style::Pill, Style::Notch] {
-            let s = panel(style);
+            let s = shape_for(style, ShapeKind::Panel);
             let ids: Vec<u64> = (1..=48).collect();
             let l = clipboard_layout(s, false, &ids, Some(1), 0, |id| id == 3);
             assert_eq!(l.rows, 3);
@@ -3302,7 +3334,7 @@ mod media_tests {
 
     #[test]
     fn clipboard_scrolls_by_rows_and_keeps_the_selection_in_view() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let ids: Vec<u64> = (1..=11).collect();
         // 11 cards: 6 rows, 3 shown, at most 3 rows down.
         assert_eq!(clip_max_scroll(11, 3), 3);
@@ -3324,7 +3356,7 @@ mod media_tests {
 
     #[test]
     fn clipboard_regions_and_empty_state() {
-        let s = panel(Style::Pill);
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
         let l = clipboard_layout(s, true, &[5, 6], Some(5), 0, |_| false);
         let r = regions(s, &PageLayout::Clipboard(l.clone()), true);
         let first = |hit: Hit| r.iter().position(|x| x.hit == hit);

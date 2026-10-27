@@ -466,7 +466,7 @@ keys! {
     ClipClearOnLockDesc => "Item tersemat tetap", "Pinned items stay";
     ClipHotkey => "Pintasan", "Shortcut";
     ClipHotkeyDesc => "Buka halaman Clipboard", "Open the Clipboard page";
-    ClipHotkeyTaken => "Dipakai aplikasi lain, pilih yang lain", "Taken by another app, pick another";
+    ClipHotkeyTaken => "Dipakai aplikasi lain", "Taken by another app";
     ClipHotkeyNone => "Tidak ada", "None";
     ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
     ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";

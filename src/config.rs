@@ -582,7 +582,10 @@ mod tests {
         for name in ["CtrlShiftV", "Ctrl+Shift+V", "F13", ""] {
             let json = format!(r#"{{"style":"Notch","clipboard":{{"hotkey":"{name}"}}}}"#);
             let c = parse(&json);
-            assert_eq!((c.style, c.clipboard.hotkey), (Style::Notch, ClipHotkey::Off));
+            assert_eq!(
+                (c.style, c.clipboard.hotkey),
+                (Style::Notch, ClipHotkey::Off)
+            );
         }
         // The island's own settings win over a stale copy on disk.
         let mem = Config {

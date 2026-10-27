@@ -65,13 +65,13 @@ use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
     CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
-    Section, State, Tone, battery_step, layout, scroll_by,
+    Section, State, Tone, battery_step, clip_items_step, layout, scroll_by,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::{Config, Style};
+use crate::config::{ClipHotkey, ClipboardSettings, Config, Style};
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pomodoro::PomoSettings;
@@ -102,6 +102,15 @@ pub enum Action {
     RobotMotion(Motion),
     RobotSleep(u32),
     Greeting(bool),
+    /// Settings → Clipboard.
+    ClipEnabled(bool),
+    ClipItems(u32),
+    ClipPersist(bool),
+    ClipClearOnLock(bool),
+    ClipHotkey(ClipHotkey),
+    ClipFeedbackAll(bool),
+    /// "Hapus riwayat": every entry that is not pinned.
+    ClipClear,
     BatteryThreshold(u8),
     DndHelp,
     Pomo(PomoField, i32),
@@ -148,6 +157,9 @@ pub struct Model {
     pub calendar: CalStatus,
     pub google_client_id: String,
     pub google_client_secret: String,
+    pub clip: ClipboardSettings,
+    /// The chosen Clipboard hotkey could not be registered.
+    pub clip_hotkey_failed: bool,
 }
 
 impl Model {
@@ -173,6 +185,8 @@ impl Model {
             calendar: CalStatus::NotConfigured,
             google_client_id: cfg.google_client_id.clone(),
             google_client_secret: cfg.google_client_secret.clone(),
+            clip: cfg.clipboard,
+            clip_hotkey_failed: false,
         }
     }
 }
@@ -893,6 +907,8 @@ impl Settings {
             google_note: self.google_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             hooks: self.hooks,
             hook_note: self.hook_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
+            clip: m.clip,
+            clip_hotkey_failed: m.clip_hotkey_failed,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -977,6 +993,10 @@ impl Settings {
                     .iter()
                     .position(|v| *v == m.robot_motion)
                     .unwrap_or(0) as f32,
+                Group::ClipHotkey => ClipHotkey::ALL
+                    .iter()
+                    .position(|v| *v == m.clip.hotkey)
+                    .unwrap_or(0) as f32,
             }
         };
         for group in [
@@ -987,6 +1007,7 @@ impl Settings {
             Group::CliStart,
             Group::Shell,
             Group::Motion,
+            Group::ClipHotkey,
         ] {
             let (from, to) = (index(group, &old), index(group, new));
             if from != to {
@@ -1013,6 +1034,21 @@ impl Settings {
         if old.greeting != new.greeting {
             self.anims
                 .slide_toggle(Hit::Greeting, old.greeting, new.greeting, now);
+        }
+        let (oc, nc) = (old.clip, new.clip);
+        for (hit, from, to) in [
+            (Hit::ClipEnabled, oc.enabled, nc.enabled),
+            (Hit::ClipPersist, oc.persist, nc.persist),
+            (Hit::ClipClearOnLock, oc.clear_on_lock, nc.clear_on_lock),
+            (
+                Hit::ClipFeedbackAll,
+                oc.copied_feedback_all,
+                nc.copied_feedback_all,
+            ),
+        ] {
+            if from != to {
+                self.anims.slide_toggle(hit, from, to, now);
+            }
         }
         let mut changes = ModelChanges {
             title: None,
@@ -1167,6 +1203,20 @@ impl Settings {
                 }
             }
             Hit::Greeting => post(Action::Greeting(!m.greeting)),
+            Hit::ClipEnabled => post(Action::ClipEnabled(!m.clip.enabled)),
+            Hit::ClipItems(dir) => {
+                let n = clip_items_step(m.clip.max_items, dir);
+                if n == m.clip.max_items {
+                    Vec::new()
+                } else {
+                    post(Action::ClipItems(n))
+                }
+            }
+            Hit::ClipPersist => post(Action::ClipPersist(!m.clip.persist)),
+            Hit::ClipClearOnLock => post(Action::ClipClearOnLock(!m.clip.clear_on_lock)),
+            Hit::ClipHotkey(h) if h != m.clip.hotkey => post(Action::ClipHotkey(h)),
+            Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
+            Hit::ClipClear => post(Action::ClipClear),
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1246,7 +1296,8 @@ impl Settings {
             | Hit::Lang(_)
             | Hit::Shell(_)
             | Hit::CliStart(_)
-            | Hit::Motion(_) => Vec::new(),
+            | Hit::Motion(_)
+            | Hit::ClipHotkey(_) => Vec::new(),
         };
         self.relayout();
         after
@@ -1770,6 +1821,13 @@ pub fn run_demo(args: &[String]) {
             Action::RobotMotion(v) => m.robot_motion = v,
             Action::RobotSleep(v) => m.robot_sleep = v,
             Action::Greeting(v) => m.greeting = v,
+            Action::ClipEnabled(v) => m.clip.enabled = v,
+            Action::ClipItems(v) => m.clip.max_items = v,
+            Action::ClipPersist(v) => m.clip.persist = v,
+            Action::ClipClearOnLock(v) => m.clip.clear_on_lock = v,
+            Action::ClipHotkey(v) => m.clip.hotkey = v,
+            Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
+            Action::ClipClear => {}
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);

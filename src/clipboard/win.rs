@@ -13,7 +13,9 @@ use windows::Win32::System::DataExchange::{
     GetClipboardData, GetClipboardFormatNameW, GetClipboardOwner, GetClipboardSequenceNumber,
     OpenClipboard, RemoveClipboardFormatListener, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 use super::image;

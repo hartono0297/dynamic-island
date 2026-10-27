@@ -214,7 +214,10 @@ pub mod tests {
     fn reads_the_header_and_rejects_junk() {
         let d = dib24(1280, 720);
         let info = dib_info(&d).unwrap();
-        assert_eq!((info.w, info.h, info.bpp, info.top_down), (1280, 720, 24, false));
+        assert_eq!(
+            (info.w, info.h, info.bpp, info.top_down),
+            (1280, 720, 24, false)
+        );
         assert_eq!(info.offset, 40);
         assert_eq!(dib_info(&d[..100]), None);
         assert_eq!(dib_info(b"garbage"), None);
