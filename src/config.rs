@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use chrono::NaiveDate;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +7,7 @@ use crate::cli::Shell;
 use crate::i18n::Lang;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
+use crate::ui::robot::{Motion, clamp_sleep};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
@@ -39,6 +41,34 @@ pub struct Config {
     pub lyrics: bool,
     /// The shell the CLI page runs commands in.
     pub cli_shell: Shell,
+    /// Bata, the robot, beside the clock and on the island's own notices.
+    pub robot: bool,
+    /// How much Bata moves: Full, Saver or Off (by name; a typo is Full).
+    pub robot_animation: Motion,
+    /// Bata falls asleep after this many minutes without activity (1–60).
+    #[serde(deserialize_with = "sleep_minutes")]
+    pub robot_sleep_minutes: u32,
+    /// Once a day, before noon, a greeting with today's events and reminders.
+    pub morning_greeting: bool,
+    /// The day the greeting last showed; an unreadable date reads as none.
+    #[serde(deserialize_with = "lenient_date")]
+    pub last_greeting: Option<NaiveDate>,
+}
+
+/// Any number, kept in 1–60; a non-number is the default.
+fn sleep_minutes<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64()
+        .map_or(Config::default().robot_sleep_minutes, |n| {
+            clamp_sleep(n.clamp(0.0, f64::from(u32::MAX)) as u32)
+        }))
+}
+
+/// "2026-10-27", else `None`: a hand edit never invalidates the file.
+fn lenient_date<'de, D: Deserializer<'de>>(d: D) -> Result<Option<NaiveDate>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str()
+        .and_then(|s| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()))
 }
 
 impl Default for Config {
@@ -59,6 +89,11 @@ impl Default for Config {
             idle_clock: true,
             lyrics: false,
             cli_shell: Shell::PowerShell,
+            robot: true,
+            robot_animation: Motion::Full,
+            robot_sleep_minutes: 10,
+            morning_greeting: true,
+            last_greeting: None,
         }
     }
 }
@@ -106,7 +141,8 @@ pub fn read_at(path: &Path) -> OnDisk {
 }
 
 /// The island's own settings (`mem`: style, autostart, onboarding, pomodoro,
-/// language, theme, idle clock, lyrics, CLI shell) over everything else as it
+/// language, theme, idle clock, lyrics, CLI shell, the robot, its greeting
+/// and the day it last greeted) over everything else as it
 /// is on disk (Google client, muted apps, battery threshold), which the owner
 /// may have edited by hand while the island ran.
 pub fn merge_owned(disk: Config, mem: &Config) -> Config {
@@ -122,6 +158,11 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         idle_clock: mem.idle_clock,
         lyrics: mem.lyrics,
         cli_shell: mem.cli_shell,
+        robot: mem.robot,
+        robot_animation: mem.robot_animation,
+        robot_sleep_minutes: mem.robot_sleep_minutes,
+        morning_greeting: mem.morning_greeting,
+        last_greeting: mem.last_greeting,
         ..disk
     }
 }
@@ -292,6 +333,52 @@ mod tests {
         assert!(c.idle_clock);
         assert!(!c.lyrics);
         assert_eq!(c.cli_shell, Shell::PowerShell);
+        assert!(c.robot);
+        assert_eq!(c.robot_animation, Motion::Full);
+        assert_eq!(c.robot_sleep_minutes, 10);
+        assert!(c.morning_greeting);
+        assert_eq!(c.last_greeting, None);
+    }
+
+    #[test]
+    fn robot_fields_round_trip_and_hand_edits_fall_back() {
+        let c = Config {
+            robot: false,
+            robot_animation: Motion::Saver,
+            robot_sleep_minutes: 25,
+            morning_greeting: false,
+            last_greeting: NaiveDate::from_ymd_opt(2026, 10, 27),
+            ..Config::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        for field in [
+            r#""robot_animation":"Saver""#,
+            r#""last_greeting":"2026-10-27""#,
+            r#""robot_sleep_minutes":25"#,
+        ] {
+            assert!(json.contains(field), "{json}");
+        }
+        assert_eq!(parse(&json), c);
+        // Typos and out-of-range values: only that field falls back or clamps.
+        let hand = parse(
+            r#"{"style":"Notch","robot_animation":"mati","robot_sleep_minutes":500,"last_greeting":"kemarin"}"#,
+        );
+        assert_eq!(
+            (
+                hand.style,
+                hand.robot_animation,
+                hand.robot_sleep_minutes,
+                hand.last_greeting
+            ),
+            (Style::Notch, Motion::Full, 60, None)
+        );
+        let off = parse(r#"{"robot_animation":"off","robot_sleep_minutes":0}"#);
+        assert_eq!(
+            (off.robot_animation, off.robot_sleep_minutes),
+            (Motion::Off, 1)
+        );
+        let odd = parse(r#"{"robot_sleep_minutes":"ten","last_greeting":null}"#);
+        assert_eq!((odd.robot_sleep_minutes, odd.last_greeting), (10, None));
     }
 
     #[test]
@@ -333,6 +420,11 @@ mod tests {
             idle_clock: false,
             lyrics: true,
             cli_shell: Shell::Cmd,
+            robot: false,
+            robot_animation: Motion::Off,
+            robot_sleep_minutes: 5,
+            morning_greeting: false,
+            last_greeting: NaiveDate::from_ymd_opt(2026, 1, 2),
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -424,6 +516,13 @@ mod tests {
             (c.accent, c.surface, c.window_theme),
             (Accent::Terracotta, Surface::Espresso, WindowTheme::System)
         );
+        // The robot's fields came later: defaults, and they survive a save.
+        assert!(c.robot && c.morning_greeting);
+        assert_eq!(
+            (c.robot_animation, c.robot_sleep_minutes, c.last_greeting),
+            (Motion::Full, 10, None)
+        );
+        assert_eq!(parse(&serde_json::to_string_pretty(&c).unwrap()), c);
     }
 
     #[test]
@@ -453,6 +552,7 @@ mod tests {
         bool,
         bool,
         Shell,
+        (bool, Motion, u32, bool, Option<NaiveDate>),
     );
 
     fn owned(c: &Config) -> Owned {
@@ -468,6 +568,13 @@ mod tests {
             c.idle_clock,
             c.lyrics,
             c.cli_shell,
+            (
+                c.robot,
+                c.robot_animation,
+                c.robot_sleep_minutes,
+                c.morning_greeting,
+                c.last_greeting,
+            ),
         )
     }
 
@@ -506,6 +613,11 @@ mod tests {
             idle_clock: false,
             lyrics: true,
             cli_shell: Shell::Cmd,
+            robot: false,
+            robot_animation: Motion::Saver,
+            robot_sleep_minutes: 30,
+            morning_greeting: false,
+            last_greeting: NaiveDate::from_ymd_opt(2026, 10, 27),
             ..Config::default()
         };
         (disk, mem)

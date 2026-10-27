@@ -13,6 +13,16 @@ use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 
 /// How long each temporary notice stays on screen, counted from when it becomes current.
 pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
+/// The morning greeting goes a little sooner.
+pub const GREETING_DURATION: Duration = Duration::from_secs(4);
+
+/// How long `notice` stays once it is current.
+fn duration_of(notice: &Notice) -> Duration {
+    match notice.kind {
+        NoticeKind::Greeting => GREETING_DURATION,
+        _ => NOTICE_DURATION,
+    }
+}
 
 /// One mouse-wheel notch, as Windows reports it.
 const WHEEL_STEP: i32 = 120;
@@ -136,6 +146,13 @@ impl IslandState {
                 NoticeKind::App { .. } | NoticeKind::BatteryLow | NoticeKind::Pomodoro => {
                     self.queue.push_back(notice)
                 }
+                // Never over a fullscreen app (`App` checks first and tries
+                // again later; this only guards a race).
+                NoticeKind::Greeting => {
+                    if !self.fullscreen {
+                        self.queue.push_back(notice);
+                    }
+                }
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => self.fullscreen = on,
@@ -229,6 +246,11 @@ impl IslandState {
 
     pub fn media(&self) -> Option<&MediaInfo> {
         self.media.as_ref()
+    }
+
+    /// A fullscreen app is in front (the island hides).
+    pub fn fullscreen(&self) -> bool {
+        self.fullscreen
     }
 
     pub fn timeline(&self) -> Option<&Timeline> {
@@ -474,7 +496,8 @@ impl IslandState {
         if self.current.is_none()
             && let Some(next) = self.queue.pop_front()
         {
-            self.current = Some((next, now + NOTICE_DURATION));
+            let expires = now + duration_of(&next);
+            self.current = Some((next, expires));
         }
     }
 
@@ -695,6 +718,39 @@ mod tests {
             View::Notice(n) => Some((&n.kind, n.title.as_str(), n.body.as_str())),
             _ => None,
         }
+    }
+
+    fn greeting() -> Notice {
+        Notice {
+            key: "greeting".into(),
+            source: "Bata".into(),
+            title: "Selamat pagi".into(),
+            body: "3 acara dan 2 pengingat hari ini".into(),
+            kind: NoticeKind::Greeting,
+        }
+    }
+
+    #[test]
+    fn greeting_shows_four_seconds_and_never_in_fullscreen() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(greeting()), t0);
+        assert_eq!(s.view(), View::Notice(greeting()));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(4)));
+        s.apply(Event::Tick, t0 + secs(4));
+        assert_eq!(s.view(), View::Idle);
+        // Fullscreen: dropped, not queued for afterwards.
+        s.apply(Event::Fullscreen(true), t0);
+        assert!(s.fullscreen());
+        s.apply(Event::Notice(greeting()), t0);
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // A click dismisses it like any notice.
+        s.apply(Event::Notice(greeting()), t0);
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert!(effects.is_empty());
+        assert_eq!(s.view(), View::Idle);
     }
 
     // ---- v1 behaviour, adapted to v2 views ----

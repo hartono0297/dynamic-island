@@ -16,6 +16,7 @@ use crate::model::PomoField;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::ui::icons::Icon;
+use crate::ui::robot::{Motion, SLEEP_MAX, SLEEP_MIN};
 
 pub use super::geometry::Rect;
 
@@ -43,6 +44,12 @@ const CONTENT_W: f32 = CLIENT_W - CONTENT_X - PAD;
 const TITLE_Y: f32 = 20.0;
 const TITLE_H: f32 = 32.0;
 const FIRST_CARD_Y: f32 = TITLE_Y + TITLE_H + 16.0;
+/// A section taller than the window scrolls under the title, from here down.
+pub const VIEW_TOP: f32 = TITLE_Y + TITLE_H + 8.0;
+/// One wheel notch scrolls one row.
+const WHEEL_STEP: f32 = ROW_H;
+/// The scrollbar thumb at the content's right edge.
+const SCROLLBAR_W: f32 = 3.0;
 /// Segmented controls and steppers.
 pub const CONTROL_H: f32 = 28.0;
 pub const BUTTON_H: f32 = 30.0;
@@ -72,6 +79,8 @@ const LINK_PAD: f32 = 8.0;
 /// Space taken by the glyph after a link's label.
 pub const LINK_GLYPH_W: f32 = 18.0;
 const GAP: f32 = 8.0;
+/// A description that wraps: each further line adds this to its row.
+const DESC_LINE_H: f32 = 14.0;
 const LOGO: f32 = 28.0;
 const NAV_X: f32 = 10.0;
 const NAV_W: f32 = SIDEBAR_W - 2.0 * NAV_X;
@@ -256,6 +265,14 @@ pub enum Hit {
     IdleClock,
     Lyrics,
     Shell(Shell),
+    /// "Asisten di notch".
+    Robot,
+    /// "Animasi": Penuh, Hemat, Mati.
+    Motion(Motion),
+    /// "Tidur setelah", one step down (−1) or up.
+    RobotSleep(i32),
+    /// "Sapaan pagi".
+    Greeting,
     Battery(i32),
     DndHelp,
     Pomo(PomoField, i32),
@@ -303,6 +320,7 @@ pub enum Group {
     Window,
     Lang,
     Shell,
+    Motion,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -342,16 +360,19 @@ pub enum Field {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Control {
+    /// Off (`enabled` false): faded, no clicks.
     Segmented {
         group: Group,
         track: Rect,
         items: Vec<Segment>,
         selected: usize,
+        enabled: bool,
     },
     Toggle {
         hit: Hit,
         rect: Rect,
         on: bool,
+        enabled: bool,
     },
     /// `−  value  +`; a side is `None` at the end of the range or while locked.
     Stepper {
@@ -371,6 +392,9 @@ impl Control {
     /// Everything clickable in the control, with the area that takes the click.
     pub fn hits(&self) -> Vec<(Hit, Rect)> {
         match self {
+            Control::Segmented { enabled: false, .. } | Control::Toggle { enabled: false, .. } => {
+                Vec::new()
+            }
             Control::Segmented { items, .. } => items.iter().map(|s| (s.hit, s.rect)).collect(),
             Control::Toggle { hit, rect, .. } => vec![(*hit, *rect)],
             Control::Stepper { minus, plus, .. } => [minus, plus]
@@ -383,6 +407,33 @@ impl Control {
                 .collect(),
             Control::Button(b) if b.enabled => vec![(b.hit, b.rect)],
             Control::Button(_) => Vec::new(),
+        }
+    }
+
+    /// Moves the control `dy` down (a scrolled section).
+    fn shift(&mut self, dy: f32) {
+        let down = |r: &mut Rect| r.y += dy;
+        match self {
+            Control::Segmented { track, items, .. } => {
+                down(track);
+                for s in items {
+                    down(&mut s.rect);
+                }
+            }
+            Control::Toggle { rect, .. } => down(rect),
+            Control::Stepper {
+                minus, plus, value, ..
+            } => {
+                down(&mut minus.0);
+                down(&mut plus.0);
+                down(&mut value.rect);
+            }
+            Control::Swatches { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
+            Control::Button(b) => down(&mut b.rect),
         }
     }
 
@@ -443,14 +494,43 @@ pub struct Layout {
     pub fields: Vec<(Field, Rect)>,
     /// The accent row's description, which names the swatch under the pointer.
     pub accent_desc: Option<usize>,
+    /// A section taller than the window: the area its content scrolls in
+    /// (clipped to it, clicks only inside it), how far it can scroll, and
+    /// the scroll applied.
+    pub viewport: Option<Rect>,
+    pub scroll_max: f32,
+    pub scroll: f32,
 }
 
 impl Layout {
-    /// Every clickable area: sidebar rows, then the section's controls.
+    /// Every clickable area: sidebar rows, then the section's controls (cut
+    /// to the viewport of a scrolled section, so nothing hidden takes clicks).
     pub fn hits(&self) -> Vec<(Hit, Rect)> {
         let nav = self.nav.iter().map(|n| (Hit::Nav(n.section), n.pill));
-        nav.chain(self.controls.iter().flat_map(Control::hits))
-            .collect()
+        let view = self.viewport;
+        let controls = self
+            .controls
+            .iter()
+            .flat_map(Control::hits)
+            .filter_map(move |(h, r)| match view {
+                Some(v) => clip(r, v).map(|r| (h, r)),
+                None => Some((h, r)),
+            });
+        nav.chain(controls).collect()
+    }
+
+    /// The scrollbar thumb of a scrolled section.
+    pub fn scrollbar(&self) -> Option<Rect> {
+        let v = self.viewport.filter(|_| self.scroll_max > 0.0)?;
+        let content = v.h + self.scroll_max;
+        let h = (v.h * v.h / content).max(24.0);
+        let y = v.y + (v.h - h) * (self.scroll / self.scroll_max);
+        Some(Rect {
+            x: CLIENT_W - SCROLLBAR_W - 5.0,
+            y: y + 4.0,
+            w: SCROLLBAR_W,
+            h: h - 8.0,
+        })
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
@@ -469,6 +549,7 @@ impl Layout {
                 track,
                 items,
                 selected,
+                ..
             } if *g == group => Some((track, items.as_slice(), *selected)),
             _ => None,
         })
@@ -497,6 +578,13 @@ pub struct State<'a> {
     pub window: WindowTheme,
     /// The idle island shows the clock.
     pub idle_clock: bool,
+    /// Bata in the notch, how it moves, when it sleeps, the greeting.
+    pub robot: bool,
+    pub robot_motion: Motion,
+    pub robot_sleep: u32,
+    pub greeting: bool,
+    /// How far a section taller than the window is scrolled (clamped).
+    pub scroll: f32,
     /// Synced lyrics in the notch.
     pub lyrics: bool,
     /// The CLI page's shell.
@@ -565,6 +653,26 @@ pub fn battery_step(threshold: u8, dir: i32) -> u8 {
     };
     // A hand-edited value off the 5 % grid snaps onto it.
     (stepped / step * step).clamp(min, max)
+}
+
+/// The scroll after `wheel` (raw delta, +120 per notch away from the user,
+/// which scrolls up) from `scroll`, kept in 0..=`max`.
+pub fn scroll_by(scroll: f32, wheel: i32, max: f32) -> f32 {
+    (scroll - wheel as f32 / 120.0 * WHEEL_STEP).clamp(0.0, max.max(0.0))
+}
+
+/// The part of `r` inside `v`, if any.
+fn clip(r: Rect, v: Rect) -> Option<Rect> {
+    let x = r.x.max(v.x);
+    let y = r.y.max(v.y);
+    let right = r.right().min(v.right());
+    let bottom = r.bottom().min(v.bottom());
+    (right > x && bottom > y).then_some(Rect {
+        x,
+        y,
+        w: right - x,
+        h: bottom - y,
+    })
 }
 
 fn inflate(r: Rect, by: f32) -> Rect {
@@ -696,7 +804,7 @@ impl Builder<'_> {
         control_x: f32,
     ) -> Option<usize> {
         let x = card.x + INSET;
-        let w = (control_x - 2.0 * GAP - x).max(0.0);
+        let w = row_text_w(card, control_x);
         let Some((desc, tone)) = desc else {
             let rect = Rect {
                 x,
@@ -734,6 +842,78 @@ impl Builder<'_> {
         Some(self.text(desc_rect, desc, Font::Desc, tone, Align::Left))
     }
 
+    /// `row_text` with a description already broken into `lines` (`wrap`):
+    /// each line one `DESC_LINE_H` under the last, in a row
+    /// `wrapped_row_h(lines.len())` tall.
+    fn row_text_lines(
+        &mut self,
+        card: Rect,
+        y: f32,
+        label: String,
+        lines: Vec<String>,
+        tone: Tone,
+        control_x: f32,
+    ) {
+        let x = card.x + INSET;
+        let w = row_text_w(card, control_x);
+        let label_rect = Rect {
+            x,
+            y: y + 7.0,
+            w,
+            h: 20.0,
+        };
+        self.text(label_rect, label, Font::Label, Tone::Primary, Align::Left);
+        for (i, line) in lines.into_iter().enumerate() {
+            let rect = Rect {
+                x,
+                y: y + 28.0 + i as f32 * DESC_LINE_H,
+                w,
+                h: 16.0,
+            };
+            self.text(rect, line, Font::Desc, tone, Align::Left);
+        }
+    }
+
+    /// `s` broken at spaces into lines no wider than `w` in `font`; a word
+    /// wider than `w` keeps a line of its own.
+    fn wrap(&self, s: &str, font: Font, w: f32) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for word in s.split_whitespace() {
+            match lines.last_mut() {
+                Some(line) if self.w(&format!("{line} {word}"), font) <= w => {
+                    line.push(' ');
+                    line.push_str(word);
+                }
+                _ => lines.push(word.to_owned()),
+            }
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
+    }
+
+    /// The width a segmented control of `items` takes (see `segmented_if`).
+    fn segmented_w(&self, items: &[(Hit, String)]) -> f32 {
+        self.segment_widths(items).iter().sum::<f32>() + 2.0 * SEG_PAD
+    }
+
+    /// Each segment's width: all the widest one's, unless that runs past
+    /// `SEG_EQUAL_MAX`; then each its own.
+    fn segment_widths(&self, items: &[(Hit, String)]) -> Vec<f32> {
+        let natural: Vec<f32> = items
+            .iter()
+            .map(|(_, s)| (self.w(s, Font::Control) + 2.0 * SEG_TEXT_PAD).max(SEG_MIN_W))
+            .collect();
+        let widest = natural.iter().copied().fold(0.0, f32::max);
+        let equal = widest * items.len() as f32 + 2.0 * SEG_PAD <= SEG_EQUAL_MAX;
+        if equal {
+            vec![widest; items.len()]
+        } else {
+            natural
+        }
+    }
+
     /// A segmented control right-aligned at `right`, centered on `cy`.
     fn segmented(
         &mut self,
@@ -743,17 +923,20 @@ impl Builder<'_> {
         items: Vec<(Hit, String)>,
         selected: usize,
     ) -> f32 {
-        let natural: Vec<f32> = items
-            .iter()
-            .map(|(_, s)| (self.w(s, Font::Control) + 2.0 * SEG_TEXT_PAD).max(SEG_MIN_W))
-            .collect();
-        let widest = natural.iter().copied().fold(0.0, f32::max);
-        let equal = widest * items.len() as f32 + 2.0 * SEG_PAD <= SEG_EQUAL_MAX;
-        let widths: Vec<f32> = if equal {
-            vec![widest; items.len()]
-        } else {
-            natural
-        };
+        self.segmented_if(group, right, cy, items, selected, true)
+    }
+
+    /// `segmented`, faded and taking no clicks unless `enabled`.
+    fn segmented_if(
+        &mut self,
+        group: Group,
+        right: f32,
+        cy: f32,
+        items: Vec<(Hit, String)>,
+        selected: usize,
+        enabled: bool,
+    ) -> f32 {
+        let widths = self.segment_widths(&items);
         let total = widths.iter().sum::<f32>() + 2.0 * SEG_PAD;
         let track = Rect {
             x: right - total,
@@ -781,18 +964,28 @@ impl Builder<'_> {
             track,
             items: segs,
             selected,
+            enabled,
         });
         track.x
     }
 
     fn toggle(&mut self, hit: Hit, right: f32, cy: f32, on: bool) -> f32 {
+        self.toggle_if(hit, right, cy, on, true)
+    }
+
+    fn toggle_if(&mut self, hit: Hit, right: f32, cy: f32, on: bool, enabled: bool) -> f32 {
         let rect = Rect {
             x: right - TOGGLE_W,
             y: cy - TOGGLE_H / 2.0,
             w: TOGGLE_W,
             h: TOGGLE_H,
         };
-        self.l.controls.push(Control::Toggle { hit, rect, on });
+        self.l.controls.push(Control::Toggle {
+            hit,
+            rect,
+            on,
+            enabled,
+        });
         rect.x
     }
 
@@ -973,7 +1166,52 @@ pub fn layout(section: Section, s: &State, m: &dyn Measure) -> Layout {
         Section::Integrations => integrations(&mut b, s),
         Section::About => about(&mut b, s),
     }
+    scroll(&mut b.l, s.scroll);
     b.l
+}
+
+/// A section whose cards run past the window's bottom margin scrolls: its
+/// content (not the sidebar or title) moves up by `scroll`, kept in range,
+/// inside a viewport from `VIEW_TOP` to the window's bottom.
+fn scroll(l: &mut Layout, scroll: f32) {
+    let bottom = l.cards.iter().map(Rect::bottom).fold(0.0, f32::max);
+    let max = (bottom - (CLIENT_H - PAD)).max(0.0);
+    if max <= 0.0 {
+        return;
+    }
+    let dy = -scroll.clamp(0.0, max);
+    l.viewport = Some(Rect {
+        x: SIDEBAR_W,
+        y: VIEW_TOP,
+        w: CLIENT_W - SIDEBAR_W,
+        h: CLIENT_H - VIEW_TOP,
+    });
+    l.scroll_max = max;
+    l.scroll = -dy;
+    let down = |r: &mut Rect| r.y += dy;
+    for r in l.cards.iter_mut().chain(l.dividers.iter_mut()) {
+        down(r);
+    }
+    for t in &mut l.texts {
+        down(&mut t.rect);
+    }
+    for c in &mut l.controls {
+        c.shift(dy);
+    }
+    for c in &mut l.chips {
+        down(&mut c.rect);
+        down(&mut c.dot);
+        down(&mut c.label.rect);
+    }
+    for (_, r) in &mut l.fields {
+        down(r);
+    }
+    for r in [&mut l.preview, &mut l.about_logo, &mut l.note_glyph]
+        .into_iter()
+        .flatten()
+    {
+        down(r);
+    }
 }
 
 fn index_of<T: PartialEq>(all: &[T], v: &T) -> usize {
@@ -1073,6 +1311,86 @@ fn appearance(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
     b.row_text(card, rows[4], b.t(Key::IdleClock), desc, false, x);
     b.divider(card, rows[4]);
+
+    robot_card(b, s);
+}
+
+/// The width left for a row's label and description, left of `control_x`.
+fn row_text_w(card: Rect, control_x: f32) -> f32 {
+    (control_x - 2.0 * GAP - (card.x + INSET)).max(0.0)
+}
+
+/// A row whose description takes `lines` lines.
+fn wrapped_row_h(lines: usize) -> f32 {
+    ROW_H + lines.saturating_sub(1) as f32 * DESC_LINE_H
+}
+
+/// Bata's four rows under Tampilan; with the robot off the other three
+/// stay visible but faded and take no clicks. The Animasi description wraps
+/// beside its three segments (the design's full sentence), and that row
+/// grows by a line.
+fn robot_card(b: &mut Builder, s: &State) {
+    let modes = [
+        (Motion::Full, Key::MotionFull),
+        (Motion::Saver, Key::MotionSaver),
+        (Motion::Off, Key::MotionOff),
+    ];
+    let items: Vec<(Hit, String)> = modes
+        .iter()
+        .map(|(v, k)| (Hit::Motion(*v), b.t(*k)))
+        .collect();
+    let probe = Rect {
+        x: CONTENT_X,
+        y: 0.0,
+        w: CONTENT_W,
+        h: 0.0,
+    };
+    let desc_w = row_text_w(probe, RIGHT - b.segmented_w(&items));
+    let motion_desc = b.wrap(&b.t(Key::RobotMotionDesc), Font::Desc, desc_w);
+    let motion_h = wrapped_row_h(motion_desc.len());
+
+    let card = b.card(3.0 * ROW_H + motion_h);
+    let heights = [ROW_H, motion_h, ROW_H, ROW_H];
+    let mut rows = [card.y; 4];
+    for i in 1..4 {
+        rows[i] = rows[i - 1] + heights[i - 1];
+    }
+    let cy = |i: usize| rows[i] + heights[i] / 2.0;
+    let on = s.robot;
+
+    let x = b.toggle(Hit::Robot, RIGHT, cy(0), on);
+    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
+
+    let selected = index_of(Motion::ALL, &s.robot_motion);
+    let x = b.segmented_if(Group::Motion, RIGHT, cy(1), items, selected, on);
+    let label = b.t(Key::RobotMotion);
+    b.row_text_lines(card, rows[1], label, motion_desc, Tone::Secondary, x);
+    b.divider(card, rows[1]);
+
+    let m = s.robot_sleep;
+    let x = b.stepper(
+        RIGHT,
+        cy(2),
+        sleep_value(b.lang, m),
+        Hit::RobotSleep(-1),
+        Hit::RobotSleep(1),
+        (m > SLEEP_MIN, m < SLEEP_MAX),
+        on && s.robot_motion != Motion::Off,
+    );
+    let desc = Some((b.t(Key::RobotSleepDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::RobotSleep), desc, false, x);
+    b.divider(card, rows[2]);
+
+    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(3), s.greeting, on);
+    let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::MorningGreeting), desc, false, x);
+    b.divider(card, rows[3]);
+}
+
+/// "10 mnt", "10 min": the sleep stepper's value.
+pub fn sleep_value(lang: Lang, minutes: u32) -> String {
+    format!("{minutes} {}", text(lang, Key::MinutesShort))
 }
 
 fn general(b: &mut Builder, s: &State) {
@@ -1452,6 +1770,11 @@ mod tests {
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
                         idle_clock: locked,
+                        robot: !locked,
+                        robot_motion: if locked { Motion::Off } else { Motion::Saver },
+                        robot_sleep: if locked { 60 } else { 1 },
+                        greeting: locked,
+                        scroll: 0.0,
                         lyrics: !locked,
                         shell: if locked {
                             Shell::Cmd
@@ -1506,14 +1829,31 @@ mod tests {
         out
     }
 
+    /// Every section and state, each scrolled to the top and to the bottom.
     fn all_layouts() -> Vec<(Section, Lang, Layout)> {
         let mut out = Vec::new();
         for s in states() {
             for section in Section::ALL {
-                out.push((section, s.lang, layout(section, &s, &Estimate)));
+                for scroll in [0.0, f32::MAX] {
+                    let s = State {
+                        scroll,
+                        ..s.clone()
+                    };
+                    out.push((section, s.lang, layout(section, &s, &Estimate)));
+                }
             }
         }
         out
+    }
+
+    /// The window, or for a scrolled section its whole content as if the
+    /// window were tall enough (at this scroll).
+    fn canvas(l: &Layout) -> Rect {
+        Rect {
+            y: -l.scroll,
+            h: CLIENT_H + l.scroll_max,
+            ..CLIENT
+        }
     }
 
     fn overlaps(a: Rect, b: Rect) -> bool {
@@ -1587,7 +1927,7 @@ mod tests {
                 );
             }
             for card in &l.cards {
-                assert!(inside(*card, CLIENT), "{section:?}: card {card:?}");
+                assert!(inside(*card, canvas(&l)), "{section:?}: card {card:?}");
                 assert!(card.x >= SIDEBAR_W + PAD - 0.01);
             }
             for n in &l.nav {
@@ -1645,7 +1985,7 @@ mod tests {
                     t.rect.w
                 );
                 assert!(t.rect.h >= t.font.size(), "{:?} too short", t.text);
-                assert!(inside(t.rect, CLIENT), "{:?}", t.text);
+                assert!(inside(t.rect, canvas(&l)), "{:?}", t.text);
             }
             for c in &l.controls {
                 let labels: Vec<(&str, Rect, f32)> = match c {
@@ -1676,6 +2016,8 @@ mod tests {
         }
     }
 
+    /// Every section fits the window's height; Appearance, which has Bata's
+    /// rows too, scrolls by exactly what it lacks and then fits.
     #[test]
     fn everything_fits_in_the_window_height() {
         for (section, lang, l) in all_layouts() {
@@ -1685,8 +2027,231 @@ mod tests {
                 .map(Rect::bottom)
                 .chain(l.texts.iter().map(|t| t.rect.bottom()))
                 .fold(0.0, f32::max);
-            assert!(bottom <= CLIENT_H - PAD, "{section:?} {lang:?}: {bottom}");
+            let unscrolled = bottom + l.scroll;
+            assert!(
+                unscrolled - l.scroll_max <= CLIENT_H - PAD + 0.01,
+                "{section:?} {lang:?}: {bottom}"
+            );
+            if section == Section::Appearance {
+                assert!(l.scroll_max > 0.0 && l.viewport.is_some());
+                // Scrolled to the end, the last card ends at the margin.
+                if l.scroll == l.scroll_max {
+                    assert!((bottom - (CLIENT_H - PAD)).abs() < 0.01, "{bottom}");
+                }
+            } else {
+                assert_eq!((l.scroll_max, l.viewport), (0.0, None), "{section:?}");
+            }
         }
+    }
+
+    #[test]
+    fn appearance_scrolls_and_clicks_follow() {
+        let base = State {
+            robot: true,
+            robot_motion: Motion::Full,
+            robot_sleep: 10,
+            greeting: true,
+            ..states()[0].clone()
+        };
+        let robot_hits = |l: &Layout| -> Vec<Hit> {
+            l.hits()
+                .into_iter()
+                .map(|(h, _)| h)
+                .filter(|h| {
+                    matches!(
+                        h,
+                        Hit::Robot | Hit::Motion(_) | Hit::RobotSleep(_) | Hit::Greeting
+                    )
+                })
+                .collect()
+        };
+        let top = layout(Section::Appearance, &base, &Estimate);
+        let view = top.viewport.expect("viewport");
+        assert_eq!(top.scroll, 0.0);
+        // At the top only the robot toggle peeks in; nothing below the
+        // window takes a click.
+        assert_eq!(robot_hits(&top), [Hit::Robot]);
+        for (_, r) in top.hits() {
+            assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
+        }
+        // Scrolled to the end: all four rows, where they are drawn.
+        let end = State {
+            scroll: 1e6,
+            ..base.clone()
+        };
+        let l = layout(Section::Appearance, &end, &Estimate);
+        assert_eq!(l.scroll, l.scroll_max);
+        assert_eq!(
+            robot_hits(&l).len(),
+            7,
+            "2 toggles, 3 segments, minus, plus"
+        );
+        let toggle = l
+            .controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Toggle {
+                    hit: Hit::Greeting,
+                    rect,
+                    ..
+                } => Some(*rect),
+                _ => None,
+            })
+            .expect("greeting toggle");
+        assert_eq!(l.hit(toggle.x + 4.0, toggle.y + 4.0), Some(Hit::Greeting));
+        // The style row went up under the title: clipped, so no clicks.
+        let style_hits: Vec<Rect> = l
+            .hits()
+            .into_iter()
+            .filter(|(h, _)| matches!(h, Hit::Style(_)))
+            .map(|(_, r)| r)
+            .collect();
+        assert!(style_hits.iter().all(|r| r.y >= view.y));
+        // The wheel: a notch is a row, kept in range.
+        assert_eq!(scroll_by(0.0, -120, 100.0), ROW_H);
+        assert_eq!(scroll_by(0.0, 120, 100.0), 0.0);
+        assert_eq!(scroll_by(90.0, -240, 100.0), 100.0);
+        assert!(l.scrollbar().is_some() && top.scrollbar().is_some());
+        let general = layout(Section::General, &base, &Estimate);
+        assert!(general.scrollbar().is_none());
+    }
+
+    #[test]
+    fn robot_rows_follow_the_setting() {
+        for lang in [Lang::Id, Lang::En] {
+            let on = State {
+                lang,
+                robot: true,
+                robot_motion: Motion::Saver,
+                robot_sleep: 10,
+                greeting: false,
+                scroll: 1e6,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &on, &Estimate);
+            let (_, items, selected) = l.segmented(Group::Motion).expect("Animasi");
+            assert_eq!(items[selected].hit, Hit::Motion(Motion::Saver));
+            let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+            let want: Vec<&str> = [Key::MotionFull, Key::MotionSaver, Key::MotionOff]
+                .iter()
+                .map(|k| text(lang, *k))
+                .collect();
+            assert_eq!(labels, want);
+            let value = l.controls.iter().find_map(|c| match c {
+                Control::Stepper { minus, value, .. } if minus.1 == Some(Hit::RobotSleep(-1)) => {
+                    Some(value.text.clone())
+                }
+                _ => None,
+            });
+            assert_eq!(value.as_deref(), Some(sleep_value(lang, 10).as_str()));
+            // A wrapped description is its lines in order, joined by spaces.
+            let shown = l
+                .texts
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            for key in [
+                Key::RobotInNotch,
+                Key::RobotInNotchDesc,
+                Key::RobotMotion,
+                Key::RobotMotionDesc,
+                Key::RobotSleep,
+                Key::RobotSleepDesc,
+                Key::MorningGreeting,
+                Key::MorningGreetingDesc,
+            ] {
+                assert!(shown.contains(text(lang, key)), "{key:?}");
+            }
+            // Off: only the main toggle still takes clicks.
+            let off = State {
+                robot: false,
+                ..on.clone()
+            };
+            let l = layout(Section::Appearance, &off, &Estimate);
+            let hits: Vec<Hit> = l.hits().into_iter().map(|(h, _)| h).collect();
+            assert!(hits.contains(&Hit::Robot));
+            assert!(
+                !hits
+                    .iter()
+                    .any(|h| matches!(h, Hit::Motion(_) | Hit::RobotSleep(_) | Hit::Greeting))
+            );
+            // Mati: no sleep timer, so no sleep setting.
+            let still = State {
+                robot_motion: Motion::Off,
+                ..on.clone()
+            };
+            let l = layout(Section::Appearance, &still, &Estimate);
+            assert!(
+                !l.hits()
+                    .iter()
+                    .any(|(h, _)| matches!(h, Hit::RobotSleep(_)))
+            );
+        }
+        assert_eq!(sleep_value(Lang::Id, 10), "10 mnt");
+        assert_eq!(sleep_value(Lang::En, 10), "10 min");
+    }
+
+    /// The design's full "Hemat: tanpa kedip dan gerak, ekspresi tetap"
+    /// wraps beside the segments; its row grows by the extra line and the
+    /// rows under it follow, clear of the segmented control.
+    #[test]
+    fn motion_description_wraps_beside_the_segments() {
+        assert_eq!(
+            text(Lang::Id, Key::RobotMotionDesc),
+            "Hemat: tanpa kedip dan gerak, ekspresi tetap"
+        );
+        for lang in [Lang::Id, Lang::En] {
+            let s = State {
+                lang,
+                robot: true,
+                scroll: 1e6,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let label = l
+                .texts
+                .iter()
+                .position(|t| t.text == text(lang, Key::RobotMotion))
+                .expect("Animasi label");
+            let sleep = l
+                .texts
+                .iter()
+                .position(|t| t.text == text(lang, Key::RobotSleep))
+                .expect("sleep label");
+            let lines = &l.texts[label + 1..sleep];
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|t| t.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                text(lang, Key::RobotMotionDesc)
+            );
+            let (track, _, _) = l.segmented(Group::Motion).expect("segments");
+            for t in lines {
+                assert!(t.rect.right() + 2.0 * GAP <= track.x + 0.01, "{:?}", t.text);
+            }
+            // The sleep row starts below the last line, with the usual gap.
+            let last = lines.last().expect("a line");
+            let sleep_label = &l.texts[sleep];
+            assert!(sleep_label.rect.y - last.rect.bottom() >= 15.0 - 0.01);
+            assert_eq!(
+                last.rect.y - lines[0].rect.y,
+                (lines.len() - 1) as f32 * DESC_LINE_H
+            );
+        }
+        let b = Builder {
+            m: &Estimate,
+            lang: Lang::Id,
+            l: Layout::default(),
+            y: 0.0,
+        };
+        assert_eq!(b.wrap("a b", Font::Desc, 1.0), ["a", "b"]);
+        assert_eq!(b.wrap("a b", Font::Desc, 100.0), ["a b"]);
+        assert_eq!(b.wrap("", Font::Desc, 100.0), [""]);
+        assert_eq!(wrapped_row_h(1), ROW_H);
+        assert_eq!(wrapped_row_h(2), ROW_H + DESC_LINE_H);
     }
 
     #[test]
@@ -1834,7 +2399,9 @@ mod tests {
             };
             let l = layout(Section::Appearance, &s, &Estimate);
             let toggle = l.controls.iter().find_map(|c| match c {
-                Control::Toggle { hit, rect, on } if *hit == Hit::IdleClock => Some((*rect, *on)),
+                Control::Toggle { hit, rect, on, .. } if *hit == Hit::IdleClock => {
+                    Some((*rect, *on))
+                }
                 _ => None,
             });
             let (rect, shown) = toggle.expect("idle clock toggle in Appearance");
@@ -1855,7 +2422,9 @@ mod tests {
                 };
                 let l = layout(Section::General, &s, &Estimate);
                 let toggle = l.controls.iter().find_map(|c| match c {
-                    Control::Toggle { hit, rect, on } if *hit == Hit::Lyrics => Some((*rect, *on)),
+                    Control::Toggle { hit, rect, on, .. } if *hit == Hit::Lyrics => {
+                        Some((*rect, *on))
+                    }
                     _ => None,
                 });
                 let (rect, shown) = toggle.expect("lyrics toggle in General");

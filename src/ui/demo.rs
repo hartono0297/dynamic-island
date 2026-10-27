@@ -18,6 +18,10 @@
 //! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
 //!   LRC (`DEMO_LRC`); `DI_DEMO_FADE=0.5` freezes the crossfade from the
 //!   previous line at that progress.
+//!
+//! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
+//! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
+//! fixed ("14:32", "23:48"), so nothing depends on the time of day.
 
 use std::time::{Duration, Instant};
 
@@ -29,8 +33,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
-use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_for};
-use super::render::{CliView, Frame, Progress, Renderer};
+use super::geometry::{ANIM_MS, ShapeKind, ease_out_back, lerp_shape, shape_with_robot};
+use super::render::{CliView, Frame, Progress, Renderer, RobotFrame};
+use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::cli::{self, Output, Shell};
@@ -82,6 +87,12 @@ struct Scene {
     cli: CliDemo,
     /// The track with very long names instead of the design's.
     long_media: bool,
+    /// Bata's face; `None` draws the island without the robot.
+    robot: Option<Expr>,
+    /// A fixed idle clock instead of the time now.
+    clock: Option<&'static str>,
+    /// Bata's sheet of faces instead of the island.
+    sheet: bool,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -125,6 +136,10 @@ enum DemoNotice {
     Battery,
     /// An app's notification: the letter badge.
     App,
+    /// The morning greeting.
+    Greeting,
+    /// Claude at work (the design's "Claude Code" state).
+    ClaudeWorking,
 }
 
 const BASE: Scene = Scene {
@@ -142,7 +157,22 @@ const BASE: Scene = Scene {
     lyrics_on: false,
     cli: CliDemo::Empty,
     long_media: false,
+    robot: None,
+    clock: None,
+    sheet: false,
 };
+
+/// A scene of Bata in the notch (studio-robot.html p3).
+const fn bata(name: &'static str, kind: ShapeKind, view: View0, expr: Expr) -> Scene {
+    Scene {
+        name,
+        kind,
+        view,
+        robot: Some(expr),
+        clock: Some("14:32"),
+        ..BASE
+    }
+}
 
 /// Made-up lyrics: a metadata tag, an offset, a line timed twice, an
 /// instrumental gap and a line too long for the notch.
@@ -194,7 +224,7 @@ const fn cli(name: &'static str, which: CliDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 37] = [
+const SCENES: [Scene; 51] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -301,6 +331,86 @@ const SCENES: [Scene; 37] = [
     cli("cli-error", CliDemo::Error),
     cli("cli-tall", CliDemo::Tall),
     panel("shortcuts", Page::Shortcuts),
+    Scene {
+        name: "bata-sheet",
+        sheet: true,
+        ..BASE
+    },
+    bata("bata-kosong", ShapeKind::Idle, View0::Idle, Expr::Idle),
+    Scene {
+        clock: Some("23:48"),
+        ..bata("bata-tidur", ShapeKind::Idle, View0::Idle, Expr::Sleep)
+    },
+    bata(
+        "bata-sapaan",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::Greeting),
+        Expr::Wave,
+    ),
+    Scene {
+        pomo: Pomo::Running,
+        ..bata(
+            "bata-pomodoro",
+            ShapeKind::PomodoroCompact,
+            View0::PomodoroCompact,
+            Expr::Focus,
+        )
+    },
+    bata(
+        "bata-musik",
+        ShapeKind::MediaCompact,
+        View0::MediaCompact,
+        Expr::Music,
+    ),
+    Scene {
+        lyric_at: 6_000,
+        lyrics_on: true,
+        ..bata(
+            "bata-lirik",
+            ShapeKind::MediaLyric,
+            View0::MediaLyric,
+            Expr::Sing,
+        )
+    },
+    bata(
+        "bata-pengingat",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::Reminder),
+        Expr::Alert,
+    ),
+    Scene {
+        pomo: Pomo::Ready,
+        ..bata(
+            "bata-fase",
+            ShapeKind::Notice,
+            View0::Notice(DemoNotice::Pomodoro),
+            Expr::Happy,
+        )
+    },
+    bata(
+        "bata-claude",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ClaudeWorking),
+        Expr::Think,
+    ),
+    // Other apps keep their badge: no robot.
+    Scene {
+        robot: None,
+        ..bata(
+            "bata-notifikasi",
+            ShapeKind::Notice,
+            View0::Notice(DemoNotice::App),
+            Expr::Idle,
+        )
+    },
+    bata(
+        "bata-cli-running",
+        ShapeKind::Idle,
+        View0::Idle,
+        Expr::Think,
+    ),
+    bata("bata-cli-done", ShapeKind::Idle, View0::Idle, Expr::Happy),
+    bata("bata-cli-failed", ShapeKind::Idle, View0::Idle, Expr::Sad),
 ];
 
 /// `DI_DEMO_STEP`: a step number, or a scene's name (Pill), or
@@ -330,6 +440,17 @@ pub fn run() {
 /// `--demo-cli`: only the CLI page's scenes (`cli-empty`, `cli-ready`,
 /// `cli-typing`, `cli-running`, `cli-done`, `cli-error`, `cli-tall`), Pill
 /// then Notch; `DI_DEMO_STEP` picks one by number or name as in `--demo`.
+/// `--demo-robot`: only Bata's scenes, Pill then Notch; `DI_DEMO_STEP`
+/// picks one by number or name as in `--demo`.
+pub fn run_robot() {
+    let scenes: Vec<Scene> = SCENES
+        .iter()
+        .copied()
+        .filter(|s| s.name.starts_with("bata-"))
+        .collect();
+    run_scenes(&scenes);
+}
+
 pub fn run_cli() {
     let scenes: Vec<Scene> = SCENES
         .iter()
@@ -404,6 +525,17 @@ fn run_scenes(scenes: &[Scene]) {
         };
         let t = frozen_t.unwrap_or((into as f32 / ANIM_MS as f32).min(1.0));
         let (style, scene) = scene(scenes, step);
+        if scene.sheet {
+            if step != settled {
+                println!("demo: step {step} {:?} {}", style, scene.name);
+                settled = step;
+                if let Err(error) = renderer.draw_robot_sheet(&win, palette) {
+                    eprintln!("demo: draw failed: {error}");
+                }
+            }
+            std::thread::sleep(Duration::from_millis(16));
+            continue;
+        }
         // The equalizer animates; everything else redraws only while morphing.
         let animated = scene.view == View0::MediaCompact;
         if step != settled || animated {
@@ -414,8 +546,9 @@ fn run_scenes(scenes: &[Scene]) {
                 settled = step;
             }
             let (prev_style, prev) = self::scene(scenes, (step + steps - 1) % steps);
-            let from = shape_for(prev_style, prev.kind);
-            let shape = lerp_shape(from, shape_for(style, scene.kind), ease_out_back(t));
+            let from = shape_with_robot(prev_style, prev.kind, prev.robot.is_some());
+            let to = shape_with_robot(style, scene.kind, scene.robot.is_some());
+            let shape = lerp_shape(from, to, ease_out_back(t));
             let now = Instant::now();
             let pomodoro = demo_pomodoro(scene.pomo, now);
             let view = match scene.view {
@@ -467,11 +600,18 @@ fn run_scenes(scenes: &[Scene]) {
                 day_page: scene.day_page,
                 page_slide: slide,
                 palette,
-                clock: clock_on.then(|| Local::now().format("%H:%M").to_string()),
+                clock: match scene.clock {
+                    Some(fixed) => Some(fixed.to_owned()),
+                    None => clock_on.then(|| Local::now().format("%H:%M").to_string()),
+                },
                 lyric: lyric_state.shown(now),
                 lyrics_on: scene.lyrics_on,
                 cli: cli.view(),
                 progress: Some(DEMO_PROGRESS),
+                robot: scene.robot.map(|expr| RobotFrame {
+                    expr,
+                    pose: Pose::default(),
+                }),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -522,6 +662,20 @@ fn demo_notice(which: DemoNotice) -> Notice {
             "Rani · Mail",
             "Denah lantai 2 sudah saya kirim, cek ya".into(),
             NoticeKind::App { app_id: None },
+        ),
+        DemoNotice::Greeting => notice(
+            tr(Key::SourceBata),
+            tr(Key::GoodMorning),
+            crate::i18n::greeting_body(crate::i18n::lang(), 3, 2),
+            NoticeKind::Greeting,
+        ),
+        DemoNotice::ClaudeWorking => notice(
+            "Claude",
+            "Claude sedang bekerja",
+            "dynamic-island · 3 file diubah".into(),
+            NoticeKind::ClaudeDone {
+                session_id: "demo".into(),
+            },
         ),
     }
 }

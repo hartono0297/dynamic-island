@@ -44,9 +44,11 @@ use chrono::NaiveDate;
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
-    compact_layout, corner_radius, equalizer_heights, lyric_layout, notice_action, notice_layout,
+    compact_layout, compact_layout_robot, corner_radius, equalizer_heights, idle_layout,
+    lyric_layout, lyric_layout_robot, notice_action, notice_layout,
 };
 use super::icons::{Icon, IconSet};
+use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::calendar::CalendarSnapshot;
 use crate::cli::{Output, Shell};
@@ -115,6 +117,16 @@ pub struct Frame<'a> {
     /// Where the playing track is: the notch's progress line and the Music
     /// page's bar. `None` without a timeline or a known length.
     pub progress: Option<Progress>,
+    /// Bata in the compact island or in place of a notice's badge; `None`
+    /// when it is off or the view has none (the panel, other apps' notices).
+    pub robot: Option<RobotFrame>,
+}
+
+/// The robot's face and pose for one frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RobotFrame {
+    pub expr: Expr,
+    pub pose: Pose,
 }
 
 /// The playback position within a track of known length.
@@ -225,6 +237,8 @@ pub struct Renderer {
     fonts: Fonts,
     /// Studio icon geometries, built on `d2d`.
     icons: IconSet,
+    /// Bata's face strokes, built on `d2d`.
+    robot: RobotPainter,
     surface: Option<Surface>,
     target: Option<Target>,
     /// Most recently used first; at most `ART_SLOTS`.
@@ -390,6 +404,7 @@ impl Renderer {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let fonts = Fonts::new(&dwrite)?;
             let icons = IconSet::new(&d2d)?;
+            let robot = RobotPainter::new(&d2d)?;
             let tabular = fonts::tabular_figures(&dwrite)?;
             let round_cap = d2d.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -410,6 +425,7 @@ impl Renderer {
                 tabular,
                 fonts,
                 icons,
+                robot,
                 surface: None,
                 target: None,
                 art: Vec::new(),
@@ -449,7 +465,15 @@ impl Renderer {
             self.regions = HitRegions::default();
             self.paint(style, shape, frame, opacity)?;
         }
-        let surface = self.surface.as_ref().expect("surface ensured above");
+        self.present(win, opacity)
+    }
+
+    /// Pushes the drawn surface to the layered window at `opacity`.
+    fn present(&self, win: &IslandWindow, opacity: f32) -> Result<()> {
+        let surface = self
+            .surface
+            .as_ref()
+            .expect("surface ensured by the caller");
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
             BlendFlags: 0,
@@ -468,6 +492,130 @@ impl Renderer {
                 Some(&blend),
                 ULW_ALPHA,
             )
+        }
+    }
+
+    /// `--demo-robot`'s sheet (studio-robot.html page 2): the ten faces at
+    /// 48 px with their names, then a blink, the notch sizes (48, 32, 26,
+    /// 20 px) and three faces at 26 px, on a dark card filling the window.
+    #[cfg(debug_assertions)]
+    pub fn draw_robot_sheet(&mut self, win: &IslandWindow, palette: Palette) -> Result<()> {
+        self.palette = palette;
+        self.scale = win.scale();
+        self.regions = HitRegions::default();
+        self.ensure_surface(win.size())?;
+        self.ensure_target()?;
+        let surface = self.surface.as_ref().expect("surface ensured above");
+        let target = self.target.as_ref().expect("target ensured above");
+        let bounds = RECT {
+            left: 0,
+            top: 0,
+            right: surface.size.cx,
+            bottom: surface.size.cy,
+        };
+        unsafe {
+            target.rt.BindDC(surface.dc, &bounds)?;
+            target.rt.SetDpi(96.0 * self.scale, 96.0 * self.scale);
+            target.rt.BeginDraw();
+            target.rt.Clear(Some(&color(0, 0.0)));
+        }
+        self.paint_robot_sheet();
+        let target = self.target.as_ref().expect("target ensured above");
+        unsafe { target.rt.EndDraw(None, None) }?;
+        self.present(win, 1.0)
+    }
+
+    #[cfg(debug_assertions)]
+    fn paint_robot_sheet(&self) {
+        use super::geometry::ROBOT_COMPACT;
+        use super::robot::Expr;
+        let card = Rect {
+            x: 20.0,
+            y: 8.0,
+            w: 580.0,
+            h: 440.0,
+        };
+        self.set_color(self.palette.surface, 1.0);
+        self.fill_round(card, radius::PANEL);
+        let title = Rect {
+            x: card.x + 24.0,
+            y: card.y + 14.0,
+            w: 300.0,
+            h: 28.0,
+        };
+        self.text("Bata", &self.fonts.heading, title, 1.0);
+        let pose = Pose::default();
+        let lang = i18n::lang();
+        let col = (card.w - 40.0) / 5.0;
+        for (i, expr) in Expr::ALL.into_iter().enumerate() {
+            let (row, c) = (i / 5, i % 5);
+            let x = card.x + 20.0 + c as f32 * col;
+            let y = card.y + 56.0 + row as f32 * 118.0;
+            let cell = Rect {
+                x: x + 4.0,
+                y,
+                w: col - 8.0,
+                h: 108.0,
+            };
+            self.set_color(self.palette.raised, 1.0);
+            self.fill_round(cell, radius::NOTICE / 1.5);
+            let size = 56.0;
+            let area = Rect {
+                x: cell.x + (cell.w - size) / 2.0,
+                y: cell.y + 14.0,
+                w: size,
+                h: size,
+            };
+            self.paint_robot(area, RobotFrame { expr, pose });
+            let label = Rect {
+                y: cell.y + 80.0,
+                h: 18.0,
+                ..cell
+            };
+            let name = i18n::text(lang, expr.key());
+            self.text(name, &self.fonts.small_center, label, 1.0);
+        }
+        // Sizes: a blink, 48 → 20 px, then three faces at the notch's 26 px.
+        let base = card.y + 56.0 + 2.0 * 118.0 + 70.0;
+        let face = |expr: Expr| i18n::text(lang, expr.key());
+        let blinking = i18n::text(lang, i18n::Key::ExprBlink);
+        let items: [(Expr, bool, f32, &str); 8] = [
+            (Expr::Idle, true, 48.0, blinking),
+            (Expr::Idle, false, 48.0, "48 px"),
+            (Expr::Idle, false, 32.0, "32 px"),
+            (Expr::Idle, false, ROBOT_COMPACT, "26 px"),
+            (Expr::Idle, false, 20.0, "20 px"),
+            (Expr::Happy, false, ROBOT_COMPACT, face(Expr::Happy)),
+            (Expr::Alert, false, ROBOT_COMPACT, face(Expr::Alert)),
+            (Expr::Sleep, false, ROBOT_COMPACT, face(Expr::Sleep)),
+        ];
+        let step = (card.w - 40.0) / items.len() as f32;
+        for (i, (expr, blink, size, label)) in items.into_iter().enumerate() {
+            let cx = card.x + 20.0 + step * (i as f32 + 0.5);
+            let area = Rect {
+                x: cx - size / 2.0,
+                y: base - size,
+                w: size,
+                h: size,
+            };
+            let pose = Pose {
+                blink,
+                ..Pose::default()
+            };
+            self.paint_robot(area, RobotFrame { expr, pose });
+            let text = Rect {
+                x: cx - step / 2.0,
+                y: base + 8.0,
+                w: step,
+                h: 16.0,
+            };
+            self.text_colored(
+                label,
+                &self.fonts.small_center,
+                text,
+                self.palette.secondary,
+                1.0,
+            );
         }
     }
 
@@ -613,6 +761,7 @@ impl Renderer {
             return Ok(());
         }
         self.regions.shape = Some((style, shape));
+        // Never a robot in the panel.
         if let View::Panel(_) = view {
             return self.paint_panel(style, shape, frame);
         }
@@ -622,21 +771,33 @@ impl Renderer {
                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             );
         }
+        let robot = frame.robot;
         let content = match view {
             View::MediaCompact => frame.media.map_or(Ok(()), |m| {
-                self.paint_compact(style, shape, m, frame.now, frame.progress)
+                self.paint_compact(style, shape, m, frame.now, frame.progress, robot)
             }),
             View::MediaLyric => {
-                self.paint_lyric(shape, frame.lyric.as_ref());
+                self.paint_lyric(shape, frame.lyric.as_ref(), robot);
                 Ok(())
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             // A pomodoro notice shows while the next phase waits (Ready).
-            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro),
+            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro, robot),
             View::Idle => {
-                // Without the clock, idle is the empty shape.
-                if let Some(time) = &frame.clock {
-                    self.text(time, &self.fonts.clock, shape_rect(shape), 1.0);
+                // Without the clock or the robot, idle is the empty shape.
+                let l = idle_layout(shape, robot.is_some(), frame.clock.is_some());
+                if let (Some(area), Some(r)) = (l.robot, robot) {
+                    self.paint_robot(area, r);
+                }
+                if let (Some(area), Some(time)) = (l.clock, &frame.clock) {
+                    // A sleeping Bata dims the clock beside it, as in the design.
+                    let asleep = robot.is_some_and(|r| r.expr == Expr::Sleep);
+                    self.text(
+                        time,
+                        &self.fonts.clock,
+                        area,
+                        if asleep { 0.6 } else { 1.0 },
+                    );
                 }
                 Ok(())
             }
@@ -648,6 +809,13 @@ impl Renderer {
         content
     }
 
+    /// Bata filling the square `area`.
+    fn paint_robot(&self, area: Rect, robot: RobotFrame) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        self.robot
+            .paint(&target.rt, &target.brush, area, robot.expr, robot.pose, 1.0);
+    }
+
     fn paint_compact(
         &mut self,
         style: Style,
@@ -655,8 +823,12 @@ impl Renderer {
         media: &MediaInfo,
         now: Instant,
         progress: Option<Progress>,
+        robot: Option<RobotFrame>,
     ) -> Result<()> {
-        let layout = compact_layout(shape);
+        let layout = match robot {
+            Some(_) => compact_layout_robot(shape),
+            None => compact_layout(shape),
+        };
         if let Some(line) = progress.and_then(|p| compact_progress(style, shape, p)) {
             let radius = PROGRESS_LINE_H / 2.0;
             self.set_color(self.palette.track, 1.0);
@@ -666,7 +838,11 @@ impl Renderer {
                 self.fill_round(line.fill, radius);
             }
         }
-        self.paint_art(layout.art, radius::ART, media.art.as_deref())?;
+        // The robot takes the album art's place, as in the design.
+        match robot {
+            Some(r) => self.paint_robot(layout.art, r),
+            None => self.paint_art(layout.art, radius::ART, media.art.as_deref())?,
+        }
         // The song, as in the design; the artist when the player gives no title.
         let label = if media.title.is_empty() {
             &media.artist
@@ -694,9 +870,16 @@ impl Renderer {
 
     /// The current lyric line, centred and trimmed; while lines change, the
     /// old one fades out rising and the new one fades in from below.
-    fn paint_lyric(&self, shape: ShapeRect, lyric: Option<&ShownLine>) {
+    fn paint_lyric(&self, shape: ShapeRect, lyric: Option<&ShownLine>, robot: Option<RobotFrame>) {
+        let area = match robot {
+            Some(r) => {
+                let (slot, area) = lyric_layout_robot(shape);
+                self.paint_robot(slot, r);
+                area
+            }
+            None => lyric_layout(shape),
+        };
         let Some(lyric) = lyric else { return };
-        let area = lyric_layout(shape);
         let t = lyric.fade.clamp(0.0, 1.0);
         // Smoothstep: the lines settle gently instead of stopping dead.
         let eased = t * t * (3.0 - 2.0 * t);
@@ -724,7 +907,13 @@ impl Renderer {
     /// Badge, title over body, and the chip naming what a click does
     /// (`notice_action`): a reminder is then done, a pomodoro phase waiting
     /// to start starts (in that phase's colour).
-    fn paint_notice(&mut self, shape: ShapeRect, notice: &Notice, pomo: &Pomodoro) -> Result<()> {
+    fn paint_notice(
+        &mut self,
+        shape: ShapeRect,
+        notice: &Notice,
+        pomo: &Pomodoro,
+        robot: Option<RobotFrame>,
+    ) -> Result<()> {
         let p = self.palette;
         let next = pomo.phase();
         let action = notice_action(&notice.kind, pomo.status()).map(|key| {
@@ -736,14 +925,20 @@ impl Renderer {
         });
         let layout = notice_layout(shape, action.is_some());
         let badge = badge_style(notice, &p, next);
-        self.set_color(badge.fill, badge.alpha);
-        self.fill_round(layout.badge, radius::BADGE);
-        match badge.icon {
-            // Line only: the duotone would vanish on a tint of its own colour.
-            Some(icon) => self.icon_colored(icon, layout.badge, 20.0, badge.ink, 1.0, None),
+        match robot {
+            // The island's own notices: Bata (40 px) instead of the badge.
+            Some(r) => self.paint_robot(layout.badge, r),
             None => {
-                let letter = badge_letter(&notice.source);
-                self.text_colored(&letter, &self.fonts.badge, layout.badge, badge.ink, 1.0);
+                self.set_color(badge.fill, badge.alpha);
+                self.fill_round(layout.badge, radius::BADGE);
+                match badge.icon {
+                    // Line only: the duotone would vanish on a tint of its own colour.
+                    Some(icon) => self.icon_colored(icon, layout.badge, 20.0, badge.ink, 1.0, None),
+                    None => {
+                        let letter = badge_letter(&notice.source);
+                        self.text_colored(&letter, &self.fonts.badge, layout.badge, badge.ink, 1.0);
+                    }
+                }
             }
         }
         self.text(&notice.title, &self.fonts.title, layout.title, 1.0);

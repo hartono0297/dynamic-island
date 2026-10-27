@@ -43,7 +43,7 @@ fn opens_windows(arg: Option<&str>) -> bool {
     match arg {
         None => true,
         #[cfg(debug_assertions)]
-        Some("--demo" | "--demo-editor" | "--demo-cli" | "--settings") => true,
+        Some("--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--settings") => true,
         Some(_) => false,
     }
 }
@@ -89,6 +89,12 @@ fn main() {
             attach_parent_console();
             demo_lang_from_env();
             ui::demo::run_cli();
+        }
+        #[cfg(debug_assertions)]
+        Some("--demo-robot") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            ui::demo::run_robot();
         }
         #[cfg(debug_assertions)]
         Some("--settings") => {

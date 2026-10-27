@@ -54,17 +54,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow,
     SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
     WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR,
-    WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT,
+    WM_SETCURSOR, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
 use super::frame_clock::{FrameClock, WM_APP_FRAME};
+use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
     CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
-    Section, State, Tone, battery_step, layout,
+    Section, State, Tone, battery_step, layout, scroll_by,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -95,6 +96,10 @@ pub enum Action {
     IdleClock(bool),
     Lyrics(bool),
     Shell(Shell),
+    Robot(bool),
+    RobotMotion(Motion),
+    RobotSleep(u32),
+    Greeting(bool),
     BatteryThreshold(u8),
     DndHelp,
     Pomo(PomoField, i32),
@@ -129,6 +134,10 @@ pub struct Model {
     pub idle_clock: bool,
     pub lyrics: bool,
     pub shell: Shell,
+    pub robot: bool,
+    pub robot_motion: Motion,
+    pub robot_sleep: u32,
+    pub greeting: bool,
     pub battery_threshold: u8,
     pub pomodoro: PomoSettings,
     /// A pomodoro phase runs or is paused.
@@ -150,6 +159,10 @@ impl Model {
             idle_clock: cfg.idle_clock,
             lyrics: cfg.lyrics,
             shell: cfg.cli_shell,
+            robot: cfg.robot,
+            robot_motion: cfg.robot_animation,
+            robot_sleep: cfg.robot_sleep_minutes,
+            greeting: cfg.morning_greeting,
             battery_threshold: cfg.battery_threshold,
             pomodoro: cfg.pomodoro,
             pomodoro_locked: false,
@@ -294,6 +307,8 @@ struct Settings {
     dpi: u32,
     model: Model,
     section: Section,
+    /// How far Appearance (taller than the window) is scrolled.
+    scroll: f32,
     layout: Layout,
     gfx: Gfx,
     hover: Option<Hit>,
@@ -582,6 +597,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         dpi,
         model,
         section: section.unwrap_or(Section::Appearance),
+        scroll: 0.0,
         layout: Layout::default(),
         gfx,
         hover: None,
@@ -852,6 +868,11 @@ impl Settings {
             window: m.window,
             autostart: m.autostart,
             idle_clock: m.idle_clock,
+            robot: m.robot,
+            robot_motion: m.robot_motion,
+            robot_sleep: m.robot_sleep,
+            greeting: m.greeting,
+            scroll: self.scroll,
             lyrics: m.lyrics,
             shell: m.shell,
             battery_threshold: m.battery_threshold,
@@ -873,8 +894,21 @@ impl Settings {
 
     fn relayout(&mut self) {
         let l = layout(self.section, &self.state(), &self.gfx);
+        // The layout keeps the scroll in range (a language change can move it).
+        self.scroll = l.scroll;
         self.layout = l;
         self.invalidate();
+    }
+
+    /// The wheel over a section taller than the window scrolls it.
+    fn on_wheel(&mut self, delta: i32) {
+        let scroll = scroll_by(self.scroll, delta, self.layout.scroll_max);
+        if scroll != self.scroll {
+            self.scroll = scroll;
+            // What was under the pointer moved away.
+            self.hover = None;
+            self.relayout();
+        }
     }
 
     fn invalidate(&self) {
@@ -933,6 +967,10 @@ impl Settings {
                     .unwrap_or(0) as f32,
                 Group::Lang => usize::from(m.lang == Lang::En) as f32,
                 Group::Shell => usize::from(m.shell == Shell::Cmd) as f32,
+                Group::Motion => Motion::ALL
+                    .iter()
+                    .position(|v| *v == m.robot_motion)
+                    .unwrap_or(0) as f32,
             }
         };
         for group in [
@@ -941,6 +979,7 @@ impl Settings {
             Group::Window,
             Group::Lang,
             Group::Shell,
+            Group::Motion,
         ] {
             let (from, to) = (index(group, &old), index(group, new));
             if from != to {
@@ -959,6 +998,14 @@ impl Settings {
         if old.lyrics != new.lyrics {
             self.anims
                 .slide_toggle(Hit::Lyrics, old.lyrics, new.lyrics, now);
+        }
+        if old.robot != new.robot {
+            self.anims
+                .slide_toggle(Hit::Robot, old.robot, new.robot, now);
+        }
+        if old.greeting != new.greeting {
+            self.anims
+                .slide_toggle(Hit::Greeting, old.greeting, new.greeting, now);
         }
         let mut changes = ModelChanges {
             title: None,
@@ -1016,6 +1063,7 @@ impl Settings {
             p,
             island: theme::island(self.model.accent, self.model.surface),
             style: self.model.style,
+            robot: self.model.robot,
             lang: self.model.lang,
             hover: self.hover,
             pressed: self.pressed,
@@ -1100,6 +1148,17 @@ impl Settings {
             Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
             Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
             Hit::Shell(v) if v != m.shell => post(Action::Shell(v)),
+            Hit::Robot => post(Action::Robot(!m.robot)),
+            Hit::Motion(v) if v != m.robot_motion => post(Action::RobotMotion(v)),
+            Hit::RobotSleep(dir) => {
+                let v = sleep_step(m.robot_sleep, dir);
+                if v == m.robot_sleep {
+                    Vec::new()
+                } else {
+                    post(Action::RobotSleep(v))
+                }
+            }
+            Hit::Greeting => post(Action::Greeting(!m.greeting)),
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1177,7 +1236,8 @@ impl Settings {
             | Hit::Surface(_)
             | Hit::WindowMode(_)
             | Hit::Lang(_)
-            | Hit::Shell(_) => Vec::new(),
+            | Hit::Shell(_)
+            | Hit::Motion(_) => Vec::new(),
         };
         self.relayout();
         after
@@ -1208,6 +1268,7 @@ impl Settings {
             start: now,
         });
         self.section = section;
+        self.scroll = 0.0;
         self.focused = None;
         self.hover = None;
         self.start_clock();
@@ -1532,6 +1593,12 @@ unsafe extern "system" fn wnd_proc(
             on_mouse_leave();
             LRESULT(0)
         }
+        WM_MOUSEWHEEL => {
+            // High word of wParam: signed delta, +120 per notch away from the user.
+            let delta = i32::from((wparam.0 >> 16) as u16 as i16);
+            with(|st| st.on_wheel(delta));
+            LRESULT(0)
+        }
         WM_LBUTTONDOWN => {
             on_button_down(hwnd, lparam);
             LRESULT(0)
@@ -1689,6 +1756,10 @@ pub fn run_demo(args: &[String]) {
             Action::IdleClock(v) => m.idle_clock = v,
             Action::Lyrics(v) => m.lyrics = v,
             Action::Shell(v) => m.shell = v,
+            Action::Robot(v) => m.robot = v,
+            Action::RobotMotion(v) => m.robot_motion = v,
+            Action::RobotSleep(v) => m.robot_sleep = v,
+            Action::Greeting(v) => m.greeting = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);

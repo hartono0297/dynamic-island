@@ -12,12 +12,12 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE,
-    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
-    D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION,
-    D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
+    D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
     ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
@@ -33,8 +33,12 @@ use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::fonts::{self, Face, Role};
-use super::geometry::{BAR_COUNT, BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, shape_for};
+use super::geometry::{
+    BAR_COUNT, BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, compact_layout_robot,
+    shape_with_robot,
+};
 use super::icons::{Icon, IconSet};
+use super::robot::{Expr, Pose, RobotPainter};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
     FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect, SEGMENT_RADIUS,
@@ -59,6 +63,8 @@ pub struct Scene<'a> {
     pub p: WindowPalette,
     pub island: Palette,
     pub style: Style,
+    /// Bata is on: the preview shows it in the album art's place.
+    pub robot: bool,
     pub lang: Lang,
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
@@ -88,6 +94,8 @@ pub struct Gfx {
     plain: IDWriteTypography,
     /// Studio icon geometries, built on `d2d`.
     icons: IconSet,
+    /// Bata, for the preview.
+    robot: RobotPainter,
     /// The preview island's line of text.
     island_text: IDWriteTextFormat,
     widths: RefCell<HashMap<(String, Font), f32>>,
@@ -124,6 +132,7 @@ impl Gfx {
             let normal = DWRITE_FONT_WEIGHT_NORMAL;
             Ok(Gfx {
                 icons: IconSet::new(&d2d)?,
+                robot: RobotPainter::new(&d2d)?,
                 island_text: line_format(
                     &dwrite,
                     &text,
@@ -513,6 +522,25 @@ impl Painter<'_> {
         if let Some(title) = &l.title {
             self.text(title);
         }
+        // A scrolled section draws inside its viewport only.
+        if let Some(v) = l.viewport {
+            unsafe {
+                self.rt
+                    .PushAxisAlignedClip(&d2d_rect(v), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
+        }
+        self.cards_and_controls(s);
+        if l.viewport.is_some() {
+            unsafe { self.rt.PopAxisAlignedClip() };
+            if let Some(bar) = l.scrollbar() {
+                self.fill_round(bar, FULL_RADIUS, self.p.secondary, 0.35);
+            }
+        }
+    }
+
+    /// Everything of the section below its title.
+    fn cards_and_controls(&self, s: &Scene) {
+        let l = s.layout;
         for card in &l.cards {
             self.fill_round(*card, CARD_RADIUS, self.p.card, 1.0);
             self.stroke_round(*card, CARD_RADIUS, self.p.border);
@@ -554,21 +582,28 @@ impl Painter<'_> {
                     track,
                     items,
                     selected,
+                    enabled,
                 } => {
                     let pos = s
                         .segments
                         .iter()
                         .find(|(g, _)| g == group)
                         .map_or(*selected as f32, |(_, v)| *v);
-                    self.segmented(*track, items, pos, s);
+                    self.dimmed(*enabled).segmented(*track, items, pos, s);
                 }
-                Control::Toggle { hit, rect, on } => {
+                Control::Toggle {
+                    hit,
+                    rect,
+                    on,
+                    enabled,
+                } => {
                     let v = s
                         .toggles
                         .iter()
                         .find(|(h, _)| h == hit)
                         .map_or(f32::from(u8::from(*on)), |(_, v)| *v);
-                    self.toggle(*rect, v, s.hover == Some(*hit))
+                    let hover = *enabled && s.hover == Some(*hit);
+                    self.dimmed(*enabled).toggle(*rect, v, hover)
                 }
                 Control::Stepper {
                     minus,
@@ -594,6 +629,18 @@ impl Painter<'_> {
                 }
                 Control::Button(b) => self.button(b, s),
             }
+        }
+    }
+
+    /// This painter, faded for a control that is off.
+    fn dimmed(&self, enabled: bool) -> Painter<'_> {
+        Painter {
+            alpha: if enabled {
+                self.alpha
+            } else {
+                self.alpha * 0.45
+            },
+            ..*self
         }
     }
 
@@ -808,7 +855,7 @@ impl Painter<'_> {
         self.stroke_round(screen, CONTROL_RADIUS, self.p.border);
 
         // The island, at its real size, centered at the top of the "screen".
-        let base = shape_for(s.style, ShapeKind::MediaCompact);
+        let base = shape_with_robot(s.style, ShapeKind::MediaCompact, s.robot);
         let shape = super::geometry::ShapeRect {
             x: screen.x + (screen.w - base.w) / 2.0,
             y: screen.y + base.y,
@@ -839,20 +886,36 @@ impl Painter<'_> {
                 }
             }
         }
-        let l = compact_layout(shape);
-        // Album art: an accent tile, darker toward the bottom, with a note.
+        let l = if s.robot {
+            compact_layout_robot(shape)
+        } else {
+            compact_layout(shape)
+        };
         let art = l.art;
-        self.fill_round(art, 5.0, mix(pal.accent, pal.surface, 0.35), 1.0);
-        self.fill_round(
-            Rect {
-                h: art.h * 0.55,
-                ..art
-            },
-            5.0,
-            pal.accent,
-            0.9,
-        );
-        self.icon(Icon::Music, art, 12.0, pal.on_accent, 0.95, false);
+        if s.robot {
+            // Bata listening, as on the island.
+            self.gfx.robot.paint(
+                self.rt,
+                self.brush,
+                art,
+                Expr::Music,
+                Pose::default(),
+                self.alpha,
+            );
+        } else {
+            // Album art: an accent tile, darker toward the bottom, with a note.
+            self.fill_round(art, 5.0, mix(pal.accent, pal.surface, 0.35), 1.0);
+            self.fill_round(
+                Rect {
+                    h: art.h * 0.55,
+                    ..art
+                },
+                5.0,
+                pal.accent,
+                0.9,
+            );
+            self.icon(Icon::Music, art, 12.0, pal.on_accent, 0.95, false);
+        }
         let label = text(s.lang, Key::PreviewTrack);
         let style = TextStyle {
             format: &self.gfx.island_text,

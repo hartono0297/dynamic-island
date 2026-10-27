@@ -73,6 +73,115 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     }
 }
 
+/// Bata in a compact island: this big, this far in from the left edge, and
+/// this far from what follows. On a notice it takes the badge's 40 px place.
+pub const ROBOT_COMPACT: f32 = 26.0;
+pub const ROBOT_NOTICE: f32 = 40.0;
+const ROBOT_INSET: f32 = 6.0;
+const ROBOT_GAP: f32 = 8.0;
+/// The idle clock's box beside the robot: "00:00" in Fraunces It 16 fits.
+pub const CLOCK_W: f32 = 44.0;
+
+/// How much wider a compact shape is with the robot at its left, so its
+/// content keeps the room it has without it. Idle holds the robot and the
+/// clock as it is; a notice's robot takes the badge's place.
+pub fn robot_extra(kind: ShapeKind) -> f32 {
+    match kind {
+        // The art (22 px, text from +38) becomes the robot (26 px, text from +40).
+        ShapeKind::MediaCompact => 2.0,
+        // The line started 20 px in; now after the robot, 40 px in.
+        ShapeKind::MediaLyric => 20.0,
+        // The ring started 14 px in; now after the robot, 40 px in.
+        ShapeKind::PomodoroCompact => 26.0,
+        _ => 0.0,
+    }
+}
+
+/// `shape_for`, widened by `robot_extra` (and still centred) with the robot on.
+pub fn shape_with_robot(style: Style, kind: ShapeKind, robot: bool) -> ShapeRect {
+    let s = shape_for(style, kind);
+    if !robot {
+        return s;
+    }
+    let w = s.w + robot_extra(kind);
+    ShapeRect {
+        x: (WINDOW_W - w) / 2.0,
+        w,
+        ..s
+    }
+}
+
+/// The robot's square at the left of a compact shape, vertically centred.
+pub fn robot_slot(s: ShapeRect) -> Rect {
+    square(
+        s.x + ROBOT_INSET,
+        s.y + (s.h - ROBOT_COMPACT) / 2.0,
+        ROBOT_COMPACT,
+    )
+}
+
+/// The idle island: the robot, the clock, both side by side (centred as a
+/// group), or nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IdleLayout {
+    pub robot: Option<Rect>,
+    /// The clock's box; its text is centred in it.
+    pub clock: Option<Rect>,
+}
+
+pub fn idle_layout(s: ShapeRect, robot: bool, clock: bool) -> IdleLayout {
+    let full = Rect {
+        x: s.x,
+        y: s.y,
+        w: s.w,
+        h: s.h,
+    };
+    let y = s.y + (s.h - ROBOT_COMPACT) / 2.0;
+    match (robot, clock) {
+        (false, clock) => IdleLayout {
+            robot: None,
+            clock: clock.then_some(full),
+        },
+        (true, false) => IdleLayout {
+            robot: Some(square(s.x + (s.w - ROBOT_COMPACT) / 2.0, y, ROBOT_COMPACT)),
+            clock: None,
+        },
+        (true, true) => {
+            let group = ROBOT_COMPACT + ROBOT_GAP + CLOCK_W;
+            let x = s.x + (s.w - group) / 2.0;
+            IdleLayout {
+                robot: Some(square(x, y, ROBOT_COMPACT)),
+                clock: Some(Rect {
+                    x: x + ROBOT_COMPACT + ROBOT_GAP,
+                    y: s.y,
+                    w: CLOCK_W,
+                    h: s.h,
+                }),
+            }
+        }
+    }
+}
+
+/// Compact media with the robot in the album art's place (`art` is the
+/// robot's square): title, then the equalizer.
+pub fn compact_layout_robot(s: ShapeRect) -> CompactLayout {
+    let robot = robot_slot(s);
+    let plain = compact_layout(s);
+    CompactLayout {
+        art: robot,
+        text: text_box(robot.right() + ROBOT_GAP, plain.bars.x - 10.0, s.y, s.h),
+        bars: plain.bars,
+    }
+}
+
+/// The lyric view with the robot: its square, then the line's box.
+pub fn lyric_layout_robot(s: ShapeRect) -> (Rect, Rect) {
+    let robot = robot_slot(s);
+    let line = lyric_layout(s);
+    let left = robot.right() + ROBOT_GAP;
+    (robot, text_box(left, line.right(), s.y, s.h))
+}
+
 /// Linear blend; `t` outside 0..=1 extrapolates, which is how the eased
 /// overshoot carries past the target shape.
 pub fn lerp_shape(a: ShapeRect, b: ShapeRect, t: f32) -> ShapeRect {
@@ -261,7 +370,8 @@ pub fn lyric_layout(s: ShapeRect) -> Rect {
 /// `action`: room for the chip naming what a click does ("Selesai",
 /// "Mulai") at the right, the text stopping short of it.
 pub fn notice_layout(s: ShapeRect, action: bool) -> NoticeLayout {
-    const BADGE: f32 = 40.0;
+    // The robot takes exactly the badge's place.
+    const BADGE: f32 = ROBOT_NOTICE;
     const PAD_L: f32 = 18.0;
     const PAD_R: f32 = 20.0;
     const ACTION_W: f32 = 66.0;
@@ -352,6 +462,8 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
             tint(p.accent, Icon::Sparkle)
         }
         NoticeKind::BatteryLow => tint(p.ochre, Icon::Battery),
+        // Drawn by the robot; this badge only shows if it is turned off meanwhile.
+        NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
         NoticeKind::Reminder { .. } => BadgeStyle {
             fill: p.accent,
@@ -532,6 +644,138 @@ mod tests {
             assert!(a.title.right() < chip.x && a.body.right() < chip.x);
             assert!(chip.right() <= n.x + n.w - corner_radius(style, n) / 2.0);
             assert_eq!((a.badge, a.title.x), (l.badge, l.title.x));
+        }
+    }
+
+    /// Points along the robot head's rounded outline, drawn in `area`.
+    fn head_outline(area: Rect) -> Vec<(f32, f32)> {
+        let (h, r) = crate::ui::robot::head_rect(area);
+        let mut out = Vec::new();
+        for (cx, cy, a0) in [
+            (h.x + r, h.y + r, 180.0f32),
+            (h.right() - r, h.y + r, 270.0),
+            (h.right() - r, h.bottom() - r, 0.0),
+            (h.x + r, h.bottom() - r, 90.0),
+        ] {
+            for i in 0..=8 {
+                let a = (a0 + i as f32 * 90.0 / 8.0).to_radians();
+                out.push((cx + r * a.cos(), cy + r * a.sin()));
+            }
+        }
+        out
+    }
+
+    fn intersects(a: Rect, b: Rect) -> bool {
+        a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+    }
+
+    #[test]
+    fn robot_and_content_share_every_compact_shape() {
+        for style in [Style::Pill, Style::Notch] {
+            let head_inside = |s: ShapeRect, robot: Rect| {
+                for (x, y) in head_outline(robot) {
+                    assert!(
+                        shape_contains(style, s, x, y),
+                        "{style:?} {robot:?} ({x}, {y})"
+                    );
+                }
+            };
+            for (robot, clock) in [(true, true), (true, false), (false, true)] {
+                let s = shape_with_robot(style, ShapeKind::Idle, robot);
+                let l = idle_layout(s, robot, clock);
+                assert_eq!(l.robot.is_some(), robot);
+                assert_eq!(l.clock.is_some(), clock);
+                if let Some(r) = l.robot {
+                    assert_eq!((r.w, r.h), (ROBOT_COMPACT, ROBOT_COMPACT));
+                    head_inside(s, r);
+                }
+                if let (Some(r), Some(c)) = (l.robot, l.clock) {
+                    assert!(inside(s, c) && !intersects(r, c), "{style:?} {l:?}");
+                    // Side by side, centred as a group.
+                    let (left, right) = (r.x - s.x, s.x + s.w - c.right());
+                    assert!((left - right).abs() < 0.01);
+                }
+            }
+
+            let s = shape_with_robot(style, ShapeKind::MediaCompact, true);
+            let l = compact_layout_robot(s);
+            head_inside(s, l.art);
+            for r in [l.text, l.bars] {
+                assert!(
+                    inside(s, r) && !intersects(l.art, r),
+                    "{style:?} media {r:?}"
+                );
+            }
+            assert!(l.text.right() <= l.bars.x);
+            assert_eq!(
+                l.text.w,
+                compact_layout(shape_for(style, ShapeKind::MediaCompact))
+                    .text
+                    .w
+            );
+
+            let s = shape_with_robot(style, ShapeKind::MediaLyric, true);
+            let (robot, text) = lyric_layout_robot(s);
+            head_inside(s, robot);
+            assert!(inside(s, text) && !intersects(robot, text));
+            assert_eq!(
+                text.w,
+                lyric_layout(shape_for(style, ShapeKind::MediaLyric)).w
+            );
+
+            let s = shape_with_robot(style, ShapeKind::PomodoroCompact, true);
+            let (robot, (cx, cy), r, text) =
+                super::super::panel_layout::pomodoro_compact_layout_robot(s);
+            head_inside(s, robot);
+            let ring = Rect {
+                x: cx - r - 1.5,
+                y: cy - r - 1.5,
+                w: 2.0 * r + 3.0,
+                h: 2.0 * r + 3.0,
+            };
+            for part in [ring, text] {
+                assert!(inside(s, part), "{style:?} pomodoro {part:?}");
+                assert!(!intersects(robot, part), "{style:?} pomodoro {part:?}");
+            }
+            assert!(!intersects(ring, text));
+
+            // A notice's robot is its badge: same 40 px square, text after it.
+            let n = shape_with_robot(style, ShapeKind::Notice, true);
+            let l = notice_layout(n, true);
+            assert_eq!((l.badge.w, l.badge.h), (ROBOT_NOTICE, ROBOT_NOTICE));
+            head_inside(n, l.badge);
+            assert!(l.title.x >= l.badge.right());
+        }
+    }
+
+    #[test]
+    fn robot_widens_compact_shapes_only_when_on() {
+        for style in [Style::Pill, Style::Notch] {
+            for kind in [
+                ShapeKind::Idle,
+                ShapeKind::MediaCompact,
+                ShapeKind::MediaLyric,
+                ShapeKind::PomodoroCompact,
+                ShapeKind::Notice,
+                ShapeKind::Panel,
+                ShapeKind::PanelTall,
+            ] {
+                // Off: exactly as before.
+                assert_eq!(shape_with_robot(style, kind, false), shape_for(style, kind));
+                let on = shape_with_robot(style, kind, true);
+                assert_eq!(on.x * 2.0 + on.w, WINDOW_W, "{style:?} {kind:?} centred");
+                assert_eq!(
+                    (on.y, on.h),
+                    (shape_for(style, kind).y, shape_for(style, kind).h)
+                );
+            }
+            let w = |kind| shape_with_robot(style, kind, true).w;
+            assert_eq!(w(ShapeKind::Idle), 190.0);
+            assert_eq!(w(ShapeKind::MediaCompact), 192.0);
+            assert_eq!(w(ShapeKind::MediaLyric), 320.0);
+            assert_eq!(w(ShapeKind::PomodoroCompact), 236.0);
+            assert_eq!(w(ShapeKind::Notice), 360.0);
+            assert_eq!(w(ShapeKind::Panel), 560.0, "never in the panel");
         }
     }
 

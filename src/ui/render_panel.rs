@@ -38,8 +38,8 @@ use crate::ui::panel_layout::{
     CLI_LINE_H, CLI_TERM_RADIUS, CalendarLayout, CliHead, CliLayout, HOUR_GUTTER, ListLayout,
     PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, ShortcutsLayout, WEEK_HEAD_H,
     calendar_layout, cli_layout, cli_suggestions, media_panel_layout, media_progress_layout,
-    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_layout, regions, reminders_layout,
-    shortcuts_layout, tile_parts, waiting_strip,
+    notes_layout, page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot,
+    pomodoro_layout, regions, reminders_layout, shortcuts_layout, tile_parts, waiting_strip,
 };
 
 /// Height of the compact shapes the panel grows from.
@@ -1521,7 +1521,14 @@ impl Renderer {
     /// Small ring, `mm:ss`, then "Fokus 2/4", "Istirahat" or "Siap · klik".
     pub(super) fn paint_pomodoro_compact(&mut self, shape: ShapeRect, frame: &Frame) -> Result<()> {
         let pomo = frame.pomodoro;
-        let (center, radius, text) = pomodoro_compact_layout(shape);
+        let (center, radius, text) = match frame.robot {
+            Some(robot) => {
+                let (slot, center, radius, text) = pomodoro_compact_layout_robot(shape);
+                self.paint_robot(slot, robot);
+                (center, radius, text)
+            }
+            None => pomodoro_compact_layout(shape),
+        };
         let tint = self.palette.phase(pomo.phase());
         self.ring(center, radius, 3.0, pomo.progress(frame.now), tint)?;
         let paused = matches!(pomo.status(), PomoStatus::Paused { .. });

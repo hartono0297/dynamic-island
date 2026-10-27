@@ -13,6 +13,7 @@ pub mod icons;
 pub mod month_grid;
 pub mod panel_layout;
 pub mod render;
+pub mod robot;
 pub mod settings;
 pub mod settings_controls;
 pub mod settings_layout;

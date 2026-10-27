@@ -37,6 +37,9 @@ pub enum NoticeKind {
     Reminder {
         id: String,
     },
+    /// The morning greeting: today's events and reminders, from Bata. Shows
+    /// `GREETING_DURATION`, never in fullscreen.
+    Greeting,
 }
 
 #[derive(Clone, Debug, PartialEq)]
