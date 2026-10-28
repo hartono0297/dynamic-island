@@ -38,7 +38,10 @@ choice, Off included, sticks across saves (3.2.1 review fix). Registered as `Reg
   - settings pages: a fixed table of 16 `ms-settings:` pages with ID/EN
     names.
   - calculator: a recursive-descent parser (`+ - * / % ^`, `× ÷`, brackets,
-    `.` or `,` decimals), no variables or functions; division by zero, a
+    `.` or `,` decimals), no variables or functions. The language's
+    thousands mark (`.` in Id, `,` in En) counts as one when exactly three
+    digits follow it, before any decimal mark ("1.000 + 500" = 1500 in Id);
+    otherwise either mark is a decimal one. Division by zero, a
     non-finite result, > 120 chars or > 48 nested levels → no result. A bare
     number is not a calculation. Enter copies the result (own clipboard
     write, so the history does not take it twice) and shows "Disalin".
@@ -50,7 +53,12 @@ choice, Off included, sticks across saves (3.2.1 review fix). Registered as `Reg
     score, an app wins a tie with a settings page; at most 6 rows, the
     calculation first and the web row last.
 - **Running:** `shortcuts::Action::Shell(String)` (`ShellExecute open`) after
-  the panel collapses, like a tile.
+  the panel collapses, like a tile. For an app, a settings page or the web
+  the keyboard is *not* handed back to the window from before (`cli_prev`
+  cleared, so the release only drops the field's focus) and
+  `AllowSetForegroundWindow(ASFW_ANY)` is called: the shell runs while the
+  island still has the foreground, so the launched window comes to the
+  front instead of opening behind. A copied calculation hands it back.
 - Demo scene `search` (a made-up list of apps, never the real Start Menu).
 
 **Not done / later:** file search (Windows Search on a thread with a time
@@ -73,4 +81,23 @@ Related: [[shortcut-tiles]], [[gestures]].
   panel.
 - `focus_search` starts the Start Menu index for every way in.
 - Nine built-in tiles now: the Pintasan page has three rows (4 + 4 + 1).
+
+## 3.2.1 review fixes
+- **Another page beneath it closes it:** the Clipboard hotkey, files dragged
+  over the island, a Mole strip click change the page under an open search;
+  the post-process in `apply` (now run first) closes it when
+  `search_open && (page != Search || !panel_open())`, emits
+  `ReleaseSearchFocus` and keeps the new page.
+- **From the CLI input or the Clipboard field:** `search_hotkey` clears
+  `cli_focused` / `clip_focused` without their release effects (those ran
+  after `FocusSearch` and handed the keyboard to the old window, which closed
+  the search at once); `cli_prev` stays.
+- **Tray "Cari…"** sends `Event::SearchOpen`: opens, or re-focuses an open
+  search (never closes it). The window it returns to is the one in front
+  when the menu opened, unless that is the taskbar / tray overflow (by
+  class) or the island; then the topmost ordinary window in the z-order.
+- **Hotkey retry:** a failed `RegisterHotKey` (search and Clipboard) is
+  tried again on every sync (config read) and when the tray menu or
+  Settings opens (`retry_hotkeys`).
+- No search EDIT (creation failed at start): `FocusSearch` closes it again.
 

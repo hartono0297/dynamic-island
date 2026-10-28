@@ -1541,19 +1541,30 @@ fn tile_target(b: &Builder, lang: Lang, kind: CustomKind, target: &str, max_w: f
 
 /// "Pintasan": one row per tile in the owner's order, with its toggle and
 /// order stepper like "Halaman panel", and "Hapus" on a custom tile. The
-/// last tile still shown cannot be switched off. Under the card, where the
-/// custom tiles come from.
+/// last tile still shown cannot be switched off, and while twelve show no
+/// other can be switched on (its row says the page is full). A tile on past
+/// the twelfth (a list edited by hand) says it does not show. Under the
+/// card, where the custom tiles come from.
 fn tiles_card(b: &mut Builder, s: &State) {
     b.eyebrow(Key::Shortcuts, CONTENT_W - 4.0);
     let entries = s.tiles.entries();
     let card = b.card(entries.len() as f32 * ROW_H);
     let shown = s.tiles.shown();
+    let full = s.tiles.full();
     let last = entries.len() - 1;
     let delete = b.t(Key::Delete);
     for (i, (tile, on)) in entries.iter().enumerate() {
         let y = card.y + i as f32 * ROW_H;
         let cy = y + ROW_H / 2.0;
-        let locked = *on && shown == 1;
+        let locked = (*on && shown == 1) || (!*on && full);
+        let limit_note = if s.tiles.beyond_limit(i) {
+            Some(Key::TileNotShown)
+        } else if !*on && full {
+            Some(Key::TilePageFull)
+        } else {
+            None
+        };
+        let limit_note = limit_note.map(|k| (b.t(k), Tone::Secondary));
         let x = b.toggle_if(Hit::TileOn(i), RIGHT, cy, *on, !locked);
         let mut x = b.stepper(
             x - GAP,
@@ -1565,7 +1576,7 @@ fn tiles_card(b: &mut Builder, s: &State) {
             true,
         );
         let (label, desc) = match tile {
-            Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), None),
+            Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), limit_note),
             Tile::Custom(c) => {
                 let w = b.button_w(&[&delete], ButtonKind::Secondary);
                 let item = (
@@ -1576,9 +1587,12 @@ fn tiles_card(b: &mut Builder, s: &State) {
                     w,
                 );
                 x = b.buttons(x - GAP, cy, vec![item]);
-                let max_w = row_text_w(card, x);
-                let desc = tile_target(b, s.lang, c.kind, &c.target, max_w);
-                (c.label.clone(), Some((desc, Tone::Secondary)))
+                // Why it does not show matters more than where it points.
+                let desc = limit_note.unwrap_or_else(|| {
+                    let max_w = row_text_w(card, x);
+                    (tile_target(b, s.lang, c.kind, &c.target, max_w), Tone::Secondary)
+                });
+                (c.label.clone(), Some(desc))
             }
         };
         b.row_text(card, y, label, desc, false, x);
@@ -2420,6 +2434,16 @@ mod tests {
                                 "https://mail.google.com",
                             );
                             t.add(own.expect("valid"));
+                            // Full, and two past the twelfth (added by
+                            // hand): both notes show.
+                            for i in 0..5 {
+                                let own = crate::tiles::CustomTile::new(
+                                    &format!("Proyek {i}"),
+                                    CustomKind::Folder,
+                                    r"D:\Proyek\sebuah folder dengan nama yang panjang",
+                                );
+                                t.add(own.expect("valid"));
+                            }
                             t
                         } else {
                             ShortcutTiles::default()

@@ -447,6 +447,15 @@ impl IslandState {
             Event::ClipHotkey => self.clip_hotkey(),
             Event::ClipHoldEnd => self.clip_held = false,
             Event::SearchHotkey => self.search_hotkey(&mut effects),
+            Event::SearchOpen => {
+                if self.search_open {
+                    if !self.fullscreen {
+                        effects.push(Effect::FocusSearch);
+                    }
+                } else {
+                    self.search_hotkey(&mut effects);
+                }
+            }
             Event::SearchClose => {
                 if self.search_open {
                     self.search_open = false;
@@ -535,6 +544,20 @@ impl IslandState {
         if self.hover && self.shown_shot().is_some() {
             self.shot_touched = true;
         }
+        // The search closed (or the panel went away some other way): the
+        // page it came over returns, and the keyboard with it. Another page
+        // taking its place (the Clipboard hotkey, files dragged over, a Mole
+        // notice) closes it too and stays. First, so what follows sees the
+        // panel as the search left it.
+        if (self.search_open || self.page == Page::Search)
+            && (self.page != Page::Search || !self.panel_open())
+        {
+            self.search_open = false;
+            if self.page == Page::Search {
+                self.page = self.search_prev;
+            }
+            effects.push(Effect::ReleaseSearchFocus);
+        }
         // The input lets go once its page is gone: another page, or the
         // panel shut for a shortcut.
         if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
@@ -564,13 +587,6 @@ impl IslandState {
         }
         if self.shelf_held && (self.page != Page::Shelf || self.collapsed != Collapse::No) {
             self.shelf_held = false;
-        }
-        // The search closed (or the panel went away some other way): the
-        // page it came over returns, and the keyboard with it.
-        if self.page == Page::Search && !self.panel_open() {
-            self.search_open = false;
-            self.page = self.search_prev;
-            effects.push(Effect::ReleaseSearchFocus);
         }
         // The menu belongs to the CLI page of an open panel.
         if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
@@ -948,7 +964,11 @@ impl IslandState {
 
     /// The quick search's hotkey: it opens over whatever page shows (a new
     /// visit, whatever closed the panel before) and asks for the keyboard;
-    /// pressed again, it closes.
+    /// pressed again, it closes. The CLI input or the Clipboard search field
+    /// may have the keyboard: it passes straight to the search's field, so
+    /// theirs is let go without handing it back to the window before (that
+    /// would pull it from the search at once), and that window stays the one
+    /// the search returns to.
     fn search_hotkey(&mut self, effects: &mut Vec<Effect>) {
         if self.fullscreen {
             return;
@@ -958,6 +978,8 @@ impl IslandState {
             self.collapse();
             return;
         }
+        self.cli_focused = false;
+        self.clip_focused = false;
         if self.page != Page::Search {
             self.search_prev = self.page;
         }
@@ -4551,6 +4573,93 @@ mod tests {
         s.apply(Event::SearchClose, t0);
         assert_eq!(s.page(), Page::Media);
         assert!(!s.pages().visible().contains(&Page::Search));
+    }
+
+    #[test]
+    fn the_clipboard_hotkey_over_the_search_closes_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::SearchHotkey, t0);
+        let effects = s.apply(Event::ClipHotkey, t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert!(!s.search_open());
+        assert_eq!(s.view(), View::Panel(Page::Clipboard), "the new page stays");
+        // Opened again, it comes back to the Clipboard page.
+        s.apply(Event::SearchHotkey, t0);
+        assert_eq!(s.apply(Event::SearchClose, t0), vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(s.page(), Page::Clipboard);
+    }
+
+    #[test]
+    fn files_dragged_over_the_search_close_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::SearchHotkey, t0);
+        let effects = s.apply(Event::ShelfDrag(true), t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert!(!s.search_open());
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // The drag ends away from the island: the panel shuts, no search.
+        assert!(s.apply(Event::ShelfDrag(false), t0).is_empty());
+        assert!(!matches!(s.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn a_mole_strip_click_over_the_search_closes_it_on_the_log() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let failed = mole_notice(NoticeKind::MoleFailed);
+        s.apply(Event::Notice(failed.clone()), t0);
+        s.apply(Event::Notice(failed.clone()), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.waiting_strip(), Some(&failed));
+        s.apply(Event::SearchHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        let effects = s.apply(Event::Click(Hit::Strip), t0);
+        assert!(effects.contains(&Effect::ReleaseSearchFocus), "{effects:?}");
+        assert!(!s.search_open());
+        assert_eq!(s.view(), View::Panel(Page::System));
+        assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
+    }
+
+    #[test]
+    fn the_search_takes_the_keyboard_from_the_cli_and_clipboard_fields_without_handing_it_back() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::CliFocus(true), t0);
+        // No ReleaseCliFocus after FocusSearch: that would hand the keyboard
+        // to the window before and close the search at once.
+        let effects = s.apply(Event::SearchHotkey, t0);
+        assert_eq!(effects, vec![Effect::FocusSearch]);
+        assert!(s.search_open() && !s.cli_focused());
+        assert_eq!(s.apply(Event::SearchClose, t0), vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(s.page(), Page::Cli);
+
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::ClipFocus(true), t0);
+        let effects = s.apply(Event::SearchHotkey, t0);
+        assert_eq!(effects, vec![Effect::FocusSearch]);
+        assert!(s.search_open() && !s.clip_focused());
+        assert_eq!(s.view(), View::Panel(Page::Search));
+    }
+
+    #[test]
+    fn the_tray_opens_the_search_or_focuses_it_but_never_closes_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert_eq!(s.apply(Event::SearchOpen, t0), vec![Effect::FocusSearch]);
+        assert!(s.search_open());
+        // Open already: the field takes the keyboard again, it stays open.
+        assert_eq!(s.apply(Event::SearchOpen, t0), vec![Effect::FocusSearch]);
+        assert!(s.search_open());
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        // Hidden under a fullscreen app: nothing.
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        assert!(s.apply(Event::SearchOpen, t0).is_empty());
+        assert!(!s.search_open());
     }
 
     #[test]

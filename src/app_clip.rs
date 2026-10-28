@@ -222,10 +222,10 @@ impl App {
     }
 
     /// Registers the chosen hotkey (none by default). A failure (another app
-    /// has it) shows in Settings; nothing else happens.
-    fn sync_clip_hotkey(&mut self) {
+    /// has it) shows in Settings and is tried again on the next sync.
+    pub(super) fn sync_clip_hotkey(&mut self) {
         let want = self.config.clipboard.hotkey;
-        if self.clip.hotkey == Some(want) {
+        if self.clip.hotkey == Some(want) && !self.clip.hotkey_failed {
             return;
         }
         unsafe {

@@ -8,9 +8,15 @@ date: 2026-10-28
 `src/tiles.rs` (`ShortcutTiles`, like `pages::PanelPages`): the Pintasan page
 shows the tiles in `config.shortcut_tiles`, in that order, up to twelve (four
 per row, up to three rows, `panel_layout::shortcuts_layout` wraps). Empty =
-the eight built-ins, so old configs read as before. Settings → Tampilan →
-**Pintasan** has a row per tile (toggle, order stepper, "Hapus" on a custom
-one); the last tile shown cannot be switched off.
+the nine built-ins (Search is the ninth since 3.2.1), so old configs read as
+before. Settings → Tampilan → **Pintasan** has a row per tile (toggle, order
+stepper, "Hapus" on a custom one); the last tile shown cannot be switched
+off, and none can be switched on while twelve show (`toggle` refuses; the
+off rows say "Halaman penuh (maks. 12)" with a disabled toggle). A list
+edited by hand can still have more than twelve on: the rows past the twelfth
+say "Tidak tampil (maks. 12)" (`beyond_limit`). Tile names in the file
+(built-ins, `Custom`, the `kind`) are read in any case and written back in
+the canonical spelling.
 
 - **Built-in** entry: `{"tile":"Lock","on":false}`; each built-in is listed
   once, one missing from the file rejoins right after the one before it in
@@ -37,6 +43,8 @@ config.json for now (README shows how).
 
 Related: [[open-mode]].
 
-**3.2.1:** a built-in the file does not name (the new "Search" tile) comes in
-*off* when the page already shows twelve, so an upgrade never pushes an own
-tile off it (`from_saved`); it can be switched on in Settings.
+**3.2.1:** a built-in the file does not name (the new "Search" tile) rejoins
+right after the built-in before it in `Shortcut::ALL`, and comes in *off*
+when the page already shows twelve, so an upgrade never pushes an own tile
+off it (`from_saved`); it can be switched on in Settings once another tile is
+switched off (the twelve-tile limit above).

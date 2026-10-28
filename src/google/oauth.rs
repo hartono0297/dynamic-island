@@ -307,7 +307,7 @@ pub fn login(http: &Http, client: &Client) -> Result<Tokens, AuthError> {
         &pkce_challenge(&verifier),
         &state,
     ))?;
-    wait_for_code(&listener, &state, |code| {
+    wait_for_code(&listener, &state, client.own, |code| {
         let (status, body) = http
             .post_form(
                 TOKEN_ENDPOINT,
@@ -424,9 +424,11 @@ fn open_browser(url: &str) -> Result<(), AuthError> {
 /// login times out. Other requests (favicon, empty preconnects) are skipped.
 /// The redirect's code goes through `exchange` before the browser gets its
 /// answer, so the page says "connected" only when the login really worked.
+/// `own`: the login uses the user's own client, not Vale's built-in one.
 fn wait_for_code<T>(
     listener: &TcpListener,
     expected_state: &str,
+    own: bool,
     mut exchange: impl FnMut(String) -> Result<T, AuthError>,
 ) -> Result<T, AuthError> {
     listener.set_nonblocking(true).map_err(io_error)?;
@@ -436,13 +438,7 @@ fn wait_for_code<T>(
             Ok((stream, _)) => {
                 if let Some(code) = read_redirect(&stream, expected_state) {
                     let outcome = code.and_then(&mut exchange);
-                    let message = match &outcome {
-                        Ok(_) => Key::OauthConnected,
-                        Err(AuthError::MissingScopes) => Key::OauthScopes,
-                        Err(AuthError::NeedsLogin) => Key::OauthCancelled,
-                        Err(AuthError::NotConfigured) => Key::OauthRejected,
-                        Err(_) => Key::OauthFailed,
-                    };
+                    let message = page_key(&outcome, own);
                     respond(&stream, "200 OK", &i18n::oauth_page(i18n::lang(), message));
                     return outcome;
                 }
@@ -455,6 +451,20 @@ fn wait_for_code<T>(
             }
             Err(e) => return Err(io_error(e)),
         }
+    }
+}
+
+/// What the browser page after a login says. A rejected client is advice,
+/// like `sync::rejected`: the user's own → check Settings; Vale's built-in
+/// one → try later or use an own Client ID.
+fn page_key<T>(outcome: &Result<T, AuthError>, own: bool) -> Key {
+    match outcome {
+        Ok(_) => Key::OauthConnected,
+        Err(AuthError::MissingScopes) => Key::OauthScopes,
+        Err(AuthError::NeedsLogin) => Key::OauthCancelled,
+        Err(AuthError::NotConfigured) if own => Key::OauthRejected,
+        Err(AuthError::NotConfigured) => Key::OauthBuiltInRejected,
+        Err(_) => Key::OauthFailed,
     }
 }
 
@@ -720,7 +730,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         });
-        let outcome = wait_for_code(&listener, "s1", |code| {
+        let outcome = wait_for_code(&listener, "s1", true, |code| {
             // Slow enough that an early answer would beat it.
             std::thread::sleep(Duration::from_millis(200));
             let result = exchange(code);
@@ -771,6 +781,25 @@ mod tests {
             });
         assert_eq!(outcome, Err(AuthError::MissingScopes));
         assert!(responses[0].0.contains("Izin Google belum lengkap"));
+    }
+
+    #[test]
+    fn a_rejected_client_page_depends_on_whose_client_it_is() {
+        let rejected: Result<(), AuthError> = Err(AuthError::NotConfigured);
+        assert_eq!(page_key(&rejected, true), Key::OauthRejected);
+        assert_eq!(page_key(&rejected, false), Key::OauthBuiltInRejected);
+        // Everything else reads the same for both clients.
+        for own in [true, false] {
+            assert_eq!(page_key(&Ok(()), own), Key::OauthConnected);
+            assert_eq!(page_key::<()>(&Err(AuthError::MissingScopes), own), Key::OauthScopes);
+            assert_eq!(page_key::<()>(&Err(AuthError::NeedsLogin), own), Key::OauthCancelled);
+            let other = Err(AuthError::Google("invalid_request".into()));
+            assert_eq!(page_key::<()>(&other, own), Key::OauthFailed);
+        }
+        for lang in [i18n::Lang::Id, i18n::Lang::En] {
+            let page = i18n::oauth_page(lang, Key::OauthBuiltInRejected);
+            assert!(page.contains("Client ID"), "{page}");
+        }
     }
 
     #[test]
