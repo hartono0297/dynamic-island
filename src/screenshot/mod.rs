@@ -29,6 +29,10 @@ pub const HASH_MAX_DIST: u32 = 10;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClipCandidate {
     pub at_ms: i64,
+    /// The earliest file time it may claim: `at_ms - BEFORE_MS`, or its own
+    /// arrival when another screenshot came just before (files before it
+    /// are that one's).
+    pub from_ms: i64,
     pub w: u32,
     pub h: u32,
     /// `thumb_hash` of its thumbnail; `None` when it had none.
@@ -89,7 +93,7 @@ fn hash_agrees(clip: Option<u64>, file: Option<u64>) -> bool {
     }
 }
 
-/// The file that is this screenshot: inside `BEFORE_MS` .. `AFTER_MS` of
+/// The file that is this screenshot: from `from_ms` to `AFTER_MS` after
 /// the clipboard's arrival with the very same size and a thumbnail hash
 /// that agrees. A file whose hash was read and agrees beats one whose hash
 /// is unknown; then the closest in time wins (the later one on a tie). A
@@ -112,9 +116,20 @@ pub fn pick_match<'a>(
         })
 }
 
+/// The `from_ms` of an image arriving at `at_ms` when the image before it
+/// arrived at `previous`: its own arrival when that one's files (written up
+/// to `AFTER_MS` after it) could fall in its window, else `BEFORE_MS` earlier.
+pub fn claim_from(at_ms: i64, previous: Option<i64>) -> i64 {
+    let window = at_ms - BEFORE_MS;
+    match previous {
+        Some(p) if p + AFTER_MS >= window => at_ms,
+        _ => window,
+    }
+}
+
 /// Inside the time window with the very same size: worth hashing.
 fn in_window(clip: &ClipCandidate, f: &FileCandidate) -> bool {
-    let (from, to) = (clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
+    let (from, to) = (clip.from_ms, clip.at_ms + AFTER_MS);
     (from..=to).contains(&f.at_ms) && (f.w, f.h) == (clip.w, clip.h)
 }
 
@@ -245,14 +260,15 @@ pub fn list_folder(dir: &Path, from_ms: i64, to_ms: i64) -> Vec<FileCandidate> {
 
 /// One folder check for `clip`: the listing of its window, the hash of
 /// each file of its size (`hash_of` decodes one; only those are decoded),
-/// then the match.
+/// then the match. A file in `taken` belongs to another screenshot.
 pub fn find_in(
     dir: &Path,
     clip: &ClipCandidate,
+    taken: &[PathBuf],
     hash_of: impl Fn(&Path) -> Option<u64>,
 ) -> Option<FileCandidate> {
-    let mut files = list_folder(dir, clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
-    files.retain(|f| in_window(clip, f));
+    let mut files = list_folder(dir, clip.from_ms, clip.at_ms + AFTER_MS);
+    files.retain(|f| in_window(clip, f) && !taken.contains(&f.path));
     for f in &mut files {
         f.hash = hash_of(&f.path);
     }
@@ -335,6 +351,7 @@ mod tests {
     const AT: i64 = 1_800_000_000_000;
     const CLIP: ClipCandidate = ClipCandidate {
         at_ms: AT,
+        from_ms: AT - BEFORE_MS,
         w: 1280,
         h: 720,
         hash: None,
@@ -436,6 +453,53 @@ mod tests {
     }
 
     #[test]
+    fn a_file_of_an_earlier_screenshot_is_never_this_ones() {
+        // B is taken 2 s after A of the same window: A's file, written
+        // before B arrived, must not be taken for B's (Hapus would recycle
+        // it).
+        let b = ClipCandidate {
+            from_ms: AT,
+            ..CLIP
+        };
+        let a_file = file("a.png", AT - 1_500, 1280, 720);
+        assert_eq!(pick_match(&b, std::slice::from_ref(&a_file)), None);
+        let b_file = file("b.png", AT + 700, 1280, 720);
+        assert_eq!(
+            pick_match(&b, &[a_file.clone(), b_file]).unwrap().path,
+            PathBuf::from("b.png")
+        );
+        // With no screenshot just before, a file written first still counts
+        // (PrtSc saves before the clipboard has it).
+        assert!(pick_match(&CLIP, &[a_file]).is_some());
+        // Where a screenshot's files may start: before it, unless the files
+        // of the one before could reach that far.
+        assert_eq!(claim_from(AT, None), AT - BEFORE_MS);
+        assert_eq!(claim_from(AT, Some(AT - 2_000)), AT);
+        assert_eq!(claim_from(AT, Some(AT - BEFORE_MS - AFTER_MS)), AT);
+        assert_eq!(
+            claim_from(AT, Some(AT - BEFORE_MS - AFTER_MS - 1)),
+            AT - BEFORE_MS
+        );
+    }
+
+    #[test]
+    fn a_file_matched_by_another_screenshot_is_not_matched_again() {
+        let dir = std::env::temp_dir().join(format!("vale-shot-taken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Screenshot 1.png");
+        std::fs::write(&path, png(1280, 720)).unwrap();
+        let clip = ClipCandidate {
+            at_ms: unix_ms(SystemTime::now()),
+            from_ms: unix_ms(SystemTime::now()) - BEFORE_MS,
+            ..CLIP
+        };
+        assert!(find_in(&dir, &clip, &[], |_| Some(PIC)).is_some());
+        assert_eq!(find_in(&dir, &clip, &[path], |_| Some(PIC)), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_different_size_is_never_a_match() {
         let files = [
             file("a.png", AT + 400, 1280, 721),
@@ -530,6 +594,7 @@ mod tests {
         // The match: one clipboard image, one file of its size.
         let clip = ClipCandidate {
             at_ms: now,
+            from_ms: now - BEFORE_MS,
             w: 1280,
             h: 720,
             hash: Some(PIC),
@@ -540,12 +605,12 @@ mod tests {
             seen.borrow_mut().push(p.to_path_buf());
             Some(PIC)
         };
-        assert!(find_in(&dir, &clip, same).is_some());
+        assert!(find_in(&dir, &clip, &[], same).is_some());
         assert_eq!(seen.borrow().len(), 2);
         // Another picture: nothing, though time and size agree.
-        assert_eq!(find_in(&dir, &clip, |_| Some(!PIC)), None);
+        assert_eq!(find_in(&dir, &clip, &[], |_| Some(!PIC)), None);
         let other = ClipCandidate { w: 800, ..clip };
-        assert_eq!(find_in(&dir, &other, |_| Some(PIC)), None);
+        assert_eq!(find_in(&dir, &other, &[], |_| Some(PIC)), None);
         assert!(list_folder(&dir.join("missing"), 0, i64::MAX).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

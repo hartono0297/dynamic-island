@@ -75,7 +75,16 @@ pub(super) struct Shots {
     pub dir: Option<PathBuf>,
     /// The last preview's look, kept so its fade-out still draws it.
     pub faded: Option<ShotLook>,
+    /// When the image before the newest arrived (unix ms): files before
+    /// the newest's arrival may be that one's (`screenshot::claim_from`).
+    pub last_at_ms: Option<i64>,
+    /// The files matched to screenshots, newest last (`TAKEN_CAP`): never
+    /// matched to another.
+    pub taken: Vec<PathBuf>,
 }
+
+/// How many matched files `Shots::taken` remembers.
+const TAKEN_CAP: usize = 16;
 
 impl Shots {
     fn get_mut(&mut self, id: u64) -> Option<&mut ShotState> {
@@ -142,6 +151,7 @@ impl App {
         }
         self.shots.next_id += 1;
         let id = self.shots.next_id;
+        let at_ms = screenshot::unix_ms(SystemTime::now());
         let dib = img.full.clone();
         let thumb = dib
             .as_deref()
@@ -160,7 +170,8 @@ impl App {
             },
             entry,
             clip: ClipCandidate {
-                at_ms: screenshot::unix_ms(SystemTime::now()),
+                at_ms,
+                from_ms: screenshot::claim_from(at_ms, self.shots.last_at_ms.replace(at_ms)),
                 w: img.width,
                 h: img.height,
                 hash: screenshot::thumb_hash(&img.thumb.bgra, img.thumb.w, img.thumb.h),
@@ -214,7 +225,14 @@ impl App {
         };
         state.checks += 1;
         let clip = state.clip;
-        if !win::spawn_check(id, clip, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
+        let taken = self.shots.taken.clone();
+        if !win::spawn_check(
+            id,
+            clip,
+            taken,
+            self.tx.clone(),
+            poster(self.hwnd, WM_APP_EVENT),
+        ) {
             self.shots.checking = None;
         }
     }
@@ -257,7 +275,15 @@ impl App {
         match found {
             Some(file) => {
                 state.look.bytes = file.bytes;
+                let path = file.path.clone();
                 state.file = Some(file);
+                let taken = &mut self.shots.taken;
+                if !taken.contains(&path) {
+                    taken.push(path);
+                    if taken.len() > TAKEN_CAP {
+                        taken.remove(0);
+                    }
+                }
                 if looking {
                     self.shots.checking = None;
                     self.stop_shot_retry();
@@ -425,6 +451,7 @@ impl App {
             shot: id,
             file: state.file.map(|f| f.path),
             clip: state.clip,
+            taken: self.shots.taken.clone(),
             emptied,
         };
         if win::spawn_delete(job, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
@@ -510,6 +537,7 @@ mod tests {
         assert!(hash.is_some());
         let clip = ClipCandidate {
             at_ms: 100_000,
+            from_ms: 100_000 - crate::screenshot::BEFORE_MS,
             w: 1280,
             h: 720,
             hash,

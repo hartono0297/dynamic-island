@@ -84,6 +84,7 @@ pub fn screenshots_dir() -> Option<PathBuf> {
 pub fn spawn_check(
     shot: u64,
     clip: ClipCandidate,
+    taken: Vec<PathBuf>,
     tx: Sender<Event>,
     wake: impl Fn() + Send + 'static,
 ) -> bool {
@@ -93,7 +94,9 @@ pub fn spawn_check(
             // For WIC (the files' hashes).
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
             let dir = screenshots_dir();
-            let found = dir.as_deref().and_then(|d| find_in(d, &clip, file_hash));
+            let found = dir
+                .as_deref()
+                .and_then(|d| find_in(d, &clip, &taken, file_hash));
             if inited {
                 unsafe { CoUninitialize() };
             }
@@ -110,6 +113,8 @@ pub struct DeleteJob {
     /// The file matched so far; `None` runs one last check first.
     pub file: Option<PathBuf>,
     pub clip: ClipCandidate,
+    /// Files other screenshots matched: never this one's.
+    pub taken: Vec<PathBuf>,
     /// The clipboard was emptied (on the UI thread, before this).
     pub emptied: bool,
 }
@@ -126,7 +131,7 @@ pub fn spawn_delete(job: DeleteJob, tx: Sender<Event>, wake: impl Fn() + Send + 
             let inited = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
             let file = job.file.or_else(|| {
                 screenshots_dir()
-                    .and_then(|d| find_in(&d, &job.clip, file_hash))
+                    .and_then(|d| find_in(&d, &job.clip, &job.taken, file_hash))
                     .map(|f| f.path)
             });
             let outcome = match file {
