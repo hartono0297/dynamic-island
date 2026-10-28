@@ -5,9 +5,9 @@ date: 2026-10-28
 
 # Panel pages: order and which ones the wheel shows
 
-Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all nine
-pages in the owner's order, each with an order stepper (− earlier, + later)
-and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
+Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all 11
+pages (every page in `Page::ALL`) in the owner's order, each with an order
+stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
 
 - **Every page is always listed once.** `config.json` keeps `panel_pages` as
   `[{page, on}]`; unknown and repeated names are dropped, a page the file

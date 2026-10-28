@@ -40,8 +40,12 @@ pub const LIVE_MS: u32 = 1_000;
 pub const FULL_EVERY: u32 = 4;
 /// What a figure takes to glide to its new reading.
 pub const EASE_MS: u64 = 500;
-/// A history whose last point is older than this starts over, so a page
-/// opened again does not join its line to stale data.
+/// A new reading closer than this to the target is no move: nothing on the
+/// page would change, so no glide (and no frame clock) for it.
+pub const EASE_MIN_STEP: f32 = 0.002;
+/// A reading older than this is not shown again: a page opened again shows
+/// dashes until a fresh one, and its line starts over instead of joining
+/// stale data.
 pub const HISTORY_STALE: Duration = Duration::from_secs(10);
 /// CPU and process times older than this are no baseline: the worker
 /// takes a fresh one and samples again `BASELINE_WAIT` later.
@@ -197,10 +201,7 @@ impl CpuHistory {
     /// Adds a sample taken at `now`; after a gap longer than
     /// `HISTORY_STALE` (the page was closed) the line starts over.
     pub fn push(&mut self, cpu: f32, now: Instant) {
-        if self
-            .last
-            .is_some_and(|t| now.saturating_duration_since(t) > HISTORY_STALE)
-        {
+        if self.stale(now) {
             self.points.clear();
         }
         self.points.push(cpu);
@@ -213,6 +214,13 @@ impl CpuHistory {
 
     pub fn points(&self) -> &[f32] {
         &self.points
+    }
+
+    /// The last point is older than `HISTORY_STALE` at `now` (the page was
+    /// closed since). False before the first point.
+    pub fn stale(&self, now: Instant) -> bool {
+        self.last
+            .is_some_and(|t| now.saturating_duration_since(t) > HISTORY_STALE)
     }
 }
 
@@ -275,9 +283,15 @@ impl Eased {
         }
     }
 
-    /// Starts gliding to `to` from wherever the figure is at `now`.
+    /// Starts gliding to `to` from wherever the figure is at `now`. The same
+    /// target again, or one less than `EASE_MIN_STEP` off, changes nothing:
+    /// a glide under way runs on, a figure at rest stays at rest (and the
+    /// frame clock with it).
     pub fn retarget(&mut self, to: f32, now: Instant) {
-        if (to - self.to).abs() < f32::EPSILON && self.start.is_none() {
+        if !self.running(now) {
+            self.start = None;
+        }
+        if (to - self.to).abs() < EASE_MIN_STEP {
             return;
         }
         self.from = self.value(now);
@@ -931,6 +945,11 @@ mod tests {
         assert_eq!(h.points().len(), HISTORY_LEN);
         h.push(2.0, last + Duration::from_secs(21));
         assert_eq!(h.points(), [2.0]);
+        // Stale once the last point is more than 10 s old; never when empty.
+        let at = last + Duration::from_secs(21);
+        assert!(!h.stale(at + HISTORY_STALE));
+        assert!(h.stale(at + HISTORY_STALE + Duration::from_millis(1)));
+        assert!(!CpuHistory::default().stale(at + Duration::from_secs(3_600)));
     }
 
     #[test]
@@ -968,6 +987,40 @@ mod tests {
         assert!(!still.running(t0));
         assert_eq!(ease_out(-1.0), 0.0);
         assert_eq!(ease_out(2.0), 1.0);
+    }
+
+    #[test]
+    fn an_unchanged_reading_does_not_glide_again() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut e = Eased::at(10.0);
+        e.retarget(50.0, t0);
+        // At rest after the first glide: the same reading every second
+        // keeps it at rest, so the frame clock stops.
+        for n in 1..=3 {
+            e.retarget(50.0, ms(n * 1_000));
+            assert!(!e.running(ms(n * 1_000)), "reading {n}");
+            assert_eq!(e.value(ms(n * 1_000)), 50.0);
+        }
+        // Nor does a step too small to see: the finished glide is cleared.
+        e.retarget(50.0 + EASE_MIN_STEP / 2.0, ms(3_500));
+        assert!(!e.running(ms(3_500)) && e.start.is_none());
+        assert_eq!(e.value(ms(3_500)), 50.0);
+        // Mid-glide, the same target again does not start it over.
+        e.retarget(20.0, ms(4_000));
+        e.retarget(20.0, ms(4_200));
+        assert!(!e.running(ms(4_000 + EASE_MS)));
+        assert_eq!(e.value(ms(4_000 + EASE_MS)), 20.0);
+        // The page's figures: one move glides, the same readings after rest.
+        let mut s = SysEase::default();
+        s.update(&reading(SampleKind::Page, 30.0, 40, Vec::new()), t0);
+        s.update(&reading(SampleKind::Live, 35.0, 45, Vec::new()), ms(1_000));
+        assert!(s.running(ms(1_000)));
+        let same = reading(SampleKind::Live, 35.0, 45, Vec::new());
+        for n in 2..=4 {
+            s.update(&same, ms(n * 1_000));
+            assert!(!s.running(ms(n * 1_000)), "reading {n}");
+        }
     }
 
     fn reading(kind: SampleKind, cpu: f32, used: u64, drives: Vec<Drive>) -> SystemSample {
