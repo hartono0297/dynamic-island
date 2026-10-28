@@ -10,7 +10,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{HSTRING, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::i18n::Key;
 use crate::model::Shortcut;
@@ -37,6 +37,9 @@ pub enum Action {
     /// The quick search's result: `ShellExecute` "open" on a shortcut file,
     /// an `ms-settings:` page or an address the island built itself.
     Shell(String),
+    /// A shelf card: `ShellExecute` "open" on a file or folder path, passed
+    /// as it is (no lossy text conversion on the way).
+    OpenPath(std::path::PathBuf),
 }
 
 /// A drive's root as Explorer takes it: "C:\".
@@ -108,6 +111,15 @@ pub fn delay_ms(action: &Action) -> u32 {
     }
 }
 
+/// The `ShellExecute` verb for a custom tile: "explore" for a folder, so a
+/// folder path is only ever shown in Explorer; "open" for the rest.
+fn custom_verb(kind: CustomKind) -> PCWSTR {
+    match kind {
+        CustomKind::Folder => w!("explore"),
+        CustomKind::App | CustomKind::Url => w!("open"),
+    }
+}
+
 /// `rel` under `%SystemRoot%`.
 fn system_path(rel: &str) -> std::path::PathBuf {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
@@ -139,12 +151,23 @@ pub fn run(action: Action) {
             );
         },
         Action::Custom(tile) => unsafe {
-            // A folder opens in Explorer; an address in the default browser
-            // or mail program; an app or file as a double click would.
+            // A folder opens in Explorer ("explore": never as a program);
+            // an address in the default browser or mail program; an app or
+            // file as a double click would.
+            ShellExecuteW(
+                None,
+                custom_verb(tile.kind),
+                &HSTRING::from(tile.target.as_str()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        },
+        Action::OpenPath(path) => unsafe {
             ShellExecuteW(
                 None,
                 w!("open"),
-                &HSTRING::from(tile.target.as_str()),
+                &HSTRING::from(path.as_os_str()),
                 None,
                 None,
                 SW_SHOWNORMAL,
@@ -254,6 +277,16 @@ mod tests {
     fn a_search_result_waits_for_the_collapse_like_a_tile() {
         let a = Action::Shell("ms-settings:display".into());
         assert_eq!(delay_ms(&a), 120);
+    }
+
+    #[test]
+    fn a_folder_tile_is_only_ever_explored() {
+        let verb = |kind| unsafe { custom_verb(kind).to_string().unwrap() };
+        assert_eq!(verb(CustomKind::Folder), "explore");
+        assert_eq!(verb(CustomKind::App), "open");
+        assert_eq!(verb(CustomKind::Url), "open");
+        let shelf = Action::OpenPath(r"C:\x\denah.pdf".into());
+        assert_eq!(delay_ms(&shelf), 120);
     }
 
     #[test]

@@ -51,6 +51,14 @@ const SEARCH_API: &str = "https://lrclib.net/api/search";
 const NONE_EXT: &str = "none2";
 /// A search result is the track only when its length is this close.
 const SEARCH_DURATION_MS: u64 = 3_000;
+/// LRCLIB answers and cached `.lrc` files larger than this are refused
+/// unparsed: a song's synced lyrics are a few KB.
+pub const MAX_BODY_BYTES: usize = 512 * 1024;
+/// `parse_lrc` keeps at most this many time tags of one line (more are
+/// skipped), this many characters of its text, and this many lines.
+const MAX_TAGS_PER_LINE: usize = 16;
+const MAX_LINE_CHARS: usize = 500;
+const MAX_LINES: usize = 5_000;
 
 /// One timed line; an empty `text` is an instrumental gap.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,18 +93,25 @@ pub struct Query {
 /// Parses LRC text: every `[mm:ss.xx]` tag on a line times a copy of its text,
 /// `[offset:±ms]` shifts all lines (positive = earlier), metadata tags and
 /// lines without a time tag are skipped. The result is sorted by time
-/// (stable: equal times keep their order).
+/// (stable: equal times keep their order). Untrusted text stays bounded: a
+/// line keeps its first `MAX_TAGS_PER_LINE` times and `MAX_LINE_CHARS`
+/// characters, and at most `MAX_LINES` lines come out.
 pub fn parse_lrc(text: &str) -> Vec<LrcLine> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut offset: i64 = 0;
-    let mut lines = Vec::new();
+    let mut lines: Vec<(u64, String)> = Vec::new();
     for raw in text.lines() {
+        if lines.len() >= MAX_LINES {
+            break;
+        }
         let mut rest = raw.trim();
         let mut times = Vec::new();
         while let Some(tag_end) = rest.strip_prefix('[').and_then(|r| r.find(']')) {
             let tag = &rest[1..=tag_end];
             if let Some(ms) = parse_time(tag) {
-                times.push(ms);
+                if times.len() < MAX_TAGS_PER_LINE {
+                    times.push(ms);
+                }
             } else if let Some(value) = tag_value(tag, "offset") {
                 if let Ok(v) = value.trim().parse::<i64>() {
                     offset = v;
@@ -109,7 +124,12 @@ pub fn parse_lrc(text: &str) -> Vec<LrcLine> {
             rest = rest[tag_end + 2..].trim_start();
         }
         let text = rest.trim();
-        lines.extend(times.into_iter().map(|at_ms| (at_ms, text.to_owned())));
+        let text = match text.char_indices().nth(MAX_LINE_CHARS) {
+            Some((cut, _)) => text[..cut].trim_end(),
+            None => text,
+        };
+        let room = MAX_LINES - lines.len();
+        lines.extend(times.into_iter().take(room).map(|at_ms| (at_ms, text.to_owned())));
     }
     let mut out: Vec<LrcLine> = lines
         .into_iter()
@@ -367,8 +387,12 @@ pub fn lrclib_search_url(title: &str, artist: &str) -> String {
 }
 
 /// The synced lyrics of the search result whose length is closest to
-/// `duration_ms`, within `SEARCH_DURATION_MS`; `None` when there is none.
+/// `duration_ms`, within `SEARCH_DURATION_MS`; `None` when there is none or
+/// the body is over `MAX_BODY_BYTES`.
 pub fn pick_search(body: &str, duration_ms: u64) -> Option<String> {
+    if body.len() > MAX_BODY_BYTES {
+        return None;
+    }
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     json.as_array()?
         .iter()
@@ -397,8 +421,11 @@ pub enum Answer {
     Failed,
 }
 
+/// What a `/api/get` reply says. A body over `MAX_BODY_BYTES` is not read:
+/// it is a failure, asked again another time.
 pub fn read_answer(status: u16, body: &str) -> Answer {
     match status {
+        200 if body.len() > MAX_BODY_BYTES => Answer::Failed,
         200 => {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
                 return Answer::Failed;
@@ -482,8 +509,12 @@ impl DiskCache {
         self.dir.join(format!("{}.{ext}", key_hash(key)))
     }
 
+    /// An `.lrc` over `MAX_BODY_BYTES` (never written by `write_lrc`) is
+    /// left unread, as if it were not there.
     pub fn read(&self, key: &str, now_unix: i64) -> Cached {
-        if let Ok(lrc) = std::fs::read_to_string(self.file(key, "lrc")) {
+        let lrc = self.file(key, "lrc");
+        let fits = std::fs::metadata(&lrc).is_ok_and(|m| m.len() <= MAX_BODY_BYTES as u64);
+        if fits && let Ok(lrc) = std::fs::read_to_string(&lrc) {
             return Cached::Lrc(lrc);
         }
         let marker = self.file(key, NONE_EXT);
@@ -499,8 +530,12 @@ impl DiskCache {
         }
     }
 
-    /// Write errors only cost a lookup next time; they are ignored.
+    /// Write errors only cost a lookup next time; they are ignored. LRC
+    /// that `storable` refuses is not written.
     pub fn write_lrc(&self, key: &str, lrc: &str) {
+        if !storable(lrc) {
+            return;
+        }
         let _ = write_atomic(&self.file(key, "lrc"), lrc);
         let _ = std::fs::remove_file(self.file(key, NONE_EXT));
     }
@@ -508,6 +543,12 @@ impl DiskCache {
     pub fn write_nothing(&self, key: &str, now_unix: i64) {
         let _ = write_atomic(&self.file(key, NONE_EXT), &now_unix.to_string());
     }
+}
+
+/// LRC fit to cache and show: within `MAX_BODY_BYTES` and with at least one
+/// timed line.
+fn storable(lrc: &str) -> bool {
+    lrc.len() <= MAX_BODY_BYTES && !parse_lrc(lrc).is_empty()
 }
 
 fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
@@ -772,7 +813,9 @@ fn lookup(
     let Some(client) = http.as_ref() else {
         return found(q, None, true);
     };
-    let get = |url: &str| client.get_with_headers(url, &[("User-Agent", USER_AGENT)]);
+    let get = |url: &str| {
+        client.get_with_headers_capped(url, &[("User-Agent", USER_AGENT)], MAX_BODY_BYTES)
+    };
     let ask = |url: &str| match get(url) {
         Ok((status, body)) => read_answer(status, &body),
         Err(_) => Answer::Failed,
@@ -825,6 +868,8 @@ fn keep_answer(
     now: i64,
 ) -> LyricsFound {
     match answer {
+        // Never anything else: `read_answer` and `pick_search` check it.
+        Answer::Synced(lrc) if !storable(&lrc) => found(q, None, true),
         Answer::Synced(lrc) => {
             cache.write_lrc(&q.key, &lrc);
             let lines = Some(Arc::new(parse_lrc(&lrc)));
@@ -947,6 +992,40 @@ mod tests {
     #[test]
     fn long_minutes_and_colon_fractions() {
         assert_eq!(parse_lrc("[123:04:50] x"), vec![l(7_384_500, "x")]);
+    }
+
+    #[test]
+    fn parsing_untrusted_lrc_stays_bounded() {
+        // 100k tags on one line: only the first few become lines, the rest
+        // are skipped without a copy each, and it stays quick.
+        let flood = format!("{} x", "[00:01.00]".repeat(100_000));
+        let start = Instant::now();
+        let lines = parse_lrc(&flood);
+        assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
+        assert_eq!(lines.len(), MAX_TAGS_PER_LINE);
+        assert!(lines.iter().all(|line| line.text == "x"));
+        // A long text is cut by characters, not bytes.
+        let long = format!("[00:01.00] {}", "é".repeat(2_000));
+        assert_eq!(parse_lrc(&long)[0].text.chars().count(), MAX_LINE_CHARS);
+        // At most `MAX_LINES` lines, however they come.
+        let many: String = (0..MAX_LINES + 100)
+            .map(|i| format!("[00:{:02}.00] l{i}\n", i % 60))
+            .collect();
+        assert_eq!(parse_lrc(&many).len(), MAX_LINES);
+        let tagged = format!("{} x\n", "[00:01.00]".repeat(MAX_TAGS_PER_LINE)).repeat(MAX_LINES);
+        assert_eq!(parse_lrc(&tagged).len(), MAX_LINES);
+    }
+
+    #[test]
+    fn oversized_bodies_are_refused_unparsed() {
+        let pad = "x".repeat(MAX_BODY_BYTES);
+        let big = format!(r#"{{"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}"#);
+        assert_eq!(read_answer(200, &big), Answer::Failed);
+        let list = format!(r#"[{{"duration":180.0,"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}]"#);
+        assert_eq!(pick_search(&list, 180_000), None);
+        assert!(storable("[00:01.00] hi"));
+        assert!(!storable(&format!("[00:01.00] {pad}")));
+        assert!(!storable("no tags"));
     }
 
     fn song() -> Vec<LrcLine> {
@@ -1364,6 +1443,27 @@ mod tests {
     }
 
     #[test]
+    fn oversized_lrc_is_neither_written_nor_read() {
+        let tmp = TempDir::new("oversized");
+        let cache = DiskCache::new(tmp.0.clone());
+        let now = 1_800_000_000;
+        let huge = format!("[00:01.00] {}", "x".repeat(MAX_BODY_BYTES));
+        let q = query("big");
+        let file = tmp.0.join(format!("{}.lrc", key_hash(&q.key)));
+        let mut memory = MemoryCache::new(5);
+        let f = keep_answer(&q, Answer::Synced(huge.clone()), &cache, &mut memory, now);
+        assert!(f.transient && f.lines.is_none());
+        cache.write_lrc(&q.key, &huge);
+        assert!(!file.exists(), "never written");
+        // One put there by hand is skipped.
+        std::fs::create_dir_all(&tmp.0).unwrap();
+        std::fs::write(&file, &huge).unwrap();
+        assert_eq!(cache.read(&q.key, now), Cached::Miss);
+        std::fs::write(&file, "[00:01.00] hi").unwrap();
+        assert_eq!(cache.read(&q.key, now), Cached::Lrc("[00:01.00] hi".into()));
+    }
+
+    #[test]
     fn worker_answers_from_disk_cache() {
         let tmp = TempDir::new("worker");
         let cache = DiskCache::new(tmp.0.clone());
@@ -1691,7 +1791,7 @@ mod tests {
         };
         let http = Http::new().unwrap();
         let (status, body) = http
-            .get_with_headers(&lrclib_url(&q), &[("User-Agent", USER_AGENT)])
+            .get_with_headers_capped(&lrclib_url(&q), &[("User-Agent", USER_AGENT)], MAX_BODY_BYTES)
             .unwrap();
         println!("status {status}, {} bytes", body.len());
         let Answer::Synced(lrc) = read_answer(status, &body) else {

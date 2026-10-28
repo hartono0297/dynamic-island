@@ -2,13 +2,16 @@
 //! async operation with `.join()`, so call it only from worker threads.
 
 use windows::Foundation::Uri;
-use windows::Storage::Streams::UnicodeEncoding;
+use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions, UnicodeEncoding};
+use windows::Win32::Foundation::E_FAIL;
 use windows::Web::Http::Filters::{
     HttpBaseProtocolFilter, HttpCacheReadBehavior, HttpCacheWriteBehavior,
 };
 use windows::Web::Http::Headers::HttpCredentialsHeaderValue;
-use windows::Web::Http::{HttpClient, HttpMethod, HttpRequestMessage, HttpStringContent};
-use windows::core::{HSTRING, Result};
+use windows::Web::Http::{
+    HttpClient, HttpCompletionOption, HttpMethod, HttpRequestMessage, HttpStringContent,
+};
+use windows::core::{Error, HSTRING, Result};
 
 pub struct Http {
     client: HttpClient,
@@ -34,14 +37,45 @@ impl Http {
     }
 
     /// GET with extra request headers (e.g. `User-Agent`), added without
-    /// WinRT's header-value validation, which rejects some valid agents.
-    pub fn get_with_headers(&self, url: &str, extra: &[(&str, &str)]) -> Result<(u16, String)> {
+    /// WinRT's header-value validation, which rejects some valid agents, for
+    /// a body that must stay under `max_bytes`: it is read in pieces and the
+    /// call fails (`Err`) as soon as it grows past that, so a hostile server
+    /// cannot make it hold more. The body is read as UTF-8.
+    pub fn get_with_headers_capped(
+        &self,
+        url: &str,
+        extra: &[(&str, &str)],
+        max_bytes: usize,
+    ) -> Result<(u16, String)> {
         let request = self.request(&HttpMethod::Get()?, url, None)?;
         let headers = request.Headers()?;
         for (name, value) in extra {
             headers.TryAppendWithoutValidation(&HSTRING::from(*name), &HSTRING::from(*value))?;
         }
-        self.send(&request)
+        let response = self
+            .client
+            .SendRequestWithOptionAsync(&request, HttpCompletionOption::ResponseHeadersRead)?
+            .join()?;
+        let status = response.StatusCode()?.0 as u16;
+        let stream = response.Content()?.ReadAsInputStreamAsync()?.join()?;
+        const CHUNK: u32 = 64 * 1024;
+        let mut body = Vec::new();
+        loop {
+            let buffer = stream
+                .ReadAsync(&Buffer::Create(CHUNK)?, CHUNK, InputStreamOptions::Partial)?
+                .join()?;
+            let len = buffer.Length()? as usize;
+            if len == 0 {
+                break;
+            }
+            if body.len() + len > max_bytes {
+                return Err(Error::new(E_FAIL, "response too large"));
+            }
+            let start = body.len();
+            body.resize(start + len, 0);
+            DataReader::FromBuffer(&buffer)?.ReadBytes(&mut body[start..])?;
+        }
+        Ok((status, String::from_utf8_lossy(&body).into_owned()))
     }
 
     /// `method` is "POST" or "PATCH"; `body` is sent as UTF-8 JSON.

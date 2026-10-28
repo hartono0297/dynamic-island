@@ -108,7 +108,7 @@ impl App {
             self.shelf_look();
             return;
         }
-        self.queue_shortcut(shortcuts::Action::Shell(path.display().to_string()));
+        self.queue_shortcut(shortcuts::Action::OpenPath(path));
     }
 
     pub(super) fn shelf_remove(&mut self, i: usize) {

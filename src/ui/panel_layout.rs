@@ -4203,7 +4203,7 @@ mod tests {
             .map(|i| match Shortcut::ALL.get(i) {
                 Some(s) => Tile::Builtin(*s),
                 None => Tile::Custom(
-                    CustomTile::new(&format!("T{i}"), CustomKind::App, "a.exe").expect("valid"),
+                    CustomTile::new(&format!("T{i}"), CustomKind::App, r"C:\a.exe").expect("valid"),
                 ),
             })
             .collect()

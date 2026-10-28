@@ -177,14 +177,15 @@ pub fn auth_url(client_id: &str, redirect: &str, challenge: &str, state: &str) -
 }
 
 /// Parses the loopback request line, e.g. `GET /?state=..&code=.. HTTP/1.1`.
-/// `Err` carries Google's `error` value, or `no_code` for any other request.
-pub fn parse_redirect(request_line: &str) -> Result<(String, String), String> {
+/// `Err` carries Google's `error` value and the request's `state` (to be
+/// checked like a code's), or `no_code` for any other request.
+pub fn parse_redirect(request_line: &str) -> Result<(String, String), (String, Option<String>)> {
     let mut parts = request_line.split_whitespace();
     let (Some("GET"), Some(target)) = (parts.next(), parts.next()) else {
-        return Err(NO_CODE.into());
+        return Err((NO_CODE.into(), None));
     };
     let Some((_, query)) = target.split_once('?') else {
-        return Err(NO_CODE.into());
+        return Err((NO_CODE.into(), None));
     };
     let (mut code, mut state, mut error) = (None, None, None);
     for pair in query.split('&') {
@@ -198,11 +199,11 @@ pub fn parse_redirect(request_line: &str) -> Result<(String, String), String> {
         *slot = Some(url_decode(value));
     }
     if let Some(error) = error {
-        return Err(error);
+        return Err((error, state));
     }
     match (code, state) {
         (Some(code), Some(state)) => Ok((code, state)),
-        _ => Err(NO_CODE.into()),
+        _ => Err((NO_CODE.into(), None)),
     }
 }
 
@@ -459,7 +460,8 @@ fn wait_for_code<T>(
 
 /// The redirect's code, or why the login failed; the caller answers the
 /// browser. `None` (already answered 404) when the request was not the
-/// redirect and waiting should go on.
+/// redirect and waiting should go on: that includes an error whose `state`
+/// is not this login's, so a forged `?error=` cannot end it.
 fn read_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<String, AuthError>> {
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT)).ok()?;
@@ -474,12 +476,12 @@ fn read_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<Stri
     }
 
     Some(match parse_redirect(request_line.trim_end()) {
-        Err(e) if e == NO_CODE => {
+        Err((e, state)) if e == NO_CODE || state.as_deref() != Some(expected_state) => {
             respond(stream, "404 Not Found", "");
             return None;
         }
-        Err(e) if e == "access_denied" => Err(AuthError::NeedsLogin),
-        Err(e) => Err(AuthError::Network(format!(
+        Err((e, _)) if e == "access_denied" => Err(AuthError::NeedsLogin),
+        Err((e, _)) => Err(AuthError::Network(format!(
             "login error: {}",
             e.chars().take(64).collect::<String>()
         ))),
@@ -596,7 +598,15 @@ mod tests {
         );
         assert_eq!(
             parse_redirect("GET /?error=access_denied&state=s1 HTTP/1.1"),
-            Err("access_denied".to_string())
+            Err(("access_denied".to_string(), Some("s1".to_string())))
+        );
+        assert_eq!(
+            parse_redirect("GET /?error=access_denied HTTP/1.1"),
+            Err(("access_denied".to_string(), None))
+        );
+        assert_eq!(
+            parse_redirect("GET /favicon.ico HTTP/1.1"),
+            Err((NO_CODE.to_string(), None))
         );
     }
 
@@ -774,6 +784,29 @@ mod tests {
             Err(AuthError::Network("login state mismatch".into()))
         );
         assert!(responses[0].0.contains("Gagal terhubung"));
+    }
+
+    #[test]
+    fn loopback_ignores_an_error_from_another_login() {
+        // A forged error (wrong or no state) does not end the login; the
+        // real redirect after it still goes through.
+        let (outcome, responses) = loopback_run(
+            &[
+                "GET /?error=access_denied&state=evil HTTP/1.1\r\n\r\n",
+                "GET /?error=access_denied HTTP/1.1\r\n\r\n",
+                "GET /?state=s1&code=c HTTP/1.1\r\n\r\n",
+            ],
+            |code| Ok(format!("tokens for {code}")),
+        );
+        assert_eq!(outcome, Ok("tokens for c".to_string()));
+        assert!(responses[0].0.starts_with("HTTP/1.1 404"));
+        assert!(responses[1].0.starts_with("HTTP/1.1 404"));
+        // This login's own error still ends it.
+        let (outcome, _) = loopback_run(
+            &["GET /?error=access_denied&state=s1 HTTP/1.1\r\n\r\n"],
+            |_| panic!("no exchange after an error"),
+        );
+        assert_eq!(outcome, Err(AuthError::NeedsLogin));
     }
 
     const BOTH: &str = "https://www.googleapis.com/auth/calendar.events \

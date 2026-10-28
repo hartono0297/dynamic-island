@@ -25,13 +25,15 @@ use windows::Win32::System::Ole::{
     IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize,
     RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
 };
+use windows::Win32::System::Memory::GlobalSize;
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::{
-    BHID_DataObject, DragQueryFileW, HDROP, IShellItem, SHCreateItemFromParsingName,
+    BHID_DataObject, DROPFILES, DragQueryFileW, HDROP, IShellItem, SHCreateItemFromParsingName,
 };
 use windows::core::{BOOL, HRESULT, HSTRING, Ref, implement};
 
 use crate::model::Event;
+use crate::shelf::MAX_ITEMS;
 
 /// The effect a drop answers with, from the ones the source offers: link,
 /// else copy, else none. Never move.
@@ -58,7 +60,9 @@ fn has_files(data: &IDataObject) -> bool {
     answer == S_OK
 }
 
-/// The paths in `data`'s file list (empty when it has none).
+/// The paths in `data`'s file list (empty when it has none), at most
+/// `shelf::MAX_ITEMS` of them: the shelf keeps no more. A medium that is not
+/// an HGLOBAL holding at least a `DROPFILES` header is not read.
 fn read_paths(data: &IDataObject) -> Vec<PathBuf> {
     let format = FORMATETC {
         cfFormat: CF_HDROP.0,
@@ -72,8 +76,15 @@ fn read_paths(data: &IDataObject) -> Vec<PathBuf> {
     };
     let mut paths = Vec::new();
     unsafe {
+        let hglobal = (medium.tymed == TYMED_HGLOBAL.0 as u32).then(|| medium.u.hGlobal);
+        let readable = hglobal
+            .is_some_and(|h| !h.is_invalid() && GlobalSize(h) >= size_of::<DROPFILES>());
+        if !readable {
+            ReleaseStgMedium(&mut medium);
+            return paths;
+        }
         let hdrop = HDROP(medium.u.hGlobal.0);
-        let count = DragQueryFileW(hdrop, u32::MAX, None);
+        let count = DragQueryFileW(hdrop, u32::MAX, None).min(MAX_ITEMS as u32);
         for i in 0..count {
             let len = DragQueryFileW(hdrop, i, None) as usize;
             if len == 0 {

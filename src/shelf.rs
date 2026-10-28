@@ -65,8 +65,46 @@ pub enum Probe {
     Folder,
 }
 
-/// The real file system's answer (for `Shelf::cards`).
+/// `GetDriveTypeW`'s answer for a network drive.
+const DRIVE_REMOTE: u32 = 4;
+
+/// Whether `path` is on the network: a UNC path (`\\server\share\…`, and
+/// any other `\\` form, which is not worth the risk) or a drive letter that
+/// `remote_drive` says is mapped. Such a path is never probed on the UI
+/// thread: a share that is gone can block it for many seconds.
+pub fn on_network(path: &Path, remote_drive: impl Fn(char) -> bool) -> bool {
+    let s = path.as_os_str().to_string_lossy();
+    let mut chars = s.chars();
+    match (chars.next(), chars.next()) {
+        (Some('\\' | '/'), Some('\\' | '/')) => true,
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => remote_drive(letter),
+        _ => false,
+    }
+}
+
+/// Whether drive `letter` is a network drive (asks for its root only, which
+/// does not touch the share).
+fn drive_is_remote(letter: char) -> bool {
+    let root = windows::core::HSTRING::from(format!("{letter}:\\"));
+    unsafe { windows::Win32::Storage::FileSystem::GetDriveTypeW(&root) == DRIVE_REMOTE }
+}
+
+/// What a network path is taken to be without looking: present, a folder
+/// when it has no extension, else a file.
+fn unprobed(path: &Path) -> Probe {
+    if path.extension().is_some() {
+        Probe::File
+    } else {
+        Probe::Folder
+    }
+}
+
+/// The real file system's answer (for `Shelf::cards`). A path on the
+/// network (`on_network`) is not looked at: it counts as there.
 pub fn probe(path: &Path) -> Probe {
+    if on_network(path, drive_is_remote) {
+        return unprobed(path);
+    }
     match std::fs::metadata(path) {
         Ok(m) if m.is_dir() => Probe::Folder,
         Ok(_) => Probe::File,
@@ -269,6 +307,22 @@ mod tests {
                 ("hilang.zip", ShelfKind::Archive, true),
             ]
         );
+    }
+
+    #[test]
+    fn network_paths_are_never_probed() {
+        let mapped = |letter: char| letter.eq_ignore_ascii_case(&'z');
+        assert!(on_network(Path::new(r"\\server\share\denah.pdf"), mapped));
+        assert!(on_network(Path::new(r"\\?\UNC\server\share\a.txt"), mapped));
+        assert!(on_network(Path::new("//server/share/a.txt"), mapped));
+        assert!(on_network(Path::new(r"Z:\proyek\a.txt"), mapped));
+        assert!(on_network(Path::new(r"z:\proyek"), mapped));
+        assert!(!on_network(Path::new(r"C:\proyek\a.txt"), mapped));
+        assert!(!on_network(Path::new(r"\proyek"), mapped));
+        assert!(!on_network(Path::new(""), mapped));
+        // Taken as there; a folder when it has no extension.
+        assert_eq!(probe(Path::new(r"\\vale-test-nowhere\share\a.txt")), Probe::File);
+        assert_eq!(probe(Path::new(r"\\vale-test-nowhere\share\Proyek")), Probe::Folder);
     }
 
     #[test]

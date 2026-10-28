@@ -7,11 +7,12 @@
 //!
 //! No watcher and no polling: each worker lists the folder once and ends.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
-use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppBGRA,
     IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapEncoderNoCache,
@@ -19,10 +20,11 @@ use windows::Win32::Graphics::Imaging::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance,
-    CoInitializeEx, CoTaskMemFree, CoUninitialize,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, STREAM_SEEK_END, STREAM_SEEK_SET,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Screenshots, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellExecuteW,
+    FOLDERID_Screenshots, KF_FLAG_DEFAULT, SHCreateMemStream, SHGetKnownFolderPath,
+    ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
@@ -110,19 +112,16 @@ pub fn spawn_check(
         .is_ok()
 }
 
-/// `bgra` (top-down, `w` x `h`, opaque) as a PNG at `path` through WIC. On a
-/// failure the half-written file is removed. Needs COM on the calling thread.
-fn write_png(path: &Path, w: u32, h: u32, bgra: &[u8]) -> Option<()> {
-    let done = unsafe {
+/// `bgra` (top-down, `w` x `h`, opaque) as PNG bytes, encoded by WIC into a
+/// memory stream: no file is touched. Needs COM on the calling thread.
+fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
+    unsafe {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
         let encoder = wic
             .CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())
             .ok()?;
-        let stream = wic.CreateStream().ok()?;
-        stream
-            .InitializeFromFilename(&HSTRING::from(path.as_os_str()), GENERIC_WRITE.0)
-            .ok()?;
+        let stream = SHCreateMemStream(None)?;
         encoder.Initialize(&stream, WICBitmapEncoderNoCache).ok()?;
         let mut frame = None;
         let mut options = None;
@@ -135,12 +134,53 @@ fn write_png(path: &Path, w: u32, h: u32, bgra: &[u8]) -> Option<()> {
         frame.WritePixels(h, w * 4, bgra).ok()?;
         frame.Commit().ok()?;
         encoder.Commit().ok()?;
-        Some(())
-    };
-    if done.is_none() {
-        let _ = std::fs::remove_file(path);
+        let mut len = 0u64;
+        stream.Seek(0, STREAM_SEEK_END, Some(&mut len)).ok()?;
+        stream.Seek(0, STREAM_SEEK_SET, None).ok()?;
+        let mut bytes = vec![0u8; usize::try_from(len).ok()?];
+        let mut read = 0u32;
+        stream
+            .Read(bytes.as_mut_ptr().cast(), u32::try_from(len).ok()?, Some(&mut read))
+            .ok()
+            .ok()?;
+        (read as usize == bytes.len()).then_some(bytes)
     }
-    done
+}
+
+/// Writes `bytes` to a new file in `dir`, named by `save_name` with `exists`
+/// as its guide. The file is created only if no file has that name (create
+/// new, never open an existing one): a name taken in the meantime moves on
+/// to the next " (n)". A file this made and could not fill is removed; no
+/// other file is ever touched.
+fn write_new(
+    dir: &Path,
+    now: chrono::NaiveDateTime,
+    bytes: &[u8],
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let mut taken: Vec<String> = Vec::new();
+    for _ in 0..16 {
+        let name = save_name(now, |n| taken.iter().any(|t| t == n) || exists(&dir.join(n)));
+        let path = dir.join(&name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let written = file.write_all(bytes).and_then(|()| file.sync_all());
+                drop(file);
+                if written.is_ok() {
+                    return Some(path);
+                }
+                let _ = std::fs::remove_file(&path);
+                return None;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => taken.push(name),
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// The pixels of a clipboard DIB at full size, top-down BGRA (the
@@ -169,11 +209,9 @@ pub fn spawn_save(
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
             let path = screenshots_dir().and_then(|dir| {
                 std::fs::create_dir_all(&dir).ok()?;
-                let name = save_name(now, |n| dir.join(n).exists());
-                let path = dir.join(name);
                 let (w, h, bgra) = full_pixels(&dib)?;
-                write_png(&path, w, h, &bgra)?;
-                Some(path)
+                let png = encode_png(w, h, &bgra)?;
+                write_new(&dir, now, &png, Path::exists)
             });
             if inited {
                 unsafe { CoUninitialize() };
@@ -248,11 +286,17 @@ mod tests {
     use super::*;
     use crate::clipboard::image::tests::dib24;
 
+    fn at() -> chrono::NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 28)
+            .and_then(|d| d.and_hms_opt(14, 30, 12))
+            .expect("valid time")
+    }
+
     #[test]
     fn a_picture_round_trips_through_a_png_in_a_temp_folder() {
         let dir = std::env::temp_dir().join(format!("vale-shot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("t.png");
         let (w, h) = (40u32, 24u32);
         let mut bgra = Vec::new();
         for y in 0..h {
@@ -261,13 +305,30 @@ mod tests {
             }
         }
         let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-        let written = write_png(&path, w, h, &bgra);
+        let png = encode_png(w, h, &bgra);
         if inited {
             unsafe { CoUninitialize() };
         }
-        assert!(written.is_some(), "WIC wrote it");
-        let bytes = std::fs::read(&path).expect("the file");
-        assert_eq!(crate::screenshot::png_size(&bytes), Some((w, h)));
+        let png = png.expect("WIC encoded it");
+        assert_eq!(crate::screenshot::png_size(&png), Some((w, h)));
+        let path = write_new(&dir, at(), &png, Path::exists).expect("written");
+        assert_eq!(std::fs::read(&path).expect("the file"), png);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_never_opens_a_file_that_is_there() {
+        let dir = std::env::temp_dir().join(format!("vale-shot-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let first = dir.join("Screenshot 2026-10-28 143012.png");
+        std::fs::write(&first, b"theirs").expect("a file already there");
+        // The check says the name is free (a file made in the meantime):
+        // creating it fails, and the next name is taken instead.
+        let path = write_new(&dir, at(), b"ours", |_| false).expect("written");
+        assert_eq!(path, dir.join("Screenshot 2026-10-28 143012 (2).png"));
+        assert_eq!(std::fs::read(&first).expect("theirs"), b"theirs", "untouched");
+        assert_eq!(std::fs::read(&path).expect("ours"), b"ours");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

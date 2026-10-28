@@ -57,8 +57,9 @@ pub struct CustomTile {
 
 impl CustomTile {
     /// A tile from what the owner typed: both parts trimmed, within their
-    /// limits and free of control characters, and a web address with a safe
-    /// scheme. `None` when any of that fails.
+    /// limits and free of control characters, a web address with a safe
+    /// scheme, and an app or folder as an absolute local path. `None` when
+    /// any of that fails: nothing is cut off to make it pass.
     pub fn new(label: &str, kind: CustomKind, target: &str) -> Option<CustomTile> {
         let (label, target) = (label.trim(), target.trim());
         let clean = |s: &str, max: usize| {
@@ -67,7 +68,11 @@ impl CustomTile {
         if !clean(label, LABEL_MAX) || !clean(target, TARGET_MAX) {
             return None;
         }
-        if kind == CustomKind::Url && !safe_url(target) {
+        let valid = match kind {
+            CustomKind::Url => safe_url(target),
+            CustomKind::App | CustomKind::Folder => local_path(target),
+        };
+        if !valid {
             return None;
         }
         Some(CustomTile {
@@ -79,8 +84,9 @@ impl CustomTile {
 }
 
 /// An address the shell may open from a tile: http(s) with a host, or a
-/// mail link. Anything else (file:, javascript:, ms-*: handlers, bare words)
-/// is not a link this page launches.
+/// mail link without a `?` query (which could fill in a body, copies or an
+/// attachment). Anything else (file:, javascript:, ms-*: handlers, bare
+/// words) is not a link this page launches.
 fn safe_url(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
     let host = lower
@@ -88,8 +94,24 @@ fn safe_url(target: &str) -> bool {
         .or_else(|| lower.strip_prefix("http://"));
     match host {
         Some(rest) => rest.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()),
-        None => lower.strip_prefix("mailto:").is_some_and(|rest| !rest.is_empty()),
+        None => lower
+            .strip_prefix("mailto:")
+            .is_some_and(|rest| !rest.is_empty() && !rest.contains('?')),
     }
+}
+
+/// A path an app or folder tile may open: absolute and local, a drive
+/// letter then `:\` ("C:\Program Files\…"), with no other `:` (no stream
+/// name, no `scheme:` further on). Relative paths (looked up wherever the
+/// shell looks), UNC shares (`\\server\…`), `\\?\` forms and addresses are
+/// refused.
+fn local_path(target: &str) -> bool {
+    let b = target.as_bytes();
+    b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && b[2] == b'\\'
+        && !target[2..].contains(':')
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -378,16 +400,42 @@ mod tests {
             "https://",
             "http:// x",
             "mailto:",
+            "mailto:a@b.co?attach=C:\\secret.txt",
+            "mailto:a@b.co?body=x",
         ] {
             assert!(!ok("X", CustomKind::Url, bad), "{bad}");
         }
+        // An app or folder is an absolute local path, nothing else.
+        assert!(ok("Akar", CustomKind::Folder, r"C:\"));
+        assert!(ok("Proyek", CustomKind::Folder, r"d:\Proyek\2026"));
+        for kind in [CustomKind::App, CustomKind::Folder] {
+            for bad in [
+                "a.exe",
+                r"Proyek\a.exe",
+                r"\Windows\notepad.exe",
+                r"\\server\share\a.exe",
+                r"\\?\C:\a.exe",
+                "C:a.exe",
+                "C:/Tools/a.exe",
+                r"C:\a.txt:stream.exe",
+                r"C:\x\https://evil",
+                "file:///C:/a.exe",
+                "https://example.com",
+                "shell:startup",
+                r"%APPDATA%\a.exe",
+                r"1:\a.exe",
+            ] {
+                assert!(!ok("X", kind, bad), "{kind:?} {bad}");
+            }
+        }
         // Empty, control characters, too long.
-        assert!(!ok("", CustomKind::App, "a.exe"));
-        assert!(!ok("  ", CustomKind::App, "a.exe"));
+        assert!(!ok("", CustomKind::App, r"C:\a.exe"));
+        assert!(!ok("  ", CustomKind::App, r"C:\a.exe"));
         assert!(!ok("X", CustomKind::App, ""));
-        assert!(!ok("X\n", CustomKind::App, "a.exe\0"));
-        assert!(!ok("Ini label terlalu panjang", CustomKind::App, "a.exe"));
-        assert!(!ok("X", CustomKind::App, &"a".repeat(TARGET_MAX + 1)));
+        assert!(!ok("X\n", CustomKind::App, "C:\\a.exe\0"));
+        assert!(!ok("Ini label terlalu panjang", CustomKind::App, r"C:\a.exe"));
+        let long = format!(r"C:\{}", "a".repeat(TARGET_MAX));
+        assert!(!ok("X", CustomKind::App, &long));
         // Trimmed.
         let t = CustomTile::new("  Gmail ", CustomKind::Url, " https://x.co ").unwrap();
         assert_eq!((t.label.as_str(), t.target.as_str()), ("Gmail", "https://x.co"));
@@ -429,9 +477,9 @@ mod tests {
     fn the_list_and_the_shown_tiles_have_limits() {
         let mut t = ShortcutTiles::default();
         for i in 0..MAX_CUSTOM {
-            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, "a.exe")));
+            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe")));
         }
-        assert!(!t.add(custom("Lebih", CustomKind::App, "a.exe")), "full");
+        assert!(!t.add(custom("Lebih", CustomKind::App, r"C:\a.exe")), "full");
         // Nine built-in + 8 own, all on: only the first twelve show.
         assert_eq!(t.entries().len(), Shortcut::ALL.len() + MAX_CUSTOM);
         assert_eq!(t.visible().len(), MAX_SHOWN);
@@ -442,7 +490,7 @@ mod tests {
                 on: true,
                 label: format!("T{i}"),
                 kind: "App".into(),
-                target: "a.exe".into(),
+                target: r"C:\a.exe".into(),
             })
             .collect();
         assert_eq!(ShortcutTiles::from_saved(&many).customs(), MAX_CUSTOM);
@@ -463,7 +511,7 @@ mod tests {
                 on: true,
                 label: format!("T{i}"),
                 kind: "App".into(),
-                target: "a.exe".into(),
+                target: r"C:\a.exe".into(),
             });
         }
         let t = ShortcutTiles::from_saved(&saved);
