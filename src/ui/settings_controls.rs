@@ -8,18 +8,19 @@ use std::collections::HashMap;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F,
-    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
+    D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
-    D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
-    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
-    ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory,
+    ID2D1Factory, ID2D1HwndRenderTarget, ID2D1PathGeometry, ID2D1RenderTarget,
+    ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
@@ -48,8 +49,8 @@ use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
 use crate::theme::{Accent, Palette, WindowPalette};
 
-/// The Bata logo's fixed brand colours, whatever the accent: terracotta
-/// tile, espresso island, cream "camera" dot.
+/// The Vale logo's fixed brand colours, whatever the accent: terracotta
+/// eared tile, espresso island, cream "camera" dot.
 const LOGO_TILE: u32 = 0xE2683C;
 const LOGO_PILL: u32 = 0x17120F;
 const LOGO_DOT: u32 = 0xF4EDE4;
@@ -99,8 +100,10 @@ pub struct Gfx {
     /// The preview island's line of text.
     island_text: IDWriteTextFormat,
     widths: RefCell<HashMap<(String, Font), f32>>,
-    /// The logo's tile outline in its 256-unit design space.
-    tile: ID2D1PathGeometry,
+    /// The logo's two ear triangles in its 256-unit design space.
+    ears: ID2D1PathGeometry,
+    /// Round joins, for the ears' stroke.
+    round: ID2D1StrokeStyle,
     target: Option<Target>,
 }
 
@@ -141,7 +144,15 @@ impl Gfx {
                     12.0,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                 )?,
-                tile: tile_geometry(&d2d)?,
+                ears: ears_geometry(&d2d)?,
+                round: d2d.CreateStrokeStyle(
+                    &D2D1_STROKE_STYLE_PROPERTIES {
+                        lineJoin: D2D1_LINE_JOIN_ROUND,
+                        miterLimit: 10.0,
+                        ..Default::default()
+                    },
+                    None,
+                )?,
                 tabular: fonts::tabular_figures(&dwrite)?,
                 plain: dwrite.CreateTypography()?,
                 d2d,
@@ -487,7 +498,7 @@ impl Painter<'_> {
         }
     }
 
-    /// The app logo, Bata (assets/logo.svg), scaled into `r`.
+    /// The app logo, the eared tile (assets/logo.svg), scaled into `r`.
     fn logo(&self, r: Rect) {
         if r.w <= 0.0 {
             return;
@@ -506,12 +517,25 @@ impl Painter<'_> {
                 M32: r.y,
             };
             rt.SetTransform(&(local * previous));
+            // Ears: triangles with a 16-unit round stroke, behind the tile.
             self.set(LOGO_TILE, 1.0);
-            rt.FillGeometry(&self.gfx.tile, self.brush, None);
+            rt.FillGeometry(&self.gfx.ears, self.brush, None);
+            rt.DrawGeometry(&self.gfx.ears, self.brush, 16.0, &self.gfx.round);
+            self.fill_round(
+                Rect {
+                    x: 12.0,
+                    y: 52.0,
+                    w: 232.0,
+                    h: 192.0,
+                },
+                72.0,
+                LOGO_TILE,
+                1.0,
+            );
             self.fill_round(
                 Rect {
                     x: 58.0,
-                    y: 104.0,
+                    y: 122.0,
                     w: 140.0,
                     h: 48.0,
                 },
@@ -519,7 +543,7 @@ impl Painter<'_> {
                 LOGO_PILL,
                 1.0,
             );
-            self.circle(174.0, 128.0, 9.5, LOGO_DOT, 1.0);
+            self.circle(174.0, 146.0, 9.5, LOGO_DOT, 1.0);
             rt.SetTransform(&previous);
         }
     }
@@ -1144,27 +1168,21 @@ pub(super) fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
     }
 }
 
-/// The Bata logo tile (assets/logo.svg): a squircle from 12 to 244.
-fn tile_geometry(d2d: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
+/// The logo's ears (assets/logo.svg): (30,104) (52,22) (116,64) and mirrored.
+fn ears_geometry(d2d: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
     let pt = |x: f32, y: f32| Vector2::new(x, y);
-    let bez = |a: (f32, f32), b: (f32, f32), c: (f32, f32)| D2D1_BEZIER_SEGMENT {
-        point1: pt(a.0, a.1),
-        point2: pt(b.0, b.1),
-        point3: pt(c.0, c.1),
-    };
     unsafe {
         let path = d2d.CreatePathGeometry()?;
         let sink = path.Open()?;
-        sink.BeginFigure(pt(82.0, 12.0), D2D1_FIGURE_BEGIN_FILLED);
-        sink.AddLine(pt(174.0, 12.0));
-        sink.AddBezier(&bez((227.2, 12.0), (244.0, 28.8), (244.0, 82.0)));
-        sink.AddLine(pt(244.0, 174.0));
-        sink.AddBezier(&bez((244.0, 227.2), (227.2, 244.0), (174.0, 244.0)));
-        sink.AddLine(pt(82.0, 244.0));
-        sink.AddBezier(&bez((28.8, 244.0), (12.0, 227.2), (12.0, 174.0)));
-        sink.AddLine(pt(12.0, 82.0));
-        sink.AddBezier(&bez((12.0, 28.8), (28.8, 12.0), (82.0, 12.0)));
-        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        for [a, b, c] in [
+            [(30.0, 104.0), (52.0, 22.0), (116.0, 64.0)],
+            [(226.0, 104.0), (204.0, 22.0), (140.0, 64.0)],
+        ] {
+            sink.BeginFigure(pt(a.0, a.1), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(pt(b.0, b.1));
+            sink.AddLine(pt(c.0, c.1));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        }
         sink.Close()?;
         Ok(path)
     }

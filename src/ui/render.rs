@@ -820,7 +820,7 @@ impl Renderer {
             h: 28.0,
         };
         let lang = i18n::lang();
-        let name = i18n::text(lang, i18n::Key::SourceBata);
+        let name = i18n::text(lang, i18n::Key::SourceVale);
         self.text(name, &self.fonts.heading, title, 1.0);
         let pose = Pose::default();
         let col = (card.w - 40.0) / 5.0;

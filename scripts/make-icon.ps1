@@ -1,8 +1,9 @@
-# Renders the Vale logo ("Bata": terracotta tile, espresso island,
-# cream dot, fixed brand colours) and writes assets\icon.ico (16-256 px) and
-# assets\logo-256.png. The vector source is assets\logo.svg; keep both in sync.
-# Sizes up to 32 px use hand-snapped geometry so the pill keeps crisp edges;
-# larger sizes scale the 256 px design and round to whole pixels.
+# Renders the Vale logo (the "eared tile": terracotta tile with two cat ears,
+# espresso island, cream dot, fixed brand colours) and writes assets\icon.ico
+# (16-256 px) and assets\logo-256.png. The vector source is assets\logo.svg;
+# keep both in sync. Sizes up to 32 px use hand-snapped geometry so the tile
+# and pill keep crisp edges; larger sizes scale the 256 px design and round to
+# whole pixels.
 # Every size is drawn at 8x and reduced, which gives clean anti-aliasing.
 # Requires Windows PowerShell 5.1 or later. Per-size PNGs go to -OutDir
 # (default target\icon) for inspection.
@@ -53,26 +54,25 @@ $tileColor = [System.Drawing.Color]::FromArgb(255, 0xE2, 0x68, 0x3C)
 $pillColor = [System.Drawing.Color]::FromArgb(255, 0x17, 0x12, 0x0F)
 $dotColor = [System.Drawing.Color]::FromArgb(255, 0xF4, 0xED, 0xE4)
 
-# Squircle tile: straight edges joined by one cubic per corner. Each corner
-# curve spans 70/232 of the side from the corner and its control points sit
-# 0.76 of that span along the edges, which eases the curvature into the
-# straight sides (logo.svg uses the same numbers).
-$cornerSpan = 70 / 232
-$cornerPull = 0.76
+# The 256 px design (logo.svg): the tile is x 12..244, y 52..244, radius 72;
+# the pill 140 x 48 centred at y 146; the ears are triangles with a 16 px round
+# stroke, (30,104) (52,22) (116,64) and mirrored. Fractions are of the tile's
+# width (232) or height (192).
+$design = @{ Inset = 12 / 256; Top = 52 / 256; Radius = 72 / 232; PillW = 140 / 232; PillH = 48 / 232; PillMid = 94 / 192; Dot = 19 / 48 }
+$ears = @(
+    @(@(30, 104), @(52, 22), @(116, 64)),
+    @(@(226, 104), @(204, 22), @(140, 64))
+)
 
-# The 256 px design, as fractions of the tile side (tile = 232 px, inset 12).
-# The pill sits centred on the tile (104..152 at 256 px).
-$design = @{ Inset = 12 / 256; PillW = 140 / 232; PillH = 48 / 232; PillTop = 92 / 232; Dot = 19 / 48 }
-
-# Hand-tuned small sizes: tile inset, pill width, height and top (absolute y),
-# dot diameter. The pill is vertically centred on whole pixels and the dot is
-# centred on the pill's right end cap. 16 px fills the whole square so the
-# terracotta tile reads on dark and light taskbars alike.
+# Hand-tuned small sizes: tile inset (sides and bottom) and top, pill width,
+# height and top (absolute y), dot diameter. The pill is centred on whole
+# pixels and the dot on the pill's right end cap. 16 px spans the whole width
+# so the terracotta reads on dark and light taskbars alike.
 $hand = @{
-    16 = @{ Inset = 0; PillW = 10; PillH = 4; PillY = 6; Dot = 2 }
-    20 = @{ Inset = 1; PillW = 12; PillH = 4; PillY = 8; Dot = 2 }
-    24 = @{ Inset = 1; PillW = 14; PillH = 6; PillY = 9; Dot = 2 }
-    32 = @{ Inset = 1; PillW = 18; PillH = 6; PillY = 13; Dot = 2 }
+    16 = @{ Inset = 0; Top = 3; PillW = 10; PillH = 4; PillY = 8; Dot = 2 }
+    20 = @{ Inset = 1; Top = 4; PillW = 12; PillH = 4; PillY = 10; Dot = 2 }
+    24 = @{ Inset = 1; Top = 5; PillW = 14; PillH = 6; PillY = 11; Dot = 2 }
+    32 = @{ Inset = 1; Top = 7; PillW = 18; PillH = 6; PillY = 16; Dot = 2 }
 }
 
 function Round-Parity([double]$value, [int]$parity) {
@@ -86,15 +86,17 @@ function Round-Parity([double]$value, [int]$parity) {
 function Get-Geometry([int]$size) {
     if ($hand.ContainsKey($size)) {
         $g = $hand[$size]
-        $inset = $g.Inset; $pillW = $g.PillW; $pillH = $g.PillH; $pillY = $g.PillY; $dot = $g.Dot
+        $inset = $g.Inset; $top = $g.Top; $pillW = $g.PillW; $pillH = $g.PillH; $pillY = $g.PillY; $dot = $g.Dot
     } else {
         $inset = [int][math]::Round($size * $design.Inset)
+        $top = [int][math]::Round($size * $design.Top)
         $tile = $size - 2 * $inset
+        $tileH = $size - $inset - $top
         # Same parity as the canvas keeps the pill centred on whole pixels.
         $pillW = Round-Parity ($tile * $design.PillW) ($size % 2)
         $pillH = Round-Parity ($tile * $design.PillH) ($size % 2)
         # Keep the design's pill centre, so the snapped pill stays centred.
-        $pillY = $inset + [int][math]::Round($tile * $design.PillTop - ($pillH - $tile * $design.PillH) / 2)
+        $pillY = $top + [int][math]::Round($tileH * $design.PillMid - $pillH / 2)
         if ($size -ge 128) {
             # Big enough for the exact dot; anti-aliasing hides the half pixels.
             $dot = $pillH * $design.Dot
@@ -105,26 +107,32 @@ function Get-Geometry([int]$size) {
     }
     $pillX = ($size - $pillW) / 2
     return @{
-        Inset = $inset
+        Inset = $inset; Top = $top; TileW = $size - 2 * $inset; TileH = $size - $inset - $top
         PillX = $pillX; PillY = $pillY; PillW = $pillW; PillH = $pillH
         DotCx = $pillX + $pillW - $pillH / 2; DotCy = $pillY + $pillH / 2; Dot = $dot
     }
 }
 
-function New-SquirclePath([double]$left, [double]$top, [double]$side) {
-    $span = $side * $cornerSpan
-    $k = $span * $cornerPull
-    $right = $left + $side; $b = $top + $side
+function New-RoundRectPath([double]$x, [double]$y, [double]$w, [double]$h, [double]$r) {
+    $d = 2 * $r
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddLine([single]($left + $span), [single]$top, [single]($right - $span), [single]$top)
-    $path.AddBezier([single]($right - $span), [single]$top, [single]($right - $span + $k), [single]$top, [single]$right, [single]($top + $span - $k), [single]$right, [single]($top + $span))
-    $path.AddLine([single]$right, [single]($top + $span), [single]$right, [single]($b - $span))
-    $path.AddBezier([single]$right, [single]($b - $span), [single]$right, [single]($b - $span + $k), [single]($right - $span + $k), [single]$b, [single]($right - $span), [single]$b)
-    $path.AddLine([single]($right - $span), [single]$b, [single]($left + $span), [single]$b)
-    $path.AddBezier([single]($left + $span), [single]$b, [single]($left + $span - $k), [single]$b, [single]$left, [single]($b - $span + $k), [single]$left, [single]($b - $span))
-    $path.AddLine([single]$left, [single]($b - $span), [single]$left, [single]($top + $span))
-    $path.AddBezier([single]$left, [single]($top + $span), [single]$left, [single]($top + $span - $k), [single]($left + $span - $k), [single]$top, [single]($left + $span), [single]$top)
+    $path.AddArc([single]$x, [single]$y, [single]$d, [single]$d, 180, 90)
+    $path.AddArc([single]($x + $w - $d), [single]$y, [single]$d, [single]$d, 270, 90)
+    $path.AddArc([single]($x + $w - $d), [single]($y + $h - $d), [single]$d, [single]$d, 0, 90)
+    $path.AddArc([single]$x, [single]($y + $h - $d), [single]$d, [single]$d, 90, 90)
     $path.CloseFigure()
+    return $path
+}
+
+# An ear's triangle, from the 256 px design onto this size's tile: x follows
+# the tile's width, y its top and height, so the ears stay on the snapped tile.
+function New-EarPath($points, $g, [double]$s) {
+    $kx = $g.TileW / 232; $ky = $g.TileH / 192
+    $pts = foreach ($p in $points) {
+        New-Object System.Drawing.PointF ([single](($g.Inset + ($p[0] - 12) * $kx) * $s)), ([single](($g.Top + ($p[1] - 52) * $ky) * $s))
+    }
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $path.AddPolygon([System.Drawing.PointF[]]$pts)
     return $path
 }
 
@@ -145,10 +153,17 @@ function Render-Logo([int]$size) {
     $gfx.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $gfx.Clear([System.Drawing.Color]::Transparent)
 
-    $left = $g.Inset * $s
-    $side = ($size - 2 * $g.Inset) * $s
-    $tile = New-SquirclePath $left $left $side
     $tileBrush = New-Object System.Drawing.SolidBrush $tileColor
+    $earPen = New-Object System.Drawing.Pen $tileColor, ([single](16 * $g.TileW / 232 * $s))
+    $earPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    foreach ($ear in $ears) {
+        $path = New-EarPath $ear $g $s
+        $gfx.FillPath($tileBrush, $path)
+        $gfx.DrawPath($earPen, $path)
+    }
+    $earPen.Dispose()
+    $radius = $g.TileW * $design.Radius
+    $tile = New-RoundRectPath ($g.Inset * $s) ($g.Top * $s) ($g.TileW * $s) ($g.TileH * $s) ($radius * $s)
     $gfx.FillPath($tileBrush, $tile)
 
     $pillBrush = New-Object System.Drawing.SolidBrush $pillColor

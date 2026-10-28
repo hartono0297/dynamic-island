@@ -1,21 +1,24 @@
-//! Bata, the notch assistant: a little robot drawn from the logo (terracotta
-//! tile = head, espresso island = visor, cream dot = eyes). Shapes are copied
-//! from `robot()` in `docs/design/studio-robot.html` (a 64-unit grid) and
-//! drawn with Direct2D at any size; colours are the fixed brand colours, not
-//! the user's accent.
+//! Vale's cat, the notch assistant: a round terracotta head (the logo's
+//! tile) with two ears, espresso eyes with lashes and a plum bow at the base
+//! of the right ear. Shapes are copied from `cat()` (variant B) in
+//! `docs/design/vale-kucing-simpel.html` (a 64-unit grid) and drawn with
+//! Direct2D at any size; colours are the fixed brand colours, not the user's
+//! accent.
 //!
 //! Everything here except `RobotPainter` is pure: which face to show
 //! (`choose_expr`), when it blinks, sleeps, bounces or lifts, and which
 //! one-shot timers that needs (`plan_timers`). `app.rs` only feeds it events
 //! and arms the timers it asks for.
 
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, NaiveTime};
 // `named_enum!` below names these unqualified.
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_OPEN,
+    D2D_RECT_F, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_CAP_STYLE_ROUND, D2D1_DASH_STYLE_SOLID, D2D1_ELLIPSE, D2D1_LINE_JOIN_ROUND,
@@ -29,19 +32,21 @@ use super::geometry::Rect;
 use crate::i18n::Key;
 use crate::model::{NoticeKind, View};
 
-/// Head (the logo's tile).
+/// Head and ears (the logo's tile).
 pub const TERRACOTTA: u32 = 0xE2683C;
-/// Visor (the logo's island).
+/// Eyes and lashes (the logo's island).
 pub const ESPRESSO: u32 = 0x17120F;
-/// Eyes and extras (the logo's dot).
+/// The eyes' shine and the marks beside the head (the logo's dot).
 pub const CREAM: u32 = 0xF4EDE4;
+/// The bow.
+pub const PLUM: u32 = 0xB07A9A;
 
 /// The design grid.
 pub const GRID: f32 = 64.0;
 /// Eye centres and their line.
-const L: f32 = 24.5;
-const R: f32 = 39.5;
-const Y: f32 = 32.0;
+const L: f32 = 24.0;
+const R: f32 = 40.0;
+const Y: f32 = 35.0;
 
 /// The ten faces. Blinking is not one of them: it is a `Pose` input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -104,7 +109,7 @@ impl Expr {
 }
 
 /// Moment-to-moment state on top of the face: eyes shut for a blink, and
-/// how far the whole robot is raised (hover lift, alert bounce), in px.
+/// how far the whole cat is raised (hover lift, alert bounce), in px.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pose {
     pub blink: bool,
@@ -114,19 +119,38 @@ pub struct Pose {
 
 // ---- Shapes (pure data, in grid units) ----
 
-/// A stroked line of the face, drawn in cream with round caps and joins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The colour of a face mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ink {
+    Espresso,
+    Cream,
+}
+
+impl Ink {
+    fn rgb(self) -> u32 {
+        match self {
+            Ink::Espresso => ESPRESSO,
+            Ink::Cream => CREAM,
+        }
+    }
+}
+
+/// A stroked line of the face, with round caps and joins.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Line {
     /// The happy eyes: two arcs bending up.
     Happy,
-    FocusBrows,
-    SadBrows,
+    /// A blink: two short level lines.
+    Blink,
     /// Closed eyes bending down.
     Sleep,
+    /// Two lashes at the outer upper corner of each eye: `dy` lower than the
+    /// open eyes' lashes, their ends `droop` lower still.
+    Lashes { dy: f32, droop: f32 },
     /// The two small z's.
     Zz,
-    /// The music note's stem and beam.
-    Note,
+    /// A music note's stem and beam, its foot at (x, y).
+    Note { x: f32, y: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -135,25 +159,26 @@ enum Seg {
     Line(f32, f32),
     /// Control point, then end point (an SVG `q`, made absolute).
     Quad(f32, f32, f32, f32),
+    /// Two control points, then the end point (an SVG `C`).
+    Cubic(f32, f32, f32, f32, f32, f32),
+    /// Closes the figure (an SVG `Z`).
+    Close,
 }
 
 impl Line {
-    const ALL: [Line; 6] = [
-        Line::Happy,
-        Line::FocusBrows,
-        Line::SadBrows,
-        Line::Sleep,
-        Line::Zz,
-        Line::Note,
-    ];
-
     fn width(self) -> f32 {
         match self {
-            Line::Happy => 2.6,
-            Line::FocusBrows | Line::SadBrows => 1.8,
+            Line::Happy | Line::Blink => 2.4,
             Line::Sleep => 2.2,
+            Line::Lashes { .. } | Line::Note { .. } => 1.6,
             Line::Zz => 1.5,
-            Line::Note => 1.6,
+        }
+    }
+
+    fn ink(self) -> Ink {
+        match self {
+            Line::Zz | Line::Note { .. } => Ink::Cream,
+            _ => Ink::Espresso,
         }
     }
 
@@ -165,26 +190,19 @@ impl Line {
     fn segments(self) -> Vec<Seg> {
         use Seg::{Line as To, Move, Quad};
         match self {
-            // M L-4 Y+2 q4-6 8 0, twice.
+            // M L-4 Y+1.5 q4-5.5 8 0, twice.
             Line::Happy => vec![
-                Move(L - 4.0, Y + 2.0),
-                Quad(L, Y - 4.0, L + 4.0, Y + 2.0),
-                Move(R - 4.0, Y + 2.0),
-                Quad(R, Y - 4.0, R + 4.0, Y + 2.0),
+                Move(L - 4.0, Y + 1.5),
+                Quad(L, Y - 4.0, L + 4.0, Y + 1.5),
+                Move(R - 4.0, Y + 1.5),
+                Quad(R, Y - 4.0, R + 4.0, Y + 1.5),
             ],
-            // M L-4 Y-4.5 l7 1.6 M R+4 Y-4.5 l-7 1.6
-            Line::FocusBrows => vec![
-                Move(L - 4.0, Y - 4.5),
-                To(L + 3.0, Y - 2.9),
-                Move(R + 4.0, Y - 4.5),
-                To(R - 3.0, Y - 2.9),
-            ],
-            // M L-4 Y-2 l7-2 M R+4 Y-2 l-7-2
-            Line::SadBrows => vec![
-                Move(L - 4.0, Y - 2.0),
-                To(L + 3.0, Y - 4.0),
-                Move(R + 4.0, Y - 2.0),
-                To(R - 3.0, Y - 4.0),
+            // M L-4 Y+1 h8, twice.
+            Line::Blink => vec![
+                Move(L - 4.0, Y + 1.0),
+                To(L + 4.0, Y + 1.0),
+                Move(R - 4.0, Y + 1.0),
+                To(R + 4.0, Y + 1.0),
             ],
             // M L-4 Y q4 3.5 8 0, twice.
             Line::Sleep => vec![
@@ -193,23 +211,35 @@ impl Line {
                 Move(R - 4.0, Y),
                 Quad(R, Y + 3.5, R + 4.0, Y),
             ],
-            // M52 4h5l-5 5.5h5 M59-3h3.6l-3.6 4h3.6
-            Line::Zz => vec![
-                Move(52.0, 4.0),
-                To(57.0, 4.0),
-                To(52.0, 9.5),
-                To(57.0, 9.5),
-                Move(59.0, -3.0),
-                To(62.6, -3.0),
-                To(59.0, 1.0),
-                To(62.6, 1.0),
+            // M L-3.2 Y-3.6+dy l-3.4 -2.2+droop  M L-4 Y-1+dy l-3.8 -.4+droop,
+            // mirrored on the right eye.
+            Line::Lashes { dy, droop } => vec![
+                Move(L - 3.2, Y - 3.6 + dy),
+                To(L - 3.2 - 3.4, Y - 3.6 + dy - 2.2 + droop),
+                Move(L - 4.0, Y - 1.0 + dy),
+                To(L - 4.0 - 3.8, Y - 1.0 + dy - 0.4 + droop),
+                Move(R + 3.2, Y - 3.6 + dy),
+                To(R + 3.2 + 3.4, Y - 3.6 + dy - 2.2 + droop),
+                Move(R + 4.0, Y - 1.0 + dy),
+                To(R + 4.0 + 3.8, Y - 1.0 + dy - 0.4 + droop),
             ],
-            // note(57, 9): M57 9 v-8 l5-1.5 v8
-            Line::Note => vec![
-                Move(57.0, 9.0),
-                To(57.0, 1.0),
-                To(62.0, -0.5),
-                To(62.0, 7.5),
+            // M53 6h5l-5 5.5h5 M60-1h3.6l-3.6 4h3.6
+            Line::Zz => vec![
+                Move(53.0, 6.0),
+                To(58.0, 6.0),
+                To(53.0, 11.5),
+                To(58.0, 11.5),
+                Move(60.0, -1.0),
+                To(63.6, -1.0),
+                To(60.0, 3.0),
+                To(63.6, 3.0),
+            ],
+            // note(x, y): M x y v-8 l5-1.5 v8
+            Line::Note { x, y } => vec![
+                Move(x, y),
+                To(x, y - 8.0),
+                To(x + 5.0, y - 9.5),
+                To(x + 5.0, y - 1.5),
             ],
         }
     }
@@ -218,7 +248,7 @@ impl Line {
 /// One mark of a face.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Part {
-    /// A filled rounded rect (the eyes are pills).
+    /// A filled espresso rounded rect (the open eyes are pills).
     Pill {
         x: f32,
         y: f32,
@@ -226,26 +256,41 @@ pub enum Part {
         h: f32,
         r: f32,
     },
-    /// A filled ellipse (round eyes, the note's heads, thinking dots, the mouth).
+    /// A filled circle (round eyes, shine, the note's heads, thinking dots).
     Dot {
         cx: f32,
         cy: f32,
-        rx: f32,
-        ry: f32,
+        r: f32,
+        ink: Ink,
     },
     Stroke(Line),
+    /// The cream heart beside a waving cat, its top notch at (x, y).
+    Heart {
+        x: f32,
+        y: f32,
+    },
 }
 
-/// A face: its marks, the vertical bob and the tilt (degrees, clockwise).
+/// Where the ears stand: `up` raises the tips, `droop` turns both ears
+/// outward by `droop * 3` degrees around their base.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Ears {
+    pub up: f32,
+    pub droop: f32,
+}
+
+/// A face: its marks, the ears, the vertical bob and the tilt (degrees,
+/// clockwise).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub parts: Vec<Part>,
+    pub ears: Ears,
     pub bob: f32,
     pub tilt: f32,
 }
 
-/// The design's `eye(x, y, w, h, r)`: a pill centred on (x, y).
-fn eye(x: f32, y: f32, w: f32, h: f32, r: f32) -> Part {
+/// An espresso pill centred on (x, y).
+fn pill(x: f32, y: f32, w: f32, h: f32, r: f32) -> Part {
     Part::Pill {
         x: x - w / 2.0,
         y: y - h / 2.0,
@@ -255,99 +300,182 @@ fn eye(x: f32, y: f32, w: f32, h: f32, r: f32) -> Part {
     }
 }
 
-fn dot(cx: f32, cy: f32, r: f32) -> Part {
-    Part::Dot {
-        cx,
-        cy,
-        rx: r,
-        ry: r,
-    }
+fn dot(cx: f32, cy: f32, r: f32, ink: Ink) -> Part {
+    Part::Dot { cx, cy, r, ink }
 }
 
-/// The note's two heads (the stem and beam are `Line::Note`).
-fn note_heads() -> [Part; 2] {
-    [dot(57.0 - 1.6, 9.0, 1.9), dot(57.0 + 3.4, 9.0 - 1.5, 1.9)]
+fn lashes(dy: f32, droop: f32) -> Part {
+    Part::Stroke(Line::Lashes { dy, droop })
 }
 
-/// The marks of `expr`; with `blink`, open eyes (pills and round ones) become
-/// the design's `blink` eyes: 7 × 2.4 slits at (L, Y + 1) and (R, Y + 1),
-/// wherever the open eyes sat. Arcs (happy, asleep) stay.
+/// The design's `open(h, w, dy)`: two pills, fully rounded.
+fn open(h: f32, w: f32, dy: f32) -> [Part; 2] {
+    let r = w.min(h) / 2.0;
+    [pill(L, Y + dy, w, h, r), pill(R, Y + dy, w, h, r)]
+}
+
+/// The design's `shine(dy)`: a cream glint high on each eye.
+fn shine(dy: f32) -> [Part; 2] {
+    [
+        dot(L + 1.2, Y - 2.0 + dy, 1.2, Ink::Cream),
+        dot(R + 1.2, Y - 2.0 + dy, 1.2, Ink::Cream),
+    ]
+}
+
+/// The design's `note(x, y)`: stem and beam, then the two heads.
+fn note(x: f32, y: f32) -> [Part; 3] {
+    [
+        Part::Stroke(Line::Note { x, y }),
+        dot(x - 1.6, y, 1.9, Ink::Cream),
+        dot(x + 3.4, y - 1.5, 1.9, Ink::Cream),
+    ]
+}
+
+/// The marks of `expr`: its eyes first, then what floats beside the head.
+/// With `blink`, open eyes (pills and round ones, with their shine and
+/// lashes) become the design's `blink` eyes; arcs (happy, asleep) stay.
 pub fn face(expr: Expr, blink: bool) -> Face {
-    let happy = Part::Stroke(Line::Happy);
-    let (mut parts, bob, tilt) = match expr {
-        Expr::Idle => (
-            vec![eye(L, Y, 6.0, 9.0, 3.0), eye(R, Y, 6.0, 9.0, 3.0)],
-            0.0,
-            0.0,
-        ),
-        Expr::Happy => (vec![happy], 0.0, 0.0),
-        Expr::Focus => (
-            vec![
-                eye(L, Y + 1.0, 7.0, 3.4, 1.7),
-                eye(R, Y + 1.0, 7.0, 3.4, 1.7),
-                Part::Stroke(Line::FocusBrows),
-            ],
-            0.0,
-            0.0,
-        ),
-        Expr::Music => {
-            let [a, b] = note_heads();
-            (vec![happy, Part::Stroke(Line::Note), a, b], 0.0, 0.0)
+    let happy = vec![Part::Stroke(Line::Happy), lashes(1.5, 0.0)];
+    let still = Ears::default();
+    let (eyes, extra, ears, bob, tilt): (Vec<Part>, Vec<Part>, Ears, f32, f32) = match expr {
+        Expr::Idle => {
+            let mut eyes = open(9.5, 7.0, 0.0).to_vec();
+            eyes.extend(shine(0.0));
+            eyes.push(lashes(0.0, 0.0));
+            (eyes, vec![], still, 0.0, 0.0)
         }
+        Expr::Happy => (happy, vec![], still, 0.0, 0.0),
+        Expr::Focus => {
+            let mut eyes = open(4.2, 7.5, 1.0).to_vec();
+            eyes.push(lashes(1.0, 0.0));
+            (eyes, vec![], still, 0.0, 0.0)
+        }
+        Expr::Music => (happy, note(56.0, 10.0).to_vec(), still, 0.0, 0.0),
         Expr::Sing => {
-            let [a, b] = note_heads();
-            let mouth = Part::Dot {
-                cx: 32.0,
-                cy: Y + 6.5,
-                rx: 2.6,
-                ry: 2.0,
-            };
-            (vec![happy, mouth, Part::Stroke(Line::Note), a, b], 0.0, 0.0)
+            let mut notes = note(57.0, 12.0).to_vec();
+            notes.extend(note(64.0, 2.0));
+            (happy, notes, still, 0.0, 0.0)
         }
-        Expr::Alert => (vec![dot(L, Y, 4.6), dot(R, Y, 4.6)], -1.5, 0.0),
+        Expr::Alert => {
+            let mut eyes = vec![dot(L, Y, 4.8, Ink::Espresso), dot(R, Y, 4.8, Ink::Espresso)];
+            eyes.extend(shine(-0.5));
+            eyes.push(lashes(-1.0, 0.0));
+            let ears = Ears {
+                up: 3.0,
+                droop: 0.0,
+            };
+            (eyes, vec![], ears, -1.5, 0.0)
+        }
         Expr::Think => (
+            // Looking up and to the right.
             vec![
-                eye(L + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
-                eye(R + 2.5, Y - 2.5, 5.5, 7.5, 2.75),
-                dot(54.0, 6.0, 1.4),
-                dot(58.5, 3.0, 1.8),
-                dot(63.5, 0.0, 2.2),
+                Part::Pill {
+                    x: L - 1.0,
+                    y: Y - 7.5,
+                    w: 6.0,
+                    h: 8.5,
+                    r: 3.0,
+                },
+                Part::Pill {
+                    x: R - 1.0,
+                    y: Y - 7.5,
+                    w: 6.0,
+                    h: 8.5,
+                    r: 3.0,
+                },
+                lashes(-2.5, 0.0),
             ],
+            vec![
+                dot(55.0, 8.0, 1.4, Ink::Cream),
+                dot(59.5, 5.0, 1.8, Ink::Cream),
+                dot(64.5, 2.0, 2.2, Ink::Cream),
+            ],
+            still,
             0.0,
             0.0,
         ),
         Expr::Sleep => (
-            vec![Part::Stroke(Line::Sleep), Part::Stroke(Line::Zz)],
+            vec![Part::Stroke(Line::Sleep), lashes(1.0, 2.4)],
+            vec![Part::Stroke(Line::Zz)],
+            Ears {
+                up: 0.0,
+                droop: 4.0,
+            },
             1.5,
             0.0,
         ),
-        Expr::Sad => (
-            vec![
-                eye(L, Y + 2.5, 6.0, 5.0, 2.5),
-                eye(R, Y + 2.5, 6.0, 5.0, 2.5),
-                Part::Stroke(Line::SadBrows),
-            ],
-            1.5,
+        Expr::Sad => {
+            let mut eyes = open(6.0, 6.5, 2.5).to_vec();
+            eyes.push(lashes(3.0, 3.0));
+            let ears = Ears {
+                up: 0.0,
+                droop: 8.0,
+            };
+            (eyes, vec![], ears, 1.5, 0.0)
+        }
+        Expr::Wave => (
+            happy,
+            vec![Part::Heart { x: 6.0, y: 2.0 }],
+            still,
             0.0,
+            -7.0,
         ),
-        Expr::Wave => (vec![happy], 0.0, -9.0),
     };
-    if blink && expr.blinks() {
-        // Every blinking face starts with its two eyes; brows, dots and
-        // other extras stay. The design's `case 'blink'` uses fixed spots.
-        parts[0] = eye(L, Y + 1.0, 7.0, 2.4, 1.2);
-        parts[1] = eye(R, Y + 1.0, 7.0, 2.4, 1.2);
+    let eyes = if blink && expr.blinks() {
+        vec![Part::Stroke(Line::Blink), lashes(1.5, 0.0)]
+    } else {
+        eyes
+    };
+    let mut parts = eyes;
+    parts.extend(extra);
+    Face {
+        parts,
+        ears,
+        bob,
+        tilt,
     }
-    Face { parts, bob, tilt }
 }
 
-/// Head: the tile, x 6 y 9, 52 × 46, radius 18.
-pub const HEAD: (f32, f32, f32, f32, f32) = (6.0, 9.0, 52.0, 46.0, 18.0);
-/// Visor: the island, x 12 y 21, 40 × 22, radius 11.
-pub const VISOR: (f32, f32, f32, f32, f32) = (12.0, 21.0, 40.0, 22.0, 11.0);
+/// Head: x 7 y 15, 50 × 42, radius 20.
+pub const HEAD: (f32, f32, f32, f32, f32) = (7.0, 15.0, 50.0, 42.0, 20.0);
+/// How far an ear's stroke (width 5, round joins) reaches past its triangle.
+const EAR_STROKE: f32 = 5.0;
 
-/// The head's rounded rect for a robot drawn in `area` (a square), in px:
-/// what must stay inside the island. Extras may draw outside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    /// The point an ear turns around when it droops.
+    fn pivot(self) -> Vector2 {
+        match self {
+            Side::Left => Vector2::new(18.0, 24.0),
+            Side::Right => Vector2::new(46.0, 24.0),
+        }
+    }
+
+    /// Degrees (clockwise) an ear turns for `droop`: both turn outward.
+    fn turn(self, droop: f32) -> f32 {
+        match self {
+            Side::Left => -droop * 3.0,
+            Side::Right => droop * 3.0,
+        }
+    }
+}
+
+/// An ear's triangle before its rounded stroke: outer base, tip (raised by
+/// `up`), inner base.
+pub fn ear(side: Side, up: f32) -> [(f32, f32); 3] {
+    match side {
+        Side::Left => [(10.0, 27.0), (14.0, 7.0 - up), (28.0, 17.0)],
+        Side::Right => [(54.0, 27.0), (50.0, 7.0 - up), (36.0, 17.0)],
+    }
+}
+
+/// The head's rounded rect for a cat drawn in `area` (a square), in px:
+/// what must stay inside the island. Ears and extras may draw outside it.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn head_rect(area: Rect) -> (Rect, f32) {
     let k = area.w / GRID;
@@ -363,21 +491,84 @@ pub fn head_rect(area: Rect) -> (Rect, f32) {
     )
 }
 
+/// The bow's two loops around its knot at the origin: `M0 0L-6.5-4.2Q-7.8 0-6.5
+/// 4.2Z`, and the same mirrored.
+fn bow_loops() -> Vec<Seg> {
+    use Seg::{Close, Line as To, Move, Quad};
+    vec![
+        Move(0.0, 0.0),
+        To(-6.5, -4.2),
+        Quad(-7.8, 0.0, -6.5, 4.2),
+        Close,
+        Move(0.0, 0.0),
+        To(6.5, -4.2),
+        Quad(7.8, 0.0, 6.5, 4.2),
+        Close,
+    ]
+}
+
+/// The bow sits at the base of the right ear and turns with it:
+/// `rotate(droop*3 46 24) translate(43.5 17.5-up/2) rotate(22) scale(1.15)`.
+fn bow_transform(ears: Ears) -> Matrix3x2 {
+    Matrix3x2::scale(1.15, 1.15)
+        * Matrix3x2::rotation_around(22.0, Vector2::new(0.0, 0.0))
+        * Matrix3x2::translation(43.5, 17.5 - ears.up / 2.0)
+        * Matrix3x2::rotation_around(Side::Right.turn(ears.droop), Side::Right.pivot())
+}
+
+/// The heart: `M0 3C-4-1-5.5 2.5-3 5L0 8L3 5C5.5 2.5 4-1 0 3Z`, moved to (x, y).
+fn heart(x: f32, y: f32) -> Vec<Seg> {
+    use Seg::{Close, Cubic, Line as To, Move};
+    vec![
+        Move(x, y + 3.0),
+        Cubic(x - 4.0, y - 1.0, x - 5.5, y + 2.5, x - 3.0, y + 5.0),
+        To(x, y + 8.0),
+        To(x + 3.0, y + 5.0),
+        Cubic(x + 5.5, y + 2.5, x + 4.0, y - 1.0, x, y + 3.0),
+        Close,
+    ]
+}
+
 // ---- Drawing ----
 
-/// The face strokes as Direct2D paths in grid units, built once per factory.
-/// The render target's transform scales them (and their widths) to any size.
+/// A path the painter builds once and keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shape {
+    Line(Line),
+    Ear(Side, f32),
+    Bow,
+    Heart(f32, f32),
+}
+
+impl Shape {
+    fn segments(self) -> Vec<Seg> {
+        match self {
+            Shape::Line(line) => line.segments(),
+            Shape::Ear(side, up) => {
+                let [a, b, c] = ear(side, up);
+                vec![
+                    Seg::Move(a.0, a.1),
+                    Seg::Line(b.0, b.1),
+                    Seg::Line(c.0, c.1),
+                    Seg::Close,
+                ]
+            }
+            Shape::Bow => bow_loops(),
+            Shape::Heart(x, y) => heart(x, y),
+        }
+    }
+}
+
+/// The cat's paths in grid units, built on first use and kept. The render
+/// target's transform scales them (and their widths) to any size.
 pub struct RobotPainter {
-    lines: Vec<(Line, ID2D1PathGeometry)>,
+    factory: ID2D1Factory,
+    paths: RefCell<Vec<(Shape, ID2D1PathGeometry)>>,
     round: ID2D1StrokeStyle,
 }
 
 impl RobotPainter {
     pub fn new(factory: &ID2D1Factory) -> WinResult<Self> {
-        let mut lines = Vec::new();
-        for line in Line::ALL {
-            lines.push((line, path(factory, &line.segments())?));
-        }
         let round = unsafe {
             factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -392,10 +583,24 @@ impl RobotPainter {
                 None,
             )?
         };
-        Ok(Self { lines, round })
+        Ok(Self {
+            factory: factory.clone(),
+            paths: RefCell::new(Vec::new()),
+            round,
+        })
     }
 
-    /// Draws Bata filling the square `area` (its 64-unit grid scaled to
+    /// `shape`'s path, built the first time it is asked for.
+    fn path(&self, shape: Shape) -> Option<ID2D1PathGeometry> {
+        if let Some((_, g)) = self.paths.borrow().iter().find(|(s, _)| *s == shape) {
+            return Some(g.clone());
+        }
+        let g = path(&self.factory, &shape.segments()).ok()?;
+        self.paths.borrow_mut().push((shape, g.clone()));
+        Some(g)
+    }
+
+    /// Draws the cat filling the square `area` (its 64-unit grid scaled to
     /// `area.w`), raised by the pose's lift and bounce, at `alpha`. The
     /// render target's transform is restored; the brush colour is not.
     pub fn paint(
@@ -412,14 +617,13 @@ impl RobotPainter {
         }
         let face = face(expr, pose.blink);
         let k = area.w / GRID;
-        let centre = Vector2::new(GRID / 2.0, GRID / 2.0);
-        let local = Matrix3x2::rotation_around(face.tilt, centre)
+        let local = Matrix3x2::rotation_around(face.tilt, Vector2::new(32.0, 36.0))
             * Matrix3x2::translation(0.0, face.bob)
             * Matrix3x2::scale(k, k)
             * Matrix3x2::translation(area.x, area.y - pose.lift_px - pose.bounce_px);
         let color = |rgb: u32, a: f32| {
             let ch = |s: u32| ((rgb >> s) & 0xFF) as f32 / 255.0;
-            windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+            D2D1_COLOR_F {
                 r: ch(16),
                 g: ch(8),
                 b: ch(0),
@@ -436,35 +640,58 @@ impl RobotPainter {
             radiusX: r,
             radiusY: r,
         };
+        let circle = |cx: f32, cy: f32, r: f32| D2D1_ELLIPSE {
+            point: Vector2::new(cx, cy),
+            radiusX: r,
+            radiusY: r,
+        };
         unsafe {
             let mut previous = Matrix3x2::default();
             rt.GetTransform(&mut previous);
-            rt.SetTransform(&(local * previous));
+            let world = local * previous;
+            // Ears behind the head: a triangle with a fat round stroke.
             brush.SetColor(&color(TERRACOTTA, 1.0));
+            for side in [Side::Left, Side::Right] {
+                if let Some(g) = self.path(Shape::Ear(side, face.ears.up)) {
+                    let turn = Matrix3x2::rotation_around(side.turn(face.ears.droop), side.pivot());
+                    rt.SetTransform(&(turn * world));
+                    rt.FillGeometry(&g, brush, None);
+                    rt.DrawGeometry(&g, brush, EAR_STROKE, &self.round);
+                }
+            }
+            rt.SetTransform(&world);
             rt.FillRoundedRectangle(&rounded(HEAD), brush);
-            brush.SetColor(&color(ESPRESSO, 1.0));
-            rt.FillRoundedRectangle(&rounded(VISOR), brush);
+            // The bow, then its knot ringed in terracotta.
+            if let Some(g) = self.path(Shape::Bow) {
+                rt.SetTransform(&(bow_transform(face.ears) * world));
+                brush.SetColor(&color(PLUM, 1.0));
+                rt.FillGeometry(&g, brush, None);
+                rt.DrawGeometry(&g, brush, 1.6, &self.round);
+                rt.FillEllipse(&circle(0.0, 0.0, 2.2), brush);
+                brush.SetColor(&color(TERRACOTTA, 1.0));
+                rt.DrawEllipse(&circle(0.0, 0.0, 2.2), brush, 0.8, None);
+            }
+            rt.SetTransform(&world);
             for part in &face.parts {
                 match *part {
                     Part::Pill { x, y, w, h, r } => {
-                        brush.SetColor(&color(CREAM, 1.0));
+                        brush.SetColor(&color(ESPRESSO, 1.0));
                         rt.FillRoundedRectangle(&rounded((x, y, w, h, r)), brush);
                     }
-                    Part::Dot { cx, cy, rx, ry } => {
-                        brush.SetColor(&color(CREAM, 1.0));
-                        rt.FillEllipse(
-                            &D2D1_ELLIPSE {
-                                point: Vector2::new(cx, cy),
-                                radiusX: rx,
-                                radiusY: ry,
-                            },
-                            brush,
-                        );
+                    Part::Dot { cx, cy, r, ink } => {
+                        brush.SetColor(&color(ink.rgb(), 1.0));
+                        rt.FillEllipse(&circle(cx, cy, r), brush);
                     }
                     Part::Stroke(line) => {
-                        if let Some((_, g)) = self.lines.iter().find(|(l, _)| *l == line) {
-                            brush.SetColor(&color(CREAM, line.alpha()));
-                            rt.DrawGeometry(g, brush, line.width(), &self.round);
+                        if let Some(g) = self.path(Shape::Line(line)) {
+                            brush.SetColor(&color(line.ink().rgb(), line.alpha()));
+                            rt.DrawGeometry(&g, brush, line.width(), &self.round);
+                        }
+                    }
+                    Part::Heart { x, y } => {
+                        if let Some(g) = self.path(Shape::Heart(x, y)) {
+                            brush.SetColor(&color(CREAM, 1.0));
+                            rt.FillGeometry(&g, brush, None);
                         }
                     }
                 }
@@ -474,7 +701,8 @@ impl RobotPainter {
     }
 }
 
-/// Open figures from `segs` (each `Move` starts one).
+/// Figures from `segs`: each `Move` starts one, `Close` closes it; figures
+/// left open are drawn as lines and never filled.
 fn path(factory: &ID2D1Factory, segs: &[Seg]) -> WinResult<ID2D1PathGeometry> {
     unsafe {
         let path = factory.CreatePathGeometry()?;
@@ -486,7 +714,7 @@ fn path(factory: &ID2D1Factory, segs: &[Seg]) -> WinResult<ID2D1PathGeometry> {
                     if open {
                         sink.EndFigure(D2D1_FIGURE_END_OPEN);
                     }
-                    sink.BeginFigure(Vector2::new(x, y), D2D1_FIGURE_BEGIN_HOLLOW);
+                    sink.BeginFigure(Vector2::new(x, y), D2D1_FIGURE_BEGIN_FILLED);
                     open = true;
                 }
                 Seg::Line(x, y) => sink.AddLine(Vector2::new(x, y)),
@@ -495,6 +723,17 @@ fn path(factory: &ID2D1Factory, segs: &[Seg]) -> WinResult<ID2D1PathGeometry> {
                         point1: Vector2::new(cx, cy),
                         point2: Vector2::new(x, y),
                     })
+                }
+                Seg::Cubic(ax, ay, bx, by, x, y) => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: Vector2::new(ax, ay),
+                    point2: Vector2::new(bx, by),
+                    point3: Vector2::new(x, y),
+                }),
+                Seg::Close => {
+                    if open {
+                        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                        open = false;
+                    }
                 }
             }
         }
@@ -1049,82 +1288,142 @@ mod tests {
     }
 
     #[test]
-    fn faces_follow_the_design() {
+    fn faces_follow_the_cat_design() {
+        let lashes = |dy, droop| Part::Stroke(Line::Lashes { dy, droop });
+        // Idle: espresso pills 7 x 9.5 on (24, 35) and (40, 35), a cream
+        // shine on each, two lashes per eye; the ears stand still.
+        let idle = face(Expr::Idle, false);
         assert_eq!(
-            face(Expr::Idle, false).parts,
+            idle.parts,
             vec![
                 Part::Pill {
-                    x: 21.5,
-                    y: 27.5,
-                    w: 6.0,
-                    h: 9.0,
-                    r: 3.0
+                    x: 20.5,
+                    y: 30.25,
+                    w: 7.0,
+                    h: 9.5,
+                    r: 3.5
                 },
                 Part::Pill {
                     x: 36.5,
-                    y: 27.5,
-                    w: 6.0,
-                    h: 9.0,
-                    r: 3.0
+                    y: 30.25,
+                    w: 7.0,
+                    h: 9.5,
+                    r: 3.5
                 },
+                Part::Dot {
+                    cx: L + 1.2,
+                    cy: 33.0,
+                    r: 1.2,
+                    ink: Ink::Cream
+                },
+                Part::Dot {
+                    cx: R + 1.2,
+                    cy: 33.0,
+                    r: 1.2,
+                    ink: Ink::Cream
+                },
+                lashes(0.0, 0.0),
             ]
         );
-        // Blink: 7 × 2.4 slits one unit lower.
-        let blink = face(Expr::Idle, true);
         assert_eq!(
-            blink.parts[0],
-            Part::Pill {
-                x: 21.0,
-                y: 31.8,
-                w: 7.0,
-                h: 2.4,
-                r: 1.2
+            (idle.ears, idle.bob, idle.tilt),
+            (Ears::default(), 0.0, 0.0)
+        );
+        // The ears carry the mood: up when alert, down asleep, drooped when low.
+        let ears = |e| face(e, false).ears;
+        assert_eq!(
+            ears(Expr::Alert),
+            Ears {
+                up: 3.0,
+                droop: 0.0
+            }
+        );
+        assert_eq!(
+            ears(Expr::Sleep),
+            Ears {
+                up: 0.0,
+                droop: 4.0
+            }
+        );
+        assert_eq!(
+            ears(Expr::Sad),
+            Ears {
+                up: 0.0,
+                droop: 8.0
             }
         );
         assert_eq!(face(Expr::Alert, false).bob, -1.5);
         assert_eq!(face(Expr::Sleep, false).bob, 1.5);
         assert_eq!(face(Expr::Sad, false).bob, 1.5);
-        assert_eq!(face(Expr::Wave, false).tilt, -9.0);
-        // Music and singing carry the note; singing adds the mouth.
-        let music = face(Expr::Music, false).parts;
-        assert!(music.contains(&Part::Stroke(Line::Note)));
-        assert!(music.contains(&Part::Dot {
-            cx: 55.4,
-            cy: 9.0,
-            rx: 1.9,
-            ry: 1.9
+        // Waving tilts the head and shows a heart.
+        let wave = face(Expr::Wave, false);
+        assert_eq!(wave.tilt, -7.0);
+        assert!(wave.parts.contains(&Part::Heart { x: 6.0, y: 2.0 }));
+        // No mouth: listening carries one note, singing two.
+        let notes = |e| {
+            face(e, false)
+                .parts
+                .iter()
+                .filter(|p| matches!(p, Part::Stroke(Line::Note { .. })))
+                .count()
+        };
+        assert_eq!((notes(Expr::Music), notes(Expr::Sing)), (1, 2));
+        assert!(face(Expr::Music, false).parts.contains(&Part::Dot {
+            cx: 56.0 - 1.6,
+            cy: 10.0,
+            r: 1.9,
+            ink: Ink::Cream
         }));
-        let sing = face(Expr::Sing, false).parts;
-        assert!(sing.contains(&Part::Dot {
-            cx: 32.0,
-            cy: 38.5,
-            rx: 2.6,
-            ry: 2.0
-        }));
-        // Every open-eyed face blinks to the same two slits at Y + 1, as the
-        // design's `case 'blink'` draws them.
+        // A blink closes open eyes (shine and lashes too) to the design's
+        // two lines with lashes 1.5 lower; the ears and extras stay.
         for expr in [Expr::Idle, Expr::Focus, Expr::Alert, Expr::Think, Expr::Sad] {
+            let shut = face(expr, true);
             assert_eq!(
-                face(expr, true).parts[..2],
-                [
-                    eye(L, Y + 1.0, 7.0, 2.4, 1.2),
-                    eye(R, Y + 1.0, 7.0, 2.4, 1.2)
-                ],
+                shut.parts[..2],
+                [Part::Stroke(Line::Blink), lashes(1.5, 0.0)],
                 "{expr:?}"
             );
+            assert_eq!(shut.ears, face(expr, false).ears, "{expr:?}");
         }
-        // Arcs do not blink; thinking dots never close.
         assert_eq!(face(Expr::Happy, true), face(Expr::Happy, false));
         assert_eq!(
             face(Expr::Think, true).parts[2..],
-            face(Expr::Think, false).parts[2..]
+            face(Expr::Think, false).parts[3..]
         );
-        // Happy arcs: the design's q curves made absolute.
+        // The design's paths, made absolute.
         assert_eq!(
             Line::Happy.segments()[..2],
-            [Seg::Move(20.5, 34.0), Seg::Quad(24.5, 28.0, 28.5, 34.0)]
+            [Seg::Move(20.0, 36.5), Seg::Quad(24.0, 31.0, 28.0, 36.5)]
         );
-        assert_eq!((Line::Zz.alpha(), Line::Happy.width()), (0.85, 2.6));
+        assert_eq!(
+            Line::Lashes {
+                dy: 0.0,
+                droop: 0.0
+            }
+            .segments()[..2],
+            [
+                Seg::Move(L - 3.2, Y - 3.6),
+                Seg::Line(L - 3.2 - 3.4, Y - 3.6 - 2.2)
+            ]
+        );
+        assert_eq!(
+            (Line::Zz.alpha(), Line::Happy.width(), Line::Zz.ink()),
+            (0.85, 2.4, Ink::Cream)
+        );
+    }
+
+    #[test]
+    fn ears_are_triangles_that_rise_and_turn_outward() {
+        assert_eq!(
+            ear(Side::Left, 0.0),
+            [(10.0, 27.0), (14.0, 7.0), (28.0, 17.0)]
+        );
+        assert_eq!(
+            ear(Side::Right, 3.0),
+            [(54.0, 27.0), (50.0, 4.0), (36.0, 17.0)]
+        );
+        // Drooping turns the left ear anticlockwise and the right one clockwise.
+        assert_eq!((Side::Left.turn(4.0), Side::Right.turn(4.0)), (-12.0, 12.0));
     }
 
     #[test]
@@ -1137,7 +1436,7 @@ mod tests {
         });
         assert_eq!(
             (head.x, head.y, head.w, head.h, r),
-            (13.0, 4.5, 26.0, 23.0, 9.0)
+            (13.5, 7.5, 25.0, 21.0, 10.0)
         );
     }
 

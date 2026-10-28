@@ -493,10 +493,10 @@ keys! {
     DataFolder => "Folder data", "Data folder";
     OpenDataFolder => "Buka folder data", "Open data folder";
 
-    // Bata, the notch assistant (Settings → Tampilan).
+    // Vale's cat, the notch assistant (Settings → Tampilan).
     RobotInNotch => "Asisten di notch", "Assistant in notch";
-    RobotInNotchDesc => "Tampilkan Bata di samping jam dan notice",
-        "Show Bata beside the clock and notices";
+    RobotInNotchDesc => "Tampilkan kucing Vale di samping jam dan notice",
+        "Show Vale's cat beside the clock and notices";
     RobotMotion => "Animasi", "Animation";
     // The design's sentence; it wraps beside the three segments.
     RobotMotionDesc => "Hemat: tanpa kedip dan gerak, ekspresi tetap",
@@ -510,7 +510,7 @@ keys! {
     MorningGreetingDesc => "Ringkasan acara dan pengingat hari ini",
         "Today's events and reminders";
     GoodMorning => "Selamat pagi", "Good morning";
-    SourceBata => "Bata", "Bata";
+    SourceVale => "Vale", "Vale";
     // The robot's faces, as the demo sheet labels them.
     ExprIdle => "Diam", "Idle";
     ExprHappy => "Senang", "Happy";
@@ -2789,9 +2789,14 @@ mod tests {
         assert_eq!(greeting_body(Lang::Id, 0, 0), "Hari ini belum ada acara");
         assert_eq!(greeting_body(Lang::En, 0, 0), "Nothing planned today");
         // The settings rows, as in the design.
+        // The cat has no name yet (the owner picks it): it is Vale's cat.
         assert_eq!(
             text(Lang::Id, Key::RobotInNotchDesc),
-            "Tampilkan Bata di samping jam dan notice"
+            "Tampilkan kucing Vale di samping jam dan notice"
+        );
+        assert_eq!(
+            [Lang::Id, Lang::En].map(|l| text(l, Key::SourceVale)),
+            ["Vale", "Vale"]
         );
         assert_eq!(
             [Key::MotionFull, Key::MotionSaver, Key::MotionOff].map(|k| text(Lang::Id, k)),

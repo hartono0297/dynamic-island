@@ -3,7 +3,7 @@ tags: [decision, robot, power, timers]
 date: 2026-10-27
 ---
 
-# Bata's idle power budget
+# The notch assistant's idle power budget
 
 An idle island must stay cheap: no continuous timer, no frame thread.
 Bata adds only one-shots (`app.rs`, planned by `robot::plan_timers`):

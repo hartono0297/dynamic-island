@@ -1278,7 +1278,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             NoticeKind::App { app_id: None },
         ),
         DemoNotice::Greeting => notice(
-            tr(Key::SourceBata),
+            tr(Key::SourceVale),
             tr(Key::GoodMorning),
             crate::i18n::greeting_body(crate::i18n::lang(), 3, 2),
             NoticeKind::Greeting,

@@ -1073,7 +1073,7 @@ impl App {
             greeting_counts(&self.calendar.events, self.reminders.upcoming(), today);
         let notice = Notice {
             key: "bata-greeting".into(),
-            source: tr(Key::SourceBata).into(),
+            source: tr(Key::SourceVale).into(),
             title: tr(Key::GoodMorning).into(),
             body: i18n::greeting_body(i18n::lang(), events, reminders),
             kind: NoticeKind::Greeting,

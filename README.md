@@ -1,8 +1,8 @@
-<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Vale logo: a dark pill with a cream dot on a terracotta tile"></p>
+<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Vale logo: a terracotta tile with two cat ears, a dark pill and a cream dot"></p>
 
 # Vale for Windows
 
-A macOS-style island for the top of your Windows 11 screen: notifications, calendar, pomodoro, reminders, notes, music, a command line and more, in a native Rust app (Win32 + Direct2D, no browser engine). Version 3 brings the **Studio** look: warm terracotta and espresso colours, its own fonts and icons, and Bata, a small robot that lives in the notch.
+A macOS-style island for the top of your Windows 11 screen: notifications, calendar, pomodoro, reminders, notes, music, a command line and more, in a native Rust app (Win32 + Direct2D, no browser engine). Version 3 brings the **Studio** look: warm terracotta and espresso colours, its own fonts and icons, and a small cat that lives in the notch.
 
 <p align="center">
   <img src="assets/screenshots/calendar.png" width="420" alt="Calendar page in month view: October 2026 with today circled in terracotta, and today's events listed on the right">

@@ -934,7 +934,8 @@ mod tests {
         }
     }
 
-    /// Points along the robot head's rounded outline, drawn in `area`.
+    /// Points along the cat head's rounded outline and its ear tips, drawn in
+    /// `area`.
     fn head_outline(area: Rect) -> Vec<(f32, f32)> {
         let (h, r) = crate::ui::robot::head_rect(area);
         let mut out = Vec::new();
@@ -947,6 +948,15 @@ mod tests {
             for i in 0..=8 {
                 let a = (a0 + i as f32 * 90.0 / 8.0).to_radians();
                 out.push((cx + r * a.cos(), cy + r * a.sin()));
+            }
+        }
+        // The cat's ear tips, the tops of their round strokes, at rest and
+        // raised (alert lifts the ears and the head).
+        let k = area.w / crate::ui::robot::GRID;
+        for (up, bob) in [(0.0, 0.0), (3.0, -1.5)] {
+            for side in [crate::ui::robot::Side::Left, crate::ui::robot::Side::Right] {
+                let (x, y) = crate::ui::robot::ear(side, up)[1];
+                out.push((area.x + x * k, area.y + (y - 2.5 + bob) * k));
             }
         }
         out

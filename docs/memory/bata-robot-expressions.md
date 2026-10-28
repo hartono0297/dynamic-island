@@ -1,14 +1,20 @@
 ---
 tags: [decision, robot, notch]
-date: 2026-10-27
+date: 2026-10-28
 ---
 
-# Bata: which face, and where it shows
+# The notch assistant: which face, and where it shows
 
-`src/ui/robot.rs` draws Bata from `robot()` in
-`docs/design/studio-robot.html` (64-unit grid, fixed brand colours
-#E2683C / #17120F / #F4EDE4, never the accent). `choose_expr` picks the
-face; its priority, highest first:
+Since v3.1 (Run 13) the assistant is Vale's cat, not the robot Bata.
+`src/ui/robot.rs` draws it from `cat()` variant B in
+`docs/design/vale-kucing-simpel.html` (64-unit grid, fixed brand colours
+#E2683C head / #17120F eyes / #F4EDE4 shine and extras / #B07A9A bow, never
+the accent): head, two ears, eyes with two lashes each, a plum bow at the
+base of the right ear. No mouth, nose or whiskers. The cat has no name yet
+(the owner picks one); the UI says "kucing Vale" and notices come from
+"Vale". Code and demo steps still say `robot` / `bata` (no rename churn).
+`choose_expr` picks the face (unchanged from Bata); its priority, highest
+first:
 
 1. Panel or hidden: no robot. The panel stays clean.
 2. A notice decides by kind: reminder, Claude waiting → Alert; pomodoro
@@ -38,8 +44,12 @@ unchanged: the 40 px robot sits exactly in the badge's square. With the
 robot off every width is as before (`shape_with_robot(.., false)`).
 
 Blink only shows on open eyes (Idle, Focus, Alert, Think, Sad); the
-design's `blink` eyes, fixed at (L, Y + 1) and (R, Y + 1) whatever face
-blinks, replace the first two marks.
+design's `blink` eyes (two level lines with the lashes 1.5 lower) replace
+the open eyes with their shine and lashes. The ears carry the mood
+(`Face::ears`): up 3 for Alert, turned outward 12 degrees asleep and 24
+degrees when low; the bow turns with the right ear. The ear tips stay
+inside every compact island shape (`robot_and_content_share_every_compact_shape`).
+The painter builds each path once, on first use.
 
 Related: [[bata-idle-power-budget]], [[bata-morning-greeting]],
 [[studio-bata-logo-sources]]
