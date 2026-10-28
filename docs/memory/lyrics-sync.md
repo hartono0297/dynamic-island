@@ -27,6 +27,20 @@ Lyrics ran behind or ahead of the song for four reasons, each handled:
   The negative cache extension is now `.none2` so misses recorded by the old,
   weaker lookup are retried once.
 
+## 3.2.1: still too fast
+
+3.2.0 chose the line at position **+150 ms** (`LOOKAHEAD_MS`) so the crossfade
+ended as the word was sung; with the player's position already ahead of what
+the ear hears (output buffers, Bluetooth 150-300 ms) that read as "too fast".
+Now `lyric_position` = position + offset − `OUTPUT_LAG_MS` (100): at offset 0 a
+line is never chosen before its time (test
+`at_the_default_offset_a_line_never_shows_before_its_time`). The offset range
+is ±5 s (was ±2 s). The next-line timer now waits wall-clock time at the
+playback rate (`wait_ms(pos, rate)`) and is not armed while paused (the next
+refresh re-arms it). The sign is unchanged: the offset is added to the
+position, so **+ shows lines sooner and − later**; if lines still come early,
+press − on the Music page.
+
 The timeline is cleared on a track change so the old position never leaks
 into the new song.
 

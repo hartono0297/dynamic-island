@@ -1628,7 +1628,7 @@ mod tests {
             })
         );
         assert!(!st.fading(t0));
-        assert_eq!(st.wait_ms(0), Some(1_001));
+        assert_eq!(st.wait_ms(0, 1.0), Some(1_001));
         assert!(!st.advance(500, t0), "same line");
         let t1 = t0 + Duration::from_millis(1_000);
         assert!(st.advance(1_000, t1));
@@ -1643,8 +1643,8 @@ mod tests {
         let t2 = t1 + Duration::from_secs(1);
         assert!(st.advance(200, t2));
         assert_eq!(st.shown(t2).unwrap().prev, Some("one"));
-        assert_eq!(st.wait_ms(200), Some(801));
-        assert_eq!(st.wait_ms(9_000), None, "after the last line");
+        assert_eq!(st.wait_ms(200, 1.0), Some(801));
+        assert_eq!(st.wait_ms(9_000, 1.0), None, "after the last line");
     }
 
     #[test]
@@ -1657,7 +1657,7 @@ mod tests {
         st.found(found(&a.key, Some(lines), false));
         st.advance(1_500, t0);
         assert!(!st.advance(2_500, t0), "repeated text: nothing to redraw");
-        assert_eq!(st.wait_ms(2_500), Some(501));
+        assert_eq!(st.wait_ms(2_500, 1.0), Some(501));
         assert!(st.advance(3_000, t0));
         st.hide();
         assert_eq!(st.shown(t0), None);

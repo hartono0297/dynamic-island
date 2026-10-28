@@ -167,6 +167,8 @@ $shots = @(
     @{ name = 'reminders'; args = '--demo'; env = @{ DI_DEMO_STEP = 'reminders-5' } }
     @{ name = 'notes'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notes-4' } }
     @{ name = 'music'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media' } }
+    @{ name = 'music-volume'; args = '--demo'; env = @{ DI_DEMO_STEP = 'music-volume' } }
+    @{ name = 'notch-volume'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:media-volume' } }
     @{ name = 'music-lyrics'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media-lyrics-on' } }
     @{ name = 'mixer'; args = '--demo'; env = @{ DI_DEMO_STEP = 'mixer' } }
     @{ name = 'shelf'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf' } }
