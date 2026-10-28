@@ -47,6 +47,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[media-external-pause-causes]]
 - [[cli-explorer-com]]
 - [[clipboard-privacy]]
+- [[install-script-follows-latest-release]]
 
 ## Conventions
 

@@ -41,4 +41,4 @@ say Vale.
 - Dynamic Island's `settings.json.bak-dynamic-island` (the true original)
   becomes `settings.json.bak-vale` on the next hooks install.
 
-Related: [[v3-1-handoff]], [[v3-studio-overview]]
+Related: [[v3-1-handoff]], [[v3-studio-overview]], [[install-script-follows-latest-release]]
