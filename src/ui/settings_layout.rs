@@ -13,7 +13,7 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, RAM_WARN_RANGE, SHOT_SECS_RANGE,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
     ScreenshotSettings, ShotIgnore, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
@@ -280,6 +280,8 @@ pub enum Hit {
     Autostart,
     IdleClock,
     Lyrics,
+    /// "Mode buka": Hover, Hover & tetap or Klik.
+    OpenMode(OpenMode),
     /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
     CliStart(CliStart),
     Shell(Shell),
@@ -363,6 +365,7 @@ pub enum Group {
     Surface,
     Window,
     Lang,
+    OpenMode,
     CliStart,
     Shell,
     Motion,
@@ -645,6 +648,8 @@ pub struct State<'a> {
     pub shell: Shell,
     /// Where the CLI page starts when it opens.
     pub cli_start: CliStart,
+    /// How the pointer opens the panel.
+    pub open_mode: OpenMode,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -1551,8 +1556,8 @@ pub fn sleep_value(lang: Lang, minutes: u32) -> String {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(7.0 * ROW_H);
-    let rows: [f32; 7] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(8.0 * ROW_H);
+    let rows: [f32; 8] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1569,11 +1574,22 @@ fn general(b: &mut Builder, s: &State) {
     b.row_text(card, rows[1], b.t(Key::Autostart), desc, false, x);
     b.divider(card, rows[1]);
 
+    let items = vec![
+        (Hit::OpenMode(OpenMode::Hover), b.t(Key::OpenModeHover)),
+        (Hit::OpenMode(OpenMode::HoverStay), b.t(Key::OpenModeStay)),
+        (Hit::OpenMode(OpenMode::Click), b.t(Key::OpenModeClick)),
+    ];
+    let selected = index_of(OpenMode::ALL, &s.open_mode);
+    let x = b.segmented(Group::OpenMode, RIGHT, cy(rows[2]), items, selected);
+    let desc = Some((b.t(Key::OpenModeDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::OpenModeSetting), desc, false, x);
+    b.divider(card, rows[2]);
+
     let (min, max, _) = BATTERY_RANGE;
     let t = s.battery_threshold;
     let x = b.stepper(
         RIGHT,
-        cy(rows[2]),
+        cy(rows[3]),
         format!("{t}%"),
         Hit::Battery(-1),
         Hit::Battery(1),
@@ -1585,22 +1601,22 @@ fn general(b: &mut Builder, s: &State) {
     } else {
         (b.t(Key::NoBattery), Tone::Secondary)
     };
-    b.row_text(card, rows[2], b.t(Key::BatteryAlert), Some(desc), false, x);
-    b.divider(card, rows[2]);
+    b.row_text(card, rows[3], b.t(Key::BatteryAlert), Some(desc), false, x);
+    b.divider(card, rows[3]);
 
     let label = b.t(Key::ShowHow);
     let w = b.button_w(&[&label], ButtonKind::Secondary);
     let item = (Hit::DndHelp, label, ButtonKind::Secondary, true, w);
-    let x = b.buttons(RIGHT, cy(rows[3]), vec![item]);
+    let x = b.buttons(RIGHT, cy(rows[4]), vec![item]);
     let desc = Some((b.t(Key::PopupsHelpDesc), Tone::Secondary));
-    b.row_text(card, rows[3], b.t(Key::PopupsHelp), desc, false, x);
-    b.divider(card, rows[3]);
+    b.row_text(card, rows[4], b.t(Key::PopupsHelp), desc, false, x);
+    b.divider(card, rows[4]);
 
     // The description doubles as the privacy note.
-    let x = b.toggle(Hit::Lyrics, RIGHT, cy(rows[4]), s.lyrics);
+    let x = b.toggle(Hit::Lyrics, RIGHT, cy(rows[5]), s.lyrics);
     let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[4], b.t(Key::LyricsInNotch), desc, false, x);
-    b.divider(card, rows[4]);
+    b.row_text(card, rows[5], b.t(Key::LyricsInNotch), desc, false, x);
+    b.divider(card, rows[5]);
 
     // Just before the shell, as in keputusan-v3.1.html.
     let items = vec![
@@ -1611,20 +1627,20 @@ fn general(b: &mut Builder, s: &State) {
         (Hit::CliStart(CliStart::Last), b.t(Key::CliStartLast)),
     ];
     let selected = index_of(&CliStart::ALL, &s.cli_start);
-    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[5]), items, selected);
+    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[6]), items, selected);
     let desc = Some((b.t(Key::CliStartFolderDesc), Tone::Secondary));
-    b.row_text(card, rows[5], b.t(Key::CliStartFolder), desc, false, x);
-    b.divider(card, rows[5]);
+    b.row_text(card, rows[6], b.t(Key::CliStartFolder), desc, false, x);
+    b.divider(card, rows[6]);
 
     let items = vec![
         (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
         (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
     ];
     let selected = index_of(&Shell::ALL, &s.shell);
-    let x = b.segmented(Group::Shell, RIGHT, cy(rows[6]), items, selected);
+    let x = b.segmented(Group::Shell, RIGHT, cy(rows[7]), items, selected);
     let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
-    b.row_text(card, rows[6], b.t(Key::ShellCli), desc, false, x);
-    b.divider(card, rows[6]);
+    b.row_text(card, rows[7], b.t(Key::ShellCli), desc, false, x);
+    b.divider(card, rows[7]);
 
     warnings_card(b, s);
 }
@@ -2186,6 +2202,11 @@ mod tests {
                             CliStart::Last
                         } else {
                             CliStart::Explorer
+                        },
+                        open_mode: if locked {
+                            OpenMode::Click
+                        } else {
+                            OpenMode::Hover
                         },
                         autostart: true,
                         battery_threshold: 50,

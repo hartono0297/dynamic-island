@@ -47,6 +47,9 @@ pub struct Config {
     /// Where the CLI page starts when it opens: the last active Explorer
     /// window's folder, or the last folder (by name; a typo is Explorer).
     pub cli_start: CliStart,
+    /// "Mode buka": how the pointer opens the panel (by name; a typo is
+    /// Hover).
+    pub open_mode: OpenMode,
     /// Bata, the robot, beside the clock and on the island's own notices.
     pub robot: bool,
     /// How much Bata moves: Full, Saver or Off (by name; a typo is Full).
@@ -90,6 +93,15 @@ pub struct Config {
     /// means the default (all nine); `pages::PanelPages` fills in the rest.
     #[serde(deserialize_with = "panel_pages")]
     pub panel_pages: Vec<PageEntry>,
+}
+
+crate::theme::named_enum! {
+    /// "Mode buka": Hover opens the panel under the pointer and closes it when
+    /// the pointer leaves (the default, as always); HoverStay opens on hover
+    /// and keeps it open until a click outside; Click opens on a click on the
+    /// island, and keeps it open until a click outside. Any other name reads
+    /// as `Hover`.
+    OpenMode { Hover, HoverStay, Click }
 }
 
 crate::theme::named_enum! {
@@ -245,6 +257,7 @@ impl Default for Config {
             lyrics: false,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
+            open_mode: OpenMode::Hover,
             robot: true,
             robot_animation: Motion::Full,
             robot_sleep_minutes: 10,
@@ -337,6 +350,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         lyrics: mem.lyrics,
         cli_shell: mem.cli_shell,
         cli_start: mem.cli_start,
+        open_mode: mem.open_mode,
         robot: mem.robot,
         robot_animation: mem.robot_animation,
         robot_sleep_minutes: mem.robot_sleep_minutes,
@@ -653,6 +667,7 @@ mod tests {
             lyrics: true,
             cli_shell: Shell::Cmd,
             cli_start: CliStart::Last,
+            open_mode: OpenMode::Click,
             robot: false,
             robot_animation: Motion::Off,
             robot_sleep_minutes: 5,
@@ -972,6 +987,38 @@ mod tests {
         // A typo keeps the rest of the file: only the language falls back.
         let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    #[test]
+    fn open_mode_reads_old_files_typos_and_round_trips() {
+        assert_eq!(Config::default().open_mode, OpenMode::Hover);
+        // A file from before the setting: the pointer behaves as always.
+        let old = parse(r#"{"style":"Notch"}"#);
+        assert_eq!((old.style, old.open_mode), (Style::Notch, OpenMode::Hover));
+        for mode in OpenMode::ALL {
+            let c = Config {
+                open_mode: *mode,
+                ..Config::default()
+            };
+            let json = serde_json::to_string(&c).unwrap();
+            assert_eq!(parse(&json).open_mode, *mode, "{json}");
+        }
+        let json = serde_json::to_string(&Config {
+            open_mode: OpenMode::HoverStay,
+            ..Config::default()
+        })
+        .unwrap();
+        assert!(json.contains(r#""open_mode":"HoverStay""#), "{json}");
+        // A typo keeps the rest of the file.
+        let typo = parse(r#"{"style":"Notch","open_mode":"klik"}"#);
+        assert_eq!((typo.style, typo.open_mode), (Style::Notch, OpenMode::Hover));
+        // The island's own setting: the file's stale value does not win.
+        let disk = Config::default();
+        let mem = Config {
+            open_mode: OpenMode::Click,
+            ..Config::default()
+        };
+        assert_eq!(merge_owned(disk, &mem).open_mode, OpenMode::Click);
     }
 
     type Owned = (

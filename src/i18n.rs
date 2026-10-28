@@ -459,6 +459,11 @@ keys! {
     ShellCliDesc => "Untuk perintah di halaman CLI", "Runs the CLI page's commands";
     ShellPowerShell => "PowerShell", "PowerShell";
     ShellCmd => "cmd", "cmd";
+    OpenModeSetting => "Mode buka", "Open mode";
+    OpenModeDesc => "Cara panel dibuka", "How the panel opens";
+    OpenModeHover => "Hover", "Hover";
+    OpenModeStay => "Hover & tetap", "Hover & stay";
+    OpenModeClick => "Klik", "Click";
     CliStartFolder => "Folder awal CLI", "CLI start folder";
     CliStartFolderDesc => "Saat halaman CLI dibuka", "When the CLI page opens";
     CliStartExplorer => "Ikuti Explorer", "Follow Explorer";

@@ -29,11 +29,13 @@ use windows::Win32::System::RemoteDesktop::{
 };
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    GetAsyncKeyState, SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetForegroundWindow, GetMessageW,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetCursorPos, GetForegroundWindow,
+    GetMessageW,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
@@ -161,6 +163,12 @@ const TIMER_SYSTEM_PAGE: usize = 17;
 /// (sooner to confirm RAM's minute above its limit). It reads memory and
 /// drives on the sampler thread and draws nothing unless a notice is raised.
 const TIMER_SYSTEM_WARN: usize = 18;
+/// Repeating, 40 ms: a mouse button going down outside the island while the
+/// panel is kept open (`outside_click_wanted`) closes it. No hook, no capture:
+/// the click still goes where it was aimed, and nothing runs while the panel
+/// is shut or follows the pointer.
+const TIMER_OUTSIDE: usize = 24;
+const OUTSIDE_MS: u32 = 40;
 const SYSTEM_PAGE_MS: u32 = 2_000;
 const SYSTEM_WARN_MS: u32 = 300_000;
 const CLI_MS: u32 = 1000;
@@ -272,6 +280,8 @@ pub fn run(media_log_flag: bool) {
             click: ClickPair::default(),
             media_click: None,
             eq_timer: false,
+            outside_timer: false,
+            outside_edge: PressEdge::default(),
             pomo_timer: false,
             clock_timer: false,
             progress_timer: false,
@@ -323,6 +333,8 @@ pub fn run(media_log_flag: bool) {
         app.apply(Event::LyricsSetting(lyrics_on), now);
         let clean_mode = app.config.clean_mode;
         app.apply(Event::CleanModeSetting(clean_mode), now);
+        let open_mode = app.config.open_mode;
+        app.apply(Event::OpenMode(open_mode), now);
         let pages = PanelPages::from_saved(&app.config.panel_pages);
         app.apply(Event::PanelPages(pages), now);
         app.check_fullscreen();
@@ -440,6 +452,10 @@ struct App {
     media_click: Option<media_log::Click>,
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
+    /// `TIMER_OUTSIDE` runs.
+    outside_timer: bool,
+    /// The mouse buttons as the last poll saw them.
+    outside_edge: PressEdge,
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
@@ -2386,6 +2402,7 @@ impl App {
         self.sync_progress_timer(now);
         self.sync_robot_timers(now);
         self.sync_system_page();
+        self.sync_outside_timer();
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -2396,6 +2413,41 @@ impl App {
                     let _ = KillTimer(Some(self.hwnd), TIMER_CLI);
                 }
             }
+        }
+    }
+
+    /// Polls the mouse buttons only while the panel is kept open: a press
+    /// already down when the poll starts is not a click outside.
+    fn sync_outside_timer(&mut self) {
+        let wanted = self.state.outside_click_wanted();
+        if wanted == self.outside_timer {
+            return;
+        }
+        self.outside_timer = wanted;
+        unsafe {
+            if wanted {
+                self.outside_edge.reset(any_mouse_button_down());
+                SetTimer(Some(self.hwnd), TIMER_OUTSIDE, OUTSIDE_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), TIMER_OUTSIDE);
+            }
+        }
+    }
+
+    /// A button went down since the last poll: outside the island's shape
+    /// (the part that is drawn) closes the panel.
+    fn on_outside_poll(&mut self) {
+        if !self.outside_edge.poll(any_mouse_button_down()) {
+            return;
+        }
+        let mut pt = POINT::default();
+        let inside = unsafe {
+            GetCursorPos(&mut pt).is_ok()
+                && ScreenToClient(self.hwnd, &mut pt).as_bool()
+                && self.renderer.hit_test(pt.x as f32, pt.y as f32).is_some()
+        };
+        if !inside {
+            self.apply_now(Event::Dismiss);
         }
     }
 
@@ -2556,6 +2608,7 @@ impl App {
                 self.sync_system_page();
             }
             TIMER_SYSTEM_WARN => self.on_system_warn_timer(),
+            TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
                 unsafe {
@@ -2912,6 +2965,11 @@ impl App {
                 self.config.morning_greeting = on;
                 self.save_config();
             }
+            SettingsAction::OpenMode(mode) => {
+                self.config.open_mode = mode;
+                self.save_config();
+                self.apply_now(Event::OpenMode(mode));
+            }
             SettingsAction::CliStart(start) => {
                 // Read the next time the CLI page opens.
                 self.config.cli_start = start;
@@ -3169,6 +3227,35 @@ impl HoverTracking {
         self.armed = false;
         std::mem::take(&mut self.hovered).then_some(Event::Hover(false))
     }
+}
+
+/// Mouse-button presses seen by polling: true only on the poll where a button
+/// went from up to down.
+#[derive(Default)]
+struct PressEdge {
+    down: bool,
+}
+
+impl PressEdge {
+    fn poll(&mut self, down: bool) -> bool {
+        let pressed = down && !self.down;
+        self.down = down;
+        pressed
+    }
+
+    /// Starts from `down`: a press that began before the polling did is not
+    /// an edge.
+    fn reset(&mut self, down: bool) {
+        self.down = down;
+    }
+}
+
+/// Any physical mouse button is down (left, right or middle: a swapped
+/// button pair makes no difference).
+fn any_mouse_button_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .iter()
+        .any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } as u16 & 0x8000 != 0)
 }
 
 /// Pairs a left press with its release: a click counts only when both land
@@ -4746,6 +4833,21 @@ mod tests {
     }
 
     #[test]
+    fn a_press_is_the_up_to_down_edge_only() {
+        let mut e = PressEdge::default();
+        assert!(!e.poll(false));
+        assert!(e.poll(true), "the press");
+        assert!(!e.poll(true), "held down: no second edge");
+        assert!(!e.poll(false), "the release");
+        assert!(e.poll(true), "the next press");
+        // A button already down when the polling starts is not a click.
+        e.reset(true);
+        assert!(!e.poll(true));
+        assert!(!e.poll(false));
+        assert!(e.poll(true));
+    }
+
+    #[test]
     fn timer_ids_never_collide() {
         // The System page's and the clipboard's timers came in separate runs;
         // one id for two timers would kill or fire the other's.
@@ -4771,6 +4873,7 @@ mod tests {
             clip::TIMER_CLIP_SAVE,
             clip::TIMER_CLIP_HOLD,
             shot::TIMER_SHOT_RETRY,
+            TIMER_OUTSIDE,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");

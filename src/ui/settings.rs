@@ -72,7 +72,9 @@ use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::{ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style};
+use crate::config::{
+    ClipHotkey, ClipboardSettings, Config, OpenMode, ScreenshotSettings, ShotIgnore, Style,
+};
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
@@ -100,6 +102,7 @@ pub enum Action {
     IdleClock(bool),
     Lyrics(bool),
     Shell(Shell),
+    OpenMode(OpenMode),
     CliStart(CliStart),
     Robot(bool),
     RobotMotion(Motion),
@@ -173,6 +176,7 @@ pub struct Model {
     pub lyrics: bool,
     pub shell: Shell,
     pub cli_start: CliStart,
+    pub open_mode: OpenMode,
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -208,6 +212,7 @@ impl Model {
             lyrics: cfg.lyrics,
             shell: cfg.cli_shell,
             cli_start: cfg.cli_start,
+            open_mode: cfg.open_mode,
             robot: cfg.robot,
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
@@ -943,6 +948,7 @@ impl Settings {
             lyrics: m.lyrics,
             shell: m.shell,
             cli_start: m.cli_start,
+            open_mode: m.open_mode,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
@@ -1047,6 +1053,10 @@ impl Settings {
                 Group::Lang => usize::from(m.lang == Lang::En) as f32,
                 Group::Shell => usize::from(m.shell == Shell::Cmd) as f32,
                 Group::CliStart => usize::from(m.cli_start == CliStart::Last) as f32,
+                Group::OpenMode => OpenMode::ALL
+                    .iter()
+                    .position(|v| *v == m.open_mode)
+                    .unwrap_or(0) as f32,
                 Group::Motion => Motion::ALL
                     .iter()
                     .position(|v| *v == m.robot_motion)
@@ -1063,6 +1073,7 @@ impl Settings {
             Group::Surface,
             Group::Window,
             Group::Lang,
+            Group::OpenMode,
             Group::CliStart,
             Group::Shell,
             Group::Motion,
@@ -1263,6 +1274,7 @@ impl Settings {
             Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
             Hit::Shell(v) if v != m.shell => post(Action::Shell(v)),
             Hit::CliStart(v) if v != m.cli_start => post(Action::CliStart(v)),
+            Hit::OpenMode(v) if v != m.open_mode => post(Action::OpenMode(v)),
             Hit::Robot => post(Action::Robot(!m.robot)),
             Hit::Motion(v) if v != m.robot_motion => post(Action::RobotMotion(v)),
             Hit::RobotSleep(dir) => {
@@ -1412,6 +1424,7 @@ impl Settings {
             | Hit::Lang(_)
             | Hit::Shell(_)
             | Hit::CliStart(_)
+            | Hit::OpenMode(_)
             | Hit::Motion(_)
             | Hit::ClipHotkey(_)
             | Hit::ShotIgnore(_) => Vec::new(),
@@ -1937,6 +1950,7 @@ pub fn run_demo(args: &[String]) {
             Action::Lyrics(v) => m.lyrics = v,
             Action::Shell(v) => m.shell = v,
             Action::CliStart(v) => m.cli_start = v,
+            Action::OpenMode(v) => m.open_mode = v,
             Action::Robot(v) => m.robot = v,
             Action::RobotMotion(v) => m.robot_motion = v,
             Action::RobotSleep(v) => m.robot_sleep = v,

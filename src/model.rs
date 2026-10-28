@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 
 use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanEvent, CleanMode};
+use crate::config::OpenMode;
 use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
@@ -191,6 +192,11 @@ pub enum Event {
     },
     /// The cleaner's remembered mode (`clean_mode`), at startup.
     CleanModeSetting(CleanMode),
+    /// "Mode buka" (startup and the settings window).
+    OpenMode(OpenMode),
+    /// A mouse button went down outside the island while the panel was kept
+    /// open: it closes.
+    Dismiss,
     /// "Halaman panel", at startup and when the settings window changes it.
     PanelPages(PanelPages),
     /// A folder check for screenshot `shot` ended: the Screenshots folder
