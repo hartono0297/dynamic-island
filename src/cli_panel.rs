@@ -113,10 +113,10 @@ pub fn line_kind(line: &str, echo: bool) -> LineKind {
     if line == cli::exit_line(Some(0), false) {
         return LineKind::Ok;
     }
-    // `↳` marks the island's own notes (the move to an Explorer folder).
+    // The island's own notes (a move to or from an Explorer folder).
     if line == cli::exit_line(None, true)
         || line == cli::exit_line(None, false)
-        || line.starts_with('\u{21B3}')
+        || crate::i18n::is_cli_note(line)
     {
         return LineKind::Quiet;
     }
@@ -285,8 +285,21 @@ mod tests {
         assert_eq!(line_kind("[exit 1]", false), LineKind::Error);
         assert_eq!(line_kind("[exit ?]", false), LineKind::Quiet);
         assert_eq!(line_kind("[dihentikan]", false), LineKind::Quiet);
-        let moved = crate::i18n::cli_moved_to(crate::i18n::Lang::Id, "D:\\x");
-        assert_eq!(line_kind(&moved, false), LineKind::Quiet);
+        use crate::i18n::{Lang, cli_back_to, cli_moved_to};
+        for lang in [Lang::Id, Lang::En] {
+            for note in [cli_moved_to(lang, "D:\\x"), cli_back_to(lang, "D:\\x")] {
+                assert_eq!(line_kind(&note, false), LineKind::Quiet, "{note}");
+            }
+        }
+        // Program output that happens to start with the arrow stays output.
+        assert_eq!(
+            line_kind("\u{21B3} child task done", false),
+            LineKind::Output
+        );
+        assert_eq!(
+            cli_back_to(Lang::En, "D:\\x"),
+            "\u{21B3} back to D:\\x (your last folder)"
+        );
         assert_eq!(line_kind("FAIL src/rab.test.ts", false), LineKind::Error);
         assert_eq!(
             line_kind("error: could not compile", false),

@@ -13,8 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cli::write_atomic;
 
-/// Recently used folders kept (and shown) at most.
+/// Recently used folders shown at most ...
 pub const RECENT_CAP: usize = 5;
+/// ... and kept, so five remain after the favourites among them are left out.
+pub const RECENT_KEPT: usize = 25;
 /// Favourites kept at most: more would not fit any menu.
 pub const FAVORITES_CAP: usize = 20;
 
@@ -133,7 +135,7 @@ impl FolderList {
     fn cap(&self) -> usize {
         match self.kind {
             ListKind::Favorites => FAVORITES_CAP,
-            ListKind::Recent => RECENT_CAP,
+            ListKind::Recent => RECENT_KEPT,
         }
     }
 
@@ -198,6 +200,11 @@ impl FolderList {
             },
         );
         self.entries.truncate(self.cap());
+    }
+
+    /// No more fits (a star is refused).
+    pub fn is_full(&self) -> bool {
+        self.entries.len() >= self.cap()
     }
 
     /// Favourites: star (`on`) or unstar `path`. False when nothing changed
@@ -439,6 +446,29 @@ pub enum MenuItem {
     Empty,
 }
 
+/// How far the menu scrolls: up to its last folder row.
+pub fn max_scroll(items: &[MenuItem]) -> usize {
+    items
+        .iter()
+        .rposition(|i| matches!(i, MenuItem::Folder { .. }))
+        .unwrap_or(0)
+}
+
+/// The menu's lines with the first `skip` scrolled away (at most
+/// `max_scroll`); a section scrolled into keeps its header on top.
+pub fn scrolled(items: &[MenuItem], skip: usize) -> Vec<MenuItem> {
+    let skip = skip.min(max_scroll(items));
+    let rest = &items[skip..];
+    match rest.first() {
+        Some(MenuItem::Folder { section, .. }) if skip > 0 => {
+            std::iter::once(MenuItem::Header(*section))
+                .chain(rest.iter().cloned())
+                .collect()
+        }
+        _ => rest.to_vec(),
+    }
+}
+
 /// The sections as the menu's lines: each header, then its rows.
 pub fn menu_items(sections: &[MenuSection]) -> Vec<MenuItem> {
     if sections.is_empty() {
@@ -539,11 +569,18 @@ mod tests {
         for (i, f) in ["a", "b", "c", "B\\", "d", "e", "f"].iter().enumerate() {
             r.push_recent(&p(&format!(r"D:\{f}")), 100 + i as i64);
         }
-        assert_eq!(paths(&r), [r"D:\f", r"D:\e", r"D:\d", r"D:\B", r"D:\c"]);
+        assert_eq!(
+            paths(&r),
+            [r"D:\f", r"D:\e", r"D:\d", r"D:\B", r"D:\c", r"D:\a"]
+        );
         assert_eq!(r.entries()[0].used, Some(106));
         assert_eq!(r.entries()[3].used, Some(103), "the repeat moved up");
         r.push_recent(Path::new(" "), 200);
-        assert_eq!(r.entries().len(), RECENT_CAP);
+        assert_eq!(r.entries().len(), 6);
+        for i in 0..40 {
+            r.push_recent(&p(&format!(r"E:\{i}")), 300 + i);
+        }
+        assert_eq!(r.entries().len(), RECENT_KEPT);
     }
 
     #[test]
@@ -562,6 +599,16 @@ mod tests {
         }
         assert_eq!(f.entries().len(), FAVORITES_CAP);
         assert!(!f.set_favorite(&p(r"D:\one-more"), true), "full");
+        // The menu says so instead of a star that does nothing.
+        assert!(f.is_full());
+        assert_eq!(
+            crate::i18n::cli_favorites_full(crate::i18n::Lang::Id),
+            format!("\u{21B3} Favorit penuh ({FAVORITES_CAP}): lepas bintang yang lain dulu")
+        );
+        assert!(crate::i18n::is_cli_note(&crate::i18n::cli_favorites_full(
+            crate::i18n::Lang::En
+        )));
+        assert!(!FolderList::new(ListKind::Favorites).is_full());
     }
 
     #[test]
@@ -607,14 +654,12 @@ mod tests {
             r.entries().iter().map(|e| e.used).collect::<Vec<_>>(),
             [None, Some(1_700_000_000), None]
         );
-        // More than five lines: the newest five (the file's first) stay.
-        let many: String = (0..9).map(|i| format!("{i}\tD:\\f{i}\n")).collect();
+        // More lines than kept: the newest (the file's first) stay.
+        let many: String = (0..40).map(|i| format!("{i}\tD:\\f{i}\n")).collect();
         std::fs::write(&rec, many).unwrap();
         let r = FolderList::load(ListKind::Recent, &rec);
-        assert_eq!(
-            paths(&r),
-            [r"D:\f0", r"D:\f1", r"D:\f2", r"D:\f3", r"D:\f4"]
-        );
+        assert_eq!(r.entries().len(), RECENT_KEPT);
+        assert_eq!(paths(&r)[..2], [r"D:\f0", r"D:\f1"]);
         // A favourites file never keeps times.
         std::fs::write(&rec, "5\tD:\\x\n").unwrap();
         let f = FolderList::load(ListKind::Favorites, &rec);
@@ -722,6 +767,60 @@ mod tests {
             .earliest()
             .unwrap()
             .timestamp()
+    }
+
+    #[test]
+    fn a_scrolled_menu_keeps_the_header_of_its_first_row() {
+        let row = |name: &str, section| MenuItem::Folder {
+            section,
+            row: MenuRow {
+                path: p(name),
+                note: RowNote::None,
+                favorite: section == Section::Favorites,
+            },
+        };
+        let items = vec![
+            MenuItem::Header(Section::Favorites),
+            row(r"D:\a", Section::Favorites),
+            row(r"D:\b", Section::Favorites),
+            row(r"D:\c", Section::Favorites),
+            MenuItem::Header(Section::Recent),
+            row(r"D:\r", Section::Recent),
+        ];
+        assert_eq!(scrolled(&items, 0), items);
+        // Two rows down: Favorit's header stays on top of D:\b.
+        assert_eq!(
+            scrolled(&items, 2),
+            [
+                items[0].clone(),
+                items[2].clone(),
+                items[3].clone(),
+                items[4].clone(),
+                items[5].clone()
+            ]
+        );
+        // The furthest it goes: the last row stays, with its header.
+        assert_eq!(max_scroll(&items), 5);
+        assert_eq!(scrolled(&items, 9), [items[4].clone(), items[5].clone()]);
+        assert_eq!(max_scroll(&[MenuItem::Empty]), 0);
+    }
+
+    #[test]
+    fn recent_shows_five_even_when_some_are_favourites() {
+        let now = at(27, 14, 32);
+        let mut fav = FolderList::new(ListKind::Favorites);
+        let mut rec = FolderList::new(ListKind::Recent);
+        for i in 0..8 {
+            rec.push_recent(&p(&format!(r"D:\r{i}")), stamp(at(27, 10, i)));
+        }
+        // The two newest are starred: they show under Favorit only.
+        fav.set_favorite(&p(r"D:\r7"), true);
+        fav.set_favorite(&p(r"D:\r6"), true);
+        let all = |_: &Path| true;
+        let menu = menu_rows(&[], &fav, &rec, now, &all);
+        let recent = menu.iter().find(|s| s.section == Section::Recent).unwrap();
+        assert_eq!(recent.rows.len(), RECENT_CAP);
+        assert_eq!(recent.rows[0].path, p(r"D:\r5"));
     }
 
     #[test]

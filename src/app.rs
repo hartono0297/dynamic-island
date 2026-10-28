@@ -307,6 +307,8 @@ pub fn run(media_log_flag: bool) {
             cli_from_explorer: false,
             cli_pinned: false,
             cli_menu_view: FolderMenuView::default(),
+            cli_menu_all: Vec::new(),
+            cli_menu_scroll: 0,
             explorer: ExplorerReads::default(),
             shortcut: None,
             bata: Bata::new(Instant::now()),
@@ -511,6 +513,10 @@ struct App {
     cli_pinned: bool,
     /// The open folder menu's lines, built when it opens or its lists change.
     cli_menu_view: FolderMenuView,
+    /// Every line of the folder menu; the view holds them scrolled.
+    cli_menu_all: Vec<cli_folders::MenuItem>,
+    /// Lines of the folder menu scrolled away by the wheel.
+    cli_menu_scroll: usize,
     /// Explorer folders read off the UI thread, and what waits for them.
     explorer: ExplorerReads,
     /// A clicked shortcut waiting for `TIMER_SHORTCUT`.
@@ -542,6 +548,22 @@ struct ExplorerReads {
     for_open: Option<u64>,
     /// Another read asked for while one ran (true: for the page opening).
     queued: Option<bool>,
+    /// When the running read started.
+    started: Option<Instant>,
+}
+
+/// A read of the Explorer windows still out after this is given up on (a
+/// hung Explorer): the next one may start.
+const EXPLORER_READ_TIMEOUT: Duration = Duration::from_secs(3);
+
+impl ExplorerReads {
+    /// A read runs and is not yet given up on.
+    fn busy(&self, now: Instant) -> bool {
+        self.running.is_some()
+            && self
+                .started
+                .is_some_and(|at| now.duration_since(at) < EXPLORER_READ_TIMEOUT)
+    }
 }
 
 /// The System page and the warnings: the sampler thread (started on the
@@ -782,6 +804,7 @@ impl App {
             self.back_to_last_cli_folder();
         }
         if self.state.cli_menu() && !was_menu {
+            self.cli_menu_scroll = 0;
             self.rebuild_cli_menu();
             self.read_explorer(false);
         }
@@ -791,7 +814,8 @@ impl App {
     /// queues it behind the one running.
     fn read_explorer(&mut self, for_open: bool) {
         let reads = &mut self.explorer;
-        if reads.running.is_some() {
+        let now = Instant::now();
+        if reads.busy(now) {
             reads.queued = Some(reads.queued.unwrap_or(false) || for_open);
             return;
         }
@@ -799,6 +823,7 @@ impl App {
         let id = reads.asked;
         if explorer::read_folders(id, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
             reads.running = Some(id);
+            reads.started = Some(now);
             if for_open {
                 reads.for_open = Some(id);
             }
@@ -808,6 +833,10 @@ impl App {
     /// A read finished: the menu lists its windows; the read for the page
     /// opening may move the CLI to the last active one.
     fn on_explorer_folders(&mut self, request: u64, folders: Vec<PathBuf>) {
+        // A read given up on that answers after a newer one started: stale.
+        if self.explorer.running.is_some_and(|r| request < r) {
+            return;
+        }
         if self.explorer.running == Some(request) {
             self.explorer.running = None;
         }
@@ -865,7 +894,7 @@ impl App {
         self.cli_from_explorer = false;
         if dir != self.cli_cwd {
             self.cli
-                .note(i18n::cli_moved_to(i18n::lang(), &dir.to_string_lossy()));
+                .note(i18n::cli_back_to(i18n::lang(), &dir.to_string_lossy()));
             self.cli_cwd = dir;
         }
     }
@@ -880,7 +909,11 @@ impl App {
             // Never a network check on the UI thread.
             &cli_folders::exists_quick,
         );
-        self.cli_menu_view.items = cli_folders::menu_items(&sections);
+        self.cli_menu_all = cli_folders::menu_items(&sections);
+        self.cli_menu_scroll = self
+            .cli_menu_scroll
+            .min(cli_folders::max_scroll(&self.cli_menu_all));
+        self.cli_menu_view.items = cli_folders::scrolled(&self.cli_menu_all, self.cli_menu_scroll);
     }
 
     /// The user chose `dir` (`cd` or the menu): it is saved as the last
@@ -921,6 +954,10 @@ impl App {
                 self.rebuild_cli_menu();
             }
             self.redraw_cli();
+        } else if on && self.cli_favorites.is_full() {
+            // A star that did nothing says why.
+            self.cli.note(i18n::cli_favorites_full(i18n::lang()));
+            self.redraw_cli();
         }
     }
 
@@ -934,15 +971,13 @@ impl App {
         if !self.state.cli_menu() || self.state.view() != View::Panel(Page::Cli) {
             return false;
         }
-        match self.hit_at(lparam) {
-            Some(Hit::CliFolderPick {
-                path,
-                favorite: true,
-            }) => {
+        match menu_right_click(self.hit_at(lparam)) {
+            MenuRightClick::Unstar(path) => {
                 self.set_cli_favorite(&path, false);
                 true
             }
-            _ => false,
+            MenuRightClick::Swallow => true,
+            MenuRightClick::Tray => false,
         }
     }
 
@@ -1762,6 +1797,11 @@ impl App {
                         let _ = cli::save_cwd(&cli::cwd_path(), &self.cli_cwd);
                         let dir = self.cli_cwd.clone();
                         self.remember_recent(&dir);
+                        // A command ran here: this visit stays here (a slow
+                        // Explorer read must not move it afterwards), and
+                        // the folder is the user's own now (cli-cwd.txt).
+                        self.cli_pinned = true;
+                        self.cli_from_explorer = false;
                         // The folder cannot change mid-command.
                         if self.state.cli_menu() {
                             self.apply(Event::Click(Hit::CliMenuDismiss), now);
@@ -2674,7 +2714,16 @@ impl App {
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
         let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
-        if over_clips && self.state.view() == View::Panel(Page::Clipboard) {
+        if self.state.cli_menu() && self.state.view() == View::Panel(Page::Cli) {
+            // The open folder menu scrolls, a row per notch (more rows
+            // than fit: favourites, recent).
+            let rows = (-delta / 120).clamp(-20, 20);
+            let rows = if rows == 0 { -delta.signum() } else { rows };
+            let to = (self.cli_menu_scroll as i64 + i64::from(rows)).max(0) as usize;
+            self.cli_menu_scroll = to.min(cli_folders::max_scroll(&self.cli_menu_all));
+            self.rebuild_cli_menu();
+            self.redraw_cli();
+        } else if over_clips && self.state.view() == View::Panel(Page::Clipboard) {
             self.clip_wheel(delta);
         } else if over && self.state.view() == View::Panel(Page::Cli) {
             // A notch away from the user scrolls up to older lines.
@@ -3469,6 +3518,28 @@ fn is_activity(event: &Event) -> bool {
             | Event::Cli(_)
             | Event::LyricsSetting(_)
     )
+}
+
+/// What a right-click does while the CLI folder menu is open.
+#[derive(Debug, PartialEq)]
+enum MenuRightClick {
+    /// On a favourite's row: it is unstarred.
+    Unstar(PathBuf),
+    /// Elsewhere in the menu: nothing (no tray menu over the folder menu).
+    Swallow,
+    /// Outside the menu: the tray menu, as everywhere.
+    Tray,
+}
+
+fn menu_right_click(hit: Option<Hit>) -> MenuRightClick {
+    match hit {
+        Some(Hit::CliFolderPick {
+            path,
+            favorite: true,
+        }) => MenuRightClick::Unstar(path),
+        Some(Hit::CliFolderPick { .. } | Hit::CliFolderStar { .. }) => MenuRightClick::Swallow,
+        _ => MenuRightClick::Tray,
+    }
 }
 
 /// The face a quiet robot shows in `view` with the robot `on` (for tests of
@@ -5106,6 +5177,44 @@ mod tests {
             reminders_unreadable_notice(&RemindersStore::open(dir.join("none.json"))),
             None
         );
+    }
+
+    #[test]
+    fn a_hung_explorer_read_stops_blocking_the_next() {
+        let t0 = Instant::now();
+        let mut reads = ExplorerReads::default();
+        assert!(!reads.busy(t0), "nothing running");
+        reads.running = Some(1);
+        reads.started = Some(t0);
+        assert!(reads.busy(t0 + Duration::from_secs(1)));
+        // A COM call that never comes back (a hung Explorer) is given up on;
+        // a late answer is told apart by its request id.
+        assert!(!reads.busy(t0 + EXPLORER_READ_TIMEOUT));
+    }
+
+    #[test]
+    fn right_clicks_inside_the_folder_menu_never_open_the_tray_menu() {
+        let path = PathBuf::from(r"D:\x");
+        let pick = |favorite| Hit::CliFolderPick {
+            path: path.clone(),
+            favorite,
+        };
+        assert_eq!(
+            menu_right_click(Some(pick(true))),
+            MenuRightClick::Unstar(path.clone())
+        );
+        assert_eq!(menu_right_click(Some(pick(false))), MenuRightClick::Swallow);
+        let star = Hit::CliFolderStar {
+            path: path.clone(),
+            on: true,
+        };
+        assert_eq!(menu_right_click(Some(star)), MenuRightClick::Swallow);
+        // Outside the menu: the tray menu, as everywhere else.
+        assert_eq!(
+            menu_right_click(Some(Hit::CliMenuDismiss)),
+            MenuRightClick::Tray
+        );
+        assert_eq!(menu_right_click(None), MenuRightClick::Tray);
     }
 
     #[test]

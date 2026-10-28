@@ -1130,6 +1130,41 @@ pub fn cli_moved_to(lang: Lang, path: &str) -> String {
     }
 }
 
+/// The CLI's note after leaving a followed Explorer folder for the user's
+/// own last one.
+pub fn cli_back_to(lang: Lang, path: &str) -> String {
+    match lang {
+        Lang::Id => format!("\u{21B3} kembali ke {path} (folder terakhirmu)"),
+        Lang::En => format!("\u{21B3} back to {path} (your last folder)"),
+    }
+}
+
+/// The CLI's note when a star finds the favourites full.
+pub fn cli_favorites_full(lang: Lang) -> String {
+    let cap = crate::cli_folders::FAVORITES_CAP;
+    match lang {
+        Lang::Id => format!("\u{21B3} Favorit penuh ({cap}): lepas bintang yang lain dulu"),
+        Lang::En => format!("\u{21B3} Favourites are full ({cap}): unstar another first"),
+    }
+}
+
+/// One of the CLI's own notes (`cli_moved_to`, `cli_back_to`), in either
+/// language: drawn quiet. Program output that merely starts with the same
+/// arrow is not one.
+pub fn is_cli_note(line: &str) -> bool {
+    let notes = [
+        ("\u{21B3} pindah ke ", " (folder Explorer terakhir)"),
+        ("\u{21B3} moved to ", " (last Explorer folder)"),
+        ("\u{21B3} kembali ke ", " (folder terakhirmu)"),
+        ("\u{21B3} back to ", " (your last folder)"),
+        ("\u{21B3} Favorit penuh (", "lepas bintang yang lain dulu"),
+        ("\u{21B3} Favourites are full (", "unstar another first"),
+    ];
+    notes
+        .iter()
+        .any(|(start, end)| line.starts_with(start) && line.ends_with(end))
+}
+
 /// When a recent folder was used, at the right of its menu row: "baru
 /// saja", "2 mnt lalu", "3 jam lalu", "kemarin", "20 Okt" (and in English).
 pub fn folder_ago(lang: Lang, ago: crate::cli_folders::Ago) -> String {

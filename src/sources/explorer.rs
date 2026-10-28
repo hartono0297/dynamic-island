@@ -23,8 +23,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::{
-    IFolderView, IPersistFolder2, IShellBrowser, IShellWindows, IWebBrowserApp,
-    SHGetPathFromIDListW, SID_STopLevelBrowser, ShellWindows,
+    GPFIDL_DEFAULT, IFolderView, IPersistFolder2, IShellBrowser, IShellWindows, IWebBrowserApp,
+    SHGetPathFromIDListEx, SID_STopLevelBrowser, ShellWindows,
 };
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, IsWindowVisible};
 use windows::core::{BOOL, Interface};
@@ -108,8 +108,9 @@ unsafe fn tab_at(windows: &IShellWindows, i: i32) -> Option<Tab> {
     let folder: IFolderView = view.cast().ok()?;
     let persist: IPersistFolder2 = unsafe { folder.GetFolder() }.ok()?;
     let pidl = unsafe { persist.GetCurFolder() }.ok()?;
-    let mut buf = [0u16; 260];
-    let ok = unsafe { SHGetPathFromIDListW(pidl, &mut buf) }.as_bool();
+    // Long paths too (past MAX_PATH): the Ex form takes any buffer.
+    let mut buf = vec![0u16; 32_768];
+    let ok = unsafe { SHGetPathFromIDListEx(pidl, &mut buf, GPFIDL_DEFAULT) }.as_bool();
     unsafe { CoTaskMemFree(Some(pidl as *const _)) };
     if !ok {
         // A virtual location: Home, This PC, Recycle Bin, Gallery.
