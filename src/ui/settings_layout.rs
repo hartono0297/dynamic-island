@@ -19,6 +19,7 @@ use crate::config::{
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
 use crate::pages::PanelPages;
+use crate::tiles::{CustomKind, ShortcutTiles, Tile};
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::ui::icons::Icon;
@@ -318,6 +319,11 @@ pub enum Hit {
     /// +1 later).
     PageOn(Page),
     PageMove(Page, i32),
+    /// "Pintasan": a tile's toggle, its order stepper, and "Hapus" (a custom
+    /// tile), by its place in the list.
+    TileOn(usize),
+    TileMove(usize, i32),
+    TileRemove(usize),
     DndHelp,
     Pomo(PomoField, i32),
     GoogleSave,
@@ -679,6 +685,8 @@ pub struct State<'a> {
     pub shot: ScreenshotSettings,
     /// "Halaman panel": the pages' order and which the wheel shows.
     pub pages: PanelPages,
+    /// "Pintasan": the tiles' order, which show, and the custom ones.
+    pub tiles: ShortcutTiles,
     pub version: &'a str,
     /// The data folder in use, as `data_dir::label` names it.
     pub data_dir: &'a str,
@@ -1301,7 +1309,13 @@ pub fn layout(section: Section, s: &State, m: &dyn Measure) -> Layout {
 /// content (not the sidebar or title) moves up by `scroll`, kept in range,
 /// inside a viewport from `VIEW_TOP` to the window's bottom.
 fn scroll(l: &mut Layout, scroll: f32) {
-    let bottom = l.cards.iter().map(Rect::bottom).fold(0.0, f32::max);
+    // A note under the last card counts too.
+    let bottom = l
+        .cards
+        .iter()
+        .map(Rect::bottom)
+        .chain(l.texts.iter().map(|t| t.rect.bottom()))
+        .fold(0.0, f32::max);
     let max = (bottom - (CLIENT_H - PAD)).max(0.0);
     if max <= 0.0 {
         return;
@@ -1441,6 +1455,7 @@ fn appearance(b: &mut Builder, s: &State) {
 
     robot_card(b, s);
     pages_card(b, s);
+    tiles_card(b, s);
 }
 
 fn page_key(p: Page) -> Key {
@@ -1486,6 +1501,87 @@ fn pages_card(b: &mut Builder, s: &State) {
             b.divider(card, y);
         }
     }
+}
+
+/// A custom tile's target as a description: its kind, then the path or
+/// address, cut short with "…" to fit `max_w`.
+fn tile_target(b: &Builder, lang: Lang, kind: CustomKind, target: &str, max_w: f32) -> String {
+    let kind = match kind {
+        CustomKind::App => Key::TileKindApp,
+        CustomKind::Folder => Key::TileKindFolder,
+        CustomKind::Url => Key::TileKindUrl,
+    };
+    let head = format!("{} · ", text(lang, kind));
+    let mut chars: Vec<char> = target.chars().collect();
+    loop {
+        let shown: String = chars.iter().collect();
+        let line = format!("{head}{shown}");
+        if chars.len() == target.chars().count() && b.w(&line, Font::Desc) <= max_w {
+            return line;
+        }
+        if chars.is_empty() || b.w(&format!("{line}…"), Font::Desc) <= max_w {
+            return format!("{line}…");
+        }
+        chars.pop();
+    }
+}
+
+/// "Pintasan": one row per tile in the owner's order, with its toggle and
+/// order stepper like "Halaman panel", and "Hapus" on a custom tile. The
+/// last tile still shown cannot be switched off. Under the card, where the
+/// custom tiles come from.
+fn tiles_card(b: &mut Builder, s: &State) {
+    b.eyebrow(Key::Shortcuts, CONTENT_W - 4.0);
+    let entries = s.tiles.entries();
+    let card = b.card(entries.len() as f32 * ROW_H);
+    let shown = s.tiles.shown();
+    let last = entries.len() - 1;
+    let delete = b.t(Key::Delete);
+    for (i, (tile, on)) in entries.iter().enumerate() {
+        let y = card.y + i as f32 * ROW_H;
+        let cy = y + ROW_H / 2.0;
+        let locked = *on && shown == 1;
+        let x = b.toggle_if(Hit::TileOn(i), RIGHT, cy, *on, !locked);
+        let mut x = b.stepper(
+            x - GAP,
+            cy,
+            (i + 1).to_string(),
+            Hit::TileMove(i, -1),
+            Hit::TileMove(i, 1),
+            (i > 0, i < last),
+            true,
+        );
+        let (label, desc) = match tile {
+            Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), None),
+            Tile::Custom(c) => {
+                let w = b.button_w(&[&delete], ButtonKind::Secondary);
+                let item = (
+                    Hit::TileRemove(i),
+                    delete.clone(),
+                    ButtonKind::Secondary,
+                    true,
+                    w,
+                );
+                x = b.buttons(x - GAP, cy, vec![item]);
+                let max_w = row_text_w(card, x);
+                let desc = tile_target(b, s.lang, c.kind, &c.target, max_w);
+                (c.label.clone(), Some((desc, Tone::Secondary)))
+            }
+        };
+        b.row_text(card, y, label, desc, false, x);
+        if i > 0 {
+            b.divider(card, y);
+        }
+    }
+    let hint = Rect {
+        x: CONTENT_X + 4.0,
+        y: b.y - CARD_GAP + 4.0,
+        w: CONTENT_W - 8.0,
+        h: 18.0,
+    };
+    let note = b.t(Key::TilesOwnHint);
+    b.text(hint, note, Font::Desc, Tone::Secondary, Align::Left);
+    b.y += 22.0;
 }
 
 /// The width left for a row's label and description, left of `control_x`.
@@ -2271,6 +2367,19 @@ mod tests {
                             p
                         } else {
                             PanelPages::default()
+                        },
+                        tiles: if locked {
+                            let mut t = ShortcutTiles::default();
+                            t.toggle(7);
+                            let own = crate::tiles::CustomTile::new(
+                                "Gmail",
+                                CustomKind::Url,
+                                "https://mail.google.com",
+                            );
+                            t.add(own.expect("valid"));
+                            t
+                        } else {
+                            ShortcutTiles::default()
                         },
                         version: "2.1.0",
                         data_dir: r"%APPDATA%\Vale",

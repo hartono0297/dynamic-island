@@ -10,6 +10,7 @@ use crate::i18n::Lang;
 use crate::pages::PageEntry;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
+use crate::tiles::TileEntry;
 use crate::ui::robot::{Motion, clamp_sleep};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +98,10 @@ pub struct Config {
     /// means the default (all nine); `pages::PanelPages` fills in the rest.
     #[serde(deserialize_with = "panel_pages")]
     pub panel_pages: Vec<PageEntry>,
+    /// "Pintasan": the tiles' order, which show, and the custom ones. Empty
+    /// means the eight built-ins; `tiles::ShortcutTiles` checks and fills in.
+    #[serde(deserialize_with = "shortcut_tiles")]
+    pub shortcut_tiles: Vec<TileEntry>,
 }
 
 crate::theme::named_enum! {
@@ -277,6 +282,7 @@ impl Default for Config {
             clipboard: ClipboardSettings::default(),
             screenshot: ScreenshotSettings::default(),
             panel_pages: Vec::new(),
+            shortcut_tiles: Vec::new(),
         }
     }
 }
@@ -297,6 +303,18 @@ fn panel_pages<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PageEntry>, D::Err
     let list = value.as_array().map(Vec::as_slice).unwrap_or_default();
     Ok(list
         .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect())
+}
+
+/// `shortcut_tiles` read entry by entry, like `panel_pages`: an entry that
+/// is not an object is dropped (the others stay).
+fn shortcut_tiles<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<TileEntry>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let list = value.as_array().map(Vec::as_slice).unwrap_or_default();
+    Ok(list
+        .iter()
+        .filter(|v| v.is_object())
         .filter_map(|v| serde_json::from_value(v.clone()).ok())
         .collect())
 }
@@ -376,6 +394,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         clipboard: mem.clipboard,
         screenshot: mem.screenshot,
         panel_pages: mem.panel_pages.clone(),
+        shortcut_tiles: mem.shortcut_tiles.clone(),
         ..disk
     }
 }
@@ -660,6 +679,11 @@ mod tests {
     #[test]
     fn round_trips_through_json() {
         let c = Config {
+            shortcut_tiles: vec![TileEntry {
+                tile: "Lock".into(),
+                on: false,
+                ..TileEntry::default()
+            }],
             style: Style::Notch,
             battery_threshold: 35,
             start_with_windows: false,
@@ -1002,6 +1026,28 @@ mod tests {
         // A typo keeps the rest of the file: only the language falls back.
         let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    #[test]
+    fn shortcut_tiles_default_empty_lenient_and_belong_to_the_island() {
+        assert!(Config::default().shortcut_tiles.is_empty());
+        assert!(parse(r#"{"style":"Notch"}"#).shortcut_tiles.is_empty());
+        assert!(parse(r#"{"shortcut_tiles":"semua"}"#).shortcut_tiles.is_empty());
+        let mixed = parse(
+            r#"{"shortcut_tiles":[{"tile":"Lock","on":false},7,{"tile":"Custom","label":"Gmail","kind":"Url","target":"https://mail.google.com"}]}"#,
+        );
+        assert_eq!(mixed.shortcut_tiles.len(), 2);
+        assert!(!mixed.shortcut_tiles[0].on);
+        // An entry written by hand without "on" is shown.
+        assert!(mixed.shortcut_tiles[1].on);
+        let mem = Config {
+            shortcut_tiles: mixed.shortcut_tiles.clone(),
+            ..Config::default()
+        };
+        assert_eq!(
+            merge_owned(Config::default(), &mem).shortcut_tiles,
+            mixed.shortcut_tiles
+        );
     }
 
     #[test]

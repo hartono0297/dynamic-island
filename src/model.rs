@@ -10,6 +10,7 @@ use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pages::PanelPages;
+use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::system::SystemSample;
@@ -201,6 +202,8 @@ pub enum Event {
     Dismiss,
     /// "Halaman panel", at startup and when the settings window changes it.
     PanelPages(PanelPages),
+    /// "Pintasan", at startup and when the settings window changes it.
+    ShortcutTiles(ShortcutTiles),
     /// A folder check for screenshot `shot` ended: the Screenshots folder
     /// and the file that matched, if any. `App` keeps it, the reducer
     /// ignores it.
@@ -263,8 +266,10 @@ pub enum Hit {
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
-    /// A tile on the Pintasan page.
+    /// A built-in tile on the Pintasan page.
     Shortcut(Shortcut),
+    /// A custom tile: its place in the tiles the page shows.
+    CustomTile(usize),
     /// The CLI page's terminal: the input takes the keyboard.
     CliInput,
     /// The CLI header's Stop button (the same as Ctrl+C).
@@ -371,6 +376,8 @@ pub enum Effect {
     LyricOffset(Option<i32>),
     /// Run a shortcut once the panel has collapsed.
     RunShortcut(Shortcut),
+    /// The same for a custom tile.
+    RunCustom(CustomTile),
     /// Give the CLI input the keyboard (the island activates for it).
     FocusCliInput,
     /// The CLI input lets go of the keyboard; the window that had it

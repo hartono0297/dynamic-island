@@ -62,6 +62,7 @@ use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
 use crate::pages::PanelPages;
+use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
 use crate::shortcuts;
@@ -337,6 +338,8 @@ pub fn run(media_log_flag: bool) {
         app.apply(Event::OpenMode(open_mode), now);
         let pages = PanelPages::from_saved(&app.config.panel_pages);
         app.apply(Event::PanelPages(pages), now);
+        let tiles = ShortcutTiles::from_saved(&app.config.shortcut_tiles);
+        app.apply(Event::ShortcutTiles(tiles), now);
         app.check_fullscreen();
         app.check_battery();
         app.clip_start();
@@ -1210,6 +1213,7 @@ impl App {
             }
             // The Clipboard tile has no action: the reducer opened its page.
             Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)?),
+            Effect::RunCustom(tile) => self.queue_shortcut(shortcuts::Action::Custom(tile)),
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
             Effect::OpenCleaner => self.scan_clean(),
             Effect::CleanDelete(cats) => return self.start_clean(cats),
@@ -1890,14 +1894,10 @@ impl App {
     /// Runs `action` on `TIMER_SHORTCUT`, once the panel has collapsed;
     /// replaces a pending one, so only the last click runs.
     fn queue_shortcut(&mut self, action: shortcuts::Action) {
+        let delay = shortcuts::delay_ms(&action);
         self.shortcut = Some(action);
         unsafe {
-            SetTimer(
-                Some(self.hwnd),
-                TIMER_SHORTCUT,
-                shortcuts::delay_ms(action),
-                None,
-            );
+            SetTimer(Some(self.hwnd), TIMER_SHORTCUT, delay, None);
         }
     }
 
@@ -3026,6 +3026,11 @@ impl App {
                 // The wheel, the dots and the page shown follow at once.
                 self.apply_now(Event::PanelPages(pages));
             }
+            SettingsAction::ShortcutTiles(tiles) => {
+                self.config.shortcut_tiles = tiles.to_saved();
+                self.save_config();
+                self.apply_now(Event::ShortcutTiles(tiles));
+            }
             SettingsAction::Pomo(field, dir) => {
                 // Through the reducer like a click: state, then config.
                 self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
@@ -3166,6 +3171,7 @@ impl App {
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
             page_from: self.slide.map(|s| s.from_page),
             pages: state.pages().visible(),
+            tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
             clock: (self.config.idle_clock && self.drawn == View::Idle)
                 .then(|| Local::now().format("%H:%M").to_string()),

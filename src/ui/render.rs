@@ -72,6 +72,7 @@ use crate::reminders::Reminder;
 use crate::state::MolePhase;
 use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
+use crate::tiles::Tile;
 
 // Page drawing lives in its own file; as a child module it shares the
 // renderer's private state and helpers.
@@ -121,6 +122,8 @@ pub struct Frame<'a> {
     pub page_from: Option<Page>,
     /// The pages the dots show ("Halaman panel"), in order.
     pub pages: Vec<Page>,
+    /// The tiles the Pintasan page shows, in order.
+    pub tiles: Vec<Tile>,
     /// Island colours (surface and accent).
     pub palette: Palette,
     /// "HH:MM" drawn while the view is `Idle`; `None` when the clock is off.

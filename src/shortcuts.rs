@@ -14,11 +14,12 @@ use windows::core::{HSTRING, w};
 
 use crate::i18n::Key;
 use crate::model::Shortcut;
+use crate::tiles::{CustomKind, CustomTile};
 use crate::ui::geometry::ANIM_MS;
 use crate::ui::icons::Icon;
 
 /// How a shortcut is carried out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `ShellExecute` "open" on a URI.
     Open(&'static str),
@@ -31,6 +32,8 @@ pub enum Action {
     Lock,
     /// Explorer on a drive's root ("C:\"), from the System page.
     Drive(char),
+    /// The owner's own tile: `ShellExecute` "open" on its path or address.
+    Custom(CustomTile),
 }
 
 /// A drive's root as Explorer takes it: "C:\".
@@ -50,6 +53,15 @@ pub fn shortcut_action(s: Shortcut) -> Option<Action> {
         Shortcut::WindowsSettings => Action::Open("ms-settings:"),
         Shortcut::Lock => Action::Lock,
     })
+}
+
+/// The icon of a custom tile, by what it opens.
+pub fn custom_icon(kind: CustomKind) -> Icon {
+    match kind {
+        CustomKind::App => Icon::Grid,
+        CustomKind::Folder => Icon::Folder,
+        CustomKind::Url => Icon::Globe,
+    }
 }
 
 /// The tile's label.
@@ -83,7 +95,7 @@ pub fn icon(s: Shortcut) -> Icon {
 /// Milliseconds between the click and the action: long enough for the
 /// foreground window to have the keyboard again; a screen clip waits for
 /// the panel's collapse to finish so it is not in the picture.
-pub fn delay_ms(action: Action) -> u32 {
+pub fn delay_ms(action: &Action) -> u32 {
     match action {
         Action::Open("ms-screenclip:") => ANIM_MS as u32 + 60,
         _ => 120,
@@ -115,6 +127,18 @@ pub fn run(action: Action) {
                 None,
                 w!("open"),
                 &HSTRING::from(system_path(rel).as_os_str()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        },
+        Action::Custom(tile) => unsafe {
+            // A folder opens in Explorer; an address in the default browser
+            // or mail program; an app or file as a double click would.
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(tile.target.as_str()),
                 None,
                 None,
                 SW_SHOWNORMAL,
@@ -209,17 +233,25 @@ mod tests {
     }
 
     #[test]
+    fn custom_tiles_get_an_icon_by_what_they_open() {
+        let icons = CustomKind::ALL.map(custom_icon);
+        assert_eq!(icons, [Icon::Grid, Icon::Folder, Icon::Globe]);
+    }
+
+    #[test]
     fn actions_wait_for_the_collapse() {
         let screenshot = shortcut_action(Shortcut::Screenshot).expect("an action");
-        assert!(u64::from(delay_ms(screenshot)) > ANIM_MS, "after the morph");
+        assert!(u64::from(delay_ms(&screenshot)) > ANIM_MS, "after the morph");
         for s in Shortcut::ALL {
             let Some(action) = shortcut_action(s) else {
                 continue;
             };
-            let ms = delay_ms(action);
+            let ms = delay_ms(&action);
             assert!((100..=400).contains(&ms), "{s:?}: {ms}");
         }
-        assert_eq!(delay_ms(Action::Drive('C')), 120);
+        assert_eq!(delay_ms(&Action::Drive('C')), 120);
+        let own = CustomTile::new("Gmail", CustomKind::Url, "https://mail.google.com").unwrap();
+        assert_eq!(delay_ms(&Action::Custom(own)), 120);
         assert_eq!(drive_root('D'), r"D:\");
     }
 }

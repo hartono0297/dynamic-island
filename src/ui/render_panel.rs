@@ -36,6 +36,7 @@ use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
+use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
@@ -531,7 +532,7 @@ impl Renderer {
                     image,
                 ))
             }
-            Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip)),
+            Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip, &frame.tiles)),
         }
     }
 
@@ -575,7 +576,7 @@ impl Renderer {
             PageLayout::Cli(l) => self.paint_cli(l, frame),
             PageLayout::Clipboard(l) => self.paint_clipboard(l, &frame.clip),
             PageLayout::Shortcuts(l) => {
-                self.paint_shortcuts(l);
+                self.paint_shortcuts(l, &frame.tiles);
                 Ok(())
             }
         }
@@ -2054,17 +2055,20 @@ impl Renderer {
         Ok(Some(bitmap))
     }
 
-    /// Two rows of tiles: a duotone icon over its label.
-    fn paint_shortcuts(&self, l: &ShortcutsLayout) {
+    /// Rows of tiles: a duotone icon over its label.
+    fn paint_shortcuts(&self, l: &ShortcutsLayout, tiles: &[Tile]) {
         let lang = i18n::lang();
         let heading = text(lang, Key::Shortcuts);
         self.heading(heading, l.header);
-        for (s, tile) in l.tiles {
+        for ((_, rect), tile) in l.tiles.iter().zip(tiles) {
             self.set_color(self.palette.raised, 1.0);
-            self.fill_round(tile, radius::TILE);
-            let (glyph, label) = tile_parts(tile);
-            self.icon(shortcuts::icon(s), glyph, 24.0, 1.0, true);
-            let name = text(lang, shortcuts::label(s));
+            self.fill_round(*rect, radius::TILE);
+            let (glyph, label) = tile_parts(*rect);
+            let (icon, name) = match tile {
+                Tile::Builtin(s) => (shortcuts::icon(*s), text(lang, shortcuts::label(*s))),
+                Tile::Custom(c) => (shortcuts::custom_icon(c.kind), c.label.as_str()),
+            };
+            self.icon(icon, glyph, 24.0, 1.0, true);
             self.text(name, &self.fonts.eleven_center, label, 1.0);
         }
     }

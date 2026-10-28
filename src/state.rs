@@ -14,6 +14,7 @@ use crate::model::{
 };
 use crate::mole::MoleOpts;
 use crate::pages::PanelPages;
+use crate::tiles::{ShortcutTiles, Tile};
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 use crate::ui::geometry::ANIM_MS;
 
@@ -208,6 +209,8 @@ pub struct IslandState {
     page: Page,
     /// "Halaman panel": the order the wheel walks and the pages it skips.
     pages: PanelPages,
+    /// "Pintasan": the tiles the Pintasan page shows.
+    tiles: ShortcutTiles,
     /// Wheel delta not yet worth a whole page; cleared when the panel closes.
     wheel: i32,
     notes_page: usize,
@@ -263,6 +266,7 @@ impl IslandState {
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
             pages: PanelPages::default(),
+            tiles: ShortcutTiles::default(),
             wheel: 0,
             notes_page: 0,
             reminders_page: 0,
@@ -474,6 +478,7 @@ impl IslandState {
             Event::CleanFinished => self.clean_busy = false,
             Event::CleanModeSetting(mode) => self.clean_mode = mode,
             Event::PanelPages(pages) => self.set_pages(pages),
+            Event::ShortcutTiles(tiles) => self.tiles = tiles,
             Event::MoleFound(found) => self.mole_found(found, &mut effects),
             Event::MolePreviewed { opts, ok } => {
                 if self.mole == MolePhase::Scanning(opts) {
@@ -1079,6 +1084,11 @@ impl IslandState {
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
+            Hit::CustomTile(i) => {
+                if let Some(Tile::Custom(c)) = self.tiles.visible().get(i) {
+                    self.collapse_for(Effect::RunCustom(c.clone()), effects);
+                }
+            }
             // A process row opens Task Manager the way its tile does; a
             // drive opens Explorer there. Both get the panel out of the way.
             Hit::SystemProcess => {
@@ -1446,6 +1456,11 @@ impl IslandState {
     /// "Halaman panel": the order and the pages shown.
     pub fn pages(&self) -> &PanelPages {
         &self.pages
+    }
+
+    /// "Pintasan": the tiles the page shows, in order.
+    pub fn tiles(&self) -> Vec<Tile> {
+        self.tiles.visible()
     }
 
     /// The sticky notice (Claude waiting or a due reminder) to show at the top
@@ -4316,6 +4331,29 @@ mod tests {
         );
         assert!(!s.lyrics_on());
         assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn a_custom_tile_collapses_the_panel_and_runs_that_tile() {
+        use crate::tiles::{CustomKind, CustomTile};
+        let t0 = Instant::now();
+        let mut s = st();
+        let own = CustomTile::new("Gmail", CustomKind::Url, "https://mail.google.com").unwrap();
+        let mut tiles = ShortcutTiles::default();
+        tiles.toggle(0);
+        tiles.add(own.clone());
+        s.apply(Event::ShortcutTiles(tiles), t0);
+        // Shown: seven built-in tiles (one off), then Gmail at place 7.
+        assert_eq!(s.tiles().len(), 8);
+        open_on(&mut s, Page::Shortcuts, t0);
+        let effects = s.apply(Event::Click(Hit::CustomTile(7)), t0);
+        assert_eq!(effects, vec![Effect::RunCustom(own)]);
+        // A place that is not a custom tile, or past the end: nothing.
+        let mut s2 = st();
+        s2.apply(Event::ShortcutTiles(ShortcutTiles::default()), t0);
+        open_on(&mut s2, Page::Shortcuts, t0);
+        assert!(s2.apply(Event::Click(Hit::CustomTile(0)), t0).is_empty());
+        assert!(s2.apply(Event::Click(Hit::CustomTile(40)), t0).is_empty());
     }
 
     #[test]

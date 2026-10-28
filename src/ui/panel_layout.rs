@@ -10,6 +10,7 @@ use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, Section};
 use crate::model::{CalView, Hit, Page, Shortcut};
+use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::reminders::{Reminder, local_time};
@@ -174,13 +175,14 @@ pub const CLI_TERM_RADIUS: f32 = 16.0;
 /// A suggestion row's height.
 pub const CLI_SUGGEST_ROW: f32 = 30.0;
 
-/// The Pintasan page: two rows of four tiles.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The Pintasan page: up to three rows of four tiles.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShortcutsLayout {
     /// "Pintasan".
     pub header: Rect,
-    /// In `Shortcut::ALL` order, row by row.
-    pub tiles: [(Shortcut, Rect); 8],
+    /// In the order the page shows them, row by row: the built-in tile it
+    /// is, or `None` for a custom one (its index here is its `Hit`).
+    pub tiles: Vec<(Option<Shortcut>, Rect)>,
 }
 
 /// A button on the selected Clipboard card.
@@ -1912,20 +1914,29 @@ pub fn clipboard_layout(
     }
 }
 
-pub fn shortcuts_layout(s: ShapeRect, strip: bool) -> ShortcutsLayout {
+pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
     let (l, r) = (left(s), right(s));
     let header = rect(l, top, r - l, HEADER_H);
     let body = header.bottom() + 8.0;
     let w = (r - l - 3.0 * TILE_GAP) / 4.0;
-    let h = ((bottom - body - TILE_GAP) / 2.0).min(TILE_MAX_H);
-    let y0 = body + ((bottom - body) - (2.0 * h + TILE_GAP)) / 2.0;
-    let tiles = std::array::from_fn(|i| {
-        let (row, col) = ((i / 4) as f32, (i % 4) as f32);
-        let x = l + col * (w + TILE_GAP);
-        (Shortcut::ALL[i], rect(x, y0 + row * (h + TILE_GAP), w, h))
-    });
+    let rows = tiles.len().div_ceil(4).max(1) as f32;
+    let h = ((bottom - body - (rows - 1.0) * TILE_GAP) / rows).min(TILE_MAX_H);
+    let y0 = body + ((bottom - body) - (rows * h + (rows - 1.0) * TILE_GAP)) / 2.0;
+    let tiles = tiles
+        .iter()
+        .enumerate()
+        .map(|(i, tile)| {
+            let (row, col) = ((i / 4) as f32, (i % 4) as f32);
+            let x = l + col * (w + TILE_GAP);
+            let builtin = match tile {
+                Tile::Builtin(s) => Some(*s),
+                Tile::Custom(_) => None,
+            };
+            (builtin, rect(x, y0 + row * (h + TILE_GAP), w, h))
+        })
+        .collect();
     ShortcutsLayout { header, tiles }
 }
 
@@ -2437,8 +2448,8 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             }
         }
         PageLayout::Shortcuts(l) => {
-            for (s, r) in l.tiles {
-                add(r, Hit::Shortcut(s));
+            for (i, (builtin, r)) in l.tiles.iter().enumerate() {
+                add(*r, builtin.map_or(Hit::CustomTile(i), Hit::Shortcut));
             }
         }
         PageLayout::Cleaner(l) => {
@@ -2693,10 +2704,12 @@ mod tests {
             let l = clipboard_layout(s, strip, &ids, ids.get(4).copied(), scroll, |id| id == 2);
             out.push((format!("clipboard {n} s{scroll}"), PageLayout::Clipboard(l)));
         }
-        out.push((
-            "shortcuts".into(),
-            PageLayout::Shortcuts(shortcuts_layout(s, strip)),
-        ));
+        for n in [1, 5, 8, 12] {
+            out.push((
+                format!("shortcuts {n}"),
+                PageLayout::Shortcuts(shortcuts_layout(s, strip, &sample_tiles(n))),
+            ));
+        }
         for (drives, procs) in [(&[][..], 0), (&['C', 'D'][..], 3), (&SIX_DRIVES[..], 3)] {
             let l = system_layout(s, strip, &SYS_HEAD, drives, procs);
             out.push((format!("system {drives:?}"), PageLayout::System(l)));
@@ -3901,10 +3914,30 @@ mod tests {
         assert_eq!(r[1], region(explorer.chips[1], Hit::CliFolder));
         assert_eq!(r.len(), 4);
 
-        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false)), false);
+        let tiles = sample_tiles(8);
+        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &tiles)), false);
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
         let want: Vec<Hit> = Shortcut::ALL.into_iter().map(Hit::Shortcut).collect();
         assert_eq!(hits, want);
+        // A custom tile answers with its place among the tiles shown.
+        let mixed = sample_tiles(10);
+        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &mixed)), false);
+        assert_eq!(r[7].hit, Hit::Shortcut(Shortcut::Lock));
+        assert_eq!(r[8].hit, Hit::CustomTile(8));
+        assert_eq!(r[9].hit, Hit::CustomTile(9));
+    }
+
+    /// `n` tiles: the eight built-in ones first, then custom ones.
+    fn sample_tiles(n: usize) -> Vec<Tile> {
+        use crate::tiles::{CustomKind, CustomTile};
+        (0..n)
+            .map(|i| match Shortcut::ALL.get(i) {
+                Some(s) => Tile::Builtin(*s),
+                None => Tile::Custom(
+                    CustomTile::new(&format!("T{i}"), CustomKind::App, "a.exe").expect("valid"),
+                ),
+            })
+            .collect()
     }
 
     #[test]
@@ -3912,9 +3945,9 @@ mod tests {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
             for strip in [false, true] {
-                let l = shortcuts_layout(s, strip);
-                let order: Vec<Shortcut> = l.tiles.iter().map(|(t, _)| *t).collect();
-                assert_eq!(order, Shortcut::ALL);
+                let l = shortcuts_layout(s, strip, &sample_tiles(8));
+                let order: Vec<Option<Shortcut>> = l.tiles.iter().map(|(t, _)| *t).collect();
+                assert_eq!(order, Shortcut::ALL.map(Some));
                 let first = l.tiles[0].1;
                 assert!(first.h >= 60.0, "{style:?} strip={strip}: {first:?}");
                 assert!(first.y >= l.header.bottom());
@@ -3932,6 +3965,31 @@ mod tests {
                 assert!((l.tiles[3].1.right() - right(s)).abs() < 0.01);
                 assert_eq!(l.tiles[1].1.x - first.right(), 10.0);
                 assert_eq!(l.tiles[4].1.y - first.bottom(), 10.0);
+            }
+        }
+    }
+
+    #[test]
+    fn shortcut_tiles_wrap_to_rows_and_fit_up_to_twelve() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                for n in [1, 4, 5, 9, 12] {
+                    let l = shortcuts_layout(s, strip, &sample_tiles(n));
+                    assert_eq!(l.tiles.len(), n);
+                    let first = l.tiles[0].1;
+                    for (i, (_, t)) in l.tiles.iter().enumerate() {
+                        assert_eq!((t.w, t.h), (first.w, first.h), "{n}: equal tiles");
+                        assert!(t.y >= l.header.bottom(), "{n}: under the header");
+                        assert!(t.bottom() <= content_bottom(s) + 0.01, "{n}: inside");
+                        assert_eq!(t.x, l.tiles[i % 4].1.x, "{n}: columns line up");
+                        let (glyph, label) = tile_parts(*t);
+                        assert!(
+                            glyph.y >= t.y - 0.01 && label.bottom() <= t.bottom() + 0.01,
+                            "{style:?} strip={strip} n={n}: icon and label inside {t:?}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -4332,8 +4390,8 @@ mod tests {
                         }
                         PageLayout::Shortcuts(l) => {
                             drawn.push(l.header);
-                            for (_, tile) in l.tiles {
-                                let (glyph, label) = tile_parts(tile);
+                            for (_, tile) in &l.tiles {
+                                let (glyph, label) = tile_parts(*tile);
                                 drawn.extend([glyph, label]);
                             }
                         }

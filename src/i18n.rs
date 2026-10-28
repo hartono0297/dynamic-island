@@ -342,6 +342,12 @@ keys! {
 
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
+    // Settings → Tampilan → Pintasan.
+    TileKindApp => "Aplikasi", "App";
+    TileKindFolder => "Folder", "Folder";
+    TileKindUrl => "Alamat web", "Web address";
+    TilesOwnHint => "Tile sendiri: tambahkan di config.json (lihat README)",
+        "Your own tiles: add them in config.json (see the README)";
     ShortcutScreenshot => "Screenshot", "Screenshot";
     ShortcutClipboard => "Clipboard", "Clipboard";
     ShortcutEmoji => "Emoji", "Emoji";

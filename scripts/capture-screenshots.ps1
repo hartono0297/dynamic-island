@@ -168,6 +168,7 @@ $shots = @(
     @{ name = 'notes'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notes-4' } }
     @{ name = 'music'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media' } }
     @{ name = 'music-lyrics'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media-lyrics-on' } }
+    @{ name = 'shortcuts-custom'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts-custom' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }
     # The Clipboard page (fixed data, never the real clipboard), a search,
     # and "Copied" in the notch.
@@ -212,6 +213,8 @@ $shots = @(
     @{ name = 'reminder-editor'; args = '--demo-editor reminder-weekly'; env = @{ DI_WINDOW = $Window } }
     # Appearance scrolled to its end: the assistant (Bata) rows.
     @{ name = 'settings'; args = "--settings appearance $Window en"; env = @{}; wheel = 6 }
+    # Appearance scrolled to its end with two own tiles in the Pintasan card.
+    @{ name = 'settings-tiles'; args = "--settings appearance $Window en"; env = @{ DI_TILES = '1' }; wheel = 40 }
     @{ name = 'settings-clipboard'; args = "--settings clipboard $Window en"; env = @{} }
     # Clipboard scrolled to its end: the screenshot preview's card.
     @{ name = 'settings-screenshot'; args = "--settings clipboard $Window en"; env = @{}; wheel = 6 }

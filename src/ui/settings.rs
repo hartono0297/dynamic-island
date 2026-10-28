@@ -79,6 +79,7 @@ use crate::google::client;
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pages::PanelPages;
+use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoSettings;
 use crate::sources::battery::read_battery;
 use crate::theme::{self, Accent, Surface, WindowPalette, WindowTheme};
@@ -130,6 +131,8 @@ pub enum Action {
     MoleProtect(bool),
     /// "Halaman panel": the whole new order and on/off list.
     PanelPages(PanelPages),
+    /// "Pintasan": the whole new tile list.
+    ShortcutTiles(ShortcutTiles),
     DndHelp,
     Pomo(PomoField, i32),
     SaveGoogle {
@@ -149,6 +152,19 @@ fn page_action(pages: &PanelPages, hit: Hit) -> Option<PanelPages> {
     let changed = match hit {
         Hit::PageOn(p) => next.toggle(p),
         Hit::PageMove(p, d) => next.move_by(p, d),
+        _ => false,
+    };
+    changed.then_some(next)
+}
+
+/// "Pintasan": the tiles after a click on a tile's toggle, order stepper or
+/// "Hapus", or `None` when it changes nothing (or is not such a click).
+fn tile_action(tiles: &ShortcutTiles, hit: Hit) -> Option<ShortcutTiles> {
+    let mut next = tiles.clone();
+    let changed = match hit {
+        Hit::TileOn(i) => next.toggle(i),
+        Hit::TileMove(i, d) => next.move_by(i, d),
+        Hit::TileRemove(i) => next.remove(i),
         _ => false,
     };
     changed.then_some(next)
@@ -197,6 +213,8 @@ pub struct Model {
     pub shot: ScreenshotSettings,
     /// "Halaman panel".
     pub pages: PanelPages,
+    /// "Pintasan".
+    pub tiles: ShortcutTiles,
 }
 
 impl Model {
@@ -230,6 +248,7 @@ impl Model {
             clip_hotkey_failed: false,
             shot: cfg.screenshot,
             pages: PanelPages::from_saved(&cfg.panel_pages),
+            tiles: ShortcutTiles::from_saved(&cfg.shortcut_tiles),
         }
     }
 }
@@ -972,6 +991,7 @@ impl Settings {
             clip_hotkey_failed: m.clip_hotkey_failed,
             shot: m.shot,
             pages: m.pages.clone(),
+            tiles: m.tiles.clone(),
             version: env!("CARGO_PKG_VERSION"),
             data_dir: &self.data_label,
         }
@@ -1349,6 +1369,12 @@ impl Settings {
                 Some(pages) => post(Action::PanelPages(pages)),
                 None => Vec::new(),
             },
+            Hit::TileOn(_) | Hit::TileMove(..) | Hit::TileRemove(_) => {
+                match tile_action(&m.tiles, hit) {
+                    Some(tiles) => post(Action::ShortcutTiles(tiles)),
+                    None => Vec::new(),
+                }
+            }
             Hit::DndHelp => post(Action::DndHelp),
             Hit::Pomo(field, dir) => post(Action::Pomo(field, dir)),
             Hit::GoogleSave => {
@@ -1970,6 +1996,7 @@ pub fn run_demo(args: &[String]) {
             Action::RamWarn(v) => m.ram_warn_percent = v,
             Action::MoleProtect(v) => m.mole_protect = v,
             Action::PanelPages(v) => m.pages = v,
+            Action::ShortcutTiles(v) => m.tiles = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
                 let v = match field {
@@ -2051,7 +2078,21 @@ pub fn run_demo(args: &[String]) {
         _ => CalStatus::Ok,
     };
     let configured = calendar != CalStatus::NotConfigured;
-    let cfg = Config::default();
+    let mut cfg = Config::default();
+    if env("DI_TILES") == "1" {
+        // Two own tiles among the built-in ones, as the Pintasan card shows.
+        let own = |label: &str, kind: &str, target: &str| crate::tiles::TileEntry {
+            tile: "Custom".into(),
+            on: true,
+            label: label.into(),
+            kind: kind.into(),
+            target: target.into(),
+        };
+        cfg.shortcut_tiles = vec![
+            own("Gmail", "Url", "https://mail.google.com"),
+            own("Proyek", "Folder", "D:/Proyek/rumah-kemang"),
+        ];
+    }
     let model = Model {
         accent,
         window,

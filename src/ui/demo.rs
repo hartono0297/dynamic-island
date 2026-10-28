@@ -78,6 +78,7 @@ use crate::reminders::{Reminder, Repeat};
 use crate::state::MolePhase;
 use crate::system::{Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice};
 use crate::theme::{self, Accent, Palette, Surface};
+use crate::tiles::{CustomKind, CustomTile, ShortcutTiles};
 
 const PHASE: Duration = Duration::from_millis(2000);
 /// The design's track position, 1:42 of 3:58 (about 43 %).
@@ -113,6 +114,8 @@ struct Scene {
     lyric_at: u64,
     /// "Lirik di notch" is on (the Musik page's button).
     lyrics_on: bool,
+    /// The Pintasan page with custom tiles among the built-in ones.
+    custom_tiles: bool,
     /// What the CLI page's card shows.
     cli: CliDemo,
     /// The track with very long names instead of the design's.
@@ -286,6 +289,7 @@ const BASE: Scene = Scene {
     strip: false,
     lyric_at: 2_000,
     lyrics_on: false,
+    custom_tiles: false,
     cli: CliDemo::Empty,
     long_media: false,
     robot: None,
@@ -379,7 +383,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 80] = [
+const SCENES: [Scene; 81] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -483,6 +487,10 @@ const SCENES: [Scene; 80] = [
         ..panel("media-lyrics-on", Page::Media)
     },
     // Fixed figures (keputusan-v3.1.html p4); never the real machine.
+    Scene {
+        custom_tiles: true,
+        ..panel("shortcuts-custom", Page::Shortcuts)
+    },
     panel("system", Page::System),
     Scene {
         system_low: true,
@@ -1056,6 +1064,7 @@ fn run_scenes(scenes: &[Scene]) {
                     from.map(|j| Page::ALL[j])
                 },
                 pages: Page::ALL.to_vec(),
+                tiles: scene_tiles(&scene),
                 palette,
                 clock: match scene.clock {
                     Some(fixed) => Some(fixed.to_owned()),
@@ -2001,4 +2010,26 @@ unsafe extern "system" fn wnd_proc(
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
+}
+
+/// The Pintasan page's tiles: the built-in eight, or a made-up own set (a
+/// few built-ins, a web address, a folder, an app) for the custom scene.
+fn scene_tiles(scene: &Scene) -> Vec<crate::tiles::Tile> {
+    let mut tiles = ShortcutTiles::default();
+    if scene.custom_tiles {
+        for i in [7, 6, 5, 4] {
+            tiles.toggle(i);
+        }
+        for (label, kind, target) in [
+            ("Gmail", CustomKind::Url, "https://mail.google.com"),
+            ("Proyek", CustomKind::Folder, r"D:\Proyek"),
+            ("Editor", CustomKind::App, r"C:\Tools\editor.exe"),
+            ("Docs", CustomKind::Url, "https://docs.google.com"),
+        ] {
+            if let Some(tile) = CustomTile::new(label, kind, target) {
+                tiles.add(tile);
+            }
+        }
+    }
+    tiles.visible()
 }

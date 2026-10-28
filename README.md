@@ -48,7 +48,16 @@ On first run, Windows asks for access to your notifications: allow it.
 - **Clipboard:** a history of what you copy (text, links, colours, files and images), searchable, with pins, in the panel. Password managers' copies are never kept. The history can be kept across restarts (encrypted with Windows DPAPI) or in memory only, and an optional hotkey (Ctrl+Alt+V or Win+Alt+V) opens it.
 - **Screenshot preview:** after PrtSc or Win+Shift+S the notch shows the shot with *Copy again*, *Keep* and *Delete* (to the Recycle Bin, and the clipboard is emptied). What an ignored preview does is set in Settings → Clipboard; the default keeps the file.
 - **System:** CPU, RAM and disk use on their own page, with one-time warnings when a drive runs low or RAM stays high.
-- **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen.
+- **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen. Settings → Appearance → *Shortcuts* turns tiles on or off and puts them in your order (up to twelve show, four per row). Your own tiles (an app, a folder, a web address) go into `config.json`; *Delete* in the same card removes one:
+  ```json
+  "shortcut_tiles": [
+    { "tile": "Screenshot", "on": true },
+    { "tile": "Custom", "label": "Gmail", "kind": "Url", "target": "https://mail.google.com" },
+    { "tile": "Custom", "label": "Projects", "kind": "Folder", "target": "D:\Projects" },
+    { "tile": "Custom", "label": "Editor", "kind": "App", "target": "C:\Tools\editor.exe" }
+  ]
+  ```
+  `kind` is `App`, `Folder` or `Url` (only `http`, `https` and `mailto` addresses); a label has up to 14 characters, at most eight own tiles. Entries that do not pass are left out; built-in tiles you don't list come back at the end of their place.
 - **Clean up:** from the System page, measure and clean temp files and logs, browser and app caches, developer caches, Autodesk and Adobe caches, old installers in Downloads and old logs beside your own files (both to the Recycle Bin) and Windows Update leftovers (asks for admin through UAC). You tick what goes, and the button asks once more before anything is deleted; only files the scan counted are deleted. Open browsers and files in use are skipped and reported; the island reports the free space it measured afterwards.
 - **Clean up with Mole (experimental):** the cleaner's second mode, *Automatic · Mole*, hands the clean to [Mole for Windows](https://github.com/tw93/Mole/tree/windows) if you installed it yourself (see [Mole](#mole) below).
 - **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed. The CLI starts in the folder of the last active Explorer window (or in your last folder, Settings → General), and its folder chip opens a menu of open Explorer windows, favourites and recent folders.
