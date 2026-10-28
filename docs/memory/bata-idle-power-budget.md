@@ -52,6 +52,25 @@ The screenshot preview ([[screenshot-preview]]) adds `TIMER_SHOT_RETRY`
 (23), a one-shot that runs at most twice after a new clipboard image; its
 folder looks run on short-lived threads, never a watcher.
 
+## Pointer polls (v3.2.1 review, 2026-10-29)
+
+A measured review found ~78 main-thread wake-ups a second at idle (v3.1.0:
+~15); the 50 ms halo poll was ~55 of them. The three pointer polls now use
+`SetCoalescableTimer` (slack `timer_slack`: half the interval, ≤ 30 ms), are
+paced by pure helpers (tested), and all pause while the session is locked or
+the display is off (`screen_away`: `WTS_SESSION_LOCK` and
+`GUID_CONSOLE_DISPLAY_STATE` via `RegisterPowerSettingNotification`, both
+calling `sync_pointer_polls`).
+
+| Timer | Before | Now |
+|---|---|---|
+| `TIMER_HALO` (30) | 50 ms whenever the island was up, not a panel | none at idle; after a trigger ([[shelf]]): 250 ms, 50 ms only with the left button down within 300 dip; stops after 3 s near without a press, or at once away |
+| `TIMER_OUTSIDE` (24) | 40 ms while a panel is kept open (can be hours) | 40 ms with input in the last second, else 250 ms (`outside_poll_ms`, `GetLastInputInfo`); a `WM_MOUSEMOVE` speeds it up at once |
+| `TIMER_BEHIND` (29) | 80 ms while "Di belakang jendela" is on | 80 ms near the top edge (150 dip) or while lowering is due, else 350 ms (`behind::poll_ms`) |
+
+So an idle island, pointer elsewhere, runs none of them (with stay-behind on:
+~3 a second). Not measured again after the change.
+
 Gotcha: the System page and the clipboard were built in parallel runs and
 both took ids 17 and 18; the merge moved the clipboard's to 20–22.
 `app::tests::timer_ids_never_collide` now checks every id.

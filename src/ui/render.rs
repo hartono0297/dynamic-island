@@ -48,7 +48,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, SHOULDER,
-    ShapeRect, badge_letter, badge_style, compact_layout, compact_layout_robot, corner_radius,
+    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot, corner_radius,
     equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot, lyric_overflow,
     notice_action, notice_action_w, notice_layout, shot_fit, shot_layout, shot_regions,
 };
@@ -519,7 +519,7 @@ pub struct Renderer {
     art: Vec<CachedArt>,
     regions: HitRegions,
     scale: f32,
-    /// The faint drag margin is drawn (`halo::halo_wanted`).
+    /// The faint drag margin is drawn (`App::on_halo_poll`).
     halo: bool,
     /// Round caps for the pomodoro progress arcs.
     round_cap: ID2D1StrokeStyle,
@@ -969,6 +969,13 @@ impl Renderer {
         self.regions.hit(x / self.scale, y / self.scale)
     }
 
+    /// What a client point in physical pixels is over: a drawn island pixel
+    /// (shoulders and anti-aliased edge included), only the drag margin, or
+    /// nothing.
+    pub fn under(&self, x: f32, y: f32) -> Under {
+        self.regions.under(x / self.scale, y / self.scale)
+    }
+
     /// Whether the wheel at this client point (physical pixels) scrolls the
     /// CLI output rather than the pages.
     pub fn over_cli_output(&self, x: f32, y: f32) -> bool {
@@ -1127,16 +1134,15 @@ impl Renderer {
             // draws, and the top edge of the screen is where one aims.
             if self.halo && !matches!(view, View::Panel(_) | View::Hidden) {
                 let r = shape_rect(shape);
+                let halo = Rect {
+                    x: r.x - HALO_SIDE,
+                    y: 0.0,
+                    w: r.w + 2.0 * HALO_SIDE,
+                    h: r.bottom() + HALO_BELOW,
+                };
                 target.brush.SetColor(&color(0x000000, HALO_ALPHA));
-                target.rt.FillRectangle(
-                    &d2d_rect(Rect {
-                        x: r.x - HALO_SIDE,
-                        y: 0.0,
-                        w: r.w + 2.0 * HALO_SIDE,
-                        h: r.bottom() + HALO_BELOW,
-                    }),
-                    &target.brush,
-                );
+                target.rt.FillRectangle(&d2d_rect(halo), &target.brush);
+                self.regions.halo = Some(halo);
             }
             target.brush.SetColor(&color(self.palette.surface, 1.0));
             match style {
