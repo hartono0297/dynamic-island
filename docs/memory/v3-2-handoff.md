@@ -24,7 +24,7 @@ tiles in Settings (config.json for now) and a "Perintah" tile kind.
 secrets (login without Cloud Console for users depends on it); install
 superpowers (`claude plugin install superpowers@claude-plugins-official
 --scope user`; the classifier denied the agent); decide the search hotkey
-default (Off now), the open-mode default (Hover now) and the cat variant.
+default (done in 3.2.1: Ctrl+Alt+Space), the open-mode default (Hover now) and the cat variant.
 
 **Needs live checks** (the code was written and unit-tested, never run against
 the real thing): Windows clipboard formats of Snipping Tool and the preview;
