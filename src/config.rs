@@ -42,6 +42,10 @@ pub struct Config {
     /// While music plays, the compact island shows the current synced lyric
     /// line (looked up at lrclib.net) instead of the artist.
     pub lyrics: bool,
+    /// The lyric line moves this many ms later (positive) or earlier, kept in
+    /// `lyrics::OFFSET_RANGE`; the Music page nudges it 0.1 s at a time.
+    #[serde(deserialize_with = "lyrics_offset")]
+    pub lyrics_offset_ms: i32,
     /// The shell the CLI page runs commands in.
     pub cli_shell: Shell,
     /// Where the CLI page starts when it opens: the last active Explorer
@@ -255,6 +259,7 @@ impl Default for Config {
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
+            lyrics_offset_ms: 0,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
             open_mode: OpenMode::Hover,
@@ -274,6 +279,14 @@ impl Default for Config {
             panel_pages: Vec::new(),
         }
     }
+}
+
+/// Any number, kept in `OFFSET_RANGE`; a non-number is 0.
+fn lyrics_offset<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let (min, max, _) = crate::lyrics::OFFSET_RANGE;
+    Ok(v.as_f64()
+        .map_or(0, |n| n.clamp(f64::from(min), f64::from(max)).round() as i32))
 }
 
 /// `panel_pages` read entry by entry: anything that is not a list, and any
@@ -348,6 +361,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         window_theme: mem.window_theme,
         idle_clock: mem.idle_clock,
         lyrics: mem.lyrics,
+        lyrics_offset_ms: mem.lyrics_offset_ms,
         cli_shell: mem.cli_shell,
         cli_start: mem.cli_start,
         open_mode: mem.open_mode,
@@ -665,6 +679,7 @@ mod tests {
             window_theme: WindowTheme::Light,
             idle_clock: false,
             lyrics: true,
+            lyrics_offset_ms: -300,
             cli_shell: Shell::Cmd,
             cli_start: CliStart::Last,
             open_mode: OpenMode::Click,
@@ -987,6 +1002,23 @@ mod tests {
         // A typo keeps the rest of the file: only the language falls back.
         let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    #[test]
+    fn the_lyric_offset_is_kept_in_range_and_read_from_old_files() {
+        assert_eq!(Config::default().lyrics_offset_ms, 0);
+        assert_eq!(parse(r#"{"style":"Notch"}"#).lyrics_offset_ms, 0);
+        assert_eq!(parse(r#"{"lyrics_offset_ms":-300}"#).lyrics_offset_ms, -300);
+        // Out of range is kept in range, a non-number is none.
+        assert_eq!(parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms, 2_000);
+        assert_eq!(parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms, -2_000);
+        assert_eq!(parse(r#"{"lyrics_offset_ms":"x"}"#).lyrics_offset_ms, 0);
+        // The island's own setting: the file's stale value does not win.
+        let mem = Config {
+            lyrics_offset_ms: 400,
+            ..Config::default()
+        };
+        assert_eq!(merge_owned(Config::default(), &mem).lyrics_offset_ms, 400);
     }
 
     #[test]

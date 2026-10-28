@@ -1300,6 +1300,22 @@ pub fn run_clock(elapsed: std::time::Duration) -> String {
     }
 }
 
+/// The lyric offset: "-0,3 dtk", "+1,2 dtk", "0,0 dtk" ("-0.3 s" in English).
+/// Tenths, sign always shown but for 0; the minus is a real minus sign.
+pub fn lyric_offset(lang: Lang, ms: i32) -> String {
+    let (unit, point) = match lang {
+        Lang::Id => ("dtk", ','),
+        Lang::En => ("s", '.'),
+    };
+    let tenths = (ms.unsigned_abs() + 50) / 100;
+    let sign = match (tenths, ms.signum()) {
+        (0, _) => "",
+        (_, -1) => "\u{2212}",
+        _ => "+",
+    };
+    format!("{sign}{}{point}{} {unit}", tenths / 10, tenths % 10)
+}
+
 /// How long a finished command took: "2,1 dtk" ("2.1 s") under a minute,
 /// then "1 mnt 12 dtk" ("1 min 12 s"), from an hour "1 jam 5 mnt"
 /// ("1 h 5 min").
@@ -2982,5 +2998,22 @@ mod tests {
         let page = oauth_page(Lang::En, Key::OauthConnected);
         assert!(page.starts_with("<!doctype html><html lang=\"en\">"));
         assert!(page.contains("Connected. You can go back to the island."));
+    }
+}
+
+#[cfg(test)]
+mod lyric_offset_tests {
+    use super::*;
+
+    #[test]
+    fn the_offset_reads_in_tenths_with_the_languages_decimal_mark() {
+        assert_eq!(lyric_offset(Lang::Id, 0), "0,0 dtk");
+        assert_eq!(lyric_offset(Lang::Id, -300), "\u{2212}0,3 dtk");
+        assert_eq!(lyric_offset(Lang::Id, 1200), "+1,2 dtk");
+        assert_eq!(lyric_offset(Lang::En, -300), "\u{2212}0.3 s");
+        assert_eq!(lyric_offset(Lang::En, 2000), "+2.0 s");
+        // Off the grid rounds to a tenth; nearly 0 shows as 0 without a sign.
+        assert_eq!(lyric_offset(Lang::En, 40), "0.0 s");
+        assert_eq!(lyric_offset(Lang::En, -149), "\u{2212}0.1 s");
     }
 }

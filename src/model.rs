@@ -92,7 +92,7 @@ pub struct MediaInfo {
 
 /// Where the current track's playback was at a known moment, from the media
 /// session's timeline. While it plays, the position at `now` is `position_ms
-/// + (now − updated)` (`lyrics::position_at`).
+/// + (now − updated) × rate` (`lyrics::position_at`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timeline {
     pub position_ms: u64,
@@ -100,6 +100,8 @@ pub struct Timeline {
     pub end_ms: u64,
     /// When `position_ms` was true.
     pub updated: Instant,
+    /// The playback rate (1.0 normally; a player may play faster or slower).
+    pub rate: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,6 +256,10 @@ pub enum Hit {
     RemindersMore,
     /// The Musik page's "Lirik" button: lyrics in the notch on or off.
     LyricsToggle,
+    /// The lyric offset one step earlier (−1) or later (+1) on the Music page.
+    LyricOffset(i8),
+    /// The offset back to 0.
+    LyricOffsetReset,
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
@@ -360,6 +366,9 @@ pub enum Effect {
     ReminderDone(String),
     /// The Musik page's lyric button changed the setting; save it.
     SaveLyrics(bool),
+    /// The lyric offset one step earlier (−1) or later (+1), or back to 0
+    /// (`None`): `App` keeps it in the config and re-syncs the line.
+    LyricOffset(Option<i32>),
     /// Run a shortcut once the panel has collapsed.
     RunShortcut(Shortcut),
     /// Give the CLI input the keyboard (the island activates for it).

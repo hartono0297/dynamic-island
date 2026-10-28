@@ -309,6 +309,9 @@ pub struct ExpandedLayout {
     pub buttons: [Rect; 3],
     /// "Lirik": lyrics in the notch on or off.
     pub lyrics: Rect,
+    /// The lyric offset, left of "Lirik": earlier, the value (a click resets
+    /// it), later. Drawn only with lyrics on.
+    pub lyric_adj: [Rect; 3],
 }
 
 /// Notice: rounded badge, title over body, an optional action chip.

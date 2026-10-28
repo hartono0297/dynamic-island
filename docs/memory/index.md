@@ -37,6 +37,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[google-built-in-client]]
 - [[v3-1-handoff]]: where v3.1 stands, how to continue on another PC
 - [[open-mode]]: Mode buka (Hover, Hover & tetap, Klik) and notices with a button
+- [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
 
 ## Gotchas
 

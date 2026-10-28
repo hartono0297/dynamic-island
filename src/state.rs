@@ -645,7 +645,11 @@ impl IslandState {
                     self.timeline = Some(lyrics::rebase(t, old.playing, now));
                 }
             }
-            _ => self.lyrics_ready = false,
+            // Another track, or none: its position is not this one's.
+            _ => {
+                self.lyrics_ready = false;
+                self.timeline = None;
+            }
         }
         self.media = media;
     }
@@ -1048,6 +1052,17 @@ impl IslandState {
             Hit::LyricsToggle => {
                 self.lyrics_on = !self.lyrics_on;
                 effects.push(Effect::SaveLyrics(self.lyrics_on));
+            }
+            // The offset buttons are drawn only with lyrics on.
+            Hit::LyricOffset(dir) => {
+                if self.lyrics_on && self.view() == View::Panel(Page::Media) {
+                    effects.push(Effect::LyricOffset(Some(i32::from(dir.signum()))));
+                }
+            }
+            Hit::LyricOffsetReset => {
+                if self.lyrics_on && self.view() == View::Panel(Page::Media) {
+                    effects.push(Effect::LyricOffset(None));
+                }
             }
             // The strip shows the newest sticky notice; clicking it dismisses that one.
             Hit::Strip => {
@@ -4304,6 +4319,32 @@ mod tests {
     }
 
     #[test]
+    fn the_lyric_offset_buttons_work_only_with_lyrics_on_and_the_music_page_open() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Media, t0);
+        // Lyrics off: the buttons are not drawn, a click does nothing.
+        assert!(s.apply(Event::Click(Hit::LyricOffset(1)), t0).is_empty());
+        s.apply(Event::Click(Hit::LyricsToggle), t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricOffset(-1)), t0),
+            vec![Effect::LyricOffset(Some(-1))]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricOffset(1)), t0),
+            vec![Effect::LyricOffset(Some(1))]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::LyricOffsetReset), t0),
+            vec![Effect::LyricOffset(None)]
+        );
+        // Another page: nothing.
+        open_on(&mut s, Page::Notes, t0);
+        assert!(s.apply(Event::Click(Hit::LyricOffset(1)), t0).is_empty());
+        assert!(s.apply(Event::Click(Hit::LyricOffsetReset), t0).is_empty());
+    }
+
+    #[test]
     fn timeline_is_kept_and_rebased_on_play_pause() {
         let t0 = Instant::now();
         let mut s = st();
@@ -4312,6 +4353,7 @@ mod tests {
             position_ms: 10_000,
             end_ms: 200_000,
             updated: t0,
+            rate: 1.0,
         };
         s.apply(Event::MediaTimeline(Some(t)), t0);
         assert_eq!(s.timeline(), Some(&t));
@@ -4322,6 +4364,7 @@ mod tests {
             position_ms: 13_000,
             end_ms: 200_000,
             updated: paused,
+            rate: 1.0,
         };
         assert_eq!(s.timeline(), Some(&frozen));
         // A minute later it resumes from there.
@@ -4331,6 +4374,7 @@ mod tests {
             s.timeline(),
             Some(&Timeline {
                 updated: resumed,
+                rate: 1.0,
                 ..frozen
             })
         );

@@ -448,10 +448,19 @@ fn read_timeline(session: &Session) -> Result<Option<Timeline>> {
     }
     let updated_ticks = t.LastUpdatedTime()?.UniversalTime;
     let age = Duration::from_millis(age_ms(now_ticks(), updated_ticks));
+    // The rate the player reports (a faster or slower playback); unreadable
+    // or odd is normal speed.
+    let rate = session
+        .GetPlaybackInfo()
+        .and_then(|info| info.PlaybackRate())
+        .and_then(|r| r.Value())
+        .map_or(1.0, |r| r as f32);
+    let rate = if rate.is_finite() && rate > 0.0 { rate } else { 1.0 };
     Ok(Some(Timeline {
         position_ms,
         end_ms,
         updated: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
+        rate,
     }))
 }
 

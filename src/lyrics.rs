@@ -15,9 +15,16 @@ use crate::model::{Event, MediaInfo, Timeline};
 pub const MEMORY_SLOTS: usize = 50;
 /// A "not found" answer is trusted this long before asking again.
 pub const NEGATIVE_TTL_SECS: i64 = 24 * 3600;
-/// Positions closer than this to the predicted one are the same playback,
-/// not a seek: the media watcher sends no new timeline for them.
-pub const SEEK_TOLERANCE_MS: u64 = 750;
+/// A fresh reading closer than this to where playback was predicted is the
+/// same playback: the media watcher sends no new timeline for it. Anything
+/// farther is sent, so a reading that is more accurate than the prediction
+/// replaces it (a bias is never kept; a seek is just a large one).
+pub const RESYNC_MS: u64 = 100;
+/// The lyric line changes this much early: the crossfade (`FADE`) then ends
+/// as the word is sung, not after it.
+pub const LOOKAHEAD_MS: i64 = 150;
+/// "Offset lirik" in ms: (min, max, step). Positive shows the lines later.
+pub const OFFSET_RANGE: (i32, i32, i32) = (-2_000, 2_000, 100);
 /// Crossfade between two lyric lines.
 pub const FADE: Duration = Duration::from_millis(150);
 /// The worker waits this long for a newer query before looking one up, so a
@@ -33,6 +40,13 @@ const USER_AGENT: &str = concat!(
     " (https://github.com/hartono0297/dynamic-island)"
 );
 const API: &str = "https://lrclib.net/api/get";
+const SEARCH_API: &str = "https://lrclib.net/api/search";
+/// Not-found markers use this extension: ones written before the search
+/// fallback and the title clean-up (`.none`) are ignored, so a track they
+/// gave up on is asked again.
+const NONE_EXT: &str = "none2";
+/// A search result is the track only when its length is this close.
+const SEARCH_DURATION_MS: u64 = 3_000;
 
 /// One timed line; an empty `text` is an instrumental gap.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -161,17 +175,42 @@ pub fn has_words(lines: &[LrcLine]) -> bool {
     lines.iter().any(|l| !l.text.is_empty())
 }
 
-/// The playback position at `now`: frozen while paused, advancing in real
-/// time while playing, never past the end when the end is known.
+/// The playback position at `now`: frozen while paused, advancing at the
+/// reported rate while playing, never past the end when the end is known.
 pub fn position_at(t: &Timeline, playing: bool, now: Instant) -> u64 {
     let pos = if playing {
-        let elapsed = now.saturating_duration_since(t.updated).as_millis();
-        t.position_ms
-            .saturating_add(u64::try_from(elapsed).unwrap_or(u64::MAX))
+        let rate = f64::from(t.rate).clamp(0.1, 4.0);
+        let elapsed = now.saturating_duration_since(t.updated).as_secs_f64() * 1000.0 * rate;
+        t.position_ms.saturating_add(elapsed as u64)
     } else {
         t.position_ms
     };
     if t.end_ms > 0 { pos.min(t.end_ms) } else { pos }
+}
+
+/// The position the lyric line is chosen at: the playback position plus the
+/// user's offset (`lyrics_offset_ms`) and the lookahead, never before 0.
+pub fn lyric_position(raw_ms: u64, offset_ms: i32) -> u64 {
+    let shifted = i64::try_from(raw_ms)
+        .unwrap_or(i64::MAX)
+        .saturating_add(i64::from(offset_ms))
+        .saturating_add(LOOKAHEAD_MS);
+    u64::try_from(shifted).unwrap_or(0)
+}
+
+/// The offset one step (`dir` −1 or +1) on, kept in `OFFSET_RANGE`; a
+/// hand-edited value off the grid snaps onto it.
+pub fn step_offset(offset_ms: i32, dir: i32) -> i32 {
+    let (min, max, step) = OFFSET_RANGE;
+    let on_grid = offset_ms.div_euclid(step) * step;
+    let stepped = if dir > 0 {
+        on_grid + step
+    } else if offset_ms == on_grid {
+        on_grid - step
+    } else {
+        on_grid
+    };
+    stepped.clamp(min, max)
 }
 
 /// The same moment re-expressed at `now`: the position then, as of now. Used
@@ -182,11 +221,12 @@ pub fn rebase(t: &Timeline, was_playing: bool, now: Instant) -> Timeline {
         position_ms: position_at(t, was_playing, now),
         end_ms: t.end_ms,
         updated: now,
+        rate: t.rate,
     }
 }
 
 /// Whether a freshly read timeline differs from the one last sent: one of
-/// them missing, another length, or a position more than `SEEK_TOLERANCE_MS`
+/// them missing, another length or rate, or a position more than `RESYNC_MS`
 /// away from where the last one says playback should be.
 pub fn timeline_moved(
     last: Option<&Timeline>,
@@ -198,8 +238,9 @@ pub fn timeline_moved(
         (None, None) => false,
         (Some(a), Some(b)) => {
             a.end_ms != b.end_ms
+                || a.rate != b.rate
                 || position_at(a, playing, now).abs_diff(position_at(b, playing, now))
-                    > SEEK_TOLERANCE_MS
+                    > RESYNC_MS
         }
         _ => true,
     }
@@ -251,14 +292,93 @@ pub fn key_hash(key: &str) -> String {
 /// The LRCLIB lookup URL. The album is not sent: players report it
 /// unreliably, and the length (±2 s) already pins the recording.
 pub fn lrclib_url(q: &Query) -> String {
-    let secs = (q.duration_ms as f64 / 1000.0).clamp(1.0, 3600.0);
+    lrclib_url_for(&q.title, &q.artist, q.duration_ms)
+}
+
+/// A title as a streaming site decorates it, without the decoration:
+/// "(Official Video)", "[Lyrics]", "(Audio)", a trailing "- Remastered"
+/// and the like. Returns `title` itself when nothing is to cut.
+pub fn clean_title(title: &str) -> String {
+    const NOISE: &[&str] = &[
+        "official", "video", "music video", "lyric", "lyrics", "audio", "hd", "hq", "4k", "mv",
+        "visualizer", "visualiser", "remaster", "remastered", "live", "version",
+    ];
+    let mut out = title.trim().to_owned();
+    loop {
+        let before = out.clone();
+        for (open, close) in [('(', ')'), ('[', ']')] {
+            if out.ends_with(close)
+                && let Some(start) = out.rfind(open)
+            {
+                let inner = out[start + 1..out.len() - 1].to_lowercase();
+                if NOISE.iter().any(|n| inner.contains(n)) {
+                    out = out[..start].trim_end().to_owned();
+                }
+            }
+        }
+        if let Some((head, tail)) = out.rsplit_once(" - ")
+            && NOISE.iter().any(|n| tail.to_lowercase().contains(n))
+        {
+            out = head.trim_end().to_owned();
+        }
+        if out == before {
+            break;
+        }
+    }
+    if out.is_empty() { title.trim().to_owned() } else { out }
+}
+
+/// An artist without YouTube Music's " - Topic" suffix and a trailing
+/// "VEVO".
+pub fn clean_artist(artist: &str) -> String {
+    let a = artist.trim();
+    let a = a.strip_suffix(" - Topic").unwrap_or(a).trim_end();
+    let lower = a.to_lowercase();
+    let a = if lower.ends_with("vevo") && a.len() > 4 {
+        a[..a.len() - 4].trim_end()
+    } else {
+        a
+    };
+    if a.is_empty() { artist.trim().to_owned() } else { a.to_owned() }
+}
+
+/// The LRCLIB lookup URL for an explicit title and artist.
+fn lrclib_url_for(title: &str, artist: &str, duration_ms: u64) -> String {
+    let secs = (duration_ms as f64 / 1000.0).clamp(1.0, 3600.0);
     let duration = format!("{}", secs.round() as u64);
     let query = form_encode(&[
-        ("track_name", &q.title),
-        ("artist_name", &q.artist),
+        ("track_name", title),
+        ("artist_name", artist),
         ("duration", &duration),
     ]);
     format!("{API}?{query}")
+}
+
+/// The search fallback's URL: no length (a different version of the song has
+/// another one); `pick_search` chooses by it.
+pub fn lrclib_search_url(title: &str, artist: &str) -> String {
+    let query = form_encode(&[("track_name", title), ("artist_name", artist)]);
+    format!("{SEARCH_API}?{query}")
+}
+
+/// The synced lyrics of the search result whose length is closest to
+/// `duration_ms`, within `SEARCH_DURATION_MS`; `None` when there is none.
+pub fn pick_search(body: &str, duration_ms: u64) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    json.as_array()?
+        .iter()
+        .filter_map(|item| {
+            let lrc = item.get("syncedLyrics")?.as_str()?;
+            if parse_lrc(lrc).is_empty() {
+                return None;
+            }
+            let secs = item.get("duration")?.as_f64()?;
+            let ms = (secs * 1000.0).round() as u64;
+            let gap = ms.abs_diff(duration_ms);
+            (gap <= SEARCH_DURATION_MS).then(|| (gap, lrc.to_owned()))
+        })
+        .min_by_key(|(gap, _)| *gap)
+        .map(|(_, lrc)| lrc)
 }
 
 /// What an LRCLIB answer means.
@@ -337,7 +457,7 @@ pub enum Cached {
     Miss,
 }
 
-/// `<dir>\<hash>.lrc` holds a track's LRC; `<hash>.none` holds the Unix time
+/// `<dir>\<hash>.lrc` holds a track's LRC; `<hash>.none2` holds the Unix time
 /// a lookup found nothing, trusted for `NEGATIVE_TTL_SECS`.
 pub struct DiskCache {
     dir: PathBuf,
@@ -361,7 +481,7 @@ impl DiskCache {
         if let Ok(lrc) = std::fs::read_to_string(self.file(key, "lrc")) {
             return Cached::Lrc(lrc);
         }
-        let marker = self.file(key, "none");
+        let marker = self.file(key, NONE_EXT);
         match std::fs::read_to_string(&marker) {
             Ok(stamp) => match stamp.trim().parse::<i64>() {
                 Ok(at) if (0..NEGATIVE_TTL_SECS).contains(&(now_unix - at)) => Cached::Nothing(at),
@@ -377,11 +497,11 @@ impl DiskCache {
     /// Write errors only cost a lookup next time; they are ignored.
     pub fn write_lrc(&self, key: &str, lrc: &str) {
         let _ = write_atomic(&self.file(key, "lrc"), lrc);
-        let _ = std::fs::remove_file(self.file(key, "none"));
+        let _ = std::fs::remove_file(self.file(key, NONE_EXT));
     }
 
     pub fn write_nothing(&self, key: &str, now_unix: i64) {
-        let _ = write_atomic(&self.file(key, "none"), &now_unix.to_string());
+        let _ = write_atomic(&self.file(key, NONE_EXT), &now_unix.to_string());
     }
 }
 
@@ -644,10 +764,27 @@ fn lookup(
     let Some(client) = http.as_ref() else {
         return found(q, None, true);
     };
-    let answer = match client.get_with_headers(&lrclib_url(q), &[("User-Agent", USER_AGENT)]) {
+    let get = |url: &str| client.get_with_headers(url, &[("User-Agent", USER_AGENT)]);
+    let ask = |url: &str| match get(url) {
         Ok((status, body)) => read_answer(status, &body),
         Err(_) => Answer::Failed,
     };
+    // The track as the player names it first; then as a streaming site
+    // decorates it ("(Official Video)", " - Topic"); then a search, picking
+    // the result whose length is closest (a video's length differs from the
+    // album's by seconds, which `/api/get` does not forgive).
+    let mut answer = ask(&lrclib_url(q));
+    let (title, artist) = (clean_title(&q.title), clean_artist(&q.artist));
+    if answer == Answer::None && (title != q.title || artist != q.artist) {
+        answer = ask(&lrclib_url_for(&title, &artist, q.duration_ms));
+    }
+    if answer == Answer::None {
+        answer = match get(&lrclib_search_url(&title, &artist)) {
+            Ok((200, body)) => pick_search(&body, q.duration_ms).map_or(Answer::None, Answer::Synced),
+            Ok((404, _)) => Answer::None,
+            _ => Answer::Failed,
+        };
+    }
     keep_answer(q, answer, cache, memory, now)
 }
 
@@ -852,6 +989,7 @@ mod tests {
             position_ms,
             end_ms,
             updated,
+            rate: 1.0,
         }
     }
 
@@ -892,9 +1030,22 @@ mod tests {
         let t0 = Instant::now();
         let now = t0 + Duration::from_secs(5);
         let last = tl(10_000, 200_000, t0);
-        // The player re-reported where playback is: not a move.
-        let same = tl(15_200, 200_000, now);
+        // The player re-reported where playback is, within the tolerance:
+        // not a move. Past it (a stutter, a drift) is one.
+        let same = tl(15_080, 200_000, now);
         assert!(!timeline_moved(Some(&last), Some(&same), true, now));
+        assert!(timeline_moved(
+            Some(&last),
+            Some(&tl(15_200, 200_000, now)),
+            true,
+            now
+        ));
+        // Another playback rate is a move on its own.
+        let faster = Timeline {
+            rate: 1.25,
+            ..tl(15_000, 200_000, now)
+        };
+        assert!(timeline_moved(Some(&last), Some(&faster), true, now));
         // A seek back, a seek forward, a new length.
         assert!(timeline_moved(
             Some(&last),
@@ -918,13 +1069,69 @@ mod tests {
         assert!(timeline_moved(Some(&last), Some(&same), false, now));
         assert!(!timeline_moved(
             Some(&last),
-            Some(&tl(10_300, 200_000, now)),
+            Some(&tl(10_060, 200_000, now)),
             false,
             now
         ));
         assert!(timeline_moved(None, Some(&last), true, now));
         assert!(timeline_moved(Some(&last), None, true, now));
         assert!(!timeline_moved(None, None, true, now));
+    }
+
+    #[test]
+    fn the_lyric_position_adds_offset_and_lookahead_and_never_goes_below_zero() {
+        assert_eq!(lyric_position(10_000, 0), 10_000 + LOOKAHEAD_MS as u64);
+        assert_eq!(lyric_position(10_000, -300), 10_000 - 300 + LOOKAHEAD_MS as u64);
+        assert_eq!(lyric_position(10_000, 500), 10_000 + 500 + LOOKAHEAD_MS as u64);
+        assert_eq!(lyric_position(0, -2_000), 0);
+        assert_eq!(lyric_position(u64::MAX, 2_000), i64::MAX as u64);
+    }
+
+    #[test]
+    fn the_offset_steps_by_a_tenth_within_its_range_and_snaps_onto_the_grid() {
+        assert_eq!(step_offset(0, 1), 100);
+        assert_eq!(step_offset(0, -1), -100);
+        assert_eq!(step_offset(-100, 1), 0);
+        assert_eq!(step_offset(2_000, 1), 2_000);
+        assert_eq!(step_offset(-2_000, -1), -2_000);
+        // Hand-edited, off the grid: the next step lands on it.
+        assert_eq!(step_offset(130, 1), 200);
+        assert_eq!(step_offset(130, -1), 100);
+        assert_eq!(step_offset(-130, 1), -100);
+        assert_eq!(step_offset(-130, -1), -200);
+    }
+
+    #[test]
+    fn streaming_decoration_is_cut_from_titles_and_artists() {
+        assert_eq!(clean_title("Blinding Lights (Official Video)"), "Blinding Lights");
+        assert_eq!(clean_title("Song [Lyrics] (Audio)"), "Song");
+        assert_eq!(clean_title("Yesterday - Remastered 2009"), "Yesterday");
+        // A real part of the name stays.
+        assert_eq!(clean_title("Song (feat. Someone)"), "Song (feat. Someone)");
+        assert_eq!(clean_title("Plain Title"), "Plain Title");
+        // Never empties the title.
+        assert_eq!(clean_title("(Official Video)"), "(Official Video)");
+        assert_eq!(clean_artist("The Weeknd - Topic"), "The Weeknd");
+        assert_eq!(clean_artist("ArianaGrandeVEVO"), "ArianaGrande");
+        assert_eq!(clean_artist("Queen"), "Queen");
+        assert_eq!(clean_artist("VEVO"), "VEVO");
+    }
+
+    #[test]
+    fn the_search_fallback_picks_the_closest_length_with_synced_lyrics() {
+        let body = r#"[
+            {"duration": 200.0, "syncedLyrics": null},
+            {"duration": 190.0, "syncedLyrics": "[00:01.00] far"},
+            {"duration": 181.0, "syncedLyrics": "[00:01.00] near"},
+            {"duration": 181.5, "syncedLyrics": "not a lrc"}
+        ]"#;
+        assert_eq!(pick_search(body, 180_000).as_deref(), Some("[00:01.00] near"));
+        // Nothing within the tolerance, a non-list, junk: none.
+        assert_eq!(pick_search(body, 400_000), None);
+        assert_eq!(pick_search("{}", 180_000), None);
+        assert_eq!(pick_search("junk", 180_000), None);
+        let url = lrclib_search_url("Hello World", "A&B");
+        assert!(url.starts_with(SEARCH_API) && !url.contains("duration"), "{url}");
     }
 
     #[test]
