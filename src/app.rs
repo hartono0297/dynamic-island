@@ -61,6 +61,7 @@ use crate::media_log;
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
+use crate::audio;
 use crate::gestures;
 use crate::pages::PanelPages;
 use crate::tiles::ShortcutTiles;
@@ -171,6 +172,10 @@ const TIMER_SYSTEM_WARN: usize = 18;
 /// is shut or follows the pointer.
 const TIMER_OUTSIDE: usize = 24;
 const OUTSIDE_MS: u32 = 40;
+/// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
+/// it shows (`sync_mixer`). Nothing runs with the page shut.
+const TIMER_MIXER: usize = 26;
+const MIXER_MS: u32 = 1_000;
 const SYSTEM_PAGE_MS: u32 = 2_000;
 const SYSTEM_WARN_MS: u32 = 300_000;
 const CLI_MS: u32 = 1000;
@@ -286,6 +291,11 @@ pub fn run(media_log_flag: bool) {
             eq_timer: false,
             outside_timer: false,
             outside_edge: PressEdge::default(),
+            audio: None,
+            mixer: None,
+            mixer_pending: false,
+            mixer_timer: false,
+            mixer_drag: None,
             pomo_timer: false,
             clock_timer: false,
             progress_timer: false,
@@ -466,6 +476,15 @@ struct App {
     outside_timer: bool,
     /// The mouse buttons as the last poll saw them.
     outside_edge: PressEdge,
+    /// The Mixer page's audio thread (started on the first request), the
+    /// rows it last read and whether a reading is on its way.
+    audio: Option<audio::Audio>,
+    mixer: Option<Vec<audio::MixerRow>>,
+    mixer_pending: bool,
+    /// `TIMER_MIXER` runs.
+    mixer_timer: bool,
+    /// The row whose slider the left button is dragging.
+    mixer_drag: Option<usize>,
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
@@ -690,7 +709,8 @@ impl App {
         let (mut received, mut samples) = (0usize, 0usize);
         while let Ok(event) = self.rx.try_recv() {
             received += 1;
-            samples += usize::from(matches!(event, Event::SystemSample(_)));
+            // Background readings draw what they changed themselves.
+            samples += usize::from(matches!(event, Event::SystemSample(_) | Event::Audio(_)));
             self.apply(event, now);
         }
         // Once per burst of command output, not per chunk.
@@ -750,6 +770,10 @@ impl App {
                 }
                 Event::SystemSample(sample) => {
                     self.on_system_sample(sample, now);
+                    continue;
+                }
+                Event::Audio(rows) => {
+                    self.on_audio(rows);
                     continue;
                 }
                 Event::Clean(event) => {
@@ -1222,6 +1246,8 @@ impl App {
             Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)?),
             Effect::RunCustom(tile) => self.queue_shortcut(shortcuts::Action::Custom(tile)),
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
+            Effect::MixerLevel(i, level) => self.mixer_set_level(i, level),
+            Effect::MixerMute(i) => self.mixer_toggle_mute(i),
             Effect::OpenCleaner => self.scan_clean(),
             Effect::CleanDelete(cats) => return self.start_clean(cats),
             Effect::SaveCleanMode(mode) => {
@@ -1943,6 +1969,123 @@ impl App {
         }
     }
 
+    /// Sends `req` to the audio thread, starting it on the first one.
+    fn audio_request(&mut self, req: audio::Req) -> bool {
+        if self.audio.is_none() {
+            self.audio = audio::Audio::spawn(self.tx.clone(), poster(self.hwnd, WM_APP_EVENT));
+        }
+        let sent = self.audio.as_ref().is_some_and(|a| a.request(req));
+        if !sent {
+            self.audio = None;
+        }
+        sent
+    }
+
+    /// Asks for the volumes unless a reading is already on its way.
+    fn mixer_scan(&mut self) {
+        if !self.mixer_pending {
+            self.mixer_pending = self.audio_request(audio::Req::Scan);
+        }
+    }
+
+    /// The Mixer page showed: read at once and every `MIXER_MS`; it left: the
+    /// timer goes, and so does a drag (the button may come up elsewhere).
+    fn sync_mixer(&mut self) {
+        let wanted = self.state.view() == View::Panel(Page::Mixer);
+        if wanted && !self.mixer_timer {
+            self.mixer_timer = true;
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_MIXER, MIXER_MS, None);
+            }
+            self.mixer_scan();
+        } else if !wanted && self.mixer_timer {
+            self.mixer_timer = false;
+            self.mixer_drag = None;
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_MIXER);
+            }
+        }
+    }
+
+    /// The audio thread's reading. A drag keeps what the pointer set until
+    /// it lets go; otherwise the rows are the reading.
+    fn on_audio(&mut self, rows: Option<Vec<audio::MixerRow>>) {
+        self.mixer_pending = false;
+        if self.mixer_drag.is_none() {
+            self.mixer = rows;
+        }
+        if self.state.view() == View::Panel(Page::Mixer) && !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// Row `i` of the Mixer takes `level`: shown at once, set by the audio
+    /// thread.
+    fn mixer_set_level(&mut self, i: usize, level: f32) {
+        let level = audio::clamp_level(level);
+        let Some(row) = self.mixer.as_mut().and_then(|rows| rows.get_mut(i)) else {
+            return;
+        };
+        if row.level == level {
+            return;
+        }
+        row.level = level;
+        let target = row.target.clone();
+        self.audio_request(audio::Req::Level(target, level));
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    fn mixer_toggle_mute(&mut self, i: usize) {
+        let Some(row) = self.mixer.as_mut().and_then(|rows| rows.get_mut(i)) else {
+            return;
+        };
+        row.muted = !row.muted;
+        let (target, muted) = (row.target.clone(), row.muted);
+        self.audio_request(audio::Req::Mute(target, muted));
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// A press on a Mixer slider sets the level under the pointer and starts
+    /// a drag; moves with the button down follow it (`on_mouse_move`).
+    fn mixer_press(&mut self, hit: Option<&Hit>, lparam: LPARAM) {
+        self.mixer_drag = None;
+        if let Some(Hit::MixerSlider(i)) = hit {
+            self.mixer_drag = Some(*i);
+            self.mixer_follow(lparam);
+        }
+    }
+
+    /// The dragged slider's level at the pointer; the drag ends when the
+    /// left button is no longer down.
+    fn mixer_follow(&mut self, lparam: LPARAM) {
+        let Some(i) = self.mixer_drag else {
+            return;
+        };
+        if !left_button_down() {
+            self.mixer_drag = None;
+            return;
+        }
+        let (x, _) = client_xy(lparam);
+        if let Some(level) = self.renderer.mixer_level_at(i, x as f32) {
+            self.apply_now(Event::MixerLevel(i, level));
+        }
+    }
+
+    /// The wheel over a Mixer row steps its level (up is louder).
+    fn mixer_wheel(&mut self, delta: i32, row: usize) {
+        let Some(current) = self.mixer.as_ref().and_then(|rows| rows.get(row)) else {
+            return;
+        };
+        let notches = if delta == 0 { 0 } else { (delta / 120).clamp(-4, 4) };
+        let notches = if notches == 0 { delta.signum() } else { notches };
+        let level = audio::step_level(current.level, notches);
+        self.apply_now(Event::MixerLevel(row, level));
+    }
+
     /// `TIMER_SYSTEM_WARN`: the cheap disk and RAM read for the warnings.
     fn on_system_warn_timer(&mut self) {
         unsafe {
@@ -2425,6 +2568,7 @@ impl App {
         self.sync_progress_timer(now);
         self.sync_robot_timers(now);
         self.sync_system_page();
+        self.sync_mixer();
         self.sync_outside_timer();
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
@@ -2632,6 +2776,11 @@ impl App {
                 self.sync_system_page();
             }
             TIMER_SYSTEM_WARN => self.on_system_warn_timer(),
+            TIMER_MIXER => {
+                if self.state.view() == View::Panel(Page::Mixer) {
+                    self.mixer_scan();
+                }
+            }
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
@@ -2721,7 +2870,8 @@ impl App {
 
     /// Arms hover and leave tracking when the pointer enters; the island
     /// expands only once `WM_MOUSEHOVER` reports a dwell.
-    fn on_mouse_move(&mut self) {
+    fn on_mouse_move(&mut self, lparam: LPARAM) {
+        self.mixer_follow(lparam);
         if !self.hover.needs_arming() {
             return;
         }
@@ -2767,6 +2917,7 @@ impl App {
     /// `WM_LBUTTONDOWN`: remembers what the press is on.
     fn on_press(&mut self, lparam: LPARAM) {
         let hit = self.hit_at(lparam);
+        self.mixer_press(hit.as_ref(), lparam);
         if hit.is_some() && self.gestures_active() {
             let (x, y) = client_xy(lparam);
             self.swipe.press(x, y, Instant::now());
@@ -2780,6 +2931,7 @@ impl App {
     /// the same target. A button pressed in another window and let go over
     /// the island does nothing. A swipe is not a click: it skips the song.
     fn on_release(&mut self, lparam: LPARAM) {
+        self.mixer_drag = None;
         let (x, y) = client_xy(lparam);
         let min_px = (gestures::SWIPE_MIN_DIP * self.gesture_scale()).round() as i32;
         let swipe = self.swipe.release(x, y, Instant::now(), min_px);
@@ -2846,6 +2998,8 @@ impl App {
             self.cli_menu_scroll = to.min(cli_folders::max_scroll(&self.cli_menu_all));
             self.rebuild_cli_menu();
             self.redraw_cli();
+        } else if let Some(row) = self.mixer_row_under(client, &pt) {
+            self.mixer_wheel(delta, row);
         } else if over_clips
             && self.state.view() == View::Panel(Page::Clipboard)
             && self.clip_wheel(delta)
@@ -2858,6 +3012,18 @@ impl App {
             self.cli_scroll(lines);
         } else {
             self.apply_now(Event::Wheel(delta));
+        }
+    }
+
+    /// The Mixer row the wheel is over (its speaker or slider), while the
+    /// page shows.
+    fn mixer_row_under(&self, client: bool, pt: &POINT) -> Option<usize> {
+        if !client || self.state.view() != View::Panel(Page::Mixer) {
+            return None;
+        }
+        match self.renderer.hit_test(pt.x as f32, pt.y as f32)? {
+            Hit::MixerSlider(i) | Hit::MixerMute(i) => Some(i),
+            _ => None,
         }
     }
 
@@ -3216,6 +3382,7 @@ impl App {
             cal_anchor: state.cal_anchor(),
             cal_selected: state.cal_selected(),
             calendar: &self.calendar,
+            mixer: self.mixer.as_deref(),
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
             reminders_page: state.reminders_page(),
@@ -3362,6 +3529,11 @@ impl ClickPair {
     fn clear(&mut self) {
         self.pressed = None;
     }
+}
+
+/// Whether the left button is down right now.
+fn left_button_down() -> bool {
+    (unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) }) as u16 & 0x8000 != 0
 }
 
 /// A mouse message's client position, in physical pixels.
@@ -4371,7 +4543,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            with_app(App::on_mouse_move);
+            with_app(|app| app.on_mouse_move(lparam));
             LRESULT(0)
         }
         WM_MOUSEHOVER => {
@@ -4980,6 +5152,7 @@ mod tests {
             shot::TIMER_SHOT_RETRY,
             shot::TIMER_SHOT_SHOW,
             TIMER_OUTSIDE,
+            TIMER_MIXER,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
@@ -5132,7 +5305,7 @@ mod tests {
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Pomodoro), 1.0);
         assert_eq!(slide_from(&pages, Page::Pomodoro, Page::Calendar), -1.0);
         // Shortcuts moved to the front: going to it is going back.
-        pages.move_by(Page::Shortcuts, -8);
+        pages.move_by(Page::Shortcuts, -9);
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Shortcuts), -1.0);
         assert_eq!(slide_from(&pages, Page::Shortcuts, Page::Calendar), 1.0);
     }

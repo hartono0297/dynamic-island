@@ -37,7 +37,7 @@ On first run, Windows asks for access to your notifications: allow it.
 ## Features
 
 - **Always-visible notch** at the top centre, with a clock when idle. It hides only for fullscreen apps; clicks outside its shape pass through.
-- **Hover to open the panel**, scroll the mouse wheel to change pages: **Calendar → Pomodoro → Reminders → Notes → Music → Clipboard → System → CLI → Shortcuts**. Settings → Appearance → *Panel pages* changes the order and hides pages you don't use (a hidden page still opens from its own button).
+- **Hover to open the panel**, scroll the mouse wheel to change pages: **Calendar → Pomodoro → Reminders → Notes → Music → Mixer → Clipboard → System → CLI → Shortcuts**. Settings → Appearance → *Panel pages* changes the order and hides pages you don't use (a hidden page still opens from its own button).
 - **Calendar:** Google Calendar with Month, Week and Day views. The day view is an hour timeline with a line at the current time. Add and edit events in the island's own editor; repeating events, events over several days and events on calendars you can only view open read-only. Events can't be deleted from the island. Works offline from the last sync.
 - **Pomodoro:** progress ring, start/pause/reset/skip, a small timer in the notch while it runs. Durations are set in Settings.
 - **Reminders:** once, daily, or weekly on one or more days of the week, set in the island's own reminder editor with time shortcuts (*In 30 min*, *In 1 hour*, *Tonight*, *Tomorrow morning*) and a summary of when it rings next. Reminders that came due while the island was off fire at startup, marked "Missed".
@@ -48,6 +48,7 @@ On first run, Windows asks for access to your notifications: allow it.
 - **Clipboard:** a history of what you copy (text, links, colours, files and images), searchable, with pins, in the panel. Password managers' copies are never kept. The history can be kept across restarts (encrypted with Windows DPAPI) or in memory only, and an optional hotkey (Ctrl+Alt+V or Win+Alt+V) opens it.
 - **Screenshot preview:** after PrtSc or Win+Shift+S the notch shows the shot with *Copy again*, *Keep* and *Delete* (to the Recycle Bin, and the clipboard is emptied). What an ignored preview does is set in Settings → Clipboard; the default keeps the file.
 - **System:** CPU, RAM and disk use on their own page, with one-time warnings when a drive runs low or RAM stays high.
+- **Mixer:** the volume of the default output and of up to four apps playing sound (one row per program, active ones first). Press or drag a slider to set a level, click the speaker to mute, scroll over a row for 5 % steps. The page reads the volumes once a second while it shows and nothing otherwise.
 - **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen. Settings → Appearance → *Shortcuts* turns tiles on or off and puts them in your order (up to twelve show, four per row). Your own tiles (an app, a folder, a web address) go into `config.json`; *Delete* in the same card removes one:
   ```json
   "shortcut_tiles": [

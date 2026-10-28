@@ -10,6 +10,7 @@ use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pages::PanelPages;
+use crate::audio::MixerRow;
 use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
@@ -204,6 +205,11 @@ pub enum Event {
     PanelPages(PanelPages),
     /// "Pintasan", at startup and when the settings window changes it.
     ShortcutTiles(ShortcutTiles),
+    /// The Mixer's rows as the audio thread read them (`None`: no output
+    /// device). `App` keeps them, the reducer ignores it.
+    Audio(Option<Vec<MixerRow>>),
+    /// The pointer asks row `index` of the Mixer for this level (0..=1).
+    MixerLevel(usize, f32),
     /// A folder check for screenshot `shot` ended: the Screenshots folder
     /// and the file that matched, if any. `App` keeps it, the reducer
     /// ignores it.
@@ -270,6 +276,10 @@ pub enum Hit {
     Shortcut(Shortcut),
     /// A custom tile: its place in the tiles the page shows.
     CustomTile(usize),
+    /// The Mixer page: a row's slider (the press itself is `App`'s, which
+    /// knows where the pointer is) and its speaker icon, by the row's place.
+    MixerSlider(usize),
+    MixerMute(usize),
     /// The CLI page's terminal: the input takes the keyboard.
     CliInput,
     /// The CLI header's Stop button (the same as Ctrl+C).
@@ -378,6 +388,9 @@ pub enum Effect {
     RunShortcut(Shortcut),
     /// The same for a custom tile.
     RunCustom(CustomTile),
+    /// Set the Mixer row's level / toggle its mute; `App` knows the rows.
+    MixerLevel(usize, f32),
+    MixerMute(usize),
     /// Give the CLI input the keyboard (the island activates for it).
     FocusCliInput,
     /// The CLI input lets go of the keyboard; the window that had it
@@ -465,8 +478,7 @@ pub enum PomoField {
 }
 
 /// Panel pages, in scroll order: Kalender, Pomodoro, Pengingat, Catatan,
-/// Musik, Clipboard, Sistem, then CLI and Pintasan. This is the interim
-/// order; Run 9 sets the final one.
+/// Musik, Mixer, Clipboard, Sistem, then CLI and Pintasan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Calendar,
@@ -474,6 +486,8 @@ pub enum Page {
     Reminders,
     Notes,
     Media,
+    /// Mixer: the volume of the system and of each app playing sound.
+    Mixer,
     /// The clipboard history.
     Clipboard,
     /// Sistem: CPU, RAM, disks and the busiest processes.
@@ -484,13 +498,13 @@ pub enum Page {
 }
 
 impl Page {
-    /// Interim order (Clipboard, then Sistem); Run 9 sets the final order.
-    pub const ALL: [Page; 9] = [
+    pub const ALL: [Page; 10] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
         Page::Notes,
         Page::Media,
+        Page::Mixer,
         Page::Clipboard,
         Page::System,
         Page::Cli,

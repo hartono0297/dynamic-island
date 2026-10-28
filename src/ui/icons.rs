@@ -103,11 +103,14 @@ pub enum Icon {
     /// The screenshot preview's "Salin lagi" (`copy` in keputusan-v3.1.html;
     /// its "Simpan" is `save`, the same path as `Download`). Line only.
     Copy,
+    /// The Mixer rows' speaker, and its muted twin. Line only.
+    Volume,
+    VolumeMute,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 56] = [
+    pub const ALL: [Icon; 58] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -164,6 +167,8 @@ impl Icon {
         Icon::Text,
         Icon::Swatch,
         Icon::Copy,
+        Icon::Volume,
+        Icon::VolumeMute,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -374,6 +379,14 @@ impl Icon {
             Icon::Pin => &[Part::Path("M9 4h6l-1 6 3 3H7l3-3zM12 13v7")],
             Icon::Text => &[Part::Path("M5 6h14M5 11h14M5 16h9")],
             Icon::Swatch => &[Part::Circle(12.0, 12.0, 8.5), Part::Path("M12 3.5v17")],
+            Icon::Volume => &[
+                Part::Path("M4 9.5h3.5L12 6v12l-4.5-3.5H4z"),
+                Part::Path("M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a8 8 0 0 1 0 10.8"),
+            ],
+            Icon::VolumeMute => &[
+                Part::Path("M4 9.5h3.5L12 6v12l-4.5-3.5H4z"),
+                Part::Path("M16 9.5l5 5M21 9.5l-5 5"),
+            ],
             Icon::Copy => &[
                 Part::Rect(8.0, 8.0, 11.0, 11.0, 2.5),
                 Part::Path("M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"),

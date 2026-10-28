@@ -59,6 +59,7 @@ use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
+use crate::audio::MixerRow;
 use crate::clipboard::Clip;
 use crate::clipboard::image::Thumb;
 use crate::config::Style;
@@ -106,6 +107,9 @@ pub struct Frame<'a> {
     pub cal_anchor: NaiveDate,
     pub cal_selected: NaiveDate,
     pub calendar: &'a CalendarSnapshot,
+    /// The Mixer's rows; `None` without an output device (or before the
+    /// first reading).
+    pub mixer: Option<&'a [MixerRow]>,
     pub notes: &'a [Note],
     pub notes_page: usize,
     /// Upcoming (not done) reminders, earliest first.
@@ -910,6 +914,13 @@ impl Renderer {
     /// CLI output rather than the pages.
     pub fn over_cli_output(&self, x: f32, y: f32) -> bool {
         self.regions.over_cli_output(x / self.scale, y / self.scale)
+    }
+
+    /// The level a press at client x `x` (physical pixels) gives Mixer row
+    /// `row`'s slider; `None` when the page shows no such slider.
+    pub fn mixer_level_at(&self, row: usize, x: f32) -> Option<f32> {
+        let track = self.regions.mixer_tracks.get(row)?;
+        Some(crate::audio::slider_level(track.x, track.w, x / self.scale))
     }
 
     /// Whether the wheel at this client point (physical pixels) scrolls the

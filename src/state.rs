@@ -469,6 +469,7 @@ impl IslandState {
             | Event::Cli(_)
             | Event::ExplorerFolders { .. }
             | Event::SystemSample(_)
+            | Event::Audio(_)
             | Event::Clean(_)
             | Event::Mole(_)
             | Event::ShotFolder { .. }
@@ -479,6 +480,12 @@ impl IslandState {
             Event::CleanModeSetting(mode) => self.clean_mode = mode,
             Event::PanelPages(pages) => self.set_pages(pages),
             Event::ShortcutTiles(tiles) => self.tiles = tiles,
+            // Only the open Mixer page takes a level.
+            Event::MixerLevel(i, level) => {
+                if self.view() == View::Panel(Page::Mixer) {
+                    effects.push(Effect::MixerLevel(i, level));
+                }
+            }
             Event::MoleFound(found) => self.mole_found(found, &mut effects),
             Event::MolePreviewed { opts, ok } => {
                 if self.mole == MolePhase::Scanning(opts) {
@@ -1057,6 +1064,14 @@ impl IslandState {
             Hit::LyricsToggle => {
                 self.lyrics_on = !self.lyrics_on;
                 effects.push(Effect::SaveLyrics(self.lyrics_on));
+            }
+            // The slider is set by the press itself (`Event::MixerLevel`); the
+            // click that ends it has nothing left to do.
+            Hit::MixerSlider(_) => {}
+            Hit::MixerMute(i) => {
+                if self.view() == View::Panel(Page::Mixer) {
+                    effects.push(Effect::MixerMute(i));
+                }
             }
             // The offset buttons are drawn only with lyrics on.
             Hit::LyricOffset(dir) => {
@@ -2392,7 +2407,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 8), t0);
+        s.apply(Event::Wheel(-120 * 9), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
@@ -2456,12 +2471,39 @@ mod tests {
                 Page::Reminders,
                 Page::Notes,
                 Page::Media,
+                Page::Mixer,
                 Page::Clipboard,
                 Page::System,
                 Page::Cli,
                 Page::Shortcuts,
             ]
         );
+    }
+
+    #[test]
+    fn the_mixer_takes_levels_and_mutes_only_while_its_page_is_open() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // Closed, or another page: nothing.
+        assert!(s.apply(Event::MixerLevel(1, 0.4), t0).is_empty());
+        assert!(s.apply(Event::Click(Hit::MixerMute(1)), t0).is_empty());
+        open_on(&mut s, Page::Notes, t0);
+        assert!(s.apply(Event::MixerLevel(1, 0.4), t0).is_empty());
+        assert!(s.apply(Event::Click(Hit::MixerMute(0)), t0).is_empty());
+        open_on(&mut s, Page::Mixer, t0);
+        assert_eq!(
+            s.apply(Event::MixerLevel(1, 0.4), t0),
+            vec![Effect::MixerLevel(1, 0.4)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::MixerMute(2)), t0),
+            vec![Effect::MixerMute(2)]
+        );
+        // The slider's own click (a press already set it) does nothing, and
+        // a reading is the app's.
+        assert!(s.apply(Event::Click(Hit::MixerSlider(1)), t0).is_empty());
+        assert!(s.apply(Event::Audio(None), t0).is_empty());
+        assert_eq!(s.view(), View::Panel(Page::Mixer));
     }
 
     fn system_notice() -> Notice {
@@ -3018,9 +3060,9 @@ mod tests {
         // No Win+V, no collapse: the island's own page.
         assert_eq!(effects, vec![]);
         assert_eq!(s.view(), View::Panel(Page::Clipboard));
-        // The page sits between Musik and Sistem (interim order), then CLI.
+        // The page sits between Mixer and Sistem, then CLI.
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Media));
+        assert_eq!(s.view(), View::Panel(Page::Mixer));
         s.apply(Event::Wheel(-240), t0);
         assert_eq!(s.view(), View::Panel(Page::System));
         s.apply(Event::Wheel(-120), t0);

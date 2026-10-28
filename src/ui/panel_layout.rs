@@ -185,6 +185,33 @@ pub struct ShortcutsLayout {
     pub tiles: Vec<(Option<Shortcut>, Rect)>,
 }
 
+/// The Mixer page: a row per volume.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MixerLayout {
+    /// "Mixer".
+    pub header: Rect,
+    pub rows: Vec<MixerRowLayout>,
+}
+
+/// One row: the speaker (a click mutes), the name, the slider (its track is
+/// what the level is read from) and the percent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixerRowLayout {
+    pub icon: Rect,
+    pub name: Rect,
+    /// The slider's hit area; `MIXER_TRACK_H` of it is drawn.
+    pub track: Rect,
+    pub value: Rect,
+}
+
+/// The drawn track's thickness, in the middle of its taller hit area.
+pub const MIXER_TRACK_H: f32 = 6.0;
+const MIXER_ROW_MAX_H: f32 = 36.0;
+const MIXER_ICON: f32 = 22.0;
+const MIXER_NAME_W: f32 = 112.0;
+const MIXER_VALUE_W: f32 = 40.0;
+const MIXER_GAP: f32 = 10.0;
+
 /// A button on the selected Clipboard card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipButton {
@@ -251,6 +278,7 @@ pub enum PageLayout {
     Mole(MoleLayout),
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
+    Mixer(MixerLayout),
 }
 
 /// The cleaner behind "Bersihkan" exists (Run 5): the button is the accent
@@ -1940,6 +1968,46 @@ pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsL
     ShortcutsLayout { header, tiles }
 }
 
+/// The Mixer page for `n` rows (at least one): rows of up to
+/// `MIXER_ROW_MAX_H`, shrinking so that they all fit above the dots.
+pub fn mixer_layout(s: ShapeRect, strip: bool, n: usize) -> MixerLayout {
+    let top = content_top(s, strip);
+    let bottom = content_bottom(s);
+    let (l, r) = (left(s), right(s));
+    let header = rect(l, top, r - l, HEADER_H);
+    let body = header.bottom() + 6.0;
+    let n = n.max(1);
+    let pitch = ((bottom - body) / n as f32).min(MIXER_ROW_MAX_H);
+    let rows = (0..n)
+        .map(|i| {
+            let y = body + i as f32 * pitch;
+            let cy = y + pitch / 2.0;
+            let icon = rect(l, cy - MIXER_ICON / 2.0, MIXER_ICON, MIXER_ICON);
+            let name = rect(
+                icon.right() + MIXER_GAP,
+                cy - 10.0,
+                MIXER_NAME_W,
+                20.0,
+            );
+            let value = rect(r - MIXER_VALUE_W, cy - 10.0, MIXER_VALUE_W, 20.0);
+            let track_x = name.right() + MIXER_GAP;
+            let track = rect(
+                track_x,
+                cy - pitch.min(MIXER_ROW_MAX_H) / 2.0 + 2.0,
+                value.x - MIXER_GAP - track_x,
+                pitch.min(MIXER_ROW_MAX_H) - 4.0,
+            );
+            MixerRowLayout {
+                icon,
+                name,
+                track,
+                value,
+            }
+        })
+        .collect();
+    MixerLayout { header, rows }
+}
+
 /// The System page for `drives` (fixed drives, in order; as many as fit
 /// are shown, fewer under the waiting strip) and `procs` process rows (at
 /// most `TOP_PROCESSES`). Room for three rows is kept either way, so the
@@ -2452,6 +2520,12 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 add(*r, builtin.map_or(Hit::CustomTile(i), Hit::Shortcut));
             }
         }
+        PageLayout::Mixer(l) => {
+            for (i, row) in l.rows.iter().enumerate() {
+                add(row.icon, Hit::MixerMute(i));
+                add(row.track, Hit::MixerSlider(i));
+            }
+        }
         PageLayout::Cleaner(l) => {
             add(l.back, Hit::CleanBack);
             // The mode segment, like the rows, not while a clean runs.
@@ -2703,6 +2777,9 @@ mod tests {
             let ids: Vec<u64> = (1..=n).collect();
             let l = clipboard_layout(s, strip, &ids, ids.get(4).copied(), scroll, |id| id == 2);
             out.push((format!("clipboard {n} s{scroll}"), PageLayout::Clipboard(l)));
+        }
+        for n in [1, 2, 5, 6] {
+            out.push((format!("mixer {n}"), PageLayout::Mixer(mixer_layout(s, strip, n))));
         }
         for n in [1, 5, 8, 12] {
             out.push((
@@ -3970,6 +4047,45 @@ mod tests {
     }
 
     #[test]
+    fn mixer_rows_fit_above_the_dots_in_order_and_hit_by_place() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                for n in [1, 3, 6] {
+                    let l = mixer_layout(s, strip, n);
+                    assert_eq!(l.rows.len(), n);
+                    let mut last = l.header.bottom();
+                    for row in &l.rows {
+                        assert!(row.icon.y >= last - 0.01, "{n}: rows in order");
+                        assert!(row.track.bottom() <= content_bottom(s) + 0.01);
+                        assert!(row.icon.right() < row.name.x);
+                        assert!(row.name.right() < row.track.x);
+                        assert!(row.track.right() < row.value.x);
+                        assert!(row.track.w >= 100.0, "{n}: a usable track");
+                        assert!(row.track.h >= MIXER_TRACK_H);
+                        last = row.track.y;
+                    }
+                }
+            }
+        }
+        let s = panel(Style::Pill);
+        let l = mixer_layout(s, false, 3);
+        let r = regions(s, &PageLayout::Mixer(l.clone()), false);
+        let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
+        assert_eq!(
+            hits,
+            [
+                Hit::MixerMute(0),
+                Hit::MixerSlider(0),
+                Hit::MixerMute(1),
+                Hit::MixerSlider(1),
+                Hit::MixerMute(2),
+                Hit::MixerSlider(2),
+            ]
+        );
+    }
+
+    #[test]
     fn shortcut_tiles_wrap_to_rows_and_fit_up_to_twelve() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
@@ -4387,6 +4503,12 @@ mod tests {
                             drawn.extend([l.header, l.search, l.list]);
                             drawn.extend(l.cards.iter().map(|c| c.2));
                             drawn.extend(l.buttons.iter().map(|b| b.2));
+                        }
+                        PageLayout::Mixer(l) => {
+                            drawn.push(l.header);
+                            for row in &l.rows {
+                                drawn.extend([row.icon, row.name, row.track, row.value]);
+                            }
                         }
                         PageLayout::Shortcuts(l) => {
                             drawn.push(l.header);

@@ -383,7 +383,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 81] = [
+const SCENES: [Scene; 82] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -491,6 +491,7 @@ const SCENES: [Scene; 81] = [
         custom_tiles: true,
         ..panel("shortcuts-custom", Page::Shortcuts)
     },
+    panel("mixer", Page::Mixer),
     panel("system", Page::System),
     Scene {
         system_low: true,
@@ -1025,6 +1026,7 @@ fn run_scenes(scenes: &[Scene]) {
                     },
                 }
             });
+            let mixer_rows = demo_mixer();
             let frame = Frame {
                 view: &view,
                 media: Some(if scene.long_media {
@@ -1041,6 +1043,7 @@ fn run_scenes(scenes: &[Scene]) {
                 cal_anchor: today,
                 cal_selected: today,
                 calendar: &snapshot,
+                mixer: Some(&mixer_rows),
                 notes,
                 notes_page: 0,
                 reminders: if scene.reminders == 12 {
@@ -2032,4 +2035,26 @@ fn scene_tiles(scene: &Scene) -> Vec<crate::tiles::Tile> {
         }
     }
     tiles.visible()
+}
+
+/// Made-up volumes for the Mixer scene: never the machine's own.
+fn demo_mixer() -> Vec<crate::audio::MixerRow> {
+    use crate::audio::{MixerRow, Target};
+    let app = |name: &str, level: f32, muted: bool| MixerRow {
+        target: Target::App(name.to_lowercase()),
+        name: name.into(),
+        level,
+        muted,
+    };
+    vec![
+        MixerRow {
+            target: Target::Master,
+            name: String::new(),
+            level: 0.62,
+            muted: false,
+        },
+        app("Spotify", 0.8, false),
+        app("Chrome", 0.45, false),
+        app("Teams", 0.2, true),
+    ]
 }

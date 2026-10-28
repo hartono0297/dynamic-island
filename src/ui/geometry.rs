@@ -642,6 +642,8 @@ pub struct HitRegions {
     pub cli_output: Option<Rect>,
     /// The Clipboard page's cards, where the wheel scrolls them.
     pub clip_list: Option<Rect>,
+    /// The Mixer page's slider tracks, by row: where a press sets a level.
+    pub mixer_tracks: Vec<Rect>,
 }
 
 impl HitRegions {

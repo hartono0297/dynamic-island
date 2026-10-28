@@ -36,6 +36,7 @@ use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
+use crate::audio::{self, MixerRow, Target};
 use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
@@ -54,7 +55,7 @@ use crate::ui::panel_layout::{
     CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
     ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
     MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout,
-    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H,
+    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, MIXER_TRACK_H, MixerLayout, mixer_layout,
     calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
     clipboard_layout, media_panel_layout, media_progress_layout, mole_layout, notes_layout,
     page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
@@ -431,6 +432,10 @@ impl Renderer {
             if let PageLayout::Clipboard(l) = &layout {
                 self.regions.clip_list = Some(l.list);
             }
+            self.regions.mixer_tracks = match &layout {
+                PageLayout::Mixer(l) => l.rows.iter().map(|r| r.track).collect(),
+                _ => Vec::new(),
+            };
         }
         Ok(())
     }
@@ -533,6 +538,13 @@ impl Renderer {
                 ))
             }
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip, &frame.tiles)),
+            // Room for the master row and, under it, a line saying no app
+            // plays (or that there is no device).
+            Page::Mixer => PageLayout::Mixer(mixer_layout(
+                s,
+                strip,
+                frame.mixer.map_or(2, |rows| rows.len().max(2)),
+            )),
         }
     }
 
@@ -577,6 +589,10 @@ impl Renderer {
             PageLayout::Clipboard(l) => self.paint_clipboard(l, &frame.clip),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l, &frame.tiles);
+                Ok(())
+            }
+            PageLayout::Mixer(l) => {
+                self.paint_mixer(l, frame.mixer);
                 Ok(())
             }
         }
@@ -2053,6 +2069,66 @@ impl Renderer {
         };
         self.clip_thumbs.borrow_mut().push((id, bitmap.clone()));
         Ok(Some(bitmap))
+    }
+
+    /// The Mixer: a speaker, a name, a slider and the percent per row; the
+    /// master level first. A muted row is dimmed with the crossed speaker.
+    fn paint_mixer(&self, l: &MixerLayout, rows: Option<&[MixerRow]>) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.heading(text(lang, Key::PageMixer), l.header);
+        let Some(rows) = rows else {
+            self.text2(text(lang, Key::MixerUnavailable), &self.fonts.eleven, l.rows[0].name);
+            return;
+        };
+        for (row, lay) in rows.iter().zip(&l.rows) {
+            let dim = if row.muted { 0.45 } else { 1.0 };
+            let icon = if row.muted { Icon::VolumeMute } else { Icon::Volume };
+            let ink = if row.muted { p.secondary } else { p.text };
+            self.icon_colored(icon, lay.icon, 18.0, ink, 1.0, None);
+            let name = match row.target {
+                Target::Master => text(lang, Key::MixerMaster),
+                Target::System => text(lang, Key::MixerSystemSounds),
+                Target::App(_) => row.name.as_str(),
+            };
+            let name_area = Rect {
+                w: lay.name.w,
+                ..lay.name
+            };
+            self.text_colored(name, &self.fonts.body_medium, name_area, p.text, dim);
+            // The track, its filled part and a knob at the level.
+            let bar = Rect {
+                y: lay.track.y + (lay.track.h - MIXER_TRACK_H) / 2.0,
+                h: MIXER_TRACK_H,
+                ..lay.track
+            };
+            self.set_color(p.track, 1.0);
+            self.fill_round(bar, bar.h / 2.0);
+            let fill = Rect {
+                w: bar.w * row.level,
+                ..bar
+            };
+            self.set_color(p.accent, dim);
+            if fill.w > 0.0 {
+                self.fill_round(fill, bar.h / 2.0);
+            }
+            let knob = 14.0;
+            self.set_color(p.text, dim);
+            self.fill_round(
+                Rect {
+                    x: (fill.right() - knob / 2.0).clamp(bar.x, bar.right() - knob),
+                    y: bar.y + (bar.h - knob) / 2.0,
+                    w: knob,
+                    h: knob,
+                },
+                knob / 2.0,
+            );
+            let value = format!("{}%", audio::percent(row.level));
+            self.text_colored(&value, &self.fonts.track_time_right, lay.value, p.secondary, dim);
+        }
+        if rows.len() < 2 {
+            self.text2(text(lang, Key::MixerEmpty), &self.fonts.eleven, l.rows[1].name);
+        }
     }
 
     /// Rows of tiles: a duotone icon over its label.

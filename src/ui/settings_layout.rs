@@ -1465,6 +1465,7 @@ fn page_key(p: Page) -> Key {
         Page::Reminders => Key::PageReminders,
         Page::Notes => Key::PageNotes,
         Page::Media => Key::PageMedia,
+        Page::Mixer => Key::PageMixer,
         Page::Clipboard => Key::PageClipboard,
         Page::System => Key::PageSystem,
         Page::Cli => Key::PageCli,
@@ -2363,7 +2364,7 @@ mod tests {
                         pages: if locked {
                             let mut p = PanelPages::default();
                             p.toggle(Page::Cli);
-                            p.move_by(Page::Shortcuts, -8);
+                            p.move_by(Page::Shortcuts, -9);
                             p
                         } else {
                             PanelPages::default()
@@ -3351,7 +3352,7 @@ mod tests {
                     Some(Hit::PageMove(order[4], 1))
                 )
             );
-            assert_eq!(steppers[8], (Some(Hit::PageMove(order[8], -1)), None));
+            assert_eq!(steppers[9], (Some(Hit::PageMove(order[9], -1)), None));
         }
     }
 

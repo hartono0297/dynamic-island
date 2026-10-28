@@ -444,7 +444,12 @@ keys! {
     PageReminders => "Pengingat", "Reminders";
     PageNotes => "Catatan", "Notes";
     PageMedia => "Musik", "Music";
+    PageMixer => "Mixer", "Mixer";
     PageClipboard => "Clipboard", "Clipboard";
+    MixerMaster => "Volume utama", "Master volume";
+    MixerSystemSounds => "Suara sistem", "System sounds";
+    MixerEmpty => "Belum ada aplikasi yang bersuara", "No app is playing sound";
+    MixerUnavailable => "Tidak ada perangkat suara", "No sound device";
     PageSystem => "Sistem", "System";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
