@@ -139,6 +139,7 @@ fn shortcut_name(s: Shortcut) -> &'static str {
     match s {
         Shortcut::Screenshot => "Screenshot",
         Shortcut::Clipboard => "Clipboard",
+        Shortcut::Search => "Search",
         Shortcut::Emoji => "Emoji",
         Shortcut::Explorer => "Explorer",
         Shortcut::Calculator => "Calculator",
@@ -336,6 +337,7 @@ mod tests {
             [
                 "Screenshot",
                 "Clipboard",
+                "Search",
                 "Lock",
                 "(Emoji)",
                 "Explorer",
@@ -354,7 +356,7 @@ mod tests {
             .iter()
             .map(|s| entry(shortcut_name(*s), false))
             .collect();
-        assert_eq!(ShortcutTiles::from_saved(&all_off).shown(), 8);
+        assert_eq!(ShortcutTiles::from_saved(&all_off).shown(), Shortcut::ALL.len());
     }
 
     #[test]
@@ -395,7 +397,7 @@ mod tests {
         assert!(t.add(custom("Proyek", CustomKind::Folder, r"D:\Proyek")));
         let saved = t.to_saved();
         assert_eq!(ShortcutTiles::from_saved(&saved), t);
-        let json = serde_json::to_string(&saved[8]).unwrap();
+        let json = serde_json::to_string(&saved[Shortcut::ALL.len()]).unwrap();
         assert_eq!(
             json,
             r#"{"tile":"Custom","on":true,"label":"Gmail","kind":"Url","target":"https://mail.google.com"}"#
@@ -427,8 +429,8 @@ mod tests {
             assert!(t.add(custom(&format!("T{i}"), CustomKind::App, "a.exe")));
         }
         assert!(!t.add(custom("Lebih", CustomKind::App, "a.exe")), "full");
-        // 8 + 8 on: only the first twelve show.
-        assert_eq!(t.entries().len(), 16);
+        // Nine built-in + 8 own, all on: only the first twelve show.
+        assert_eq!(t.entries().len(), Shortcut::ALL.len() + MAX_CUSTOM);
         assert_eq!(t.visible().len(), MAX_SHOWN);
         // More customs in a file than fit: the extra are dropped.
         let many: Vec<TileEntry> = (0..MAX_CUSTOM + 3)
@@ -447,11 +449,11 @@ mod tests {
     fn toggle_move_and_remove() {
         let mut t = ShortcutTiles::default();
         assert!(t.toggle(0));
-        assert_eq!(t.shown(), 7);
+        assert_eq!(t.shown(), Shortcut::ALL.len() - 1);
         assert!(t.toggle(0), "back on");
         assert!(!t.toggle(99));
         // The last one shown cannot go off.
-        for i in 1..8 {
+        for i in 1..Shortcut::ALL.len() {
             assert!(t.toggle(i));
         }
         assert!(!t.toggle(0));
@@ -461,13 +463,13 @@ mod tests {
         assert!(t.move_by(0, 1));
         assert_eq!(&names(&t)[..2], ["Clipboard", "Screenshot"]);
         assert!(!t.move_by(0, -1));
-        assert!(!t.move_by(7, 1));
-        assert!(!t.move_by(9, -1));
+        assert!(!t.move_by(Shortcut::ALL.len() - 1, 1));
+        assert!(!t.move_by(99, -1));
 
         // Only a custom tile can be removed.
         assert!(!t.remove(0));
         t.add(custom("Gmail", CustomKind::Url, "https://mail.google.com"));
-        assert!(t.remove(8));
-        assert_eq!(t.entries().len(), 8);
+        assert!(t.remove(Shortcut::ALL.len()));
+        assert_eq!(t.entries().len(), Shortcut::ALL.len());
     }
 }

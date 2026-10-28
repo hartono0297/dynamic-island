@@ -1177,6 +1177,12 @@ impl IslandState {
                     effects.extend(self.dismiss_newest_sticky());
                 }
             }
+            // The island's own quick search, the way its hotkey opens it.
+            Hit::Shortcut(Shortcut::Search) => {
+                if matches!(self.view(), View::Panel(_)) {
+                    self.search_hotkey(effects);
+                }
+            }
             // The island's own history, not Win+V: its page opens.
             Hit::Shortcut(Shortcut::Clipboard) => {
                 if matches!(self.view(), View::Panel(_)) {
@@ -4557,10 +4563,11 @@ mod tests {
         tiles.toggle(0);
         tiles.add(own.clone());
         s.apply(Event::ShortcutTiles(tiles), t0);
-        // Shown: seven built-in tiles (one off), then Gmail at place 7.
-        assert_eq!(s.tiles().len(), 8);
+        // Shown: the built-in tiles but one, then Gmail right after them.
+        let own_at = Shortcut::ALL.len() - 1;
+        assert_eq!(s.tiles().len(), own_at + 1);
         open_on(&mut s, Page::Shortcuts, t0);
-        let effects = s.apply(Event::Click(Hit::CustomTile(7)), t0);
+        let effects = s.apply(Event::Click(Hit::CustomTile(own_at)), t0);
         assert_eq!(effects, vec![Effect::RunCustom(own)]);
         // A place that is not a custom tile, or past the end: nothing.
         let mut s2 = st();

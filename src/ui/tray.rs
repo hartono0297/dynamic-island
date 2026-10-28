@@ -42,13 +42,15 @@ static TRAY_ICON: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_m
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuCmd {
     Settings,
+    Search,
     StylePill,
     StyleNotch,
     Exit,
 }
 
-const COMMANDS: [MenuCmd; 4] = [
+const COMMANDS: [MenuCmd; 5] = [
     MenuCmd::Settings,
+    MenuCmd::Search,
     MenuCmd::StylePill,
     MenuCmd::StyleNotch,
     MenuCmd::Exit,
@@ -85,6 +87,7 @@ fn menu_items(cfg: &Config) -> Vec<MenuItem> {
     };
     vec![
         entry(MenuCmd::Settings, Key::MenuSettings, false),
+        entry(MenuCmd::Search, Key::MenuSearch, false),
         MenuItem::Separator,
         entry(
             MenuCmd::StylePill,
@@ -325,6 +328,7 @@ mod tests {
             labels(&menu_items(&Config::default())),
             vec![
                 "Pengaturan…",
+                "Cari…",
                 "-",
                 "Gaya: Pill",
                 "Gaya: Notch",
@@ -342,7 +346,15 @@ mod tests {
         };
         assert_eq!(
             labels(&menu_items(&en)),
-            vec!["Settings…", "-", "Style: Pill", "Style: Notch", "-", "Quit"]
+            vec![
+                "Settings…",
+                "Search…",
+                "-",
+                "Style: Pill",
+                "Style: Notch",
+                "-",
+                "Quit"
+            ]
         );
     }
 

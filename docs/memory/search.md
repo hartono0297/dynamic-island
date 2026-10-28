@@ -6,9 +6,11 @@ date: 2026-10-28
 # Quick search (v3.2 Run 10, "Pencarian-lite")
 
 A Spotlight-like search that opens on a hotkey. **Settings → Umum →
-Pencarian** (`config.search_hotkey`, `SearchHotkey`: `Off` default,
-`CtrlAltSpace`, `WinAltS`; Alt+Space is never offered, a typo reads as
-`Off`). Registered as `RegisterHotKey` id 2 (the Clipboard's is 1) in
+Pencarian** (`config.search_hotkey`, `SearchHotkey`: `CtrlAltSpace` is the
+default since 3.2.1 (it was `Off` in 3.2.0, so nobody found it), `WinAltS`,
+`Off`; a file that never names it gets the default, "Off" stays off, a typo
+reads as `Off`, Alt+Space is never offered; a config the island saved under
+3.2.0 holds an explicit "Off" and keeps it). Registered as `RegisterHotKey` id 2 (the Clipboard's is 1) in
 `app_search.rs`; a failed registration shows "Sudah dipakai" in Settings.
 
 - **Where it lives:** `Page::Search` is a page of the panel but not one of
@@ -58,3 +60,14 @@ another app is full screen is ignored by design), launching real Start Menu
 apps, a very large Start Menu.
 
 Related: [[shortcut-tiles]], [[gestures]].
+
+## More ways in (v3.2.1)
+- Tray menu: **Cari…** / **Search…** (`MenuCmd::Search`, second item), shown
+  whatever the hotkey says (off or taken); it runs `App::on_search_hotkey`.
+- Pintasan tile **Cari** (`Shortcut::Search`, after Clipboard in
+  `Shortcut::ALL`; old tile lists get it back after Clipboard): the reducer
+  opens the search like the hotkey (`search_hotkey()`), only from an open
+  panel.
+- `focus_search` starts the Start Menu index for every way in.
+- Nine built-in tiles now: the Pintasan page has three rows (4 + 4 + 1).
+

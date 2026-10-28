@@ -350,6 +350,7 @@ keys! {
         "Your own tiles: add them in config.json (see the README)";
     ShortcutScreenshot => "Screenshot", "Screenshot";
     ShortcutClipboard => "Clipboard", "Clipboard";
+    ShortcutSearch => "Cari", "Search";
     ShortcutEmoji => "Emoji", "Emoji";
     ShortcutExplorer => "Explorer", "Explorer";
     ShortcutCalculator => "Kalkulator", "Calculator";
@@ -407,6 +408,7 @@ keys! {
     MenuStyleNotch => "Gaya: Notch", "Style: Notch";
     MenuExit => "Keluar", "Quit";
     MenuSettings => "Pengaturan…", "Settings…";
+    MenuSearch => "Cari…", "Search…";
 
     // Settings window.
     SettingsTitle => "Pengaturan Vale", "Vale Settings";

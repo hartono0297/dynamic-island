@@ -44,11 +44,12 @@ pub fn drive_root(letter: char) -> String {
     format!("{letter}:\\")
 }
 
-/// `None` for the Clipboard tile: it opens the Clipboard page in the panel.
+/// `None` for the Clipboard and Cari tiles: they open the island's own
+/// Clipboard page and quick search (the reducer does that).
 pub fn shortcut_action(s: Shortcut) -> Option<Action> {
     Some(match s {
         Shortcut::Screenshot => Action::Open("ms-screenclip:"),
-        Shortcut::Clipboard => return None,
+        Shortcut::Clipboard | Shortcut::Search => return None,
         Shortcut::Emoji => Action::WinKey(VK_OEM_PERIOD),
         Shortcut::Explorer => Action::System("explorer.exe"),
         Shortcut::Calculator => Action::System(r"System32\calc.exe"),
@@ -72,6 +73,7 @@ pub fn label(s: Shortcut) -> Key {
     match s {
         Shortcut::Screenshot => Key::ShortcutScreenshot,
         Shortcut::Clipboard => Key::ShortcutClipboard,
+        Shortcut::Search => Key::ShortcutSearch,
         Shortcut::Emoji => Key::ShortcutEmoji,
         Shortcut::Explorer => Key::ShortcutExplorer,
         Shortcut::Calculator => Key::ShortcutCalculator,
@@ -86,6 +88,7 @@ pub fn icon(s: Shortcut) -> Icon {
     match s {
         Shortcut::Screenshot => Icon::Camera,
         Shortcut::Clipboard => Icon::Clipboard,
+        Shortcut::Search => Icon::Search,
         Shortcut::Emoji => Icon::Emoji,
         Shortcut::Explorer => Icon::Folder,
         Shortcut::Calculator => Icon::Calc,
@@ -216,6 +219,8 @@ mod tests {
                 (Shortcut::Screenshot, Some(Action::Open("ms-screenclip:"))),
                 // The island's own Clipboard page, not Win+V.
                 (Shortcut::Clipboard, None),
+                // The island's own quick search.
+                (Shortcut::Search, None),
                 (Shortcut::Emoji, Some(Action::WinKey(VK_OEM_PERIOD))),
                 (Shortcut::Explorer, Some(Action::System("explorer.exe"))),
                 (

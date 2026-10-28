@@ -176,8 +176,9 @@ crate::theme::named_enum! {
 }
 
 crate::theme::named_enum! {
-    /// "Pencarian cepat": the hotkey that opens the quick search; none by
-    /// default. Alt+Space is never offered (it is the window menu); any other
+    /// "Pencarian cepat": the hotkey that opens the quick search. A config
+    /// that never named one gets Ctrl+Alt+Space (`Config::default`); "Off" is a
+    /// choice. Alt+Space is never offered (it is the window menu); any other
     /// name, that one included, reads as `Off`.
     SearchHotkey { Off, CtrlAltSpace, WinAltS }
 }
@@ -287,7 +288,7 @@ impl Default for Config {
             lyrics_offset_ms: 0,
             gestures: true,
             scroll_volume: true,
-            search_hotkey: SearchHotkey::Off,
+            search_hotkey: SearchHotkey::CtrlAltSpace,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
             open_mode: OpenMode::Hover,
@@ -1057,9 +1058,17 @@ mod tests {
     }
 
     #[test]
-    fn the_search_hotkey_is_off_by_default_and_a_typo_or_alt_space_reads_as_off() {
-        assert_eq!(Config::default().search_hotkey, SearchHotkey::Off);
-        assert_eq!(parse(r#"{"style":"Notch"}"#).search_hotkey, SearchHotkey::Off);
+    fn the_search_hotkey_defaults_to_ctrl_alt_space_and_a_typo_or_alt_space_reads_as_off() {
+        // Never named in the file: the default. Named "Off": off.
+        assert_eq!(Config::default().search_hotkey, SearchHotkey::CtrlAltSpace);
+        assert_eq!(
+            parse(r#"{"style":"Notch"}"#).search_hotkey,
+            SearchHotkey::CtrlAltSpace
+        );
+        assert_eq!(
+            parse(r#"{"search_hotkey":"Off"}"#).search_hotkey,
+            SearchHotkey::Off
+        );
         let named = |name: &str| parse(&format!(r#"{{"search_hotkey":"{name}"}}"#)).search_hotkey;
         assert_eq!(named("CtrlAltSpace"), SearchHotkey::CtrlAltSpace);
         assert_eq!(named("WinAltS"), SearchHotkey::WinAltS);

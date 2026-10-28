@@ -561,6 +561,7 @@ impl Page {
 pub enum Shortcut {
     Screenshot,
     Clipboard,
+    Search,
     Emoji,
     Explorer,
     Calculator,
@@ -570,9 +571,10 @@ pub enum Shortcut {
 }
 
 impl Shortcut {
-    pub const ALL: [Shortcut; 8] = [
+    pub const ALL: [Shortcut; 9] = [
         Shortcut::Screenshot,
         Shortcut::Clipboard,
+        Shortcut::Search,
         Shortcut::Emoji,
         Shortcut::Explorer,
         Shortcut::Calculator,

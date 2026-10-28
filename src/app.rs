@@ -4604,6 +4604,10 @@ fn open_menu(hwnd: HWND) {
     MENU_OPEN.set(false);
     match cmd {
         Some(MenuCmd::Settings) => open_settings(hwnd),
+        // Whatever the hotkey is (off, taken): the menu always opens it.
+        Some(MenuCmd::Search) => {
+            with_app(App::on_search_hotkey);
+        }
         Some(MenuCmd::StylePill) => {
             with_app(|app| app.set_style(Style::Pill));
         }

@@ -4168,17 +4168,18 @@ mod tests {
         assert_eq!(r[1], region(explorer.chips[1], Hit::CliFolder));
         assert_eq!(r.len(), 4);
 
-        let tiles = sample_tiles(8);
+        let tiles = sample_tiles(Shortcut::ALL.len());
         let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &tiles)), false);
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
         let want: Vec<Hit> = Shortcut::ALL.into_iter().map(Hit::Shortcut).collect();
         assert_eq!(hits, want);
         // A custom tile answers with its place among the tiles shown.
-        let mixed = sample_tiles(10);
+        let builtin = Shortcut::ALL.len();
+        let mixed = sample_tiles(builtin + 2);
         let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &mixed)), false);
-        assert_eq!(r[7].hit, Hit::Shortcut(Shortcut::Lock));
-        assert_eq!(r[8].hit, Hit::CustomTile(8));
-        assert_eq!(r[9].hit, Hit::CustomTile(9));
+        assert_eq!(r[builtin - 1].hit, Hit::Shortcut(Shortcut::Lock));
+        assert_eq!(r[builtin].hit, Hit::CustomTile(builtin));
+        assert_eq!(r[builtin + 1].hit, Hit::CustomTile(builtin + 1));
     }
 
     #[test]
@@ -4209,11 +4210,11 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_tiles_two_rows_of_four_in_order() {
+    fn shortcut_tiles_four_to_a_row_in_order() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
             for strip in [false, true] {
-                let l = shortcuts_layout(s, strip, &sample_tiles(8));
+                let l = shortcuts_layout(s, strip, &sample_tiles(Shortcut::ALL.len()));
                 let order: Vec<Option<Shortcut>> = l.tiles.iter().map(|(t, _)| *t).collect();
                 assert_eq!(order, Shortcut::ALL.map(Some));
                 let first = l.tiles[0].1;

@@ -148,6 +148,8 @@ impl App {
     /// The reducer opened the search: a clean field takes the keyboard (the
     /// island activates). When it cannot have it, the search closes again.
     pub(super) fn focus_search(&mut self) -> Option<Event> {
+        // Every way in (hotkey, tray, tile) reads the Start Menu once.
+        self.start_search_index();
         if editor::focus_open_editor() {
             return Some(Event::SearchClose);
         }
