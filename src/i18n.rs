@@ -450,6 +450,10 @@ keys! {
     MixerSystemSounds => "Suara sistem", "System sounds";
     MixerEmpty => "Belum ada aplikasi yang bersuara", "No app is playing sound";
     MixerUnavailable => "Tidak ada perangkat suara", "No sound device";
+    PageShelf => "Rak berkas", "File shelf";
+    ShelfClear => "Kosongkan", "Clear";
+    ShelfEmpty => "Jatuhkan berkas ke sini, seret keluar lagi nanti",
+        "Drop files here, drag them out later";
     PageSystem => "Sistem", "System";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";

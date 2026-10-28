@@ -386,7 +386,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 83] = [
+const SCENES: [Scene; 84] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -495,6 +495,7 @@ const SCENES: [Scene; 83] = [
         ..panel("shortcuts-custom", Page::Shortcuts)
     },
     panel("mixer", Page::Mixer),
+    panel("shelf", Page::Shelf),
     Scene {
         search: true,
         ..panel("search", Page::Search)
@@ -1034,6 +1035,7 @@ fn run_scenes(scenes: &[Scene]) {
                 }
             });
             let mixer_rows = demo_mixer();
+            let shelf_cards = demo_shelf(scene.name == "shelf");
             let search_results = if scene.search {
                 demo_search_results()
             } else {
@@ -1056,6 +1058,7 @@ fn run_scenes(scenes: &[Scene]) {
                 cal_selected: today,
                 calendar: &snapshot,
                 mixer: Some(&mixer_rows),
+                shelf: &shelf_cards,
                 notes,
                 notes_page: 0,
                 reminders: if scene.reminders == 12 {
@@ -2106,4 +2109,26 @@ fn demo_search_results() -> Vec<crate::search::SearchResult> {
             web_title: &web_title,
         },
     )
+}
+
+/// Made-up files for the shelf scene (and an empty shelf elsewhere): never
+/// the machine's own. One of them is gone, as a card shows it.
+fn demo_shelf(filled: bool) -> Vec<crate::shelf::ShelfCard> {
+    use crate::shelf::{ShelfCard, ShelfKind};
+    if !filled {
+        return Vec::new();
+    }
+    let card = |name: &str, kind, stale| ShelfCard {
+        name: name.into(),
+        kind,
+        stale,
+    };
+    vec![
+        card("denah-lt2.pdf", ShelfKind::Document, false),
+        card("foto-lokasi.png", ShelfKind::Image, false),
+        card("Gambar kerja", ShelfKind::Folder, false),
+        card("rab-v3.xlsx", ShelfKind::Document, false),
+        card("render.mp4", ShelfKind::Media, false),
+        card("arsip-lama.zip", ShelfKind::Archive, true),
+    ]
 }

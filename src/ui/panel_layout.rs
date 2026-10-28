@@ -185,6 +185,28 @@ pub struct ShortcutsLayout {
     pub tiles: Vec<(Option<Shortcut>, Rect)>,
 }
 
+/// The Shelf page: up to twelve cards, four to a row, under a header with
+/// "Kosongkan".
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShelfLayout {
+    pub header: Rect,
+    /// "Kosongkan"; only with something on the shelf.
+    pub clear: Option<Rect>,
+    /// The hint of an empty shelf.
+    pub empty: Option<Rect>,
+    pub cards: Vec<ShelfCardLayout>,
+}
+
+/// A card and the X on its corner (a click takes the file off the shelf).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShelfCardLayout {
+    pub card: Rect,
+    pub remove: Rect,
+}
+
+const SHELF_CLEAR_W: f32 = 84.0;
+const SHELF_X: f32 = 18.0;
+
 /// The Mixer page: a row per volume.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MixerLayout {
@@ -296,6 +318,7 @@ pub enum PageLayout {
     Shortcuts(ShortcutsLayout),
     Mixer(MixerLayout),
     Search(SearchLayout),
+    Shelf(ShelfLayout),
 }
 
 /// The cleaner behind "Bersihkan" exists (Run 5): the button is the accent
@@ -2006,6 +2029,41 @@ pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsL
     ShortcutsLayout { header, tiles }
 }
 
+/// The Shelf page for `n` cards (at most twelve). Cards keep the size they
+/// have with two rows, so a single file is not a giant tile; they start at
+/// the top.
+pub fn shelf_layout(s: ShapeRect, strip: bool, n: usize) -> ShelfLayout {
+    let top = content_top(s, strip);
+    let bottom = content_bottom(s);
+    let (l, r) = (left(s), right(s));
+    let header = rect(l, top, r - l - SHELF_CLEAR_W - 8.0, HEADER_H);
+    let clear = (n > 0).then(|| rect(r - SHELF_CLEAR_W, top, SHELF_CLEAR_W, HEADER_H));
+    let body = header.bottom() + 8.0;
+    let w = (r - l - 3.0 * TILE_GAP) / 4.0;
+    let rows = n.div_ceil(4).max(2) as f32;
+    let h = ((bottom - body - (rows - 1.0) * TILE_GAP) / rows).min(TILE_MAX_H);
+    let cards = (0..n)
+        .map(|i| {
+            let (row, col) = ((i / 4) as f32, (i % 4) as f32);
+            let card = rect(
+                l + col * (w + TILE_GAP),
+                body + row * (h + TILE_GAP),
+                w,
+                h,
+            );
+            let remove = rect(card.right() - SHELF_X - 4.0, card.y + 4.0, SHELF_X, SHELF_X);
+            ShelfCardLayout { card, remove }
+        })
+        .collect();
+    let empty = (n == 0).then(|| rect(l, body, r - l, 2.0 * h + TILE_GAP));
+    ShelfLayout {
+        header,
+        clear,
+        empty,
+        cards,
+    }
+}
+
 /// The Mixer page for `n` rows (at least one): rows of up to
 /// `MIXER_ROW_MAX_H`, shrinking so that they all fit above the dots.
 pub fn mixer_layout(s: ShapeRect, strip: bool, n: usize) -> MixerLayout {
@@ -2569,6 +2627,18 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 add(row.track, Hit::MixerSlider(i));
             }
         }
+        PageLayout::Shelf(l) => {
+            if let Some(clear) = l.clear {
+                add(clear, Hit::ShelfClear);
+            }
+            // The X sits on its card: it comes first.
+            for (i, c) in l.cards.iter().enumerate() {
+                add(c.remove, Hit::ShelfRemove(i));
+            }
+            for (i, c) in l.cards.iter().enumerate() {
+                add(c.card, Hit::ShelfCard(i));
+            }
+        }
         PageLayout::Cleaner(l) => {
             add(l.back, Hit::CleanBack);
             // The mode segment, like the rows, not while a clean runs.
@@ -2823,6 +2893,9 @@ mod tests {
         }
         for n in [1, 2, 5, 6] {
             out.push((format!("mixer {n}"), PageLayout::Mixer(mixer_layout(s, strip, n))));
+        }
+        for n in [0, 1, 5, 9, 12] {
+            out.push((format!("shelf {n}"), PageLayout::Shelf(shelf_layout(s, strip, n))));
         }
         for n in [0, 1, 3, crate::search::MAX_RESULTS] {
             out.push((format!("search {n}"), PageLayout::Search(search_layout(s, strip, n))));
@@ -4093,6 +4166,51 @@ mod tests {
     }
 
     #[test]
+    fn shelf_cards_wrap_four_to_a_row_and_hit_by_place() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                for n in [0, 1, 4, 5, 12] {
+                    let l = shelf_layout(s, strip, n);
+                    assert_eq!(l.cards.len(), n);
+                    assert_eq!(l.clear.is_some(), n > 0);
+                    assert_eq!(l.empty.is_some(), n == 0);
+                    assert!(l.header.right() < l.clear.map_or(f32::MAX, |c| c.x));
+                    for (i, c) in l.cards.iter().enumerate() {
+                        assert!(c.card.y >= l.header.bottom(), "{n}: under the header");
+                        assert!(c.card.bottom() <= content_bottom(s) + 0.01, "{n}: inside");
+                        assert_eq!(c.card.x, l.cards[i % 4].card.x, "{n}: columns line up");
+                        assert_eq!(c.card.w, l.cards[0].card.w);
+                        assert_eq!(c.card.h, l.cards[0].card.h);
+                        assert!(c.card.h >= 56.0, "{style:?} strip={strip}: {:?}", c.card);
+                        let (glyph, label) = tile_parts(c.card);
+                        assert!(glyph.y >= c.card.y && label.bottom() <= c.card.bottom());
+                    }
+                }
+            }
+        }
+        let s = panel(Style::Pill);
+        let l = shelf_layout(s, false, 3);
+        let r = regions(s, &PageLayout::Shelf(l), false);
+        let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
+        assert_eq!(
+            hits,
+            [
+                Hit::ShelfClear,
+                Hit::ShelfRemove(0),
+                Hit::ShelfRemove(1),
+                Hit::ShelfRemove(2),
+                Hit::ShelfCard(0),
+                Hit::ShelfCard(1),
+                Hit::ShelfCard(2),
+            ]
+        );
+        // An empty shelf has no buttons.
+        let empty = shelf_layout(s, false, 0);
+        assert!(regions(s, &PageLayout::Shelf(empty), false).is_empty());
+    }
+
+    #[test]
     fn mixer_rows_fit_above_the_dots_in_order_and_hit_by_place() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
@@ -4426,6 +4544,22 @@ mod tests {
                         assert_eq!(i, r.len() - 1, "{name}: the backdrop is last");
                         r.pop();
                     }
+                    // A Shelf card's X sits on it and comes first.
+                    if let PageLayout::Shelf(l) = &layout {
+                        let first = r.iter().position(|x| matches!(x.hit, Hit::ShelfRemove(_)));
+                        if let Some(i) = first {
+                            let cards = r.iter().position(|x| matches!(x.hit, Hit::ShelfCard(_)));
+                            assert!(cards.is_none_or(|c| c > i), "{name}: X before cards");
+                            for (n, c) in l.cards.iter().enumerate() {
+                                assert!(
+                                    c.remove.x >= c.card.x && c.remove.bottom() <= c.card.bottom(),
+                                    "{name}: X {n} inside its card"
+                                );
+                                assert!(c.remove.right() <= c.card.right());
+                            }
+                            r.drain(i..i + l.cards.len());
+                        }
+                    }
                     // A Clipboard card's buttons sit on it and come first;
                     // the cards themselves must not overlap anything else.
                     if let PageLayout::Clipboard(l) = &layout {
@@ -4559,6 +4693,15 @@ mod tests {
                             drawn.push(l.header);
                             for row in &l.rows {
                                 drawn.extend([row.icon, row.name, row.track, row.value]);
+                            }
+                        }
+                        PageLayout::Shelf(l) => {
+                            drawn.push(l.header);
+                            drawn.extend(l.clear);
+                            drawn.extend(l.empty);
+                            for c in &l.cards {
+                                let (glyph, label) = tile_parts(c.card);
+                                drawn.extend([c.card, c.remove, glyph, label]);
                             }
                         }
                         PageLayout::Shortcuts(l) => {

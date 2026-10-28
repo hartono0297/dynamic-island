@@ -64,6 +64,7 @@ use crate::notes::NotesStore;
 use crate::audio;
 use crate::gestures;
 use crate::pages::PanelPages;
+use crate::shelf_ole;
 use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
@@ -103,6 +104,10 @@ use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
 #[path = "app_search.rs"]
 mod quick;
 use quick::{HOTKEY_SEARCH, QUERY_LIMIT, SearchState};
+
+#[path = "app_shelf.rs"]
+mod shelf_page;
+use shelf_page::{ShelfState, TIMER_SHELF_HOLD};
 
 #[path = "app_shot.rs"]
 mod shot;
@@ -270,6 +275,8 @@ pub fn run(media_log_flag: bool) {
     let reminders = RemindersStore::open(RemindersStore::default_path());
     // Sends the cached calendar at once; the first range is asked for below.
     let sync = spawn_sync(tx.clone(), poster(hwnd, WM_APP_EVENT), config.clone());
+    // Files dropped on the island go to the shelf.
+    shelf_ole::register(hwnd, tx.clone(), poster(hwnd, WM_APP_EVENT));
     APP.with(|cell| {
         *cell.borrow_mut() = Some(App {
             hwnd,
@@ -309,6 +316,7 @@ pub fn run(media_log_flag: bool) {
             mixer_pending: false,
             mixer_timer: false,
             mixer_drag: None,
+            shelf: ShelfState::default(),
             pomo_timer: false,
             clock_timer: false,
             progress_timer: false,
@@ -501,6 +509,8 @@ struct App {
     mixer_timer: bool,
     /// The row whose slider the left button is dragging.
     mixer_drag: Option<usize>,
+    /// The file shelf (`app_shelf`).
+    shelf: ShelfState,
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
@@ -797,6 +807,10 @@ impl App {
                 }
                 Event::SearchIndex(apps) => {
                     self.on_search_index(apps);
+                    continue;
+                }
+                Event::ShelfDrop(paths) => {
+                    self.on_shelf_drop(paths, now);
                     continue;
                 }
                 Event::Clean(event) => {
@@ -1271,6 +1285,9 @@ impl App {
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
             Effect::MixerLevel(i, level) => self.mixer_set_level(i, level),
             Effect::MixerMute(i) => self.mixer_toggle_mute(i),
+            Effect::ShelfOpen(i) => self.shelf_open(i),
+            Effect::ShelfRemove(i) => self.shelf_remove(i),
+            Effect::ShelfClear => self.shelf_clear(),
             Effect::OpenCleaner => self.scan_clean(),
             Effect::CleanDelete(cats) => return self.start_clean(cats),
             Effect::SaveCleanMode(mode) => {
@@ -2606,6 +2623,7 @@ impl App {
         self.sync_robot_timers(now);
         self.sync_system_page();
         self.sync_mixer();
+        self.sync_shelf();
         self.sync_outside_timer();
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
@@ -2818,6 +2836,7 @@ impl App {
                     self.mixer_scan();
                 }
             }
+            TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
@@ -2954,6 +2973,13 @@ impl App {
     /// `WM_LBUTTONDOWN`: remembers what the press is on.
     fn on_press(&mut self, lparam: LPARAM) {
         let hit = self.hit_at(lparam);
+        self.shelf_press(
+            match hit {
+                Some(Hit::ShelfCard(i)) => Some(i),
+                _ => None,
+            },
+            lparam,
+        );
         self.mixer_press(hit.as_ref(), lparam);
         if hit.is_some() && self.gestures_active() {
             let (x, y) = client_xy(lparam);
@@ -2968,6 +2994,7 @@ impl App {
     /// the same target. A button pressed in another window and let go over
     /// the island does nothing. A swipe is not a click: it skips the song.
     fn on_release(&mut self, lparam: LPARAM) {
+        self.shelf_release();
         self.mixer_drag = None;
         let (x, y) = client_xy(lparam);
         let min_px = (gestures::SWIPE_MIN_DIP * self.gesture_scale()).round() as i32;
@@ -3434,6 +3461,7 @@ impl App {
             cal_selected: state.cal_selected(),
             calendar: &self.calendar,
             mixer: self.mixer.as_deref(),
+            shelf: &self.shelf.cards,
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
             reminders_page: state.reminders_page(),
@@ -4372,6 +4400,7 @@ fn deliver_settings_action(action: SettingsAction) {
 /// Closes the island. An open editor is closed first and its last result
 /// (an edited note) handled here: once the island is gone, nobody reads it.
 fn shutdown(hwnd: HWND) {
+    shelf_ole::revoke(hwnd);
     settings::close();
     flush_editor();
     // A command still running ends with the island's process, which closes
@@ -4623,6 +4652,11 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_MOUSEMOVE => {
             with_app(|app| app.on_mouse_move(lparam));
+            // A card pulled off the shelf: the drag blocks until the button
+            // is let go, so it starts outside the app borrow.
+            if let Some(path) = with_app(|app| app.shelf_drag_start(lparam)).flatten() {
+                shelf_ole::drag_out(&path);
+            }
             LRESULT(0)
         }
         WM_MOUSEHOVER => {
@@ -5237,6 +5271,7 @@ mod tests {
             shot::TIMER_SHOT_SHOW,
             TIMER_OUTSIDE,
             TIMER_MIXER,
+            TIMER_SHELF_HOLD,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
@@ -5389,7 +5424,7 @@ mod tests {
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Pomodoro), 1.0);
         assert_eq!(slide_from(&pages, Page::Pomodoro, Page::Calendar), -1.0);
         // Shortcuts moved to the front: going to it is going back.
-        pages.move_by(Page::Shortcuts, -9);
+        pages.move_by(Page::Shortcuts, -10);
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Shortcuts), -1.0);
         assert_eq!(slide_from(&pages, Page::Shortcuts, Page::Calendar), 1.0);
     }

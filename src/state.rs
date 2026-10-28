@@ -198,6 +198,10 @@ pub struct IslandState {
     /// until the pointer comes (then hover holds it), the hotkey again, a
     /// copy, or `ClipHoldEnd`.
     clip_held: bool,
+    /// Files are being dragged over the island: the panel is open on the
+    /// shelf for them. Hover takes over like it does from `clip_held`;
+    /// `ShelfDrag(false)` ends it.
+    shelf_held: bool,
     /// The quick search is open (over `search_prev`'s page); it holds the
     /// panel open like the CLI input does.
     search_open: bool,
@@ -266,6 +270,7 @@ impl IslandState {
             cli_menu: false,
             clip_focused: false,
             clip_held: false,
+            shelf_held: false,
             search_open: false,
             search_prev: Page::Calendar,
             collapsed: Collapse::No,
@@ -403,6 +408,7 @@ impl IslandState {
                 // and leaving closes it as usual.
                 if on {
                     self.clip_held = false;
+                    self.shelf_held = false;
                 }
                 self.collapsed = match (self.collapsed, on) {
                     (Collapse::Shut, false) => Collapse::Left,
@@ -484,6 +490,7 @@ impl IslandState {
             | Event::SystemSample(_)
             | Event::Audio(_)
             | Event::SearchIndex(_)
+            | Event::ShelfDrop(_)
             | Event::Clean(_)
             | Event::Mole(_)
             | Event::ShotFolder { .. }
@@ -494,6 +501,16 @@ impl IslandState {
             Event::CleanModeSetting(mode) => self.clean_mode = mode,
             Event::PanelPages(pages) => self.set_pages(pages),
             Event::ShortcutTiles(tiles) => self.tiles = tiles,
+            // Files over the island: the panel opens on the shelf and stays
+            // while they hover (nothing else changes: not in a game).
+            Event::ShelfDrag(true) => {
+                if !self.fullscreen {
+                    self.page = Page::Shelf;
+                    self.collapsed = Collapse::No;
+                    self.shelf_held = true;
+                }
+            }
+            Event::ShelfDrag(false) => self.shelf_held = false,
             // Only the open Mixer page takes a level.
             Event::MixerLevel(i, level) => {
                 if self.view() == View::Panel(Page::Mixer) {
@@ -544,6 +561,9 @@ impl IslandState {
         }
         if self.clip_held && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
             self.clip_held = false;
+        }
+        if self.shelf_held && (self.page != Page::Shelf || self.collapsed != Collapse::No) {
+            self.shelf_held = false;
         }
         // The search closed (or the panel went away some other way): the
         // page it came over returns, and the keyboard with it.
@@ -889,6 +909,7 @@ impl IslandState {
                 || self.cli_focused
                 || self.clip_focused
                 || self.clip_held
+                || self.shelf_held
                 || self.search_open)
     }
 
@@ -903,6 +924,7 @@ impl IslandState {
             Collapse::Left
         };
         self.clip_held = false;
+        self.shelf_held = false;
     }
 
     /// The hotkey: the Clipboard page opens (a new visit, whatever closed
@@ -1119,6 +1141,23 @@ impl IslandState {
             Hit::MixerMute(i) => {
                 if self.view() == View::Panel(Page::Mixer) {
                     effects.push(Effect::MixerMute(i));
+                }
+            }
+            // A card opens its file, with the panel out of the way; the
+            // others change the shelf where it is.
+            Hit::ShelfCard(i) => {
+                if self.view() == View::Panel(Page::Shelf) {
+                    self.collapse_for(Effect::ShelfOpen(i), effects);
+                }
+            }
+            Hit::ShelfRemove(i) => {
+                if self.view() == View::Panel(Page::Shelf) {
+                    effects.push(Effect::ShelfRemove(i));
+                }
+            }
+            Hit::ShelfClear => {
+                if self.view() == View::Panel(Page::Shelf) {
+                    effects.push(Effect::ShelfClear);
                 }
             }
             // The offset buttons are drawn only with lyrics on.
@@ -2464,7 +2503,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 9), t0);
+        s.apply(Event::Wheel(-120 * 10), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
@@ -2530,6 +2569,7 @@ mod tests {
                 Page::Media,
                 Page::Mixer,
                 Page::Clipboard,
+                Page::Shelf,
                 Page::System,
                 Page::Cli,
                 Page::Shortcuts,
@@ -3117,10 +3157,12 @@ mod tests {
         // No Win+V, no collapse: the island's own page.
         assert_eq!(effects, vec![]);
         assert_eq!(s.view(), View::Panel(Page::Clipboard));
-        // The page sits between Mixer and Sistem, then CLI.
+        // The page sits between Mixer and the shelf, then Sistem and CLI.
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Mixer));
         s.apply(Event::Wheel(-240), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::System));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
@@ -3175,7 +3217,7 @@ mod tests {
             s.apply(Event::Wheel(-120), t0),
             vec![Effect::ReleaseClipFocus]
         );
-        assert_eq!(s.view(), View::Panel(Page::System));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
     }
 
     #[test]
@@ -4526,6 +4568,57 @@ mod tests {
         open_on(&mut s2, Page::Shortcuts, t0);
         assert!(s2.apply(Event::Click(Hit::CustomTile(0)), t0).is_empty());
         assert!(s2.apply(Event::Click(Hit::CustomTile(40)), t0).is_empty());
+    }
+
+    #[test]
+    fn files_dragged_over_the_island_open_the_shelf_and_hold_it_until_they_leave() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert!(!matches!(s.view(), View::Panel(_)));
+        s.apply(Event::ShelfDrag(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // They leave without a drop: the panel goes with them.
+        s.apply(Event::ShelfDrag(false), t0);
+        assert!(!matches!(s.view(), View::Panel(_)));
+        // Dropped and the pointer arrives: hover holds the shelf, and the end
+        // of the drop's hold does not close it.
+        s.apply(Event::ShelfDrag(true), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::ShelfDrag(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // The reducer ignores the paths themselves: `App` keeps them.
+        let effects = s.apply(Event::ShelfDrop(vec!["a.txt".into()]), t0);
+        assert!(effects.is_empty());
+        // A game on top: nothing opens.
+        let mut g = st();
+        g.apply(Event::Fullscreen(true), t0);
+        g.apply(Event::ShelfDrag(true), t0);
+        assert!(!matches!(g.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn the_shelf_cards_work_only_while_its_page_is_open() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        for hit in [Hit::ShelfCard(0), Hit::ShelfRemove(0), Hit::ShelfClear] {
+            assert!(s.apply(Event::Click(hit), t0).is_empty());
+        }
+        open_on(&mut s, Page::Shelf, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::ShelfRemove(2)), t0),
+            vec![Effect::ShelfRemove(2)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::ShelfClear), t0),
+            vec![Effect::ShelfClear]
+        );
+        // A card opens its file once the panel is out of the way.
+        assert_eq!(
+            s.apply(Event::Click(Hit::ShelfCard(1)), t0),
+            vec![Effect::ShelfOpen(1)]
+        );
+        assert!(!s.panel_is_open());
     }
 
     #[test]

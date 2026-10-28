@@ -60,6 +60,7 @@ use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
 use crate::audio::MixerRow;
+use crate::shelf::ShelfCard;
 use crate::clipboard::Clip;
 use crate::clipboard::image::Thumb;
 use crate::config::Style;
@@ -111,6 +112,8 @@ pub struct Frame<'a> {
     /// The Mixer's rows; `None` without an output device (or before the
     /// first reading).
     pub mixer: Option<&'a [MixerRow]>,
+    /// The file shelf's cards.
+    pub shelf: &'a [ShelfCard],
     pub notes: &'a [Note],
     pub notes_page: usize,
     /// Upcoming (not done) reminders, earliest first.

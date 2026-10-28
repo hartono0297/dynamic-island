@@ -155,6 +155,7 @@ pub fn page_name(page: Page) -> &'static str {
         Page::Media => "Media",
         Page::Mixer => "Mixer",
         Page::Clipboard => "Clipboard",
+        Page::Shelf => "Shelf",
         Page::System => "System",
         Page::Cli => "Cli",
         Page::Shortcuts => "Shortcuts",
@@ -183,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn default_shows_all_ten_pages_in_the_design_order() {
+    fn default_shows_all_eleven_pages_in_the_design_order() {
         let p = PanelPages::default();
         assert_eq!(p.visible(), Page::ALL.to_vec());
         assert_eq!(
@@ -196,6 +197,7 @@ mod tests {
                 Page::Media,
                 Page::Mixer,
                 Page::Clipboard,
+                Page::Shelf,
                 Page::System,
                 Page::Cli,
                 Page::Shortcuts,
@@ -317,7 +319,7 @@ mod tests {
         p.toggle(Page::Clipboard);
         p.toggle(Page::System);
         // Opened by its tile while it is off.
-        assert_eq!(p.step(Page::Clipboard, 1), Page::Cli);
+        assert_eq!(p.step(Page::Clipboard, 1), Page::Shelf);
         assert_eq!(p.step(Page::Clipboard, -1), Page::Mixer);
         assert_eq!(p.step(Page::System, 2), Page::Shortcuts);
         // Nothing shown past it: it stays.
@@ -331,7 +333,7 @@ mod tests {
     #[test]
     fn the_wheel_follows_a_custom_order() {
         let mut p = PanelPages::default();
-        p.move_by(Page::Shortcuts, -9);
+        p.move_by(Page::Shortcuts, -10);
         assert_eq!(p.entries()[0].0, Page::Shortcuts);
         assert_eq!(p.step(Page::Shortcuts, 1), Page::Calendar);
         assert_eq!(p.step(Page::Calendar, -1), Page::Shortcuts);

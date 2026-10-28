@@ -219,6 +219,12 @@ pub enum Event {
     Audio(Option<Vec<MixerRow>>),
     /// The pointer asks row `index` of the Mixer for this level (0..=1).
     MixerLevel(usize, f32),
+    /// Files are being dragged over the island (`true`: it opens on the
+    /// shelf) or the drag left without a drop (`false`).
+    ShelfDrag(bool),
+    /// Files were dropped on the island. `App` puts them on the shelf, the
+    /// reducer ignores it.
+    ShelfDrop(Vec<std::path::PathBuf>),
     /// A folder check for screenshot `shot` ended: the Screenshots folder
     /// and the file that matched, if any. `App` keeps it, the reducer
     /// ignores it.
@@ -291,6 +297,11 @@ pub enum Hit {
     /// knows where the pointer is) and its speaker icon, by the row's place.
     MixerSlider(usize),
     MixerMute(usize),
+    /// The shelf: a card (opens the file), its X, and "Kosongkan", by the
+    /// card's place on the shelf.
+    ShelfCard(usize),
+    ShelfRemove(usize),
+    ShelfClear,
     /// The CLI page's terminal: the input takes the keyboard.
     CliInput,
     /// The CLI header's Stop button (the same as Ctrl+C).
@@ -402,6 +413,11 @@ pub enum Effect {
     /// Set the Mixer row's level / toggle its mute; `App` knows the rows.
     MixerLevel(usize, f32),
     MixerMute(usize),
+    /// Open shelf card `i`'s file / take it off / empty the shelf; `App`
+    /// keeps the shelf.
+    ShelfOpen(usize),
+    ShelfRemove(usize),
+    ShelfClear,
     /// Give the CLI input the keyboard (the island activates for it).
     FocusCliInput,
     /// The CLI input lets go of the keyboard; the window that had it
@@ -495,7 +511,7 @@ pub enum PomoField {
 }
 
 /// Panel pages, in scroll order: Kalender, Pomodoro, Pengingat, Catatan,
-/// Musik, Mixer, Clipboard, Sistem, then CLI and Pintasan.
+/// Musik, Mixer, Clipboard, Rak, Sistem, then CLI and Pintasan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Calendar,
@@ -507,6 +523,8 @@ pub enum Page {
     Mixer,
     /// The clipboard history.
     Clipboard,
+    /// The file shelf: files left on the island to take out later.
+    Shelf,
     /// Sistem: CPU, RAM, disks and the busiest processes.
     System,
     Cli,
@@ -519,7 +537,7 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 11] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
@@ -527,6 +545,7 @@ impl Page {
         Page::Media,
         Page::Mixer,
         Page::Clipboard,
+        Page::Shelf,
         Page::System,
         Page::Cli,
         Page::Shortcuts,

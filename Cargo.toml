@@ -8,6 +8,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 windows-numerics = "0.3"
+# The `implement` macro of the COM objects (drop target, drag source) names it.
+windows-core = "0.62"
 
 [dependencies.windows]
 version = "0.62"
@@ -35,6 +37,7 @@ features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_SystemServices",
     "Win32_System_Variant",
     "Win32_System_Power",
     "Win32_System_Pipes",

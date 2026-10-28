@@ -169,6 +169,7 @@ $shots = @(
     @{ name = 'music'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media' } }
     @{ name = 'music-lyrics'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media-lyrics-on' } }
     @{ name = 'mixer'; args = '--demo'; env = @{ DI_DEMO_STEP = 'mixer' } }
+    @{ name = 'shelf'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf' } }
     @{ name = 'search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'search' } }
     @{ name = 'shortcuts-custom'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts-custom' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }

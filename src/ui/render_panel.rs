@@ -37,6 +37,7 @@ use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
 use crate::audio::{self, MixerRow, Target};
+use crate::shelf::ShelfCard;
 use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
@@ -55,7 +56,7 @@ use crate::ui::panel_layout::{
     CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
     ClipLayout, SearchLayout, search_layout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
     MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout,
-    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, MIXER_TRACK_H, MixerLayout, mixer_layout,
+    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, MIXER_TRACK_H, MixerLayout, ShelfLayout, mixer_layout, shelf_layout,
     calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
     clipboard_layout, media_panel_layout, media_progress_layout, mole_layout, notes_layout,
     page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
@@ -546,6 +547,7 @@ impl Renderer {
             // Room for the master row and, under it, a line saying no app
             // plays (or that there is no device).
             Page::Search => PageLayout::Search(search_layout(s, strip, frame.search.results.len())),
+            Page::Shelf => PageLayout::Shelf(shelf_layout(s, strip, frame.shelf.len())),
             Page::Mixer => PageLayout::Mixer(mixer_layout(
                 s,
                 strip,
@@ -599,6 +601,10 @@ impl Renderer {
             }
             PageLayout::Mixer(l) => {
                 self.paint_mixer(l, frame.mixer);
+                Ok(())
+            }
+            PageLayout::Shelf(l) => {
+                self.paint_shelf(l, frame.shelf);
                 Ok(())
             }
             PageLayout::Search(l) => {
@@ -2164,6 +2170,34 @@ impl Renderer {
         };
         self.clip_thumbs.borrow_mut().push((id, bitmap.clone()));
         Ok(Some(bitmap))
+    }
+
+    /// The shelf: a card per file (its type icon over its name, an X on the
+    /// corner), "Kosongkan" beside the heading. A card whose file is gone is
+    /// dimmed.
+    fn paint_shelf(&self, l: &ShelfLayout, cards: &[ShelfCard]) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.heading(text(lang, Key::PageShelf), l.header);
+        if let Some(clear) = l.clear {
+            self.set_color(p.raised, 1.0);
+            self.fill_round(clear, clear.h / 2.0);
+            self.text(text(lang, Key::ShelfClear), &self.fonts.small_center, clear, 1.0);
+        }
+        if let Some(empty) = l.empty {
+            self.set_color(p.raised, 0.5);
+            self.fill_round(empty, radius::TILE);
+            self.text2(text(lang, Key::ShelfEmpty), &self.fonts.secondary, empty);
+        }
+        for (lay, card) in l.cards.iter().zip(cards) {
+            let alpha = if card.stale { 0.4 } else { 1.0 };
+            self.set_color(p.raised, 1.0);
+            self.fill_round(lay.card, radius::TILE);
+            let (glyph, label) = tile_parts(lay.card);
+            self.icon(crate::shelf::icon(card.kind), glyph, 24.0, alpha, true);
+            self.text(&card.name, &self.fonts.eleven_center, label, alpha);
+            self.icon_colored(Icon::X, lay.remove, 11.0, p.secondary, 1.0, None);
+        }
     }
 
     /// The Mixer: a speaker, a name, a slider and the percent per row; the
