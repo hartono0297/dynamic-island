@@ -56,10 +56,16 @@ try {
     if (-not $source) {
         Say 'Mencari versi terbaru di GitHub...'
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'vale-installer' }
-        $exeAsset = $release.assets | Where-Object { $_.name -eq 'vale.exe' } | Select-Object -First 1
-        $shaAsset = $release.assets | Where-Object { $_.name -eq 'vale.exe.sha256' } | Select-Object -First 1
+        # Releases before 3.1 (Dynamic Island) name the exe dynamic-island.exe.
+        $exeAsset = $null
+        $shaAsset = $null
+        foreach ($name in @('vale.exe', 'dynamic-island.exe')) {
+            $exeAsset = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            $shaAsset = $release.assets | Where-Object { $_.name -eq "$name.sha256" } | Select-Object -First 1
+            if ($exeAsset -and $shaAsset) { break }
+        }
         if (-not $exeAsset -or -not $shaAsset) {
-            throw "Rilis $($release.tag_name) tidak punya vale.exe dan checksum-nya."
+            throw "Rilis $($release.tag_name) tidak punya exe Vale dan checksum-nya."
         }
         Say "Mengunduh $($release.tag_name)..."
         $source = Join-Path $work 'vale.exe'
