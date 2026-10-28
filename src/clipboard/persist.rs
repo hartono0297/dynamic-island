@@ -198,6 +198,18 @@ pub fn load_from(path: &Path) -> Vec<Clip> {
     items
 }
 
+/// The history at startup: the file's when it is kept, else none, and a
+/// file left behind (the removal never ran) goes now, as "Hanya di memori"
+/// promises.
+pub fn start_items(path: &Path, persist: bool) -> Vec<Clip> {
+    if persist {
+        load_from(path)
+    } else {
+        run_write(path, Write::Remove);
+        Vec::new()
+    }
+}
+
 /// Writes happen off the UI thread, one at a time and in order: each save
 /// carries a generation, and a save older than the newest asked for is
 /// dropped (the newer one writes the newer state).
@@ -332,6 +344,22 @@ mod tests {
         run_write(&path, Write::Remove);
         assert!(!path.exists());
         assert!(load_from(&path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_only_at_startup_removes_a_file_left_behind() {
+        // "Simpan setelah restart" was turned off but the removal never ran
+        // (quit at once, or config.json edited while closed).
+        let dir = temp_dir("memory-only");
+        let path = dir.join("clipboard-history.bin");
+        save_to(&path, sample().items()).unwrap();
+        std::fs::write(path.with_extension("bin.tmp"), b"half").unwrap();
+        assert!(start_items(&path, false).is_empty());
+        assert!(!path.exists() && !path.with_extension("bin.tmp").exists());
+        // Kept: loaded as before.
+        save_to(&path, sample().items()).unwrap();
+        assert_eq!(start_items(&path, true).len(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

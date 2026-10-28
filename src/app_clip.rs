@@ -139,11 +139,7 @@ impl App {
     /// At startup: the saved history (when kept), the listener and the hotkey.
     pub(super) fn clip_start(&mut self) {
         let cfg = self.config.clipboard;
-        let items = if cfg.persist {
-            persist::load_from(&persist::path())
-        } else {
-            Vec::new()
-        };
+        let items = persist::start_items(&persist::path(), cfg.persist);
         self.clip.history = History::from_items(cfg.max_items, items);
         self.sync_clip_listener();
         self.sync_clip_hotkey();

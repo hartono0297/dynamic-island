@@ -385,6 +385,8 @@ struct Settings {
     confirm: bool,
     /// "Lanjutan" under Google is open: the own Client ID fields show.
     google_advanced: bool,
+    /// "Hapus riwayat" waits for its second click.
+    clip_confirm: bool,
     /// `%APPDATA%\Vale`, or the old folder while a failed migration keeps it.
     data_label: String,
     /// Small and large window icons, owned (not shared) and destroyed with the window.
@@ -676,6 +678,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         hook_note: None,
         confirm: false,
         google_advanced,
+        clip_confirm: false,
         data_label: crate::data_dir::label(&crate::data_dir::dir()),
         icons: [HICON::default(); 2],
         styled_light: None,
@@ -956,6 +959,7 @@ impl Settings {
                 advanced: self.google_advanced,
             },
             google_note: self.google_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
+            clip_confirm: self.clip_confirm,
             hooks: self.hooks,
             hook_note: self.hook_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             clip: m.clip,
@@ -1238,6 +1242,12 @@ impl Settings {
                 let _ = KillTimer(Some(self.hwnd), TIMER_CONFIRM);
             }
         }
+        if hit != Hit::ClipClear && self.clip_confirm {
+            self.clip_confirm = false;
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_CONFIRM);
+            }
+        }
         let m = self.model.clone();
         let lang = m.lang;
         let post = |a: Action| vec![After::Post(a)];
@@ -1277,7 +1287,17 @@ impl Settings {
             Hit::ClipClearOnLock => post(Action::ClipClearOnLock(!m.clip.clear_on_lock)),
             Hit::ClipHotkey(h) if h != m.clip.hotkey => post(Action::ClipHotkey(h)),
             Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
-            Hit::ClipClear => post(Action::ClipClear),
+            Hit::ClipClear if self.clip_confirm => {
+                self.clip_confirm = false;
+                post(Action::ClipClear)
+            }
+            Hit::ClipClear => {
+                self.clip_confirm = true;
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_CONFIRM, CONFIRM_MS, None);
+                }
+                Vec::new()
+            }
             Hit::ShotPreview => post(Action::ShotPreview(!m.shot.preview)),
             Hit::ShotIgnore(v) if v != m.shot.on_ignore => post(Action::ShotOnIgnore(v)),
             Hit::ShotSecs(dir) => {
@@ -1667,7 +1687,10 @@ fn on_timer(id: usize) {
             let _ = KillTimer(Some(st.hwnd), id);
         }
         match id {
-            TIMER_CONFIRM => st.confirm = false,
+            TIMER_CONFIRM => {
+                st.confirm = false;
+                st.clip_confirm = false;
+            }
             TIMER_GOOGLE_NOTE => st.google_note = None,
             TIMER_HOOK_NOTE => st.hook_note = None,
             _ => return,

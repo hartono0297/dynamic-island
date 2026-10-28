@@ -119,6 +119,16 @@ pub(super) fn shot_view<'a>(shots: &'a Shots, view: &View) -> Option<ShotView<'a
     })
 }
 
+/// The history card that goes with a screenshot's "Hapus": its own card,
+/// never one the user pinned (a PrtSc of an unchanged screen can bring an
+/// old pinned card to the front).
+pub(super) fn card_to_remove(
+    history: &crate::clipboard::History,
+    entry: Option<u64>,
+) -> Option<u64> {
+    entry.filter(|&id| history.get(id).is_some_and(|c| !c.pinned))
+}
+
 /// The notice after "Simpan": "Disimpan · Pictures\Screenshots" when the
 /// screenshot has its file in `dir`; without one (a PrtSc with no auto-save)
 /// "Belum ada file · tetap di clipboard", so no one thinks it is on disk.
@@ -198,6 +208,18 @@ impl App {
             file: None,
             checks: 0,
         };
+        // The shown screenshot's file not found yet: one last look for it
+        // now, as the new image takes over the retries (a browser's "Copy
+        // image" must not leave the preview without its file).
+        if let Some(prev) = self.shots.checking
+            && self
+                .shots
+                .shown
+                .as_ref()
+                .is_some_and(|s| s.look.id == prev && s.file.is_none())
+        {
+            self.look_for_shot_file(prev);
+        }
         self.stop_shot_retry();
         self.shots.waiting = Some(state);
         self.shots.checking = Some(id);
@@ -443,7 +465,7 @@ impl App {
             }
             None => false,
         };
-        if let Some(entry) = state.entry
+        if let Some(entry) = card_to_remove(&self.clip.history, state.entry)
             && self.clip.history.delete(entry)
         {
             if self.clip.selected == Some(entry) {
@@ -511,7 +533,7 @@ impl App {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{delete_when_ignored, kept_notice};
+    use super::{card_to_remove, delete_when_ignored, kept_notice};
     use crate::clipboard::History;
     use crate::config::{Config, ShotIgnore};
 
@@ -565,6 +587,20 @@ mod tests {
         assert_eq!(ingest(&mut h, snap, 101), Ingested::Bumped { id });
         assert_eq!(h.len(), 1);
         assert!(h.items()[0].image().is_some_and(|i| i.screenshot));
+    }
+
+    #[test]
+    fn hapus_keeps_a_pinned_card() {
+        use crate::clipboard::store::tests::image;
+        use crate::clipboard::store::{Ingested, ingest};
+        let mut h = History::new(50);
+        let Ingested::Added { id, .. } = ingest(&mut h, image(1280, 720), 0) else {
+            panic!("added");
+        };
+        assert_eq!(card_to_remove(&h, Some(id)), Some(id));
+        h.set_pinned(id, true);
+        assert_eq!(card_to_remove(&h, Some(id)), None, "pinned on purpose");
+        assert_eq!(card_to_remove(&h, None), None);
     }
 
     #[test]

@@ -660,6 +660,8 @@ pub struct State<'a> {
     pub google: GoogleState,
     /// A short message beside the Google buttons.
     pub google_note: Option<(&'a str, Tone)>,
+    /// "Hapus riwayat" was clicked once and waits for the second click.
+    pub clip_confirm: bool,
     /// `None` when Claude Code's settings could not be read.
     pub hooks: Option<HookState>,
     /// The outcome of the last hook button, shown instead of the status.
@@ -1755,9 +1757,14 @@ fn clipboard_page(b: &mut Builder, s: &State) {
     b.row_text(card, rows[5], b.t(Key::ClipFeedbackAll), desc, false, x);
     b.divider(card, rows[5]);
 
-    let label = b.t(Key::ClipClearButton);
-    let w = b.button_w(&[&label], ButtonKind::Secondary);
-    let item = (Hit::ClipClear, label, ButtonKind::Secondary, true, w);
+    // Two clicks, as "Putuskan": the first arms it for a few seconds.
+    let (label, sure) = (b.t(Key::ClipClearButton), b.t(Key::ConfirmShort));
+    let w = b.button_w(&[&label, &sure], ButtonKind::Secondary);
+    let item = if s.clip_confirm {
+        (Hit::ClipClear, sure, ButtonKind::Confirm, true, w)
+    } else {
+        (Hit::ClipClear, label, ButtonKind::Secondary, true, w)
+    };
     let x = b.buttons(RIGHT, cy(rows[6]), vec![item]);
     let desc = Some((b.t(Key::ClipClearDesc), Tone::Secondary));
     b.row_text(card, rows[6], b.t(Key::ClipClear), desc, false, x);
@@ -2202,6 +2209,7 @@ mod tests {
                             advanced,
                         },
                         google_note: None,
+                        clip_confirm: !locked,
                         hooks,
                         hook_note: None,
                         clip: ClipboardSettings {
@@ -3057,6 +3065,30 @@ mod tests {
         let own = at(GoogleState { has_id: true, ..g });
         assert_eq!(own.fields.len(), 2);
         assert_eq!(button(&own, Hit::GoogleConnect).unwrap().label, "Hubungkan");
+    }
+
+    #[test]
+    fn clearing_the_clipboard_history_asks_once_more() {
+        let base = states()[0].clone();
+        let clear = |clip_confirm: bool| {
+            let s = State {
+                clip_confirm,
+                ..base.clone()
+            };
+            let l = layout(Section::Clipboard, &s, &Estimate);
+            l.controls
+                .iter()
+                .find_map(|c| match c {
+                    Control::Button(b) if b.hit == Hit::ClipClear => {
+                        Some((b.label.clone(), b.kind))
+                    }
+                    _ => None,
+                })
+                .expect("clear button")
+        };
+        assert_eq!(clear(false).1, ButtonKind::Secondary);
+        // The first click arms it, as "Putuskan" does: "Yakin?" in red.
+        assert_eq!(clear(true), ("Yakin?".to_string(), ButtonKind::Confirm));
     }
 
     #[test]

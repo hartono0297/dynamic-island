@@ -117,12 +117,27 @@ pub fn read(hwnd: HWND, own_sequence: Option<u32>) -> Read {
     if snap.files.is_empty() && ids.contains(&CF_UNICODETEXT) {
         snap.text = read_text();
     }
-    let has_text = snap.text.as_ref().is_some_and(|t| !t.trim().is_empty());
-    if snap.files.is_empty() && !has_text && ids.contains(&CF_DIB) {
+    let image = wants_image(
+        !snap.files.is_empty(),
+        ids.contains(&CF_UNICODETEXT),
+        snap.text.as_deref(),
+    );
+    if image && ids.contains(&CF_DIB) {
         snap.dib = read_global(CF_DIB, MAX_IMAGE_BYTES);
     }
     drop(open);
     Read::Snapshot(snap)
+}
+
+/// The bitmap is the copy only without files and without text: a text that
+/// was offered but not read (over the history's cap, a large Excel range)
+/// keeps the bitmap of it out too. Whitespace beside a bitmap does not count.
+fn wants_image(has_files: bool, text_offered: bool, text: Option<&str>) -> bool {
+    let text_counts = match text {
+        Some(t) => !t.trim().is_empty(),
+        None => text_offered,
+    };
+    !has_files && !text_counts
 }
 
 /// The bytes of format `f` (the clipboard is open), when not over `max`.
@@ -309,6 +324,19 @@ fn set(f: u32, bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::clipboard::kinds::ClipKind;
+
+    #[test]
+    fn text_too_big_to_keep_is_not_kept_as_a_picture_either() {
+        // A large Excel range: text over the cap plus a bitmap of the cells.
+        assert!(!wants_image(false, true, None));
+        // Plain text: kept as text.
+        assert!(!wants_image(false, true, Some("hello")));
+        // Only a bitmap, or whitespace beside it: the image.
+        assert!(wants_image(false, false, None));
+        assert!(wants_image(false, true, Some("  ")));
+        // Files win.
+        assert!(!wants_image(true, false, None));
+    }
 
     fn clip(data: ClipData, kind: ClipKind) -> Clip {
         Clip {

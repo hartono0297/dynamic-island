@@ -170,24 +170,21 @@ pub fn dib_from_thumb(t: &Thumb) -> Vec<u8> {
     out
 }
 
-/// A cheap fingerprint of an image's bytes (length, header and every 61st
-/// byte, FNV-1a): equal images give equal values, for de-duplication.
+/// A fingerprint of every byte of an image (its length, then 8 bytes at a
+/// time, multiply-rotate mixing): equal images give equal values, and a
+/// one-pixel change gives another, for de-duplication. A 33 MB 4K
+/// screenshot takes a few milliseconds.
 pub fn fingerprint(b: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |byte: u8| {
-        h ^= u64::from(byte);
-        h = h.wrapping_mul(0x0000_0100_0000_01B3);
-    };
-    for byte in (b.len() as u64).to_le_bytes() {
-        eat(byte);
+    const K: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mix = |h: u64, word: u64| (h.rotate_left(23) ^ word).wrapping_mul(K);
+    let mut h = mix(0xcbf2_9ce4_8422_2325, b.len() as u64);
+    let (words, rest) = b.as_chunks::<8>();
+    for w in words {
+        h = mix(h, u64::from_le_bytes(*w));
     }
-    for &byte in b.iter().take(64) {
-        eat(byte);
-    }
-    for &byte in b.iter().skip(64).step_by(61) {
-        eat(byte);
-    }
-    h
+    let mut tail = [0u8; 8];
+    tail[..rest.len()].copy_from_slice(rest);
+    mix(h, u64::from_le_bytes(tail))
 }
 
 #[cfg(test)]
@@ -280,5 +277,12 @@ pub mod tests {
         b[40] = 1;
         assert_ne!(fingerprint(&a), fingerprint(&b));
         assert_ne!(fingerprint(&a), fingerprint(&dib24(64, 33)));
+        // A one-pixel change anywhere (a typo fixed, a caret moved) is a new
+        // image, not the old card moving to the front.
+        for at in [100, 1_001, 4_000, a.len() - 1] {
+            let mut c = a.clone();
+            c[at] ^= 0x10;
+            assert_ne!(fingerprint(&a), fingerprint(&c), "byte {at}");
+        }
     }
 }
