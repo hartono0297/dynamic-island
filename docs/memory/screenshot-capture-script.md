@@ -19,3 +19,9 @@ date: 2026-10-27
   `settings-clipboard`. Their data and "now" are fixed (`demo_clips`), and the
   demo never touches the real clipboard, see [[clipboard-privacy]]. The scenes
   `clipboard-empty` and `clipboard-off` exist in `--demo` but are not shot.
+- Screenshot preview: `screenshot`, `screenshot-saved`, `screenshot-deleted`
+  (`notch:screenshot…`) with a drawn picture and fixed 1280 × 720 · 245 KB,
+  and `settings-screenshot` (Clipboard scrolled to its end); never a real
+  capture, clipboard or folder, see [[screenshot-preview]].
+- The capture copies the screen behind the window too when the backdrop
+  does not cover it: look at the PNGs and delete any that show your desktop.

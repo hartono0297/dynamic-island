@@ -48,6 +48,10 @@ either: the listener costs nothing until a copy; `TIMER_CLIP_RETRY` (20),
 while the Clipboard page is hidden draws nothing unless a notice shows;
 "Disalin" rides the notice deadline (1.5 s).
 
+The screenshot preview ([[screenshot-preview]]) adds `TIMER_SHOT_RETRY`
+(23), a one-shot that runs at most twice after a new clipboard image; its
+folder looks run on short-lived threads, never a watcher.
+
 Gotcha: the System page and the clipboard were built in parallel runs and
 both took ids 17 and 18; the merge moved the clipboard's to 20–22.
 `app::tests::timer_ids_never_collide` now checks every id.
