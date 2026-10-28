@@ -17,6 +17,9 @@ share one id), and `audio::Target::Master` is what the Mixer already sets.
   the panel opens within ~120 ms of the pointer arriving, so the compact notch
   is reachable mainly in Click mode or in that dwell; the cover is the usual
   place. Decision function: `app::volume_wheel_applies` (pure, tested).
+- **Only while it plays:** the caller passes `m.playing`, not "a song is
+  there", so over a paused song the wheel turns pages (3.2.1 review fix; it
+  used to pass `media().is_some()`).
 - **Setting:** `config.scroll_volume` (default on, hand-edited like
   `gestures`; no Settings row).
 - **Mechanics:** `audio::wheel_points` adds wheel deltas (120 a notch) into

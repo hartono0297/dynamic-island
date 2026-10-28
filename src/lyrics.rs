@@ -35,6 +35,12 @@ pub const FADE: Duration = Duration::from_millis(150);
 /// track change reported in pieces (title first, timeline later) is looked
 /// up once, with the new length.
 pub const SETTLE: Duration = Duration::from_secs(1);
+/// A lookup that failed on the way (no network, a stalled or refused
+/// request) is asked again this long after, up to `RETRIES` times per track.
+pub const RETRY_AFTER: Duration = Duration::from_secs(30);
+pub const RETRIES: u32 = 3;
+/// One request to LRCLIB that has not answered by then has failed.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// A length change this large under the same title means the next track's
 /// timeline arrived before its title.
 const LENGTH_JUMP_MS: u64 = 2_000;
@@ -183,13 +189,28 @@ pub fn has_words(lines: &[LrcLine]) -> bool {
 /// reported rate while playing, never past the end when the end is known.
 pub fn position_at(t: &Timeline, playing: bool, now: Instant) -> u64 {
     let pos = if playing {
-        let rate = f64::from(t.rate).clamp(0.1, 4.0);
+        let rate = usable_rate(t.rate);
         let elapsed = now.saturating_duration_since(t.updated).as_secs_f64() * 1000.0 * rate;
         t.position_ms.saturating_add(elapsed as u64)
     } else {
         t.position_ms
     };
     if t.end_ms > 0 { pos.min(t.end_ms) } else { pos }
+}
+
+/// A playback rate to count with: kept in 0.1..=4, and 1 for one that is
+/// not a number or infinite (`clamp` keeps a NaN, which would make the
+/// next-line timer fire every millisecond).
+fn usable_rate(rate: f32) -> f64 {
+    let rate = f64::from(rate);
+    if rate.is_finite() { rate.clamp(0.1, 4.0) } else { 1.0 }
+}
+
+/// The farthest lyric position this track can reach: `position_at` stops at
+/// its end, so with the offset applied (`lyric_position`) a line after this
+/// never comes. `None` when the player reports no length.
+pub fn lyric_reach(end_ms: u64, offset_ms: i32) -> Option<u64> {
+    (end_ms > 0).then(|| lyric_position(end_ms, offset_ms))
 }
 
 /// The position the lyric line is chosen at: the playback position plus the
@@ -525,9 +546,14 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 /// current track, and the line on screen. Caches live in the worker.
 #[derive(Default)]
 pub struct LyricsState {
-    /// The key last sent to the worker; not asked again while it is current,
-    /// so a failed lookup is not retried until another track was asked.
+    /// The key last sent to the worker; not asked again while it is current.
+    /// A lookup that failed on the way clears it, so it is asked again once
+    /// `retry_due` says the back-off is over.
     asked: Option<String>,
+    /// The track whose failed lookup waits for `retry_due`.
+    held: Option<String>,
+    /// The track retried last and how many retries it has had.
+    retries: Option<(String, u32)>,
     /// The key of the playing track as last seen; only its answer is shown.
     wanted: Option<String>,
     /// Artist and title (normalised) and the length last seen with them.
@@ -568,7 +594,13 @@ impl LyricsState {
         if self.current.as_ref().is_some_and(|(k, _)| *k == q.key) {
             return None;
         }
-        if fetch && self.asked.as_deref() != Some(q.key.as_str()) {
+        if fetch
+            && self.asked.as_deref() != Some(q.key.as_str())
+            && self.held.as_deref() != Some(q.key.as_str())
+        {
+            if self.retries.as_ref().is_some_and(|(key, _)| *key != q.key) {
+                self.retries = None;
+            }
             self.asked = Some(q.key.clone());
             return Some(Query {
                 provisional,
@@ -602,13 +634,38 @@ impl LyricsState {
     }
 
     /// A worker answer; it becomes the current lyrics only if it is for the
-    /// track playing now.
-    pub fn found(&mut self, f: LyricsFound) {
+    /// track playing now. A failure on the way (`transient`) for the track
+    /// last asked lets it be asked again, up to `RETRIES` times: true when
+    /// the caller should call `retry_due` after `RETRY_AFTER`.
+    pub fn found(&mut self, f: LyricsFound) -> bool {
+        if f.transient {
+            if self.asked.as_deref() != Some(f.key.as_str()) {
+                return false;
+            }
+            let tries = match &self.retries {
+                Some((key, n)) if *key == f.key => *n,
+                _ => 0,
+            };
+            if tries >= RETRIES {
+                return false;
+            }
+            self.asked = None;
+            self.held = Some(f.key.clone());
+            self.retries = Some((f.key, tries + 1));
+            return true;
+        }
         if let Some(lines) = f.lines
             && self.wanted.as_deref() == Some(f.key.as_str())
         {
             self.set_current(f.key, lines);
         }
+        false
+    }
+
+    /// The back-off after a failed lookup is over: the track may be asked
+    /// again (the next `want` while it plays).
+    pub fn retry_due(&mut self) {
+        self.held = None;
     }
 
     fn set_current(&mut self, key: String, lines: Lines) {
@@ -690,10 +747,14 @@ impl LyricsState {
 
     /// Milliseconds of wall clock from `pos_ms` until the line next changes
     /// at playback `rate` (a faster song gets there sooner), plus 1 so the
-    /// change has happened when a timer fires; `None` after the last line.
-    pub fn wait_ms(&self, pos_ms: u64, rate: f32) -> Option<u64> {
-        let rate = f64::from(rate).clamp(0.1, 4.0);
+    /// change has happened when a timer fires. `None` after the last line,
+    /// and when the next line lies past `reach_ms` (`lyric_reach`): the
+    /// position stops at the track's end, so a timer for it would fire and
+    /// re-arm for ever.
+    pub fn wait_ms(&self, pos_ms: u64, rate: f32, reach_ms: Option<u64>) -> Option<u64> {
+        let rate = usable_rate(rate);
         next_change(self.lines(), pos_ms)
+            .filter(|&at| reach_ms.is_none_or(|reach| at <= reach))
             .map(|at| (((at - pos_ms) as f64 / rate).ceil() as u64).saturating_add(1))
     }
 }
@@ -767,7 +828,9 @@ fn lookup(
         return known;
     }
     if http.is_none() {
-        *http = Http::new().ok();
+        // A request that stalls fails (and is retried later) instead of
+        // holding the thread and every lookup behind it.
+        *http = Http::new().ok().map(|h| h.with_timeout(REQUEST_TIMEOUT));
     }
     let Some(client) = http.as_ref() else {
         return found(q, None, true);
@@ -1126,13 +1189,60 @@ mod tests {
         let a = query("a");
         st.want(Some(&a), true);
         st.found(found(&a.key, Some(vec![l(1_000, "a"), l(5_000, "b")]), false));
-        assert_eq!(st.wait_ms(2_000, 1.0), Some(3_001));
-        assert_eq!(st.wait_ms(2_000, 2.0), Some(1_501), "twice as fast");
-        assert_eq!(st.wait_ms(2_000, 0.5), Some(6_001), "half speed");
-        assert_eq!(st.wait_ms(6_000, 1.0), None, "after the last line");
-        // An odd rate never makes it spin or sleep for ever.
-        assert!(st.wait_ms(2_000, 0.0).is_some_and(|ms| ms <= 30_001));
-        assert!(st.wait_ms(2_000, f32::NAN).is_some());
+        assert_eq!(st.wait_ms(2_000, 1.0, None), Some(3_001));
+        assert_eq!(st.wait_ms(2_000, 2.0, None), Some(1_501), "twice as fast");
+        assert_eq!(st.wait_ms(2_000, 0.5, None), Some(6_001), "half speed");
+        assert_eq!(st.wait_ms(6_000, 1.0, None), None, "after the last line");
+        // An odd rate never makes it spin or sleep for ever: a rate that is
+        // not a number (or infinite) counts as 1 (a NaN used to give 1 ms).
+        assert!(st.wait_ms(2_000, 0.0, None).is_some_and(|ms| ms <= 30_002));
+        assert_eq!(st.wait_ms(2_000, f32::NAN, None), Some(3_001));
+        assert_eq!(st.wait_ms(2_000, f32::INFINITY, None), Some(3_001));
+        assert_eq!(st.wait_ms(2_000, f32::NEG_INFINITY, None), Some(3_001));
+    }
+
+    #[test]
+    fn a_rate_that_is_not_a_number_plays_at_normal_speed() {
+        let t0 = Instant::now();
+        let mut t = tl(1_000, 0, t0);
+        t.rate = f32::NAN;
+        let later = t0 + Duration::from_millis(500);
+        assert_eq!(position_at(&t, true, later), 1_500, "it used to freeze");
+        t.rate = f32::INFINITY;
+        assert_eq!(position_at(&t, true, later), 1_500);
+    }
+
+    #[test]
+    fn the_timer_is_not_armed_for_a_line_the_track_end_cuts_off() {
+        let mut st = LyricsState::default();
+        let a = query("a");
+        st.want(Some(&a), true);
+        // The last line sits past the reported end (a long outro tag, or a
+        // length the player rounds down).
+        st.found(found(
+            &a.key,
+            Some(vec![l(1_000, "a"), l(5_000, "b"), l(9_500, "c")]),
+            false,
+        ));
+        let reach = lyric_reach(9_000, 0);
+        assert_eq!(reach, Some(8_900), "the end minus the output lag");
+        assert_eq!(st.wait_ms(2_000, 1.0, reach), Some(3_001), "b is reachable");
+        assert_eq!(st.wait_ms(6_000, 1.0, reach), None, "c never comes");
+        // Stopped at the end: position_at holds end_ms, nothing is armed
+        // (it used to re-arm every few hundred ms until the next track).
+        let t0 = Instant::now();
+        let t = tl(8_990, 9_000, t0);
+        let pos = lyric_position(position_at(&t, true, t0 + Duration::from_secs(5)), 0);
+        assert_eq!(pos, 8_900);
+        assert_eq!(st.wait_ms(pos, 1.0, reach), None);
+        // A large negative offset moves the reach back with the lines.
+        let reach = lyric_reach(9_000, -5_000);
+        assert_eq!(reach, Some(3_900));
+        assert_eq!(st.wait_ms(2_000, 1.0, reach), None, "b now lies past it");
+        assert_eq!(st.wait_ms(500, 1.0, reach), Some(501));
+        // No reported length: nothing to cut off.
+        assert_eq!(lyric_reach(0, 0), None);
+        assert_eq!(st.wait_ms(6_000, 1.0, None), Some(3_501));
     }
 
     #[test]
@@ -1339,17 +1449,19 @@ mod tests {
         assert!(file.exists());
 
         cache.write_nothing("gone", now);
+        let marker = tmp
+            .0
+            .join("lyrics-cache")
+            .join(format!("{}.{NONE_EXT}", key_hash("gone")));
+        assert!(marker.exists(), "the marker is where the test looks");
         assert_eq!(cache.read("gone", now), Cached::Nothing(now));
         assert_eq!(
             cache.read("gone", now + NEGATIVE_TTL_SECS - 1),
             Cached::Nothing(now)
         );
+        assert!(marker.exists());
         // Expired: a miss, and the marker is removed.
         assert_eq!(cache.read("gone", now + NEGATIVE_TTL_SECS), Cached::Miss);
-        let marker = tmp
-            .0
-            .join("lyrics-cache")
-            .join(format!("{}.none", key_hash("gone")));
         assert!(!marker.exists());
         // A marker from the future (clock moved back) is not trusted.
         cache.write_nothing("skew", now + 100);
@@ -1510,16 +1622,35 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_is_retried_only_after_another_track() {
+    fn a_failure_is_retried_after_a_back_off_a_few_times() {
         let mut st = LyricsState::default();
         let a = query("a");
         assert!(st.want(Some(&a), true).is_some());
-        st.found(found(&a.key, None, true));
+        for _ in 0..RETRIES {
+            // Failed on the way: the caller arms the back-off.
+            assert!(st.found(found(&a.key, None, true)));
+            assert_eq!(st.want(Some(&a), true), None, "not before the back-off");
+            st.retry_due();
+            assert_eq!(st.want(Some(&a), false), None, "paused: still no network");
+            assert_eq!(st.want(Some(&a), true), Some(a.clone()), "asked again");
+        }
+        // Out of retries: kept until another track was asked.
+        assert!(!st.found(found(&a.key, None, true)));
         assert_eq!(st.want(Some(&a), true), None);
         let b = query_len("b", 245_000);
         assert!(st.want(Some(&b), true).is_some());
         st.found(found(&b.key, Some(song()), false));
-        assert_eq!(st.want(Some(&a), true), Some(a));
+        assert_eq!(st.want(Some(&a), true), Some(a.clone()));
+        // And then it has its retries again.
+        assert!(st.found(found(&a.key, None, true)));
+        // A late failure for a track no longer asked arms nothing.
+        assert!(!st.found(found(&b.key, None, true)));
+        // A real "not found" is no failure.
+        let c = query("c");
+        st.retry_due();
+        assert!(st.want(Some(&c), true).is_some());
+        assert!(!st.found(found(&c.key, None, false)));
+        assert_eq!(st.want(Some(&c), true), None);
     }
 
     #[test]
@@ -1628,7 +1759,7 @@ mod tests {
             })
         );
         assert!(!st.fading(t0));
-        assert_eq!(st.wait_ms(0, 1.0), Some(1_001));
+        assert_eq!(st.wait_ms(0, 1.0, None), Some(1_001));
         assert!(!st.advance(500, t0), "same line");
         let t1 = t0 + Duration::from_millis(1_000);
         assert!(st.advance(1_000, t1));
@@ -1643,8 +1774,8 @@ mod tests {
         let t2 = t1 + Duration::from_secs(1);
         assert!(st.advance(200, t2));
         assert_eq!(st.shown(t2).unwrap().prev, Some("one"));
-        assert_eq!(st.wait_ms(200, 1.0), Some(801));
-        assert_eq!(st.wait_ms(9_000, 1.0), None, "after the last line");
+        assert_eq!(st.wait_ms(200, 1.0, None), Some(801));
+        assert_eq!(st.wait_ms(9_000, 1.0, None), None, "after the last line");
     }
 
     #[test]
@@ -1657,7 +1788,7 @@ mod tests {
         st.found(found(&a.key, Some(lines), false));
         st.advance(1_500, t0);
         assert!(!st.advance(2_500, t0), "repeated text: nothing to redraw");
-        assert_eq!(st.wait_ms(2_500, 1.0), Some(501));
+        assert_eq!(st.wait_ms(2_500, 1.0, None), Some(501));
         assert!(st.advance(3_000, t0));
         st.hide();
         assert_eq!(st.shown(t0), None);

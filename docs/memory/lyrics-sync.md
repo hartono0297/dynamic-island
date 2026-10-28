@@ -44,6 +44,26 @@ press − on the Music page.
 The timeline is cleared on a track change so the old position never leaks
 into the new song.
 
+## 3.2.1 review fixes
+
+- **Timer that never ends.** `position_at` stops at `end_ms`, so a line past
+  `lyric_reach(end_ms, offset)` (the end with the offset and lag applied; a
+  large negative offset pulls it back) never comes. `wait_ms(pos, rate,
+  reach)` returns `None` for it, which also covers "the position hit the
+  end": the timer used to fire and re-arm until the next track.
+- **NaN rate.** `clamp` keeps a NaN: `wait_ms` gave 1 ms (a 1 kHz timer) and
+  `position_at` froze. `usable_rate`: finite → clamp 0.1..4, else 1.0.
+- **Lookup timeout.** `Http::with_timeout` (lyrics: `REQUEST_TIMEOUT` 10 s)
+  waits on `SendRequestAsync` with a deadline (`Http::send_request`, via
+  `when` + `recv_timeout`) and `Cancel`s it; the call fails with
+  `ERROR_TIMEOUT` → `Answer::Failed`. The default completion option buffers
+  the whole body, so the deadline covers a stalled body too.
+- **Retry.** A transient answer (failure, or a provisional "not found") for
+  the track last asked clears `asked` and holds the track; `found` returns
+  true and `App` arms `TIMER_LYRIC_RETRY` (31, one-shot `RETRY_AFTER` 30 s),
+  whose `retry_due` lets the next `want` ask again. At most `RETRIES` (3) per
+  track; asking another track resets the count.
+
 **Not verified live:** real YouTube Music / Spotify GSMTC positions. Owner:
 play a song with synced lyrics, check the line against the audio, adjust
 with ± if a player reports its position consistently early or late.

@@ -29,8 +29,8 @@ use windows::Win32::System::RemoteDesktop::{
 };
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
-    VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    GetAsyncKeyState, ReleaseCapture, SetCapture, SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -38,7 +38,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
-    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND,
+    WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
     WM_WTSSESSION_CHANGE,
@@ -196,6 +197,9 @@ const TIMER_HALO: usize = 30;
 /// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
 const TIMER_MIXER: usize = 26;
+/// One-shot, `lyrics::RETRY_AFTER`: a lookup that failed on the way may be
+/// asked again (`LyricsState::retry_due`).
+const TIMER_LYRIC_RETRY: usize = 31;
 const MIXER_MS: u32 = 1_000;
 /// One-shot: the volume plate the wheel brought up goes after this long, and
 /// the volume read for it is forgotten (the next wheel reads it again).
@@ -339,6 +343,10 @@ pub fn run(media_log_flag: bool) {
             volume_pending: 0,
             volume_hud: None,
             mixer_timer: false,
+            mixer_resort: true,
+            mixer_seq: 0,
+            mixer_set_seq: 0,
+            mixer_wheel_sum: None,
             mixer_drag: None,
             shelf: ShelfState::default(),
             pomo_timer: false,
@@ -545,8 +553,18 @@ struct App {
     volume_hud: Option<f32>,
     /// `TIMER_MIXER` runs.
     mixer_timer: bool,
-    /// The row whose slider the left button is dragging.
-    mixer_drag: Option<usize>,
+    /// The page just opened: its first reading sets the row order, which
+    /// later readings keep (`audio::keep_order`) until it closes.
+    mixer_resort: bool,
+    /// Requests to the audio thread are numbered: the last one sent, and
+    /// the last level or mute (a reading asked before it is stale).
+    mixer_seq: u64,
+    mixer_set_seq: u64,
+    /// The wheel over a Mixer row: the row and what has not made a notch.
+    mixer_wheel_sum: Option<(audio::Target, i32)>,
+    /// What the slider the left button is dragging sets, taken at the press
+    /// (rows can come and go under a drag). The window holds the capture.
+    mixer_drag: Option<audio::Target>,
     /// The file shelf (`app_shelf`).
     shelf: ShelfState,
     pomo_timer: bool,
@@ -784,7 +802,7 @@ impl App {
         while let Ok(event) = self.rx.try_recv() {
             received += 1;
             // Background readings draw what they changed themselves.
-            samples += usize::from(matches!(event, Event::SystemSample(_) | Event::Audio(_)));
+            samples += usize::from(matches!(event, Event::SystemSample(_) | Event::Audio(..)));
             self.apply(event, now);
         }
         // Once per burst of command output, not per chunk.
@@ -831,7 +849,17 @@ impl App {
                 }
                 // Lyrics are `App`'s too; `refresh` tells the reducer they exist.
                 Event::Lyrics(found) => {
-                    self.lyrics.found(found);
+                    if self.lyrics.found(found) {
+                        // A failed lookup: asked again after the back-off.
+                        unsafe {
+                            SetTimer(
+                                Some(self.hwnd),
+                                TIMER_LYRIC_RETRY,
+                                lyrics::RETRY_AFTER.as_millis() as u32,
+                                None,
+                            );
+                        }
+                    }
                     continue;
                 }
                 Event::Cli(event) => {
@@ -846,8 +874,8 @@ impl App {
                     self.on_system_sample(sample, now);
                     continue;
                 }
-                Event::Audio(rows) => {
-                    self.on_audio(rows);
+                Event::Audio(asked, rows) => {
+                    self.on_audio(asked, rows);
                     continue;
                 }
                 Event::SearchIndex(apps) => {
@@ -2096,8 +2124,16 @@ impl App {
     /// Asks for the volumes unless a reading is already on its way.
     fn mixer_scan(&mut self) {
         if !self.mixer_pending {
-            self.mixer_pending = self.audio_request(audio::Req::Scan);
+            self.mixer_seq += 1;
+            self.mixer_pending = self.audio_request(audio::Req::Scan(self.mixer_seq));
         }
+    }
+
+    /// Sends a level or a mute; readings asked before it are stale.
+    fn audio_set(&mut self, req: audio::Req) {
+        self.mixer_seq += 1;
+        self.mixer_set_seq = self.mixer_seq;
+        self.audio_request(req);
     }
 
     /// The Mixer page showed: read at once and every `MIXER_MS`; it left: the
@@ -2106,13 +2142,15 @@ impl App {
         let wanted = self.state.view() == View::Panel(Page::Mixer);
         if wanted && !self.mixer_timer {
             self.mixer_timer = true;
+            self.mixer_resort = true;
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_MIXER, MIXER_MS, None);
             }
             self.mixer_scan();
         } else if !wanted && self.mixer_timer {
             self.mixer_timer = false;
-            self.mixer_drag = None;
+            self.mixer_wheel_sum = None;
+            self.end_mixer_drag();
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), TIMER_MIXER);
             }
@@ -2120,15 +2158,26 @@ impl App {
     }
 
     /// The audio thread's reading. A drag keeps what the pointer set until
-    /// it lets go; otherwise the rows are the reading.
-    fn on_audio(&mut self, rows: Option<Vec<audio::MixerRow>>) {
+    /// it lets go, and a reading asked before the last level or mute may
+    /// still hold the old value, so neither replaces the rows; otherwise the
+    /// rows are the reading, in the order the open page already shows.
+    fn on_audio(&mut self, asked: u64, rows: Option<Vec<audio::MixerRow>>) {
         self.mixer_pending = false;
         let master = rows
             .as_ref()
             .and_then(|r| r.iter().find(|row| row.target == audio::Target::Master))
             .map(|row| row.level);
-        if self.mixer_drag.is_none() {
-            self.mixer = rows;
+        let mut changed = false;
+        if self.mixer_drag.is_none() && !audio::reading_is_stale(asked, self.mixer_set_seq) {
+            let next = match (rows, &self.mixer) {
+                (Some(fresh), Some(shown)) if !self.mixer_resort => {
+                    Some(audio::keep_order(shown, fresh))
+                }
+                (rows, _) => rows,
+            };
+            changed = next != self.mixer;
+            self.mixer = next;
+            self.mixer_resort = false;
         }
         // A wheel turn waited for this reading.
         let waiting = std::mem::take(&mut self.volume_pending);
@@ -2136,7 +2185,8 @@ impl App {
             self.volume_cache = Some(level);
             self.volume_step(waiting);
         }
-        if self.state.view() == View::Panel(Page::Mixer) && !self.animating() {
+        // The page reads every second; only a reading that differs draws.
+        if changed && self.state.view() == View::Panel(Page::Mixer) && !self.animating() {
             self.draw(Instant::now());
         }
     }
@@ -2168,7 +2218,7 @@ impl App {
         };
         let next = audio::move_points(level, points);
         self.volume_cache = Some(next);
-        self.audio_request(audio::Req::Level(audio::Target::Master, next));
+        self.audio_set(audio::Req::Level(audio::Target::Master, next));
         self.volume_hud = Some(next);
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_VOLUME, VOLUME_HUD_MS, None);
@@ -2204,59 +2254,108 @@ impl App {
         }
         row.level = level;
         let target = row.target.clone();
-        self.audio_request(audio::Req::Level(target, level));
-        if !self.animating() {
-            self.draw(Instant::now());
-        }
+        // No draw here: the effect comes out of `apply`, and the `refresh`
+        // after it draws once.
+        self.audio_set(audio::Req::Level(target, level));
     }
 
+    /// Like `mixer_set_level`, drawn by the `refresh` after the click.
     fn mixer_toggle_mute(&mut self, i: usize) {
         let Some(row) = self.mixer.as_mut().and_then(|rows| rows.get_mut(i)) else {
             return;
         };
         row.muted = !row.muted;
         let (target, muted) = (row.target.clone(), row.muted);
-        self.audio_request(audio::Req::Mute(target, muted));
-        if !self.animating() {
-            self.draw(Instant::now());
-        }
+        self.audio_set(audio::Req::Mute(target, muted));
+    }
+
+    /// Row `i`'s level: `None` when there is no such row.
+    fn mixer_level(&self, i: usize) -> Option<f32> {
+        self.mixer.as_ref()?.get(i).map(|row| row.level)
     }
 
     /// A press on a Mixer slider sets the level under the pointer and starts
-    /// a drag; moves with the button down follow it (`on_mouse_move`).
+    /// a drag of that row's target; moves with the button down follow it
+    /// (`on_mouse_move`), outside the island too: the window takes the
+    /// capture until the release.
     fn mixer_press(&mut self, hit: Option<&Hit>, lparam: LPARAM) {
-        self.mixer_drag = None;
-        if let Some(Hit::MixerSlider(i)) = hit {
-            self.mixer_drag = Some(*i);
-            self.mixer_follow(lparam);
+        self.end_mixer_drag();
+        let Some(Hit::MixerSlider(i)) = hit else {
+            return;
+        };
+        let Some(row) = self.mixer.as_ref().and_then(|rows| rows.get(*i)) else {
+            return;
+        };
+        self.mixer_drag = Some(row.target.clone());
+        unsafe {
+            SetCapture(self.hwnd);
+        }
+        self.mixer_follow(lparam);
+    }
+
+    /// Ends a slider drag and lets the capture go. `ReleaseCapture` sends
+    /// `WM_CAPTURECHANGED` back while `App` is borrowed; that nested call
+    /// finds it busy and returns, and the drag is already over.
+    fn end_mixer_drag(&mut self) {
+        if self.mixer_drag.take().is_some() {
+            unsafe {
+                let _ = ReleaseCapture();
+            }
         }
     }
 
+    /// `WM_CAPTURECHANGED`: another window took the capture (or it was let
+    /// go): the drag is over.
+    fn on_capture_lost(&mut self) {
+        self.mixer_drag = None;
+    }
+
     /// The dragged slider's level at the pointer; the drag ends when the
-    /// left button is no longer down.
+    /// left button is no longer down or its row has gone.
     fn mixer_follow(&mut self, lparam: LPARAM) {
-        let Some(i) = self.mixer_drag else {
+        let Some(target) = self.mixer_drag.as_ref() else {
             return;
         };
-        if !left_button_down() {
-            self.mixer_drag = None;
+        let row = self
+            .mixer
+            .as_ref()
+            .and_then(|rows| rows.iter().position(|r| r.target == *target));
+        let Some(i) = row.filter(|_| left_button_down()) else {
+            self.end_mixer_drag();
             return;
-        }
+        };
         let (x, _) = client_xy(lparam);
-        if let Some(level) = self.renderer.mixer_level_at(i, x as f32) {
+        // A move that leaves the level where it is (sliding along one
+        // percent, or past an end) neither sets nor draws anything.
+        if let Some(level) = self.renderer.mixer_level_at(i, x as f32)
+            && self.mixer_level(i) != Some(level)
+        {
             self.apply_now(Event::MixerLevel(i, level));
         }
     }
 
-    /// The wheel over a Mixer row steps its level (up is louder).
+    /// The wheel over a Mixer row steps its level 5 % a notch (up is
+    /// louder). A touchpad's small deltas add up per row until they make a
+    /// notch.
     fn mixer_wheel(&mut self, delta: i32, row: usize) {
         let Some(current) = self.mixer.as_ref().and_then(|rows| rows.get(row)) else {
             return;
         };
-        let notches = if delta == 0 { 0 } else { (delta / 120).clamp(-4, 4) };
-        let notches = if notches == 0 { delta.signum() } else { notches };
-        let level = audio::step_level(current.level, notches);
-        self.apply_now(Event::MixerLevel(row, level));
+        let (target, level) = (current.target.clone(), current.level);
+        let mut sum = match self.mixer_wheel_sum.take() {
+            Some((on, sum)) if on == target => sum,
+            _ => 0,
+        };
+        let notches = audio::wheel_notches(&mut sum, delta);
+        self.mixer_wheel_sum = Some((target, sum));
+        if notches == 0 {
+            return;
+        }
+        // Nothing to do at an end.
+        let next = audio::step_level(level, notches);
+        if next != level {
+            self.apply_now(Event::MixerLevel(row, next));
+        }
     }
 
     /// `TIMER_SYSTEM_WARN`: the cheap disk and RAM read for the warnings.
@@ -2611,16 +2710,18 @@ impl App {
     /// the lyric view the timer stops. True when the line changed.
     fn sync_lyric_line(&mut self, now: Instant) -> bool {
         let view = self.state.view();
-        let (position, rate, playing) = match (self.state.timeline(), self.state.media()) {
+        let offset = self.config.lyrics_offset_ms;
+        let (position, rate, playing, reach) = match (self.state.timeline(), self.state.media()) {
             (Some(t), Some(m)) if view == View::MediaLyric => (
                 Some(lyrics::lyric_position(
                     lyrics::position_at(t, m.playing, now),
-                    self.config.lyrics_offset_ms,
+                    offset,
                 )),
                 t.rate,
                 m.playing,
+                lyrics::lyric_reach(t.end_ms, offset),
             ),
-            _ => (None, 1.0, false),
+            _ => (None, 1.0, false, None),
         };
         let Some(pos) = position else {
             // Fading out (fullscreen) keeps its last line and width; leaving
@@ -2641,8 +2742,11 @@ impl App {
             self.lyric_fading = true;
             self.ensure_clock();
         }
-        // Paused, nothing changes until it plays (the next refresh re-arms).
-        let wait = playing.then(|| self.lyrics.wait_ms(pos, rate)).flatten();
+        // Paused, nothing changes until it plays (the next refresh re-arms);
+        // at the track's end, or before a line the end cuts off, never.
+        let wait = playing
+            .then(|| self.lyrics.wait_ms(pos, rate, reach))
+            .flatten();
         self.set_lyric_timer(wait);
         self.sync_lyric_scroll(now);
         changed
@@ -3085,6 +3189,13 @@ impl App {
                     self.refresh(now);
                 }
             }
+            TIMER_LYRIC_RETRY => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_LYRIC_RETRY);
+                }
+                self.lyrics.retry_due();
+                self.sync_lyrics(Instant::now());
+            }
             TIMER_LYRIC_SCROLL => {
                 unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_LYRIC_SCROLL);
@@ -3217,6 +3328,12 @@ impl App {
     /// Arms hover and leave tracking when the pointer enters; the island
     /// expands only once `WM_MOUSEHOVER` reports a dwell.
     fn on_mouse_move(&mut self, lparam: LPARAM) {
+        // A slider drag holds the capture: the pointer may be anywhere, and
+        // leaving the island mid-drag is not leaving it (`on_release` checks).
+        if self.mixer_drag.is_some() {
+            self.mixer_follow(lparam);
+            return;
+        }
         // The faint margin round a small island takes a drag (the shelf),
         // not the pointer: nothing hovers there.
         if self.hit_at(lparam).is_none() {
@@ -3227,7 +3344,6 @@ impl App {
             }
             return;
         }
-        self.mixer_follow(lparam);
         if self.state.view() == View::Panel(Page::Clipboard) {
             let hit = self.hit_at(lparam);
             self.clip_hover(hit.as_ref());
@@ -3304,7 +3420,14 @@ impl App {
     /// the island does nothing. A swipe is not a click: it skips the song.
     fn on_release(&mut self, lparam: LPARAM) {
         self.shelf_release();
-        self.mixer_drag = None;
+        if self.mixer_drag.is_some() {
+            self.end_mixer_drag();
+            // A drag let go off the island: the moves out there went to the
+            // drag, so this is where the pointer leaves.
+            if self.hit_at(lparam).is_none() && !self.hover.needs_arming() {
+                self.on_mouse_leave();
+            }
+        }
         let (x, y) = client_xy(lparam);
         let min_px = (gestures::SWIPE_MIN_DIP * self.gesture_scale()).round() as i32;
         let swipe = self.swipe.release(x, y, Instant::now(), min_px);
@@ -3390,7 +3513,7 @@ impl App {
             self.cli_scroll(lines);
         } else if volume_wheel_applies(
             self.config.scroll_volume,
-            self.state.media().is_some(),
+            self.state.media().is_some_and(|m| m.playing),
             &self.state.view(),
             over_art,
         ) {
@@ -5094,6 +5217,10 @@ unsafe extern "system" fn wnd_proc(
             with_app(|app| app.on_release(lparam));
             LRESULT(0)
         }
+        WM_CAPTURECHANGED => {
+            with_app(App::on_capture_lost);
+            LRESULT(0)
+        }
         WM_RBUTTONUP => {
             // A favourite in the open CLI folder menu unstars; elsewhere
             // the tray menu opens (outside the app borrow: it is modal).
@@ -5648,6 +5775,8 @@ mod tests {
             TIMER_VOLUME,
             TIMER_SHELF_HOLD,
             TIMER_BEHIND,
+            TIMER_HALO,
+            TIMER_LYRIC_RETRY,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
@@ -5665,7 +5794,9 @@ mod tests {
         // Other pages and views keep the wheel for the pages.
         assert!(!on(&View::Panel(Page::Calendar), true));
         assert!(!on(&View::Idle, false));
-        // Nothing playing, or the setting off.
+        // A paused song (the caller passes `m.playing`, not that a song is
+        // there) or nothing at all: the wheel turns pages. So does the
+        // setting off.
         assert!(!volume_wheel_applies(true, false, &View::MediaCompact, false));
         assert!(!volume_wheel_applies(false, true, &View::MediaCompact, false));
     }

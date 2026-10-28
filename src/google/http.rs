@@ -1,17 +1,25 @@
 //! Blocking JSON/form HTTP over WinRT `HttpClient`. Every call waits on the
 //! async operation with `.join()`, so call it only from worker threads.
 
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
+
 use windows::Foundation::Uri;
+use windows::Win32::Foundation::ERROR_TIMEOUT;
 use windows::Storage::Streams::UnicodeEncoding;
 use windows::Web::Http::Filters::{
     HttpBaseProtocolFilter, HttpCacheReadBehavior, HttpCacheWriteBehavior,
 };
 use windows::Web::Http::Headers::HttpCredentialsHeaderValue;
-use windows::Web::Http::{HttpClient, HttpMethod, HttpRequestMessage, HttpStringContent};
-use windows::core::{HSTRING, Result};
+use windows::Web::Http::{
+    HttpClient, HttpMethod, HttpRequestMessage, HttpResponseMessage, HttpStringContent,
+};
+use windows::core::{Error, HSTRING, Result};
 
 pub struct Http {
     client: HttpClient,
+    /// A request not answered by then is cancelled and fails; `None` waits.
+    timeout: Option<Duration>,
 }
 
 impl Http {
@@ -24,7 +32,18 @@ impl Http {
         cache.SetWriteBehavior(HttpCacheWriteBehavior::NoCache)?;
         filter.SetAllowUI(false)?;
         let client = HttpClient::Create(&filter)?;
-        Ok(Http { client })
+        Ok(Http {
+            client,
+            timeout: None,
+        })
+    }
+
+    /// Every request fails once `timeout` passes without an answer.
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        Http {
+            timeout: Some(timeout),
+            ..self
+        }
     }
 
     /// GET; returns the status and body. A non-2xx status is not an `Err`.
@@ -100,11 +119,70 @@ impl Http {
         Ok(request)
     }
 
+    /// `SendRequestAsync`, waited on until `self.timeout` at most: past it
+    /// the operation is cancelled and the call fails with `ERROR_TIMEOUT`.
+    /// The default completion reads the whole body before it completes, so
+    /// the deadline covers a body that stalls too.
+    fn send_request(&self, request: &HttpRequestMessage) -> Result<HttpResponseMessage> {
+        let op = self.client.SendRequestAsync(request)?;
+        let Some(timeout) = self.timeout else {
+            return op.join();
+        };
+        let (done, finished) = mpsc::channel();
+        op.when(move |_| {
+            let _ = done.send(());
+        })?;
+        if let Err(RecvTimeoutError::Timeout) = finished.recv_timeout(timeout) {
+            let _ = op.Cancel();
+            return Err(Error::from(ERROR_TIMEOUT.to_hresult()));
+        }
+        op.GetResults()
+    }
+
     fn send(&self, request: &HttpRequestMessage) -> Result<(u16, String)> {
-        let response = self.client.SendRequestAsync(request)?.join()?;
+        let response = self.send_request(request)?;
         let status = response.StatusCode()?.0 as u16;
         let body = response.Content()?.ReadAsStringAsync()?.join()?;
         Ok((status, body.to_string_lossy()))
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    /// A local server that answers each connection with `reply` after
+    /// `delay` (holding the socket open meanwhile).
+    fn serve_once(delay: Duration, reply: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                std::thread::sleep(delay);
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn a_stalled_request_fails_at_the_deadline_and_a_quick_one_answers() {
+        let http = Http::new().unwrap().with_timeout(Duration::from_millis(400));
+        let url = serve_once(Duration::from_secs(8), "");
+        let start = Instant::now();
+        assert!(http.get_json(&url, None).is_err());
+        assert!(start.elapsed() < Duration::from_secs(4), "{:?}", start.elapsed());
+
+        let url = serve_once(
+            Duration::ZERO,
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
+        );
+        assert_eq!(http.get_json(&url, None).unwrap(), (200, "hi".to_owned()));
     }
 }
 
