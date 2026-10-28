@@ -86,6 +86,26 @@ pub fn step_level(level: f32, notches: i32) -> f32 {
     clamp_level(next as f32 * WHEEL_STEP)
 }
 
+/// One wheel notch over the music, in whole percent points.
+pub const SCROLL_POINTS_PER_NOTCH: i32 = 2;
+
+/// The percent points a wheel delta adds up to (120 a notch, positive up:
+/// louder), keeping what does not make a point yet in `sum`, so a touchpad's
+/// small deltas still turn the volume.
+pub fn wheel_points(sum: &mut i32, delta: i32) -> i32 {
+    *sum = sum.saturating_add(delta);
+    let per_point = 120 / SCROLL_POINTS_PER_NOTCH;
+    let points = *sum / per_point;
+    *sum -= points * per_point;
+    points
+}
+
+/// `level` moved by `points` percent points, kept in 0..=100 %.
+pub fn move_points(level: f32, points: i32) -> f32 {
+    let now = percent(level) as i32;
+    from_percent((now + points).clamp(0, 100) as u32)
+}
+
 /// "spotify" for `C:\Users\x\AppData\Roaming\Spotify\Spotify.exe`: the file
 /// name without its extension, lower case. Empty for an empty path.
 pub fn exe_key(path: &str) -> String {
@@ -386,6 +406,38 @@ fn set(target: &Target, level: Option<f32>, muted: Option<bool>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_wheel_adds_up_to_two_percent_points_a_notch() {
+        use super::*;
+        let mut sum = 0;
+        assert_eq!(wheel_points(&mut sum, 120), 2);
+        assert_eq!(wheel_points(&mut sum, -120), -2);
+        // A touchpad's small deltas keep what is not a point yet.
+        let mut sum = 0;
+        let total: i32 = (0..12).map(|_| wheel_points(&mut sum, 20)).sum();
+        assert_eq!(total, 4, "12 x 20 = two notches");
+        assert_eq!(sum, 0);
+        let mut sum = 0;
+        assert_eq!(wheel_points(&mut sum, 59), 0);
+        assert_eq!(wheel_points(&mut sum, 1), 1);
+        // Up then down cancels out.
+        let mut sum = 0;
+        assert_eq!(wheel_points(&mut sum, 30), 0);
+        assert_eq!(wheel_points(&mut sum, -30), 0);
+        assert_eq!(sum, 0);
+    }
+
+    #[test]
+    fn the_level_moves_by_points_inside_zero_and_a_hundred() {
+        use super::*;
+        assert_eq!(percent(move_points(0.50, 2)), 52);
+        assert_eq!(percent(move_points(0.51, -2)), 49);
+        assert_eq!(percent(move_points(0.99, 5)), 100);
+        assert_eq!(percent(move_points(0.01, -5)), 0);
+        assert_eq!(percent(move_points(f32::NAN, 3)), 3);
+        assert_eq!(move_points(1.0, 100), 1.0);
+    }
+
     use super::*;
 
     fn raw(pid: u32, key: &str, active: bool, level: f32) -> RawSession {

@@ -114,6 +114,8 @@ struct Scene {
     lyric_at: u64,
     /// "Lirik di notch" is on (the Musik page's button).
     lyrics_on: bool,
+    /// The volume plate the wheel brings up, at this level.
+    volume: Option<f32>,
     /// The Pintasan page with custom tiles among the built-in ones.
     custom_tiles: bool,
     /// The quick search is open with the demo's made-up apps.
@@ -291,6 +293,7 @@ const BASE: Scene = Scene {
     strip: false,
     lyric_at: 2_000,
     lyrics_on: false,
+    volume: None,
     custom_tiles: false,
     search: false,
     cli: CliDemo::Empty,
@@ -386,7 +389,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 84] = [
+const SCENES: [Scene; 86] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -418,6 +421,18 @@ const SCENES: [Scene; 84] = [
         kind: ShapeKind::MediaCompact,
         view: View0::MediaCompact,
         ..BASE
+    },
+    // The wheel over the compact notch: the volume plate at 64 %.
+    Scene {
+        name: "media-volume",
+        kind: ShapeKind::MediaCompact,
+        view: View0::MediaCompact,
+        volume: Some(0.64),
+        ..BASE
+    },
+    Scene {
+        volume: Some(0.64),
+        ..panel("music-volume", Page::Media)
     },
     panel("cal-month", Page::Calendar),
     Scene {
@@ -668,10 +683,12 @@ const SCENES: [Scene; 84] = [
     ),
 ];
 
-/// The design's CPU line: 30 points (60 s), ending on the ring's 33 %.
-const DEMO_CPU: [f32; 30] = [
-    22.0, 26.0, 30.0, 27.0, 25.0, 33.0, 41.0, 39.0, 38.0, 45.0, 52.0, 44.0, 35.0, 30.0, 28.0, 31.0,
-    33.0, 40.0, 47.0, 42.0, 31.0, 29.0, 33.0, 36.0, 31.0, 28.0, 30.0, 35.0, 31.0, 33.0,
+/// The design's CPU line: 60 points (60 s, one per second), ending on the ring's 33 %.
+const DEMO_CPU: [f32; 60] = [
+    22.0, 24.0, 26.0, 28.0, 30.0, 28.0, 27.0, 26.0, 25.0, 29.0, 33.0, 37.0, 41.0, 40.0, 39.0, 38.0,
+    38.0, 42.0, 45.0, 48.0, 52.0, 48.0, 44.0, 40.0, 35.0, 32.0, 30.0, 29.0, 28.0, 30.0, 31.0, 32.0,
+    33.0, 36.0, 40.0, 44.0, 47.0, 44.0, 42.0, 36.0, 31.0, 30.0, 29.0, 31.0, 33.0, 34.0, 36.0, 34.0,
+    31.0, 30.0, 28.0, 29.0, 30.0, 32.0, 35.0, 33.0, 31.0, 32.0, 33.0, 33.0,
 ];
 
 /// The System page's fixed figures (keputusan-v3.1.html `sysPanel`): CPU
@@ -989,6 +1006,7 @@ fn run_scenes(scenes: &[Scene]) {
                 } else {
                     &system_ok
                 }),
+                eased: None,
                 history: &DEMO_CPU,
                 disk_warn_gb: 10,
                 ram_warn_percent: 90,
@@ -1093,6 +1111,7 @@ fn run_scenes(scenes: &[Scene]) {
                 lyric_prev_scroll: 0.0,
                 lyrics_on: scene.lyrics_on,
                 lyric_offset_ms: if scene.lyrics_on { -300 } else { 0 },
+                volume: scene.volume,
                 cli: cli.view(),
                 clip: clip_view(&clips, scene.clip),
                 search: SearchView {

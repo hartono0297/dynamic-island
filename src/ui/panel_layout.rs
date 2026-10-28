@@ -2465,6 +2465,31 @@ pub fn mole_layout(
     }
 }
 
+/// The volume plate's height over the cover and on the compact island.
+pub const VOLUME_HUD_H: f32 = 28.0;
+
+/// The parts of the volume plate in `area`: the speaker, the bar and the
+/// percentage, all centred on the plate's middle line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeHud {
+    pub icon: Rect,
+    pub track: Rect,
+    pub value: Rect,
+}
+
+pub fn volume_hud_layout(area: Rect) -> VolumeHud {
+    let pad = 10.0;
+    let icon_w = 16.0;
+    let value_w = 36.0;
+    let gap = 6.0;
+    let cy = area.y + area.h / 2.0;
+    let icon = rect(area.x + pad, cy - icon_w / 2.0, icon_w, icon_w);
+    let value = rect(area.right() - pad - value_w, cy - 8.0, value_w, 16.0);
+    let track_x = icon.right() + gap;
+    let track = rect(track_x, cy - 2.0, (value.x - gap - track_x).max(0.0), 4.0);
+    VolumeHud { icon, track, value }
+}
+
 /// A tile's icon and, under it, its label; the two centred in the tile.
 pub fn tile_parts(tile: Rect) -> (Rect, Rect) {
     let h = TILE_GLYPH_H + TILE_INNER_GAP + TILE_LABEL_H;
@@ -4121,6 +4146,20 @@ mod tests {
         assert_eq!(r[7].hit, Hit::Shortcut(Shortcut::Lock));
         assert_eq!(r[8].hit, Hit::CustomTile(8));
         assert_eq!(r[9].hit, Hit::CustomTile(9));
+    }
+
+    #[test]
+    fn the_volume_plate_fits_the_cover_strip_and_the_compact_island() {
+        // The strip over the cover, and a compact island's height.
+        for area in [rect(20.0, 100.0, 134.0, VOLUME_HUD_H), rect(6.0, 4.0, 188.0, 28.0)] {
+            let l = volume_hud_layout(area);
+            for r in [l.icon, l.track, l.value] {
+                assert!(r.x >= area.x && r.right() <= area.right() + 0.01, "{r:?}");
+                assert!(r.y >= area.y && r.bottom() <= area.bottom(), "{r:?}");
+            }
+            assert!(l.icon.right() <= l.track.x && l.track.right() <= l.value.x);
+            assert!(l.track.w >= 40.0, "the bar has room: {}", l.track.w);
+        }
     }
 
     /// `n` tiles: the eight built-in ones first, then custom ones.

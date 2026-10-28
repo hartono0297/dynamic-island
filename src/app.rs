@@ -75,7 +75,9 @@ use crate::sources::battery::{
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{explorer, media, notifications};
 use crate::state::{IslandState, is_media_hit};
-use crate::system::{CpuHistory, SampleKind, Sampler, SystemSample, WarnMonitor, alert_notice};
+use crate::system::{
+    CpuHistory, SampleKind, Sampler, SysEase, SystemSample, WarnMonitor, alert_notice,
+};
 use crate::theme::{self, Theme};
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
@@ -185,7 +187,11 @@ const OUTSIDE_MS: u32 = 40;
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
 const TIMER_MIXER: usize = 26;
 const MIXER_MS: u32 = 1_000;
-const SYSTEM_PAGE_MS: u32 = 2_000;
+/// One-shot: the volume plate the wheel brought up goes after this long, and
+/// the volume read for it is forgotten (the next wheel reads it again).
+const TIMER_VOLUME: usize = 28;
+const VOLUME_HUD_MS: u32 = 1_200;
+const SYSTEM_PAGE_MS: u32 = crate::system::LIVE_MS;
 const SYSTEM_WARN_MS: u32 = 300_000;
 const CLI_MS: u32 = 1000;
 /// Output lines one wheel notch scrolls (Windows' default of three).
@@ -314,6 +320,10 @@ pub fn run(media_log_flag: bool) {
             audio: None,
             mixer: None,
             mixer_pending: false,
+            volume_sum: 0,
+            volume_cache: None,
+            volume_pending: 0,
+            volume_hud: None,
             mixer_timer: false,
             mixer_drag: None,
             shelf: ShelfState::default(),
@@ -505,6 +515,13 @@ struct App {
     audio: Option<audio::Audio>,
     mixer: Option<Vec<audio::MixerRow>>,
     mixer_pending: bool,
+    /// The wheel over the music: what has not made a percent point yet, the
+    /// master level read for it (`TIMER_VOLUME` forgets it), the points
+    /// waiting for that reading, and the level the plate shows.
+    volume_sum: i32,
+    volume_cache: Option<f32>,
+    volume_pending: i32,
+    volume_hud: Option<f32>,
     /// `TIMER_MIXER` runs.
     mixer_timer: bool,
     /// The row whose slider the left button is dragging.
@@ -647,6 +664,11 @@ struct SystemState {
     /// The last page sample; the page draws dashes without one.
     sample: Option<SystemSample>,
     history: CpuHistory,
+    /// The page's figures, easing toward each reading.
+    ease: SysEase,
+    /// Readings asked for since the page showed: the first and every fourth
+    /// walks the processes, the others are cheap (`system::kind_for_request`).
+    requests: u32,
     monitor: WarnMonitor,
     /// A page sample was asked for and has not come back.
     page_pending: bool,
@@ -664,6 +686,8 @@ impl SystemState {
             sampler: None,
             sample: None,
             history: CpuHistory::default(),
+            ease: SysEase::default(),
+            requests: 0,
             monitor,
             page_pending: false,
             page_timer: false,
@@ -2011,10 +2035,14 @@ impl App {
         let wanted = system_sample_wanted(&self.state.view(), self.state.cleaner().is_some());
         match system_page_plan(wanted, self.system.page_timer, self.system.page_pending) {
             PagePlan::Request => {
-                self.system.page_pending = self.request_system(SampleKind::Page);
+                let kind = crate::system::kind_for_request(self.system.requests);
+                self.system.requests = self.system.requests.wrapping_add(1);
+                self.system.page_pending = self.request_system(kind);
             }
             PagePlan::Stop => {
                 self.system.page_timer = false;
+                // The next time the page shows starts with a full reading.
+                self.system.requests = 0;
                 unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_SYSTEM_PAGE);
                 }
@@ -2065,10 +2093,65 @@ impl App {
     /// it lets go; otherwise the rows are the reading.
     fn on_audio(&mut self, rows: Option<Vec<audio::MixerRow>>) {
         self.mixer_pending = false;
+        let master = rows
+            .as_ref()
+            .and_then(|r| r.iter().find(|row| row.target == audio::Target::Master))
+            .map(|row| row.level);
         if self.mixer_drag.is_none() {
             self.mixer = rows;
         }
+        // A wheel turn waited for this reading.
+        let waiting = std::mem::take(&mut self.volume_pending);
+        if let (Some(level), true) = (master, waiting != 0) {
+            self.volume_cache = Some(level);
+            self.volume_step(waiting);
+        }
         if self.state.view() == View::Panel(Page::Mixer) && !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// The wheel over the music (the compact notch, or the Music page's
+    /// cover) turns the master volume, 2 % a notch. The level is read once
+    /// and kept while the plate shows; the first turn waits for the reading.
+    fn volume_wheel(&mut self, delta: i32) {
+        let points = audio::wheel_points(&mut self.volume_sum, delta);
+        if points == 0 {
+            return;
+        }
+        if self.volume_cache.is_some() {
+            self.volume_step(points);
+        } else {
+            self.volume_pending = self.volume_pending.saturating_add(points);
+            self.mixer_scan();
+        }
+    }
+
+    fn volume_step(&mut self, points: i32) {
+        let Some(level) = self.volume_cache else {
+            return;
+        };
+        let next = audio::move_points(level, points);
+        self.volume_cache = Some(next);
+        self.audio_request(audio::Req::Level(audio::Target::Master, next));
+        self.volume_hud = Some(next);
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_VOLUME, VOLUME_HUD_MS, None);
+        }
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
+    /// `TIMER_VOLUME`: the plate goes.
+    fn on_volume_timer(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_VOLUME);
+        }
+        self.volume_hud = None;
+        self.volume_cache = None;
+        self.volume_sum = 0;
+        if !self.animating() {
             self.draw(Instant::now());
         }
     }
@@ -2166,17 +2249,36 @@ impl App {
     /// and asks again in `SYSTEM_PAGE_MS` while it shows; a warning check
     /// re-arms its timer, sooner while RAM's minute is being confirmed.
     fn on_system_sample(&mut self, sample: SystemSample, now: Instant) {
-        let check = self
-            .system
-            .monitor
-            .update(&sample.drives, sample.ram_percent(), now);
+        // A cheap reading has no drives: the warnings wait for a full one.
+        let check = if sample.kind == SampleKind::Live {
+            Default::default()
+        } else {
+            self.system
+                .monitor
+                .update(&sample.drives, sample.ram_percent(), now)
+        };
         match sample.kind {
-            SampleKind::Page => {
+            SampleKind::Page | SampleKind::Live => {
                 self.system.page_pending = false;
                 self.system.history.push(sample.cpu, now);
-                self.system.sample = Some(sample);
+                self.system.ease.update(&sample, now);
+                match (&mut self.system.sample, sample.kind) {
+                    // A cheap reading refreshes the figures it measured and
+                    // keeps the drives and processes of the full one.
+                    (Some(kept), SampleKind::Live) => {
+                        kept.cpu = sample.cpu;
+                        kept.ram_used = sample.ram_used;
+                        kept.ram_total = sample.ram_total;
+                        kept.uptime = sample.uptime;
+                    }
+                    (slot, _) => *slot = Some(sample),
+                }
                 if system_sample_wanted(&self.state.view(), self.state.cleaner().is_some()) {
-                    if !self.animating() {
+                    // The figures glide: the frame clock draws them; with
+                    // nothing moving it is one plain draw.
+                    if self.system.ease.running(now) {
+                        self.ensure_clock();
+                    } else if !self.animating() {
                         self.draw(now);
                     }
                     self.system.page_timer = true;
@@ -2408,10 +2510,17 @@ impl App {
         self.animating_at(Instant::now())
     }
 
+    /// The System page shows and a figure on it is still gliding.
+    fn system_easing(&self, now: Instant) -> bool {
+        self.system.ease.running(now)
+            && system_sample_wanted(&self.state.view(), self.state.cleaner().is_some())
+    }
+
     /// A morph, page slide, lyric crossfade or scroll, or robot lift/bounce
     /// runs at `now`.
     fn animating_at(&self, now: Instant) -> bool {
         self.anim.running
+            || self.system_easing(now)
             || self.slide.is_some()
             || self.lyric_fading
             || self.lyric_scrolling
@@ -2466,12 +2575,16 @@ impl App {
     /// the lyric view the timer stops. True when the line changed.
     fn sync_lyric_line(&mut self, now: Instant) -> bool {
         let view = self.state.view();
-        let position = match (self.state.timeline(), self.state.media()) {
-            (Some(t), Some(m)) if view == View::MediaLyric => Some(lyrics::lyric_position(
-                lyrics::position_at(t, m.playing, now),
-                self.config.lyrics_offset_ms,
-            )),
-            _ => None,
+        let (position, rate, playing) = match (self.state.timeline(), self.state.media()) {
+            (Some(t), Some(m)) if view == View::MediaLyric => (
+                Some(lyrics::lyric_position(
+                    lyrics::position_at(t, m.playing, now),
+                    self.config.lyrics_offset_ms,
+                )),
+                t.rate,
+                m.playing,
+            ),
+            _ => (None, 1.0, false),
         };
         let Some(pos) = position else {
             // Fading out (fullscreen) keeps its last line and width; leaving
@@ -2492,7 +2605,9 @@ impl App {
             self.lyric_fading = true;
             self.ensure_clock();
         }
-        self.set_lyric_timer(self.lyrics.wait_ms(pos));
+        // Paused, nothing changes until it plays (the next refresh re-arms).
+        let wait = playing.then(|| self.lyrics.wait_ms(pos, rate)).flatten();
+        self.set_lyric_timer(wait);
         self.sync_lyric_scroll(now);
         changed
     }
@@ -2836,6 +2951,7 @@ impl App {
                     self.mixer_scan();
                 }
             }
+            TIMER_VOLUME => self.on_volume_timer(),
             TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BLINK => self.on_blink(),
@@ -3057,6 +3173,7 @@ impl App {
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
         let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
+        let over_art = client && self.renderer.over_media_art(pt.x as f32, pt.y as f32);
         if self.state.cli_menu() && self.state.view() == View::Panel(Page::Cli) {
             // The open folder menu scrolls, a row per notch (more rows
             // than fit: favourites, recent).
@@ -3078,6 +3195,13 @@ impl App {
             let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);
             let lines = if lines == 0 { delta.signum() } else { lines };
             self.cli_scroll(lines);
+        } else if volume_wheel_applies(
+            self.config.scroll_volume,
+            self.state.media().is_some(),
+            &self.state.view(),
+            over_art,
+        ) {
+            self.volume_wheel(delta);
         } else {
             self.apply_now(Event::Wheel(delta));
         }
@@ -3405,8 +3529,10 @@ impl App {
             cli_panel::suggestions(self.cli_history.items(), &typed, MAX_SUGGESTIONS)
         };
         let robot = self.robot_frame(&self.drawn, now);
+        let eased = self.system.ease.figures(now);
         let system = SystemView {
             sample: self.system.sample.as_ref(),
+            eased: eased.as_ref(),
             history: self.system.history.points(),
             disk_warn_gb: self.config.disk_warn_gb,
             ram_warn_percent: self.config.ram_warn_percent,
@@ -3487,6 +3613,7 @@ impl App {
             lyric_prev_scroll: self.lyric_fit.prev_scroll,
             lyrics_on: state.lyrics_on(),
             lyric_offset_ms: self.config.lyrics_offset_ms,
+            volume: self.volume_hud,
             cli: CliView {
                 output: &self.cli.output,
                 echoes: &self.cli_echoes,
@@ -3629,6 +3756,19 @@ impl ClickPair {
 /// Whether the left button is down right now.
 fn left_button_down() -> bool {
     (unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) }) as u16 & 0x8000 != 0
+}
+
+/// Whether the wheel turns the music's volume rather than the pages: the
+/// setting is on and a song plays, over the compact notch (both views of
+/// it) or the Music page's cover. Anywhere else the wheel turns pages.
+fn volume_wheel_applies(enabled: bool, playing: bool, view: &View, over_art: bool) -> bool {
+    enabled
+        && playing
+        && match view {
+            View::MediaCompact | View::MediaLyric => true,
+            View::Panel(Page::Media) => over_art,
+            _ => false,
+        }
 }
 
 /// A mouse message's client position, in physical pixels.
@@ -5228,7 +5368,7 @@ mod tests {
         assert_eq!(warn_wait_ms(Some(Duration::from_secs(60))), 60_250);
         assert_eq!(warn_wait_ms(Some(Duration::ZERO)), 1_000);
         assert_eq!(warn_wait_ms(Some(Duration::from_secs(900))), 300_000);
-        assert!(SYSTEM_PAGE_MS == 2_000 && TIMER_SYSTEM_PAGE != TIMER_SYSTEM_WARN);
+        assert!(SYSTEM_PAGE_MS == 1_000 && TIMER_SYSTEM_PAGE != TIMER_SYSTEM_WARN);
     }
 
     #[test]
@@ -5275,11 +5415,28 @@ mod tests {
             shot::TIMER_SHOT_SHOW,
             TIMER_OUTSIDE,
             TIMER_MIXER,
+            TIMER_VOLUME,
             TIMER_SHELF_HOLD,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
         }
+    }
+
+    #[test]
+    fn the_wheel_turns_the_volume_only_over_the_music() {
+        let on = |view: &View, art| volume_wheel_applies(true, true, view, art);
+        assert!(on(&View::MediaCompact, false));
+        assert!(on(&View::MediaLyric, false));
+        // The Music page: the cover turns the volume, the rest the page.
+        assert!(on(&View::Panel(Page::Media), true));
+        assert!(!on(&View::Panel(Page::Media), false));
+        // Other pages and views keep the wheel for the pages.
+        assert!(!on(&View::Panel(Page::Calendar), true));
+        assert!(!on(&View::Idle, false));
+        // Nothing playing, or the setting off.
+        assert!(!volume_wheel_applies(true, false, &View::MediaCompact, false));
+        assert!(!volume_wheel_applies(false, true, &View::MediaCompact, false));
     }
 
     #[test]

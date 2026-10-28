@@ -43,8 +43,9 @@ pub struct Config {
     /// While music plays, the compact island shows the current synced lyric
     /// line (looked up at lrclib.net) instead of the artist.
     pub lyrics: bool,
-    /// The lyric line moves this many ms later (positive) or earlier, kept in
-    /// `lyrics::OFFSET_RANGE`; the Music page nudges it 0.1 s at a time.
+    /// Added to the playback position when a lyric line is chosen: positive
+    /// shows lines sooner, negative later. Kept in `lyrics::OFFSET_RANGE`
+    /// (+-5 s); the Music page nudges it 0.1 s at a time.
     #[serde(deserialize_with = "lyrics_offset")]
     pub lyrics_offset_ms: i32,
     /// The shell the CLI page runs commands in.
@@ -60,6 +61,9 @@ pub struct Config {
     /// Swipe, sideways wheel and middle button on the island while music
     /// plays (`gestures`): on unless switched off here.
     pub gestures: bool,
+    /// The wheel over the compact music notch (and the Music page's cover)
+    /// turns the volume 2 % a notch (`scroll_volume`): on unless off here.
+    pub scroll_volume: bool,
     /// Bata, the robot, beside the clock and on the island's own notices.
     pub robot: bool,
     /// How much Bata moves: Full, Saver or Off (by name; a typo is Full).
@@ -278,6 +282,7 @@ impl Default for Config {
             lyrics: false,
             lyrics_offset_ms: 0,
             gestures: true,
+            scroll_volume: true,
             search_hotkey: SearchHotkey::Off,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
@@ -694,6 +699,7 @@ mod tests {
     fn round_trips_through_json() {
         let c = Config {
             gestures: false,
+            scroll_volume: false,
             search_hotkey: SearchHotkey::WinAltS,
             shortcut_tiles: vec![TileEntry {
                 tile: "Lock".into(),
@@ -1060,6 +1066,13 @@ mod tests {
     }
 
     #[test]
+    fn scroll_volume_is_on_unless_switched_off() {
+        assert!(Config::default().scroll_volume);
+        assert!(parse(r#"{"style":"Notch"}"#).scroll_volume);
+        assert!(!parse(r#"{"scroll_volume":false}"#).scroll_volume);
+    }
+
+    #[test]
     fn gestures_are_on_unless_switched_off() {
         assert!(Config::default().gestures);
         assert!(parse(r#"{"style":"Notch"}"#).gestures);
@@ -1094,8 +1107,8 @@ mod tests {
         assert_eq!(parse(r#"{"style":"Notch"}"#).lyrics_offset_ms, 0);
         assert_eq!(parse(r#"{"lyrics_offset_ms":-300}"#).lyrics_offset_ms, -300);
         // Out of range is kept in range, a non-number is none.
-        assert_eq!(parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms, 2_000);
-        assert_eq!(parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms, -2_000);
+        assert_eq!(parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms, 5_000);
+        assert_eq!(parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms, -5_000);
         assert_eq!(parse(r#"{"lyrics_offset_ms":"x"}"#).lyrics_offset_ms, 0);
         // The island's own setting: the file's stale value does not win.
         let mem = Config {

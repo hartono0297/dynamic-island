@@ -51,6 +51,7 @@ use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, s
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
+    VOLUME_HUD_H, volume_hud_layout,
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
     CLIP_THUMB_W,
     CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
@@ -438,6 +439,10 @@ impl Renderer {
             if let PageLayout::Clipboard(l) = &layout {
                 self.regions.clip_list = Some(l.list);
             }
+            self.regions.media_art = match &layout {
+                PageLayout::Media(l) => Some(l.art),
+                _ => None,
+            };
             self.regions.mixer_tracks = match &layout {
                 PageLayout::Mixer(l) => l.rows.iter().map(|r| r.track).collect(),
                 _ => Vec::new(),
@@ -578,6 +583,7 @@ impl Renderer {
                     frame.lyrics_on,
                     frame.lyric_offset_ms,
                     frame.progress,
+                    frame.volume,
                 )
             }
             PageLayout::System(l) => self.paint_system(l, frame.system),
@@ -660,7 +666,8 @@ impl Renderer {
         );
         self.paint_clean_button(l.clean, lang);
 
-        let cpu = sample.map(|s| s.cpu);
+        let figures = view.and_then(|v| v.eased);
+        let cpu = figures.map(|f| f.cpu).or(sample.map(|s| s.cpu));
         self.ring(
             l.ring_center,
             l.ring_radius,
@@ -685,7 +692,9 @@ impl Renderer {
         let (value, fraction, warn) = match ram {
             Some((s, pct)) => (
                 i18n::ram_usage(lang, s.ram_used, s.ram_total, pct),
-                Some(f32::from(pct) / 100.0),
+                figures
+                    .and_then(|f| f.ram)
+                    .or(Some(f32::from(pct) / 100.0)),
                 system::ram_high(pct, ram_limit),
             ),
             None => (DASH.to_owned(), None, false),
@@ -697,7 +706,9 @@ impl Renderer {
                 continue;
             };
             let value = i18n::disk_free(lang, d.free, d.total);
-            let fraction = f32::from(d.used_percent()) / 100.0;
+            let fraction = figures
+                .and_then(|f| f.drives.iter().find(|(l, _)| l == letter))
+                .map_or(f32::from(d.used_percent()) / 100.0, |(_, v)| *v);
             let warn = system::disk_low(d.free, disk_limit);
             let name = i18n::disk_name(*letter);
             self.paint_meter(m, &name, &value, Some(fraction), p.secondary, warn);
@@ -2878,9 +2889,20 @@ impl Renderer {
         lyrics_on: bool,
         lyric_offset_ms: i32,
         progress: Option<Progress>,
+        volume: Option<f32>,
     ) -> Result<()> {
         let p = self.palette;
         self.paint_art(l.art, radius::COVER, media.and_then(|m| m.art.as_deref()))?;
+        if let Some(level) = volume {
+            // Over the cover's lower part, where the wheel works.
+            let strip = Rect {
+                y: l.art.bottom() - VOLUME_HUD_H - 8.0,
+                h: VOLUME_HUD_H,
+                x: l.art.x + 8.0,
+                w: l.art.w - 16.0,
+            };
+            self.paint_volume(strip, level, 0.72);
+        }
         self.paint_lyrics_button(l.lyrics, lyrics_on);
         if lyrics_on {
             self.paint_lyric_offset(&l.lyric_adj, lyric_offset_ms);
@@ -2918,6 +2940,30 @@ impl Renderer {
         self.icon_colored(play, middle, 22.0, p.on_accent, 1.0, None);
         self.icon(Icon::Next, next, 20.0, 1.0, false);
         Ok(())
+    }
+
+    /// The volume while the wheel turns it: a dark rounded plate over `area`
+    /// (`plate`: how opaque) with the speaker, the level as a bar and the
+    /// percentage.
+    pub(super) fn paint_volume(&self, area: Rect, level: f32, plate: f32) {
+        let p = self.palette;
+        let l = volume_hud_layout(area);
+        self.set_color(0x000000, plate);
+        self.fill_round(area, area.h / 2.0);
+        let icon = if level <= 0.0 { Icon::VolumeMute } else { Icon::Volume };
+        self.icon_colored(icon, l.icon, 16.0, 0xFFFFFF, 1.0, None);
+        self.set_color(0xFFFFFF, 0.25);
+        self.fill_round(l.track, l.track.h / 2.0);
+        if level > 0.0 {
+            let fill = Rect {
+                w: (l.track.w * level.clamp(0.0, 1.0)).max(l.track.h),
+                ..l.track
+            };
+            self.set_color(p.accent, 1.0);
+            self.fill_round(fill, fill.h / 2.0);
+        }
+        let value = format!("{}%", crate::audio::percent(level));
+        self.text_colored(&value, &self.fonts.small_center, l.value, 0xFFFFFF, 1.0);
     }
 
     /// The track and its played part in the accent, a knob at the playhead,

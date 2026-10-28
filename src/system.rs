@@ -31,8 +31,15 @@ use crate::i18n::{self, Key, Lang, text};
 use crate::model::{Event, Notice, NoticeKind};
 
 pub const GIB: u64 = 1024 * 1024 * 1024;
-/// The CPU sparkline: 30 points, one per 2 s page sample, so 60 s.
-pub const HISTORY_LEN: usize = 30;
+/// The CPU sparkline: 60 points, one per 1 s reading, so 60 s.
+pub const HISTORY_LEN: usize = 60;
+/// A reading every this often while the page shows (a cheap one: CPU,
+/// memory, uptime); every `FULL_EVERY`th also walks the processes and
+/// the drives.
+pub const LIVE_MS: u32 = 1_000;
+pub const FULL_EVERY: u32 = 4;
+/// What a figure takes to glide to its new reading.
+pub const EASE_MS: u64 = 500;
 /// A history whose last point is older than this starts over, so a page
 /// opened again does not join its line to stale data.
 pub const HISTORY_STALE: Duration = Duration::from_secs(10);
@@ -224,12 +231,138 @@ impl Drive {
     }
 }
 
-/// What a reading was for: the open page (everything), or the background
-/// warning check (memory and drives only, no process walk).
+/// What a reading was for: the open page (everything), the open page's
+/// cheap in-between reading (CPU, memory, uptime), or the background warning
+/// check (memory and drives only, no process walk).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleKind {
     Page,
+    Live,
     Warn,
+}
+
+/// The `n`th request since the page showed: the first and every
+/// `FULL_EVERY`th is a full reading, the ones between are cheap.
+pub fn kind_for_request(n: u32) -> SampleKind {
+    if n % FULL_EVERY == 0 {
+        SampleKind::Page
+    } else {
+        SampleKind::Live
+    }
+}
+
+/// Cubic ease-out over 0..=1.
+pub fn ease_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// A figure gliding from where it was to a new reading over `EASE_MS`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Eased {
+    from: f32,
+    to: f32,
+    start: Option<Instant>,
+}
+
+impl Eased {
+    /// At `value`, not moving.
+    pub fn at(value: f32) -> Self {
+        Eased {
+            from: value,
+            to: value,
+            start: None,
+        }
+    }
+
+    /// Starts gliding to `to` from wherever the figure is at `now`.
+    pub fn retarget(&mut self, to: f32, now: Instant) {
+        if (to - self.to).abs() < f32::EPSILON && self.start.is_none() {
+            return;
+        }
+        self.from = self.value(now);
+        self.to = to;
+        self.start = Some(now);
+    }
+
+    pub fn value(&self, now: Instant) -> f32 {
+        match self.start {
+            Some(s) if self.running(now) => {
+                let t = now.saturating_duration_since(s).as_secs_f32() * 1000.0 / EASE_MS as f32;
+                self.from + (self.to - self.from) * ease_out(t)
+            }
+            _ => self.to,
+        }
+    }
+
+    pub fn running(&self, now: Instant) -> bool {
+        self.start
+            .is_some_and(|s| now.saturating_duration_since(s) < Duration::from_millis(EASE_MS))
+    }
+}
+
+/// The figures the page draws at one moment: the CPU in percent, the RAM and
+/// each drive's used part as 0..=1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Figures {
+    pub cpu: f32,
+    pub ram: Option<f32>,
+    pub drives: Vec<(char, f32)>,
+}
+
+/// The page's figures, each easing toward the latest reading. The first
+/// reading is shown at once, not glided to from zero.
+#[derive(Clone, Debug, Default)]
+pub struct SysEase {
+    cpu: Option<Eased>,
+    ram: Option<Eased>,
+    drives: Vec<(char, Eased)>,
+}
+
+fn retarget(slot: &mut Option<Eased>, to: f32, now: Instant) {
+    match slot {
+        Some(e) => e.retarget(to, now),
+        None => *slot = Some(Eased::at(to)),
+    }
+}
+
+impl SysEase {
+    /// Takes a reading in. A cheap one moves the CPU and RAM only (it
+    /// carries no drives).
+    pub fn update(&mut self, s: &SystemSample, now: Instant) {
+        if s.kind == SampleKind::Warn {
+            return;
+        }
+        retarget(&mut self.cpu, s.cpu, now);
+        if let Some(p) = s.ram_percent() {
+            retarget(&mut self.ram, f32::from(p) / 100.0, now);
+        }
+        if s.kind == SampleKind::Page {
+            self.drives.retain(|(l, _)| s.drives.iter().any(|d| d.letter == *l));
+            for d in &s.drives {
+                let to = f32::from(d.used_percent()) / 100.0;
+                match self.drives.iter_mut().find(|(l, _)| *l == d.letter) {
+                    Some((_, e)) => e.retarget(to, now),
+                    None => self.drives.push((d.letter, Eased::at(to))),
+                }
+            }
+        }
+    }
+
+    pub fn running(&self, now: Instant) -> bool {
+        self.cpu.is_some_and(|e| e.running(now))
+            || self.ram.is_some_and(|e| e.running(now))
+            || self.drives.iter().any(|(_, e)| e.running(now))
+    }
+
+    /// `None` before the first reading.
+    pub fn figures(&self, now: Instant) -> Option<Figures> {
+        Some(Figures {
+            cpu: self.cpu?.value(now),
+            ram: self.ram.map(|e| e.value(now)),
+            drives: self.drives.iter().map(|(l, e)| (*l, e.value(now))).collect(),
+        })
+    }
 }
 
 /// One reading of the machine.
@@ -522,6 +655,10 @@ struct Baseline {
     at: Instant,
 }
 
+/// The CPU times of the last reading of either kind, for the CPU figure's
+/// short window.
+type LastCpu = Option<(CpuTimes, Instant)>;
+
 fn take_baseline() -> Baseline {
     Baseline {
         cpu: read_cpu_times().unwrap_or_default(),
@@ -560,9 +697,11 @@ impl Sampler {
 
 fn serve(rx: &Receiver<SampleKind>, tx: &Sender<Event>, wake: impl Fn()) {
     let mut baseline: Option<Baseline> = None;
+    let mut last_cpu: LastCpu = None;
     while let Ok(kind) = rx.recv() {
         let sample = match kind {
-            SampleKind::Page => sample_page(&mut baseline),
+            SampleKind::Page => sample_page(&mut baseline, &mut last_cpu),
+            SampleKind::Live => sample_live(&mut last_cpu),
             SampleKind::Warn => sample_warn(),
         };
         if tx.send(Event::SystemSample(sample)).is_err() {
@@ -575,7 +714,7 @@ fn serve(rx: &Receiver<SampleKind>, tx: &Sender<Event>, wake: impl Fn()) {
 /// Everything, with the CPU and process figures since the last page
 /// sample. Without a recent one it takes a baseline first and waits
 /// `BASELINE_WAIT`, so the page shows real numbers at once.
-fn sample_page(baseline: &mut Option<Baseline>) -> SystemSample {
+fn sample_page(baseline: &mut Option<Baseline>, last_cpu: &mut LastCpu) -> SystemSample {
     if needs_baseline(baseline.as_ref().map(|b| b.at), Instant::now()) {
         *baseline = Some(take_baseline());
         std::thread::sleep(BASELINE_WAIT);
@@ -586,14 +725,49 @@ fn sample_page(baseline: &mut Option<Baseline>) -> SystemSample {
     let delta = cur.cpu.total().saturating_sub(prev.cpu.total());
     let procs = top_processes(process_usage(&prev.procs, &cur.procs, delta), TOP_PROCESSES);
     let (ram_used, ram_total) = read_memory().unwrap_or_default();
+    // The figure over the short window since the last reading of any kind,
+    // the processes over the longer one since the last full reading.
+    let cpu = match last_cpu.replace((cur.cpu, cur.at)) {
+        Some((p, at)) if short_window(at, cur.at) => cpu_percent(p, cur.cpu),
+        _ => cpu_percent(prev.cpu, cur.cpu),
+    };
     SystemSample {
         kind: SampleKind::Page,
-        cpu: cpu_percent(prev.cpu, cur.cpu),
+        cpu,
         cores: read_cores(),
         ram_used,
         ram_total,
         drives: read_drives(),
         procs,
+        uptime: read_uptime(),
+    }
+}
+
+/// A window the CPU figure may be measured over: long enough to be a real
+/// reading, short enough to still be "now".
+fn short_window(from: Instant, to: Instant) -> bool {
+    let d = to.saturating_duration_since(from);
+    d >= Duration::from_millis(200) && d <= BASELINE_MAX_AGE
+}
+
+/// The cheap in-between reading: CPU since the last reading, memory, uptime.
+/// No process walk, no drives.
+fn sample_live(last_cpu: &mut LastCpu) -> SystemSample {
+    let now = Instant::now();
+    let cur = read_cpu_times().unwrap_or_default();
+    let cpu = match last_cpu.replace((cur, now)) {
+        Some((p, at)) if short_window(at, now) => cpu_percent(p, cur),
+        _ => 0.0,
+    };
+    let (ram_used, ram_total) = read_memory().unwrap_or_default();
+    SystemSample {
+        kind: SampleKind::Live,
+        cpu,
+        cores: read_cores(),
+        ram_used,
+        ram_total,
+        drives: Vec::new(),
+        procs: Vec::new(),
         uptime: read_uptime(),
     }
 }
@@ -742,21 +916,116 @@ mod tests {
     }
 
     #[test]
-    fn history_keeps_thirty_points_and_restarts_after_a_gap() {
+    fn history_keeps_sixty_points_and_restarts_after_a_gap() {
         let t0 = Instant::now();
         let mut h = CpuHistory::default();
-        for i in 0..40 {
-            h.push(i as f32, t0 + Duration::from_secs(2 * i));
+        for i in 0..70 {
+            h.push(i as f32, t0 + Duration::from_secs(i));
         }
         assert_eq!(h.points().len(), HISTORY_LEN);
         assert_eq!(h.points()[0], 10.0);
-        assert_eq!(*h.points().last().unwrap(), 39.0);
+        assert_eq!(*h.points().last().unwrap(), 69.0);
         // Within 10 s it continues; after a longer gap it starts over.
-        let last = t0 + Duration::from_secs(78);
+        let last = t0 + Duration::from_secs(69);
         h.push(1.0, last + Duration::from_secs(10));
         assert_eq!(h.points().len(), HISTORY_LEN);
         h.push(2.0, last + Duration::from_secs(21));
         assert_eq!(h.points(), [2.0]);
+    }
+
+    #[test]
+    fn one_request_in_four_is_a_full_reading() {
+        let kinds: Vec<SampleKind> = (0..9).map(kind_for_request).collect();
+        use SampleKind::{Live, Page};
+        assert_eq!(kinds, [Page, Live, Live, Live, Page, Live, Live, Live, Page]);
+        // Cheap readings are a quarter of the way to a process walk.
+        assert!(LIVE_MS * FULL_EVERY <= 4_000);
+    }
+
+    #[test]
+    fn a_figure_glides_to_its_reading_and_rests() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut e = Eased::at(10.0);
+        assert!(!e.running(t0));
+        e.retarget(50.0, t0);
+        assert_eq!(e.value(t0), 10.0);
+        let mid = e.value(ms(250));
+        assert!(mid > 10.0 && mid < 50.0, "{mid}");
+        // Ease-out: past the linear halfway point at half the time.
+        assert!(mid > 30.0, "{mid}");
+        assert!(e.running(ms(499)));
+        assert!(!e.running(ms(EASE_MS)));
+        assert_eq!(e.value(ms(EASE_MS)), 50.0);
+        // A new reading mid-glide continues from where the figure is.
+        let from = e.value(ms(100));
+        e.retarget(0.0, ms(100));
+        assert!((e.value(ms(100)) - from).abs() < 0.001);
+        assert_eq!(e.value(ms(100 + EASE_MS)), 0.0);
+        // The same reading again moves nothing.
+        let mut still = Eased::at(5.0);
+        still.retarget(5.0, t0);
+        assert!(!still.running(t0));
+        assert_eq!(ease_out(-1.0), 0.0);
+        assert_eq!(ease_out(2.0), 1.0);
+    }
+
+    fn reading(kind: SampleKind, cpu: f32, used: u64, drives: Vec<Drive>) -> SystemSample {
+        SystemSample {
+            kind,
+            cpu,
+            cores: 8,
+            ram_used: used,
+            ram_total: 100,
+            drives,
+            procs: Vec::new(),
+            uptime: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn the_figures_show_the_first_reading_at_once_and_glide_after() {
+        let t0 = Instant::now();
+        let mut e = SysEase::default();
+        assert_eq!(e.figures(t0), None);
+        let d = |free: f64| Drive {
+            letter: 'C',
+            free: (free * GIB as f64) as u64,
+            total: 100 * GIB,
+        };
+        e.update(&reading(SampleKind::Page, 40.0, 50, vec![d(50.0)]), t0);
+        assert!(!e.running(t0), "the first reading does not glide from 0");
+        let f = e.figures(t0).unwrap();
+        assert_eq!((f.cpu, f.ram), (40.0, Some(0.5)));
+        assert_eq!(f.drives, [('C', 0.5)]);
+        // A cheap reading moves CPU and RAM and leaves the drives alone.
+        let t1 = t0 + Duration::from_secs(1);
+        e.update(&reading(SampleKind::Live, 80.0, 60, Vec::new()), t1);
+        assert!(e.running(t1));
+        let f = e.figures(t1 + Duration::from_millis(EASE_MS)).unwrap();
+        assert_eq!((f.cpu, f.ram), (80.0, Some(0.6)));
+        assert_eq!(f.drives, [('C', 0.5)]);
+        // A full one moves a drive, and a drive that is gone goes.
+        let t2 = t1 + Duration::from_secs(3);
+        e.update(&reading(SampleKind::Page, 80.0, 60, vec![d(25.0)]), t2);
+        let f = e.figures(t2 + Duration::from_millis(EASE_MS)).unwrap();
+        assert_eq!(f.drives, [('C', 0.75)]);
+        e.update(&reading(SampleKind::Page, 80.0, 60, Vec::new()), t2);
+        assert!(e.figures(t2).unwrap().drives.is_empty());
+        // A warning reading touches nothing.
+        let before = e.figures(t2);
+        e.update(&reading(SampleKind::Warn, 0.0, 99, vec![d(1.0)]), t2);
+        assert_eq!(e.figures(t2), before);
+    }
+
+    #[test]
+    fn the_cpu_window_is_short_but_real() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        assert!(!short_window(t0, ms(100)));
+        assert!(short_window(t0, ms(1_000)));
+        assert!(short_window(t0, ms(10_000)));
+        assert!(!short_window(t0, ms(10_001)));
     }
 
     #[test]
@@ -896,6 +1165,28 @@ mod tests {
         assert_eq!(ram.source, "System");
         assert_eq!(ram.title, "RAM 93% used");
         assert_eq!(ram.body, "Above the limit for over a minute");
+    }
+
+    /// `cargo test --locked sampling_cost -- --ignored --nocapture`: what one
+    /// full and one cheap reading cost on this machine.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn sampling_cost() {
+        let (mut baseline, mut last) = (None, None);
+        sample_page(&mut baseline, &mut last); // takes its baseline, waits
+        let n = 10u32;
+        let t = Instant::now();
+        for _ in 0..n {
+            sample_page(&mut baseline, &mut last);
+        }
+        let full = t.elapsed() / n;
+        let t = Instant::now();
+        for _ in 0..n {
+            sample_live(&mut last);
+        }
+        let live = t.elapsed() / n;
+        let procs = read_processes().len();
+        eprintln!("full {full:?} ({procs} processes), cheap {live:?}");
     }
 
     #[test]

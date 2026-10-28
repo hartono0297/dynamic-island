@@ -147,6 +147,8 @@ pub struct Frame<'a> {
     pub lyrics_on: bool,
     /// The lyric offset in ms, shown beside "Lirik" while it is on.
     pub lyric_offset_ms: i32,
+    /// The volume the wheel is turning (0..1): a plate shows it for a moment.
+    pub volume: Option<f32>,
     /// The CLI page.
     pub cli: CliView<'a>,
     /// The Clipboard page.
@@ -320,6 +322,8 @@ impl CleanerView<'_> {
 pub struct SystemView<'a> {
     /// The last page sample; `None` before the first (dashes, not zeros).
     pub sample: Option<&'a SystemSample>,
+    /// The figures as they glide to that sample; `None` draws the sample's.
+    pub eased: Option<&'a crate::system::Figures>,
     /// The CPU line's points, oldest first (`system::CpuHistory`).
     pub history: &'a [f32],
     /// The warning limits: a drive under `disk_warn_gb` free or RAM over
@@ -945,6 +949,14 @@ impl Renderer {
         Some(crate::audio::slider_level(track.x, track.w, x / self.scale))
     }
 
+    /// Whether this client point (physical pixels) is on the Music page's
+    /// cover, where the wheel turns the volume.
+    pub fn over_media_art(&self, x: f32, y: f32) -> bool {
+        self.regions
+            .media_art
+            .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
+    }
+
     /// Whether the wheel at this client point (physical pixels) scrolls the
     /// Clipboard cards rather than the pages.
     pub fn over_clip_list(&self, x: f32, y: f32) -> bool {
@@ -1146,6 +1158,21 @@ impl Renderer {
             // The panel returned above.
             View::Panel(_) | View::Hidden => Ok(()),
         };
+        if let (Some(level), View::MediaCompact | View::MediaLyric) = (frame.volume, view) {
+            let r = shape_rect(shape);
+            let h = crate::ui::panel_layout::VOLUME_HUD_H.min(r.h - 8.0).max(16.0);
+            self.paint_volume(
+                Rect {
+                    x: r.x + 6.0,
+                    y: r.y + (r.h - h) / 2.0,
+                    w: r.w - 12.0,
+                    h,
+                },
+                level,
+                // Over the song's title: opaque enough to hide it.
+                0.97,
+            );
+        }
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
         content

@@ -33,6 +33,16 @@ use windows::core::{BOOL, HRESULT, HSTRING, Ref, implement};
 
 use crate::model::Event;
 
+pub fn dbg(msg: &str) {
+    if std::env::var_os("DI_SHELF_LOG").is_some() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("vale-shelf-debug.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{:?} {msg}", std::time::SystemTime::now());
+        }
+    }
+}
+
 /// The effect a drop answers with, from the ones the source offers: link,
 /// else copy, else none. Never move.
 pub fn choose_effect(offered: u32) -> u32 {
@@ -123,6 +133,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         let files = data.as_ref().is_some_and(has_files);
+        dbg(&format!("DragEnter files={files}"));
         self.accepting.set(files);
         self.effect_for(effect);
         if files {
@@ -142,6 +153,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     }
 
     fn DragLeave(&self) -> windows::core::Result<()> {
+        dbg("DragLeave");
         if self.accepting.replace(false) {
             self.send(Event::ShelfDrag(false));
         }
@@ -156,6 +168,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         let paths = data.as_ref().map(read_paths).unwrap_or_default();
+        dbg(&format!("Drop {} paths", paths.len()));
         self.accepting.set(!paths.is_empty());
         self.effect_for(effect);
         self.accepting.set(false);
@@ -181,7 +194,9 @@ pub fn register(hwnd: HWND, tx: Sender<Event>, wake: impl Fn() + 'static) {
             accepting: Cell::new(false),
         }
         .into();
-        if let Err(error) = RegisterDragDrop(hwnd, &target) {
+        let registered = RegisterDragDrop(hwnd, &target);
+        dbg(&format!("RegisterDragDrop {registered:?}"));
+        if let Err(error) = registered {
             eprintln!("vale: no file drops: {error}");
         }
     }

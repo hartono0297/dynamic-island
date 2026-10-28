@@ -644,6 +644,8 @@ pub struct HitRegions {
     pub clip_list: Option<Rect>,
     /// The Mixer page's slider tracks, by row: where a press sets a level.
     pub mixer_tracks: Vec<Rect>,
+    /// The Music page's cover: where the wheel turns the volume.
+    pub media_art: Option<Rect>,
 }
 
 impl HitRegions {

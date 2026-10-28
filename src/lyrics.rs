@@ -20,11 +20,15 @@ pub const NEGATIVE_TTL_SECS: i64 = 24 * 3600;
 /// farther is sent, so a reading that is more accurate than the prediction
 /// replaces it (a bias is never kept; a seek is just a large one).
 pub const RESYNC_MS: u64 = 100;
-/// The lyric line changes this much early: the crossfade (`FADE`) then ends
-/// as the word is sung, not after it.
-pub const LOOKAHEAD_MS: i64 = 150;
-/// "Offset lirik" in ms: (min, max, step). Positive shows the lines later.
-pub const OFFSET_RANGE: (i32, i32, i32) = (-2_000, 2_000, 100);
+/// A line shows this long after its time, never before: the player's position
+/// is where it *plays*, and the sound reaches the ear later (output buffers,
+/// Bluetooth 150-300 ms), so a line at exactly its time looks early. 3.2.0
+/// went 150 ms *early* instead, which read as "too fast".
+pub const OUTPUT_LAG_MS: i64 = 100;
+/// "Offset lirik" in ms: (min, max, step). The offset is added to the
+/// position: positive shows each line sooner, negative later (the Music
+/// page's "-" is "later").
+pub const OFFSET_RANGE: (i32, i32, i32) = (-5_000, 5_000, 100);
 /// Crossfade between two lyric lines.
 pub const FADE: Duration = Duration::from_millis(150);
 /// The worker waits this long for a newer query before looking one up, so a
@@ -189,12 +193,13 @@ pub fn position_at(t: &Timeline, playing: bool, now: Instant) -> u64 {
 }
 
 /// The position the lyric line is chosen at: the playback position plus the
-/// user's offset (`lyrics_offset_ms`) and the lookahead, never before 0.
+/// user's offset (`lyrics_offset_ms`) minus `OUTPUT_LAG_MS`, never before 0.
+/// At offset 0 a line is therefore never chosen before its time.
 pub fn lyric_position(raw_ms: u64, offset_ms: i32) -> u64 {
     let shifted = i64::try_from(raw_ms)
         .unwrap_or(i64::MAX)
         .saturating_add(i64::from(offset_ms))
-        .saturating_add(LOOKAHEAD_MS);
+        .saturating_sub(OUTPUT_LAG_MS);
     u64::try_from(shifted).unwrap_or(0)
 }
 
@@ -683,10 +688,13 @@ impl LyricsState {
         })
     }
 
-    /// Milliseconds from `pos_ms` until the line next changes, plus 1 so the
+    /// Milliseconds of wall clock from `pos_ms` until the line next changes
+    /// at playback `rate` (a faster song gets there sooner), plus 1 so the
     /// change has happened when a timer fires; `None` after the last line.
-    pub fn wait_ms(&self, pos_ms: u64) -> Option<u64> {
-        next_change(self.lines(), pos_ms).map(|at| at - pos_ms + 1)
+    pub fn wait_ms(&self, pos_ms: u64, rate: f32) -> Option<u64> {
+        let rate = f64::from(rate).clamp(0.1, 4.0);
+        next_change(self.lines(), pos_ms)
+            .map(|at| (((at - pos_ms) as f64 / rate).ceil() as u64).saturating_add(1))
     }
 }
 
@@ -1079,12 +1087,52 @@ mod tests {
     }
 
     #[test]
-    fn the_lyric_position_adds_offset_and_lookahead_and_never_goes_below_zero() {
-        assert_eq!(lyric_position(10_000, 0), 10_000 + LOOKAHEAD_MS as u64);
-        assert_eq!(lyric_position(10_000, -300), 10_000 - 300 + LOOKAHEAD_MS as u64);
-        assert_eq!(lyric_position(10_000, 500), 10_000 + 500 + LOOKAHEAD_MS as u64);
-        assert_eq!(lyric_position(0, -2_000), 0);
-        assert_eq!(lyric_position(u64::MAX, 2_000), i64::MAX as u64);
+    fn the_lyric_position_adds_offset_minus_the_output_lag_and_never_goes_below_zero() {
+        let lag = OUTPUT_LAG_MS as u64;
+        assert_eq!(lyric_position(10_000, 0), 10_000 - lag);
+        assert_eq!(lyric_position(10_000, -300), 10_000 - 300 - lag);
+        assert_eq!(lyric_position(10_000, 500), 10_000 + 500 - lag);
+        assert_eq!(lyric_position(0, -5_000), 0);
+        assert_eq!(lyric_position(50, 0), 0);
+        assert_eq!(lyric_position(u64::MAX, 5_000), i64::MAX as u64 - lag);
+    }
+
+    #[test]
+    fn at_the_default_offset_a_line_never_shows_before_its_time() {
+        let lines = vec![l(1_000, "one"), l(5_000, "two"), l(9_000, "three")];
+        // Walking the player's position in small steps: the line chosen is
+        // never one whose time has not come, and each shows `OUTPUT_LAG_MS`
+        // after its time.
+        let mut raw = 0;
+        let mut first_seen = [None; 3];
+        while raw < 12_000 {
+            let chosen = current_line(&lines, lyric_position(raw, 0)).map(|(i, _)| i);
+            if let Some(i) = chosen {
+                assert!(raw >= lines[i].at_ms, "line {i} early at {raw}");
+                first_seen[i].get_or_insert(raw);
+            }
+            raw += 7;
+        }
+        for (i, seen) in first_seen.iter().enumerate() {
+            let seen = seen.expect("every line shows");
+            let due = lines[i].at_ms + OUTPUT_LAG_MS as u64;
+            assert!((due..due + 7).contains(&seen), "line {i}: {seen} vs {due}");
+        }
+    }
+
+    #[test]
+    fn the_timer_waits_wall_clock_time_at_the_playback_rate() {
+        let mut st = LyricsState::default();
+        let a = query("a");
+        st.want(Some(&a), true);
+        st.found(found(&a.key, Some(vec![l(1_000, "a"), l(5_000, "b")]), false));
+        assert_eq!(st.wait_ms(2_000, 1.0), Some(3_001));
+        assert_eq!(st.wait_ms(2_000, 2.0), Some(1_501), "twice as fast");
+        assert_eq!(st.wait_ms(2_000, 0.5), Some(6_001), "half speed");
+        assert_eq!(st.wait_ms(6_000, 1.0), None, "after the last line");
+        // An odd rate never makes it spin or sleep for ever.
+        assert!(st.wait_ms(2_000, 0.0).is_some_and(|ms| ms <= 30_001));
+        assert!(st.wait_ms(2_000, f32::NAN).is_some());
     }
 
     #[test]
@@ -1092,8 +1140,8 @@ mod tests {
         assert_eq!(step_offset(0, 1), 100);
         assert_eq!(step_offset(0, -1), -100);
         assert_eq!(step_offset(-100, 1), 0);
-        assert_eq!(step_offset(2_000, 1), 2_000);
-        assert_eq!(step_offset(-2_000, -1), -2_000);
+        assert_eq!(step_offset(5_000, 1), 5_000);
+        assert_eq!(step_offset(-5_000, -1), -5_000);
         // Hand-edited, off the grid: the next step lands on it.
         assert_eq!(step_offset(130, 1), 200);
         assert_eq!(step_offset(130, -1), 100);

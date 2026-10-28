@@ -21,10 +21,25 @@ the warning logic live in `src/system.rs`; the page in
   waits 300 ms, so a page that opens shows real numbers at once. Processes
   are summed per exe without case ("Chrome" is one row). A reused pid with
   another exe counts 0 %.
-- **Page refresh.** `TIMER_SYSTEM_PAGE` is a 2 s one-shot, armed when a
-  sample arrives and only while `system_sample_wanted` (the panel shows
-  `Page::System`). `sync_system_page` (called from `refresh`) kills it when
-  the page or panel goes. A sample that arrives late re-arms nothing.
+- **Page refresh (v3.2.1, smoother and lighter).** `TIMER_SYSTEM_PAGE` is a
+  1 s one-shot (`system::LIVE_MS`), armed when a sample arrives and only
+  while `system_sample_wanted` (the panel shows `Page::System`).
+  `sync_system_page` (called from `refresh`) kills it when the page or panel
+  goes and resets `system.requests`. A sample that arrives late re-arms
+  nothing. The first request after the page shows, and every 4th after
+  (`kind_for_request`), is a full `SampleKind::Page`; the ones between are
+  `SampleKind::Live` (CPU since the last reading, memory, uptime, no process
+  walk, no drives; merged into the last full sample, skipped by the
+  warnings). Measured on a 144-process machine: full 8.3 ms, cheap 27 µs
+  (`cargo test sampling_cost -- --ignored --nocapture`), so the page reads
+  four times as often for about half the work of the old 2 s walk.
+- **Easing.** `system::SysEase` keeps an `Eased` per figure (CPU, RAM, each
+  drive's bar): a new reading glides there over 500 ms (cubic ease-out),
+  from wherever the figure is. The first reading shows at once. While one
+  runs, `animating_at` is true (`system_easing`, only with the page shown)
+  so the frame clock draws; when they rest the clock stops, so an idle
+  page costs nothing between readings. The sparkline keeps 60 one-second
+  points (`HISTORY_LEN`); the demo's `DEMO_CPU` has 60 to match.
 - **Background warnings.** `TIMER_SYSTEM_WARN` is a one-shot, every 5 min,
   re-armed when its reading comes back. It is sooner only to confirm RAM's
   minute above the limit. A drain that holds only system readings does not
