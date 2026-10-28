@@ -1080,7 +1080,18 @@ const ELEVATED_WAIT_MS: u32 = 60 * 60 * 1000;
 
 /// PowerShell's single-quoted string.
 fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        // PowerShell takes U+2018..U+201B as single quotes too; each is
+        // escaped by doubling, like '.
+        if matches!(c, '\'' | '\u{2018}'..='\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
 }
 
 /// `inv` elevated through `ShellExecuteExW` verb `runas` (UAC), hidden:
@@ -2051,5 +2062,10 @@ mod tests {
         assert_eq!(decode_log(b"\xEF\xBB\xBFx\ny"), ["x", "y"]);
         assert_eq!(decode_log(b""), Vec::<String>::new());
         assert_eq!(ps_quote("C:\\it's"), "'C:\\it''s'");
+        // PowerShell also ends a single-quoted string at U+2018..U+201B.
+        assert_eq!(
+            ps_quote("C:\\Users\\D\u{2019}Angelo\u{2018}\u{201A}\u{201B}"),
+            "'C:\\Users\\D\u{2019}\u{2019}Angelo\u{2018}\u{2018}\u{201A}\u{201A}\u{201B}\u{201B}'"
+        );
     }
 }
