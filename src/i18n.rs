@@ -546,6 +546,8 @@ keys! {
     ClipOff => "Riwayat clipboard mati", "Clipboard history is off";
     ClipOffHint => "Nyalakan di Pengaturan → Clipboard", "Turn it on in Settings → Clipboard";
     ClipCopied => "Disalin", "Copied";
+    ClipImageSmall => "pratinjau kecil, aslinya tidak tersimpan",
+        "small preview, the original is no longer kept";
     SecClipboard => "Clipboard", "Clipboard";
     ClipHistory => "Riwayat clipboard", "Clipboard history";
     ClipHistoryDesc => "Simpan yang kamu salin", "Keep what you copy";
@@ -1174,6 +1176,17 @@ pub fn clip_image_meta(lang: Lang, screenshot: bool, w: u32, h: u32) -> String {
         text(lang, Key::ClipKindImage)
     };
     format!("{what} · {w} × {h}")
+}
+
+/// A copied image whose original is no longer kept: "Screenshot · pratinjau
+/// kecil, aslinya tidak tersimpan".
+pub fn clip_image_small(lang: Lang, screenshot: bool) -> String {
+    let what = if screenshot {
+        "Screenshot"
+    } else {
+        text(lang, Key::ClipKindImage)
+    };
+    format!("{what} · {}", text(lang, Key::ClipImageSmall))
 }
 
 /// Copied files in the "Disalin" notice: "laporan.pdf", "3 file".

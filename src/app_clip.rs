@@ -122,6 +122,8 @@ fn copied_notice(clip: &Clip) -> Notice {
                 .unwrap_or_default();
             i18n::clip_files(lang, paths.len(), &first)
         }
+        // Only the thumbnail is left: it pastes small, and says so.
+        ClipData::Image(img) if img.full.is_none() => i18n::clip_image_small(lang, img.screenshot),
         ClipData::Image(img) => i18n::clip_image_meta(lang, img.screenshot, img.width, img.height),
     };
     Notice {
@@ -648,7 +650,7 @@ pub enum ClipSetting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::store::tests::text;
+    use crate::clipboard::store::tests::{image, text};
 
     #[test]
     fn the_selection_falls_back_to_the_first_card_shown() {
@@ -674,5 +676,21 @@ mod tests {
         assert_eq!(n.kind, NoticeKind::Copied);
         assert_eq!(n.title, "Disalin");
         assert_eq!(n.body, "Denah lantai 2 sudah saya revisi");
+    }
+
+    #[test]
+    fn a_card_without_its_original_says_it_pastes_small() {
+        let mut h = History::new(50);
+        ingest(&mut h, image(1280, 720), 0);
+        let mut clip = h.items()[0].clone();
+        assert_eq!(copied_notice(&clip).body, "Screenshot · 1280 × 720");
+        // Restored after a restart, or past the full-size budget.
+        if let ClipData::Image(img) = &mut clip.data {
+            img.full = None;
+        }
+        assert_eq!(
+            copied_notice(&clip).body,
+            "Screenshot · pratinjau kecil, aslinya tidak tersimpan"
+        );
     }
 }

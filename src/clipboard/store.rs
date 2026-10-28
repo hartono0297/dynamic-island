@@ -260,7 +260,8 @@ impl History {
 
     /// The cap (oldest unpinned first, never a pin and never the newest
     /// entry), then the thumbnail budget (oldest unpinned images go), then
-    /// the full-size budget (the oldest images lose their original).
+    /// the full-size budget (the oldest images lose their original; never
+    /// the newest).
     fn enforce(&mut self) {
         while self.items.len() > self.cap {
             let Some(i) = self.oldest_unpinned(|_| true) else {
@@ -274,8 +275,10 @@ impl History {
             };
             self.items.remove(i);
         }
+        // The newest keeps its original whatever its size; older images
+        // share the budget, newest first.
         let mut full = 0usize;
-        for clip in &mut self.items {
+        for clip in self.items.iter_mut().skip(1) {
             if let ClipData::Image(img) = &mut clip.data
                 && let Some(bytes) = &img.full
             {
@@ -354,7 +357,8 @@ fn make_image(dib: Option<Vec<u8>>, only_bitmaps: bool) -> Option<ClipImage> {
         thumb: image::thumbnail(&dib, &info),
         fingerprint: image::fingerprint(&dib),
         screenshot: only_bitmaps,
-        full: (dib.len() <= FULL_BUDGET).then(|| Arc::new(dib)),
+        // Kept even past the budget: the newest pastes at full size.
+        full: Some(Arc::new(dib)),
     })
 }
 
@@ -559,7 +563,7 @@ pub mod tests {
         assert!(h.is_empty());
     }
 
-    fn image(w: u32, h: u32) -> ClipSnapshot {
+    pub fn image(w: u32, h: u32) -> ClipSnapshot {
         ClipSnapshot {
             dib: Some(dib24(w, h)),
             only_bitmaps: true,
@@ -617,6 +621,24 @@ pub mod tests {
         assert!(h.len() < 60 && h.len() > 40);
         // The newest survive.
         assert_eq!(h.items()[0].image().unwrap().width, 427);
+    }
+
+    #[test]
+    fn the_newest_image_always_keeps_its_original() {
+        // A 4K or 5K screenshot alone can pass the full-size budget; the
+        // newest still pastes at full size ("Salin lagi", its card).
+        let mut h = History::new(MAX_ITEMS);
+        // 24-bit rows: a little over the whole budget each.
+        let big = |w: u32| image(w, (FULL_BUDGET / 3 / w as usize) as u32 + 8);
+        ingest(&mut h, big(5120), 0);
+        assert!(h.items()[0].image().unwrap().full.is_some(), "alone");
+        ingest(&mut h, big(5100), 1);
+        let items = h.items();
+        assert!(items[0].image().unwrap().full.is_some(), "the newest");
+        assert!(
+            items[1].image().unwrap().full.is_none(),
+            "the older one gave way"
+        );
     }
 
     #[test]
