@@ -153,6 +153,8 @@ keys! {
     ConfigCheck => "Cek lagi isinya — lihat README", "Check its contents — see the README";
     ClientIdMissing => "Isi Google client ID dulu", "Add a Google client ID first";
     SeeReadme => "Lihat README", "See the README";
+    ClientIdMissingBody => "Pengaturan → Integrasi, panduan ada di README",
+        "Settings → Integrations, the guide is in the README";
     DndTitle => "Matiin popup Windows", "Turn off Windows pop-ups";
     DndBody => "Nyalain Jangan Ganggu: Pengaturan → Sistem → Pemberitahuan",
         "Turn on Do Not Disturb: Settings → System → Notifications";
@@ -185,6 +187,10 @@ keys! {
     ReasonSyncStopped => "sinkron kalender berhenti", "calendar sync stopped";
     OauthConnected => "Berhasil terhubung. Kembali ke island ya.",
         "Connected. You can go back to the island.";
+    OauthCancelled => "Login dibatalkan — tekan Masuk dengan Google di island untuk mencoba lagi.",
+        "Sign-in cancelled — press Sign in with Google in the island to try again.";
+    OauthRejected => "Google menolak Client ID — cek Pengaturan → Integrasi di island.",
+        "Google rejected the Client ID — check Settings → Integrations in the island.";
     OauthFailed => "Gagal terhubung — coba lagi dari island.",
         "Couldn't connect — try again from the island.";
     OauthScopes => "Izin Google belum lengkap — centang kedua izin, lalu coba lagi dari island.",
@@ -477,6 +483,7 @@ keys! {
         "A pomodoro is running — reset it to change these.";
     GoogleCalendar => "Google Calendar", "Google Calendar";
     StatusNotConfigured => "Belum diatur", "Not set up";
+    StatusNeedsClientId => "Isi Client ID dulu", "Add a Client ID";
     StatusNeedsLogin => "Belum terhubung", "Not connected";
     StatusConnected => "Terhubung", "Connected";
     StatusReconnect => "Perlu login ulang", "Sign in again";

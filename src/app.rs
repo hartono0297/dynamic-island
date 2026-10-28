@@ -3951,7 +3951,7 @@ fn client_id_notice() -> Notice {
         key: "calendar-client-id".into(),
         source: tr(Key::SourceCalendar).into(),
         title: tr(Key::ClientIdMissing).into(),
-        body: tr(Key::SeeReadme).into(),
+        body: tr(Key::ClientIdMissingBody).into(),
         kind: NoticeKind::App { app_id: None },
     }
 }
@@ -5390,7 +5390,7 @@ mod tests {
         let n = client_id_notice();
         assert_eq!(n.source, "Kalender");
         assert_eq!(n.title, "Isi Google client ID dulu");
-        assert_eq!(n.body, "Lihat README");
+        assert_eq!(n.body, "Pengaturan → Integrasi, panduan ada di README");
         assert_eq!(n.kind, NoticeKind::App { app_id: None });
     }
 

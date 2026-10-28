@@ -186,7 +186,8 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 ## Troubleshooting
 
 - **No notifications in the island:** check Windows Settings → Privacy & security → Notifications, then run `& "$env:LOCALAPPDATA\Programs\Vale\vale.exe" --probe-notifications` to print what arrives for 60 seconds.
-- **"Add a Google client ID first":** this build has no built-in Google client: open Settings → Integrations → *Advanced*, paste your client ID and secret and press **Save**.
+- **"Sign-in cancelled" / "Google rejected the Client ID" (browser page after the login):** the first means the consent screen was closed or refused: press *Sign in with Google* again. The second means the saved Client ID or secret is wrong: check Settings → Integrations → *Advanced*.
+- **"Add a Google client ID first":** this build has no built-in Google client (the status reads "Add a Client ID"): open Settings → Integrations → *Advanced*, paste your client ID and secret and press **Save**.
 - **"Sign in to Google again":** you switched between *Sign in with Google* and your own client ID; connect once more.
 - **"Access blocked" / Error 403 from Google (own client):** your account is not a test user (step 4), or the client is not a *Desktop app*.
 - **"Google Calendar API isn't enabled":** enable it (step 2) in the same project as the client, wait a few minutes, connect again.

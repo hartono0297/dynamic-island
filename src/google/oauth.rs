@@ -438,6 +438,8 @@ fn wait_for_code<T>(
                     let message = match &outcome {
                         Ok(_) => Key::OauthConnected,
                         Err(AuthError::MissingScopes) => Key::OauthScopes,
+                        Err(AuthError::NeedsLogin) => Key::OauthCancelled,
+                        Err(AuthError::NotConfigured) => Key::OauthRejected,
                         Err(_) => Key::OauthFailed,
                     };
                     respond(&stream, "200 OK", &i18n::oauth_page(i18n::lang(), message));

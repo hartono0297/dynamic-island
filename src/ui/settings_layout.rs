@@ -705,6 +705,17 @@ pub fn status_key(s: CalStatus) -> (Key, Tone) {
     }
 }
 
+/// The Google card's status chip: `status_key`, but without Vale's client and
+/// without a Client ID typed the next step is the user's, not "not set up".
+fn google_status_key(g: &GoogleState) -> (Key, Tone) {
+    match status_key(g.status) {
+        (Key::StatusNotConfigured, tone) if !g.built_in && !g.has_id => {
+            (Key::StatusNeedsClientId, tone)
+        }
+        other => other,
+    }
+}
+
 /// The value a stepper shows: "25 mnt", "4", "20%".
 pub fn pomo_value(lang: Lang, field: PomoField, v: u32) -> String {
     match field {
@@ -2017,7 +2028,7 @@ fn integrations(b: &mut Builder, s: &State) {
             b.text(rect, note.to_owned(), Font::Desc, tone, Align::Left);
         }
         None => {
-            let (key, tone) = status_key(g.status);
+            let (key, tone) = google_status_key(&g);
             b.chip(card.x + INSET, row_cy, b.t(key), tone, left_w);
         }
     }
@@ -3437,7 +3448,7 @@ mod tests {
                 ..base.clone()
             };
             let l = layout(Section::Integrations, &s, &Estimate);
-            let (key, tone) = status_key(status);
+            let (key, tone) = google_status_key(&s.google);
             let chips: Vec<(&str, Tone)> = l
                 .chips
                 .iter()
@@ -3459,6 +3470,18 @@ mod tests {
             assert_eq!(l.chips.len(), 1);
             assert!(l.texts.iter().any(|t| t.text == "Tersimpan"));
         }
+        // Without Vale's client and without an ID, "not set up" asks for one.
+        let bare = GoogleState {
+            status: CalStatus::NotConfigured,
+            built_in: false,
+            has_id: false,
+            ..base.google
+        };
+        assert_eq!(google_status_key(&bare).0, Key::StatusNeedsClientId);
+        let with_id = GoogleState { has_id: true, ..bare };
+        assert_eq!(google_status_key(&with_id).0, Key::StatusNotConfigured);
+        let built_in = GoogleState { built_in: true, ..bare };
+        assert_eq!(google_status_key(&built_in).0, Key::StatusNotConfigured);
         // Each card has its uppercase name above it.
         let l = layout(Section::Integrations, &base, &Estimate);
         for key in [Key::GoogleCalendar, Key::ClaudeCode] {

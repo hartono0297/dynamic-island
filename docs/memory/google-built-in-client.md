@@ -42,4 +42,12 @@ with `DI_GOOGLE=needslogin`.
   the disclosure is hidden: the button never logs in with a client its label
   does not name. `Client`'s Debug redacts the secret.
 
+- v3.2 Run 5 (messages only): without a built-in client and without an ID the
+  status chip reads "Isi Client ID dulu" (`google_status_key`), the notice
+  body says "Pengaturan → Integrasi, panduan ada di README", and the browser
+  page after a login tells a cancelled consent (`OauthCancelled`) and a
+  rejected client (`OauthRejected`) from a plain failure. The real fix, a
+  built-in client, is still the owner's: create the Cloud project, set the two
+  secrets, release.
+
 Related: [[v3-1-handoff]], [[v3-studio-overview]]
