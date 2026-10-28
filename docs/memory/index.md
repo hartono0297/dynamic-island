@@ -42,6 +42,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
 - [[gestures]]: middle click, swipe and sideways wheel on the music views
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
+- [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge
 - [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory)
 - [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread

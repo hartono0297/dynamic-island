@@ -281,6 +281,8 @@ pub enum Hit {
     Lang(Lang),
     Autostart,
     IdleClock,
+    /// "Di belakang jendela".
+    StayBehind,
     Lyrics,
     /// "Mode buka": Hover, Hover & tetap or Klik.
     OpenMode(OpenMode),
@@ -644,6 +646,8 @@ pub struct State<'a> {
     pub window: WindowTheme,
     /// The idle island shows the clock.
     pub idle_clock: bool,
+    /// "Di belakang jendela" (experimental).
+    pub stay_behind: bool,
     /// Bata in the notch, how it moves, when it sleeps, the greeting.
     pub robot: bool,
     pub robot_motion: Motion,
@@ -1672,8 +1676,8 @@ pub fn sleep_value(lang: Lang, minutes: u32) -> String {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(9.0 * ROW_H);
-    let rows: [f32; 9] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(10.0 * ROW_H);
+    let rows: [f32; 10] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1775,6 +1779,11 @@ fn general(b: &mut Builder, s: &State) {
     };
     b.row_text(card, rows[8], b.t(Key::SearchHotkeySetting), Some(desc), false, x);
     b.divider(card, rows[8]);
+
+    let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[9]), s.stay_behind);
+    let desc = Some((b.t(Key::StayBehindDesc), Tone::Secondary));
+    b.row_text(card, rows[9], b.t(Key::StayBehind), desc, false, x);
+    b.divider(card, rows[9]);
 
     warnings_card(b, s);
 }
@@ -2321,6 +2330,7 @@ mod tests {
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
                         idle_clock: locked,
+                        stay_behind: !locked,
                         robot: !locked,
                         robot_motion: if locked { Motion::Off } else { Motion::Saver },
                         robot_sleep: if locked { 60 } else { 1 },
@@ -3531,8 +3541,8 @@ mod tests {
                     Some(Hit::Shell(Shell::Cmd))
                 );
                 // Below every other control of the first card but the search
-                // hotkey, which is the last row (the warnings have a card
-                // of their own under it).
+                // hotkey and the stay-behind toggle under it (the warnings
+                // have a card of their own below).
                 let first = l.cards[0];
                 for c in &l.controls {
                     let in_first = c.bounds().bottom() <= first.bottom();
@@ -3541,6 +3551,9 @@ mod tests {
                             c,
                             Control::Segmented {
                                 group: Group::Shell | Group::SearchHotkey,
+                                ..
+                            } | Control::Toggle {
+                                hit: Hit::StayBehind,
                                 ..
                             }
                         )

@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod behind;
 mod calendar;
 mod claude;
 mod clean;

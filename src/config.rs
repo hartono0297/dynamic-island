@@ -40,6 +40,9 @@ pub struct Config {
     pub window_theme: WindowTheme,
     /// The idle island shows the local time instead of an empty shape.
     pub idle_clock: bool,
+    /// Experimental: the island sits below ordinary windows and comes up when
+    /// it has something to show or the pointer touches the top edge over it.
+    pub stay_behind: bool,
     /// While music plays, the compact island shows the current synced lyric
     /// line (looked up at lrclib.net) instead of the artist.
     pub lyrics: bool,
@@ -279,6 +282,7 @@ impl Default for Config {
             surface: Surface::Espresso,
             window_theme: WindowTheme::System,
             idle_clock: true,
+            stay_behind: false,
             lyrics: false,
             lyrics_offset_ms: 0,
             gestures: true,
@@ -397,6 +401,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         surface: mem.surface,
         window_theme: mem.window_theme,
         idle_clock: mem.idle_clock,
+        stay_behind: mem.stay_behind,
         lyrics: mem.lyrics,
         lyrics_offset_ms: mem.lyrics_offset_ms,
         cli_shell: mem.cli_shell,
@@ -724,6 +729,7 @@ mod tests {
             surface: Surface::Graphite,
             window_theme: WindowTheme::Light,
             idle_clock: false,
+            stay_behind: true,
             lyrics: true,
             lyrics_offset_ms: -300,
             cli_shell: Shell::Cmd,
@@ -1070,6 +1076,18 @@ mod tests {
         assert!(Config::default().scroll_volume);
         assert!(parse(r#"{"style":"Notch"}"#).scroll_volume);
         assert!(!parse(r#"{"scroll_volume":false}"#).scroll_volume);
+    }
+
+    #[test]
+    fn stay_behind_is_off_until_chosen_and_belongs_to_the_island() {
+        assert!(!Config::default().stay_behind);
+        assert!(!parse(r#"{"style":"Notch"}"#).stay_behind);
+        assert!(parse(r#"{"stay_behind":true}"#).stay_behind);
+        let mem = Config {
+            stay_behind: true,
+            ..Config::default()
+        };
+        assert!(merge_owned(Config::default(), &mem).stay_behind);
     }
 
     #[test]

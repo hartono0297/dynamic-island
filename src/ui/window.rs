@@ -5,8 +5,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassExW, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WNDCLASSEXW, WNDPROC, WS_EX_LAYERED,
+    CreateWindowExW, HWND_BOTTOM, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassExW,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WNDCLASSEXW, WNDPROC, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, Result, w};
@@ -26,6 +26,9 @@ pub struct IslandWindow {
     origin: POINT,
     size: SIZE,
     tall: bool,
+    /// Above every window (the default); false while "Di belakang jendela"
+    /// has put it at the bottom of the window order.
+    front: bool,
     /// The primary monitor's width in logical px (the lyric notch's cap).
     screen_w: f32,
 }
@@ -79,6 +82,7 @@ impl IslandWindow {
                 origin,
                 size,
                 tall: false,
+                front: true,
                 screen_w,
             })
         }
@@ -109,6 +113,38 @@ impl IslandWindow {
         self.screen_w
     }
 
+    /// Puts the island above every window, or at the bottom of the window
+    /// order ("Di belakang jendela"). Never activates it and never moves or
+    /// resizes it. True when the order changed.
+    pub fn set_front(&mut self, front: bool) -> bool {
+        if self.front == front {
+            return false;
+        }
+        self.front = front;
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(order(front)),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+        true
+    }
+
+    /// The screen point is on the strip along the screen's top edge over the
+    /// island's width (`behind::STRIP_PX` tall).
+    pub fn on_top_strip(&self, pt: POINT) -> bool {
+        crate::behind::on_strip(
+            (self.origin.x, self.origin.y),
+            self.size.cx,
+            (pt.x, pt.y),
+        )
+    }
+
     /// Re-centers on the primary monitor at its current DPI. Call on
     /// `WM_DPICHANGED` and `WM_DISPLAYCHANGE`, then redraw.
     pub fn reposition(&mut self) {
@@ -125,7 +161,7 @@ impl IslandWindow {
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
-                Some(HWND_TOPMOST),
+                Some(order(self.front)),
                 origin.x,
                 origin.y,
                 size.cx,
@@ -160,6 +196,12 @@ impl IslandWindow {
 /// always lives on the primary monitor, where the two agree, and asking the
 /// monitor avoids moving the window first, which would send `WM_DPICHANGED`
 /// back into the caller's window procedure mid-call.
+/// Where `SetWindowPos` puts the island in the window order: topmost, or the
+/// bottom (which also takes away the topmost style).
+fn order(front: bool) -> HWND {
+    if front { HWND_TOPMOST } else { HWND_BOTTOM }
+}
+
 fn height(tall: bool) -> f32 {
     if tall { TALL_WINDOW_H } else { WINDOW_H }
 }

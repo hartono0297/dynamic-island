@@ -62,6 +62,7 @@ use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
 use crate::audio;
+use crate::behind;
 use crate::gestures;
 use crate::pages::PanelPages;
 use crate::shelf_ole;
@@ -183,6 +184,10 @@ const TIMER_SYSTEM_WARN: usize = 18;
 /// is shut or follows the pointer.
 const TIMER_OUTSIDE: usize = 24;
 const OUTSIDE_MS: u32 = 40;
+/// Repeating, `behind::POLL_MS`: with "Di belakang jendela" on, the pointer
+/// is read to raise the island at the top edge and lower it again. Nothing
+/// runs with the setting off or in fullscreen.
+const TIMER_BEHIND: usize = 29;
 /// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
 const TIMER_MIXER: usize = 26;
@@ -316,6 +321,8 @@ pub fn run(media_log_flag: bool) {
             media_click: None,
             eq_timer: false,
             outside_timer: false,
+            behind: behind::Behind::default(),
+            behind_timer: false,
             outside_edge: PressEdge::default(),
             audio: None,
             mixer: None,
@@ -508,6 +515,10 @@ struct App {
     eq_timer: bool,
     /// `TIMER_OUTSIDE` runs.
     outside_timer: bool,
+    /// "Di belakang jendela": the island's place in the window order, and
+    /// `TIMER_BEHIND` runs.
+    behind: behind::Behind,
+    behind_timer: bool,
     /// The mouse buttons as the last poll saw them.
     outside_edge: PressEdge,
     /// The Mixer page's audio thread (started on the first request), the
@@ -2744,6 +2755,7 @@ impl App {
         self.sync_mixer();
         self.sync_shelf();
         self.sync_outside_timer();
+        self.sync_behind(now);
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -2754,6 +2766,66 @@ impl App {
                     let _ = KillTimer(Some(self.hwnd), TIMER_CLI);
                 }
             }
+        }
+    }
+
+    /// "Di belakang jendela": the poll runs only while the setting is on and
+    /// the screen is not fullscreen; off (or fullscreen) the island is back
+    /// above every window and nothing is read. A view that must be seen
+    /// raises it at once, without waiting for the poll.
+    fn sync_behind(&mut self, now: Instant) {
+        let wanted = self.config.stay_behind && !self.fullscreen;
+        if wanted != self.behind_timer {
+            self.behind_timer = wanted;
+            unsafe {
+                if wanted {
+                    SetTimer(Some(self.hwnd), TIMER_BEHIND, behind::POLL_MS, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_BEHIND);
+                }
+            }
+            if !wanted {
+                self.behind.reset();
+                self.set_front(true);
+            }
+        }
+        if wanted {
+            self.follow_behind(now);
+        }
+    }
+
+    /// `TIMER_BEHIND`.
+    fn on_behind_timer(&mut self) {
+        if self.behind_timer {
+            self.follow_behind(Instant::now());
+        }
+    }
+
+    /// Reads the pointer and puts the island where `behind` says.
+    fn follow_behind(&mut self, now: Instant) {
+        let mut pt = POINT::default();
+        let have = unsafe { GetCursorPos(&mut pt).is_ok() };
+        let on_strip = have && self.win.as_ref().is_some_and(|w| w.on_top_strip(pt));
+        let over_island = have && {
+            let mut client = pt;
+            unsafe { ScreenToClient(self.hwnd, &mut client) }.as_bool()
+                && self
+                    .renderer
+                    .hit_test(client.x as f32, client.y as f32)
+                    .is_some()
+        };
+        let inputs = behind::Inputs {
+            needs_front: behind::view_needs_front(&self.state.view()),
+            on_strip,
+            over_island,
+        };
+        let z = self.behind.decide(inputs, now);
+        self.set_front(z == behind::Z::Top);
+    }
+
+    fn set_front(&mut self, front: bool) {
+        if let Some(win) = self.win.as_mut() {
+            win.set_front(front);
         }
     }
 
@@ -2958,6 +3030,7 @@ impl App {
             TIMER_VOLUME => self.on_volume_timer(),
             TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
+            TIMER_BEHIND => self.on_behind_timer(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
                 unsafe {
@@ -3403,6 +3476,12 @@ impl App {
                 self.config.robot = on;
                 self.save_config();
                 // The compact shapes widen or narrow; its timers start or stop.
+                self.refresh(now);
+            }
+            SettingsAction::StayBehind(on) => {
+                self.config.stay_behind = on;
+                self.save_config();
+                // `sync_behind` starts or stops the poll and sets the order.
                 self.refresh(now);
             }
             SettingsAction::RobotMotion(motion) => {
@@ -5442,6 +5521,7 @@ mod tests {
             TIMER_MIXER,
             TIMER_VOLUME,
             TIMER_SHELF_HOLD,
+            TIMER_BEHIND,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");

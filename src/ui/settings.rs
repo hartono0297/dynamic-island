@@ -102,6 +102,7 @@ pub enum Action {
     Lang(Lang),
     Autostart(bool),
     IdleClock(bool),
+    StayBehind(bool),
     Lyrics(bool),
     Shell(Shell),
     OpenMode(OpenMode),
@@ -192,6 +193,7 @@ pub struct Model {
     pub lang: Lang,
     pub autostart: bool,
     pub idle_clock: bool,
+    pub stay_behind: bool,
     pub lyrics: bool,
     pub shell: Shell,
     pub cli_start: CliStart,
@@ -233,6 +235,7 @@ impl Model {
             lang: cfg.language,
             autostart: cfg.start_with_windows,
             idle_clock: cfg.idle_clock,
+            stay_behind: cfg.stay_behind,
             lyrics: cfg.lyrics,
             shell: cfg.cli_shell,
             cli_start: cfg.cli_start,
@@ -967,6 +970,7 @@ impl Settings {
             window: m.window,
             autostart: m.autostart,
             idle_clock: m.idle_clock,
+            stay_behind: m.stay_behind,
             robot: m.robot,
             robot_motion: m.robot_motion,
             robot_sleep: m.robot_sleep,
@@ -1128,6 +1132,10 @@ impl Settings {
         if old.idle_clock != new.idle_clock {
             self.anims
                 .slide_toggle(Hit::IdleClock, old.idle_clock, new.idle_clock, now);
+        }
+        if old.stay_behind != new.stay_behind {
+            self.anims
+                .slide_toggle(Hit::StayBehind, old.stay_behind, new.stay_behind, now);
         }
         if old.lyrics != new.lyrics {
             self.anims
@@ -1306,6 +1314,7 @@ impl Settings {
             Hit::Lang(v) if v != m.lang => post(Action::Lang(v)),
             Hit::Autostart => post(Action::Autostart(!m.autostart)),
             Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
+            Hit::StayBehind => post(Action::StayBehind(!m.stay_behind)),
             Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
             Hit::Shell(v) if v != m.shell => post(Action::Shell(v)),
             Hit::CliStart(v) if v != m.cli_start => post(Action::CliStart(v)),
@@ -1990,6 +1999,7 @@ pub fn run_demo(args: &[String]) {
             }
             Action::Autostart(v) => m.autostart = v,
             Action::IdleClock(v) => m.idle_clock = v,
+            Action::StayBehind(v) => m.stay_behind = v,
             Action::Lyrics(v) => m.lyrics = v,
             Action::Shell(v) => m.shell = v,
             Action::CliStart(v) => m.cli_start = v,

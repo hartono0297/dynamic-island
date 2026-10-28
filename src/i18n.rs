@@ -436,6 +436,9 @@ keys! {
     ModeSystem => "Ikuti Windows", "Follow Windows";
     ModeDark => "Gelap", "Dark";
     ModeLight => "Terang", "Light";
+    StayBehind => "Di belakang jendela", "Stay behind windows";
+    StayBehindDesc => "Eksperimen: tertutup jendela, naik di tepi atas layar",
+        "Experimental: covered by windows, rises at the top edge";
     IdleClock => "Jam saat kosong", "Clock when idle";
     IdleClockDesc => "Tampilkan jam saat island kosong", "Show the time when the island is idle";
     PanelPages => "Halaman panel", "Panel pages";
