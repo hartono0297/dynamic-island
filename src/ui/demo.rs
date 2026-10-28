@@ -996,6 +996,7 @@ fn run_scenes(scenes: &[Scene]) {
                 }),
                 system: Some(&system),
                 cleaner: cleaner.as_ref(),
+                shot: None,
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");

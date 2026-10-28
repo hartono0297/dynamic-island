@@ -92,6 +92,10 @@ use crate::ui::window::IslandWindow;
 mod clip;
 use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
 
+#[path = "app_shot.rs"]
+mod shot;
+use shot::{ShotSetting, Shots};
+
 /// Posted by background sources after queueing an event.
 const WM_APP_EVENT: u32 = WM_APP + 1;
 /// Posted once the user has answered the notification-access prompt.
@@ -282,6 +286,7 @@ pub fn run(media_log_flag: bool) {
             cli_input,
             cli_prev: None,
             clip: ClipState::default(),
+            shots: Shots::default(),
             clip_input,
             cli_cursor: HistoryCursor::default(),
             cli_browsing: false,
@@ -464,6 +469,8 @@ struct App {
     cli_prev: Option<HWND>,
     /// The clipboard history and the Clipboard page's own state.
     clip: ClipState,
+    /// The screenshot preview's screenshots (`app_shot`).
+    shots: Shots,
     /// The hidden EDIT behind the Clipboard page's search field.
     clip_input: Option<CliInput>,
     /// Up / Down through the history while no suggestions show.
@@ -692,6 +699,14 @@ impl App {
                     self.on_mole_event(event, now);
                     continue;
                 }
+                Event::ShotFolder { shot, dir, found } => {
+                    self.on_shot_folder(shot, dir, found);
+                    continue;
+                }
+                Event::ShotRecycled { file, emptied, .. } => {
+                    self.on_shot_recycled(file, emptied, now);
+                    continue;
+                }
                 other => other,
             };
             let page = self.state.page();
@@ -726,6 +741,7 @@ impl App {
             self.follow_page(page, now);
             self.follow_cli_page(cli_was);
             self.follow_clip_page(cli_was.2);
+            self.follow_shot();
         }
     }
 
@@ -1115,6 +1131,7 @@ impl App {
             Effect::FocusClipSearch => return self.focus_clip_search(),
             Effect::ReleaseClipFocus => self.return_keyboard(),
             Effect::Clip(action) => return self.perform_clip(action),
+            Effect::Shot(action) => return self.perform_shot(action),
             Effect::ReminderDone(id) => {
                 // The reducer already took its notice down.
                 self.reminder_fired.retain(|f| *f != id);
@@ -2018,6 +2035,9 @@ impl App {
             View::MediaLyric => Some(ShapeKind::MediaLyric),
             View::PomodoroCompact => Some(ShapeKind::PomodoroCompact),
             View::Panel(_) => Some(self.panel_kind()),
+            View::Notice(n) if matches!(n.kind, NoticeKind::Screenshot { .. }) => {
+                Some(ShapeKind::NoticeShot)
+            }
             View::Notice(_) => Some(ShapeKind::Notice),
         };
         // Compact shapes widen to hold the robot at their left; the lyric
@@ -2384,6 +2404,7 @@ impl App {
             clip::TIMER_CLIP_RETRY | clip::TIMER_CLIP_SAVE | clip::TIMER_CLIP_HOLD => {
                 self.on_clip_timer(id)
             }
+            shot::TIMER_SHOT_RETRY => self.on_shot_timer(),
             TIMER_BATTERY => self.check_battery(),
             TIMER_DEADLINE => {
                 unsafe {
@@ -2999,6 +3020,7 @@ impl App {
             robot,
             system: Some(&system),
             cleaner: cleaner.as_ref(),
+            shot: shot::shot_view(&self.shots, &self.drawn),
         };
         if let Err(error) = self
             .renderer
@@ -4613,6 +4635,7 @@ mod tests {
             clip::TIMER_CLIP_RETRY,
             clip::TIMER_CLIP_SAVE,
             clip::TIMER_CLIP_HOLD,
+            shot::TIMER_SHOT_RETRY,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");

@@ -544,6 +544,39 @@ const SHOT_GAP: f32 = 12.0;
 pub const SHOT_ROBOT: f32 = 26.0;
 pub const SHOT_BUTTON_H: f32 = 24.0;
 const SHOT_BUTTON_GAP: f32 = 6.0;
+/// A button's inner left and right padding (`.act`'s 11 px).
+pub const SHOT_BUTTON_PAD: f32 = 11.0;
+
+/// Where a `w` × `h` picture draws inside `area`: whole, scaled to fit
+/// (down or up) and centred.
+pub fn shot_fit(area: Rect, w: f32, h: f32) -> Rect {
+    if w <= 0.0 || h <= 0.0 {
+        return area;
+    }
+    let k = (area.w / w).min(area.h / h);
+    let (fw, fh) = (w * k, h * k);
+    Rect {
+        x: area.x + (area.w - fw) / 2.0,
+        y: area.y + (area.h - fh) / 2.0,
+        w: fw,
+        h: fh,
+    }
+}
+
+/// The preview's click targets for screenshot `id`: the three buttons and
+/// the thumbnail (opens the file). Anywhere else on it is `Hit::Body`.
+pub fn shot_regions(l: &ShotLayout, id: u64) -> Vec<Region> {
+    let hits = [Hit::ShotCopy(id), Hit::ShotKeep(id), Hit::ShotDelete(id)];
+    l.buttons
+        .iter()
+        .zip(hits)
+        .map(|(&rect, hit)| Region { rect, hit })
+        .chain([Region {
+            rect: l.thumb,
+            hit: Hit::ShotOpen(id),
+        }])
+        .collect()
+}
 
 /// Where the preview draws: the thumbnail at the left; the right column
 /// with the robot, the title and the two-line meta at its top and the three

@@ -158,9 +158,10 @@ impl App {
         self.sync_clip_hotkey();
     }
 
-    /// The listener runs while "Riwayat clipboard" is on.
-    fn sync_clip_listener(&mut self) {
-        let want = self.config.clipboard.enabled;
+    /// The listener runs while "Riwayat clipboard" or the screenshot
+    /// preview is on.
+    pub(super) fn sync_clip_listener(&mut self) {
+        let want = self.config.clipboard.enabled || self.config.screenshot.preview;
         if want && !self.clip.listening {
             self.clip.listening = win::add_listener(self.hwnd);
         } else if !want && self.clip.listening {
@@ -225,7 +226,8 @@ impl App {
     }
 
     fn read_clipboard(&mut self) {
-        if !self.config.clipboard.enabled {
+        let history = self.config.clipboard.enabled;
+        if !history && !self.config.screenshot.preview {
             return;
         }
         let snap: ClipSnapshot = match win::read(self.hwnd, self.clip.own_sequence) {
@@ -241,19 +243,41 @@ impl App {
             }
             Read::Snapshot(snap) => snap,
         };
+        let sequence = snap.sequence;
+        // The history off, the preview on: only an image is looked at, by
+        // the history's rules, and nothing is kept.
+        if !history {
+            if let Some(img) = store::image_only(snap)
+                && self.shot_from_image(None, &img, sequence)
+            {
+                self.refresh(Instant::now());
+            }
+            return;
+        }
         let at = Local::now().timestamp();
         let outcome = ingest(&mut self.clip.history, snap, at);
-        let id = match outcome {
+        let (id, shot) = match outcome {
             Ingested::Skipped | Ingested::Nothing => return,
-            Ingested::Added { id, image } => {
-                if image {
-                    self.clip_image_arrived(id);
-                }
-                id
+            Ingested::Added { id, image } => (id, image && self.clip_image_arrived(id, sequence)),
+            // The same screenshot again (PrtSc twice on an unchanged
+            // screen): one card, moved up, and a preview of it.
+            Ingested::Bumped { id } => {
+                let again = self
+                    .clip
+                    .history
+                    .get(id)
+                    .and_then(Clip::image)
+                    .is_some_and(|i| i.screenshot);
+                (id, again && self.clip_image_arrived(id, sequence))
             }
-            Ingested::Bumped { id } => id,
         };
         self.schedule_clip_save();
+        // The preview took the notice's place ("Disalin" would only be
+        // replaced by it).
+        if shot {
+            self.refresh(Instant::now());
+            return;
+        }
         let notice = self
             .config
             .clipboard
@@ -266,12 +290,18 @@ impl App {
         }
     }
 
-    /// A new image entry arrived (a screenshot, a copied picture). Run 8's
-    /// screenshot preview hooks in here; nothing else happens yet.
-    fn clip_image_arrived(&mut self, _id: u64) {}
+    /// A new image entry `id` arrived (a screenshot, a copied picture): it
+    /// becomes the screenshot preview's candidate (`app_shot`). True when
+    /// the preview went up now.
+    fn clip_image_arrived(&mut self, id: u64, sequence: u32) -> bool {
+        let Some(img) = self.clip.history.get(id).and_then(Clip::image).cloned() else {
+            return false;
+        };
+        self.shot_from_image(Some(id), &img, sequence)
+    }
 
     /// Redraws the page if it is on screen.
-    fn redraw_clip(&mut self) {
+    pub(super) fn redraw_clip(&mut self) {
         if self.state.view() == View::Panel(Page::Clipboard) && !self.animating() {
             self.draw(Instant::now());
         }
@@ -279,7 +309,7 @@ impl App {
 
     /// The file follows a change once, `SAVE_MS` later (a burst of copies
     /// writes once). Nothing with "hanya di memori".
-    fn schedule_clip_save(&mut self) {
+    pub(super) fn schedule_clip_save(&mut self) {
         if !self.config.clipboard.persist {
             return;
         }
@@ -389,7 +419,7 @@ impl App {
         Some(Event::Notice(notice))
     }
 
-    fn clamp_clip_scroll(&mut self) {
+    pub(super) fn clamp_clip_scroll(&mut self) {
         let n = shown(&self.clip.history, &self.clip.query).len();
         let max = clip_max_scroll(n, self.clip_rows());
         self.clip.scroll = self.clip.scroll.min(max);

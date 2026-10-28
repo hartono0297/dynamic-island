@@ -50,7 +50,7 @@ use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
     compact_layout, compact_layout_robot, corner_radius, equalizer_heights, idle_layout,
     lyric_layout, lyric_layout_robot, lyric_overflow, notice_action, notice_action_w,
-    notice_layout,
+    notice_layout, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, shot_fit, shot_layout, shot_regions,
 };
 use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
@@ -60,6 +60,7 @@ use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
 use crate::clipboard::Clip;
+use crate::clipboard::image::Thumb;
 use crate::config::Style;
 use crate::i18n;
 use crate::lyrics::{self, ShownLine};
@@ -143,6 +144,20 @@ pub struct Frame<'a> {
     pub system: Option<&'a SystemView<'a>>,
     /// The cleaner, while it shows over the System page.
     pub cleaner: Option<&'a CleanerView<'a>>,
+    /// The screenshot preview's picture and size, while it shows.
+    pub shot: Option<ShotView<'a>>,
+}
+
+/// What the screenshot preview draws (`NoticeKind::Screenshot`): its
+/// thumbnail (at most 460 × 272, the box at 2×), the size in pixels and
+/// the file's size (the bitmap's until its file is found).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotView<'a> {
+    pub id: u64,
+    pub thumb: &'a Thumb,
+    pub w: u32,
+    pub h: u32,
+    pub bytes: u64,
 }
 
 /// What the cleaner shows: its mode, the ticks and the armed button (the
@@ -481,6 +496,8 @@ pub struct Renderer {
     /// Clipboard thumbnails as bitmaps of the current target, by entry id;
     /// entries no longer drawn are dropped each frame.
     clip_thumbs: std::cell::RefCell<Vec<(u64, ID2D1Bitmap)>>,
+    /// The screenshot preview's thumbnail as a bitmap, by screenshot id.
+    shot_thumb: std::cell::RefCell<Option<(u64, ID2D1Bitmap)>>,
 }
 
 struct Fonts {
@@ -686,6 +703,7 @@ impl Renderer {
                 cli_caret: std::cell::Cell::new(None),
                 clip_caret: std::cell::Cell::new(None),
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
+                shot_thumb: std::cell::RefCell::new(None),
             })
         }
     }
@@ -715,6 +733,7 @@ impl Renderer {
             self.target = None;
             self.art.clear();
             self.clip_thumbs.borrow_mut().clear();
+            self.shot_thumb.borrow_mut().take();
             self.regions = HitRegions::default();
             self.paint(style, shape, frame, opacity)?;
         }
@@ -1053,7 +1072,12 @@ impl Renderer {
             }
             View::PomodoroCompact => self.paint_pomodoro_compact(shape, frame),
             // A pomodoro notice shows while the next phase waits (Ready).
-            View::Notice(notice) => self.paint_notice(shape, notice, frame.pomodoro, robot),
+            View::Notice(notice) => match (&notice.kind, frame.shot) {
+                (NoticeKind::Screenshot { shot, .. }, Some(view)) if view.id == *shot => {
+                    self.paint_shot(shape, notice, view, robot)
+                }
+                _ => self.paint_notice(shape, notice, frame.pomodoro, robot),
+            },
             View::Idle => {
                 // Without the clock or the robot, idle is the empty shape.
                 let l = idle_layout(shape, robot.is_some(), frame.clock.is_some());
@@ -1340,6 +1364,136 @@ impl Renderer {
             self.text_colored(label, &self.fonts.button_center, chip, ink, 1.0);
         }
         Ok(())
+    }
+
+    /// The screenshot preview (keputusan-v3.1 p6): the thumbnail at the
+    /// left (a click opens the file), Bata or the Camera badge with the
+    /// title and two meta lines, and Salin lagi / Simpan / Hapus stacked
+    /// at the right. Its targets go in the hit regions.
+    fn paint_shot(
+        &mut self,
+        shape: ShapeRect,
+        notice: &Notice,
+        view: ShotView,
+        robot: Option<RobotFrame>,
+    ) -> Result<()> {
+        let p = self.palette;
+        let lang = i18n::lang();
+        let l = shot_layout(shape);
+        // The picture, whole, on a raised tile (`.shot`).
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.thumb, SHOT_THUMB_RADIUS);
+        if let Some(bitmap) = self.shot_bitmap(view.id, view.thumb)? {
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe {
+                let D2D_SIZE_F { width, height } = bitmap.GetSize();
+                let fit = shot_fit(l.thumb, width, height);
+                let k = fit.w / width.max(1.0);
+                let transform = Matrix3x2 {
+                    M11: k,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: k,
+                    M31: fit.x,
+                    M32: fit.y,
+                };
+                let brush = target.rt.CreateBitmapBrush(&bitmap, None, None)?;
+                brush.SetTransform(&transform);
+                let brush: ID2D1Brush = brush.cast()?;
+                let r = SHOT_THUMB_RADIUS.min(fit.w / 2.0).min(fit.h / 2.0);
+                target.rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(fit),
+                        radiusX: r,
+                        radiusY: r,
+                    },
+                    &brush,
+                );
+            }
+        }
+        match robot {
+            Some(r) => self.paint_robot(l.robot, r),
+            None => {
+                let badge = badge_style(notice, &p, crate::pomodoro::Phase::Focus);
+                self.set_color(badge.fill, badge.alpha);
+                self.fill_round(l.robot, radius::BADGE * l.robot.w / 40.0);
+                if let Some(icon) = badge.icon {
+                    self.icon_colored(icon, l.robot, 14.0, badge.ink, 1.0, None);
+                }
+            }
+        }
+        self.text(&notice.title, &self.fonts.title, l.title, 1.0);
+        let size = i18n::shot_size(lang, view.w, view.h, view.bytes);
+        self.text_colored(&size, &self.fonts.small, l.meta[0], p.secondary, 1.0);
+        let note = i18n::text(lang, i18n::Key::ShotCopiedNote);
+        self.text_colored(note, &self.fonts.small, l.meta[1], p.secondary, 1.0);
+        // `.act`, `.act.pri` and `.act.dng`.
+        let buttons = [
+            (Icon::Copy, i18n::Key::ShotCopyAgain, p.raised, 1.0, p.text),
+            (Icon::Download, i18n::Key::ShotKeep, p.accent, 1.0, p.on_accent),
+            (Icon::Trash, i18n::Key::ShotDelete, theme::SOFT_RED, 0.14, theme::SOFT_RED),
+        ];
+        for (r, (icon, key, fill, alpha, ink)) in l.buttons.into_iter().zip(buttons) {
+            self.set_color(fill, alpha);
+            self.fill_round(r, r.h / 2.0);
+            let glyph = Rect {
+                x: r.x + SHOT_BUTTON_PAD,
+                w: 13.0,
+                ..r
+            };
+            self.icon_colored(icon, glyph, 13.0, ink, 1.0, None);
+            let label = Rect {
+                x: glyph.right() + 6.0,
+                w: (r.right() - glyph.right() - 6.0 - SHOT_BUTTON_PAD).max(0.0),
+                ..r
+            };
+            self.text_colored(i18n::text(lang, key), &self.fonts.button, label, ink, 1.0);
+        }
+        self.regions.regions = shot_regions(&l, view.id);
+        Ok(())
+    }
+
+    /// The preview's thumbnail as a bitmap of this target, made once per
+    /// screenshot.
+    fn shot_bitmap(&self, id: u64, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
+        if let Some((cached, b)) = self.shot_thumb.borrow().as_ref()
+            && *cached == id
+        {
+            return Ok(Some(b.clone()));
+        }
+        let bitmap = self.thumb_bitmap(thumb)?;
+        *self.shot_thumb.borrow_mut() = bitmap.clone().map(|b| (id, b));
+        Ok(bitmap)
+    }
+
+    /// `thumb`'s opaque BGRA pixels as a bitmap of this target; `None` for
+    /// an empty or malformed one.
+    fn thumb_bitmap(&self, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
+        if thumb.w == 0 || thumb.h == 0 || thumb.bgra.len() != (thumb.w * thumb.h * 4) as usize {
+            return Ok(None);
+        }
+        let target = self.target.as_ref().expect("target ensured by paint");
+        use windows::Win32::Graphics::Direct2D::Common::{D2D_SIZE_U, D2D1_PIXEL_FORMAT};
+        let props = windows::Win32::Graphics::Direct2D::D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        let bitmap = unsafe {
+            target.rt.CreateBitmap(
+                D2D_SIZE_U {
+                    width: thumb.w,
+                    height: thumb.h,
+                },
+                Some(thumb.bgra.as_ptr().cast()),
+                thumb.w * 4,
+                &props,
+            )?
+        };
+        Ok(Some(bitmap))
     }
 
     /// Album art cropped to a rounded square; a music-note tile when absent or undecodable.
