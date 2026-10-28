@@ -32,8 +32,8 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
   **A restored image (after a restart) copies back at thumbnail size**: the
   file never holds full-size pixels.
   "Screenshot · W × H" when only bitmap formats were on the clipboard,
-  else "Gambar · W × H". `clip_image_arrived` is the hook Run 8's
-  screenshot preview uses; it does nothing yet.
+  else "Gambar · W × H". `clip_image_arrived` hands a new image to the
+  screenshot preview ([[screenshot-preview]]).
 - **Persistence.** `clipboard-history.bin` next to config.json, DPAPI
   current user (`src/dpapi.rs`, shared with the Google token), plaintext
   wiped. Versioned binary (`DICB`, v1), written to `.bin.tmp` then renamed,
@@ -45,8 +45,10 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
 - **Lock.** "Hapus saat layar dikunci" (default off) clears the unpinned
   entries from memory and the file on `WTS_SESSION_LOCK`. **Pins stay**:
   pinning is an explicit "keep this". The clear button in Settings does the
-  same. Turning the history off stops the listener and shows "Riwayat
-  clipboard mati"; the entries stay until cleared.
+  same. Turning the history off shows "Riwayat clipboard mati"; the
+  entries stay until cleared. The listener stops only when the screenshot
+  preview is off too; with the preview on it still looks at new images
+  (by the same skip rules) and keeps nothing.
 - **Hotkey.** None by default. Settings offers Ctrl+Alt+V and Win+Alt+V,
   **never Ctrl+Shift+V** (paste as plain text in browsers, VS Code and
   Office). An unknown name in config.json reads as none. `RegisterHotKey`

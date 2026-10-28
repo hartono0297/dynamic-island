@@ -66,13 +66,13 @@ use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
     CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
     Section, State, Tone, battery_step, clip_items_step, disk_warn_step, layout, ram_warn_step,
-    scroll_by,
+    scroll_by, shot_secs_step,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::{ClipHotkey, ClipboardSettings, Config, Style};
+use crate::config::{ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style};
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pomodoro::PomoSettings;
@@ -112,6 +112,10 @@ pub enum Action {
     ClipFeedbackAll(bool),
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
+    /// Settings → Clipboard → Screenshot.
+    ShotPreview(bool),
+    ShotOnIgnore(ShotIgnore),
+    ShotSecs(u32),
     BatteryThreshold(u8),
     /// "Peringatan disk": GB free.
     DiskWarn(u32),
@@ -170,6 +174,7 @@ pub struct Model {
     pub clip: ClipboardSettings,
     /// The chosen Clipboard hotkey could not be registered.
     pub clip_hotkey_failed: bool,
+    pub shot: ScreenshotSettings,
 }
 
 impl Model {
@@ -200,6 +205,7 @@ impl Model {
             google_client_secret: cfg.google_client_secret.clone(),
             clip: cfg.clipboard,
             clip_hotkey_failed: false,
+            shot: cfg.screenshot,
         }
     }
 }
@@ -925,6 +931,7 @@ impl Settings {
             hook_note: self.hook_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             clip: m.clip,
             clip_hotkey_failed: m.clip_hotkey_failed,
+            shot: m.shot,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -1013,6 +1020,7 @@ impl Settings {
                     .iter()
                     .position(|v| *v == m.clip.hotkey)
                     .unwrap_or(0) as f32,
+                Group::ShotIgnore => usize::from(m.shot.on_ignore == ShotIgnore::Delete) as f32,
             }
         };
         for group in [
@@ -1024,6 +1032,7 @@ impl Settings {
             Group::Shell,
             Group::Motion,
             Group::ClipHotkey,
+            Group::ShotIgnore,
         ] {
             let (from, to) = (index(group, &old), index(group, new));
             if from != to {
@@ -1065,6 +1074,7 @@ impl Settings {
                 oc.copied_feedback_all,
                 nc.copied_feedback_all,
             ),
+            (Hit::ShotPreview, old.shot.preview, new.shot.preview),
         ] {
             if from != to {
                 self.anims.slide_toggle(hit, from, to, now);
@@ -1237,6 +1247,16 @@ impl Settings {
             Hit::ClipHotkey(h) if h != m.clip.hotkey => post(Action::ClipHotkey(h)),
             Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
             Hit::ClipClear => post(Action::ClipClear),
+            Hit::ShotPreview => post(Action::ShotPreview(!m.shot.preview)),
+            Hit::ShotIgnore(v) if v != m.shot.on_ignore => post(Action::ShotOnIgnore(v)),
+            Hit::ShotSecs(dir) => {
+                let n = shot_secs_step(m.shot.show_secs, dir);
+                if n == m.shot.show_secs {
+                    Vec::new()
+                } else {
+                    post(Action::ShotSecs(n))
+                }
+            }
             Hit::Battery(dir) => {
                 let t = battery_step(m.battery_threshold, dir);
                 if t == m.battery_threshold {
@@ -1334,7 +1354,8 @@ impl Settings {
             | Hit::Shell(_)
             | Hit::CliStart(_)
             | Hit::Motion(_)
-            | Hit::ClipHotkey(_) => Vec::new(),
+            | Hit::ClipHotkey(_)
+            | Hit::ShotIgnore(_) => Vec::new(),
         };
         self.relayout();
         after
@@ -1865,6 +1886,9 @@ pub fn run_demo(args: &[String]) {
             Action::ClipHotkey(v) => m.clip.hotkey = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
+            Action::ShotPreview(v) => m.shot.preview = v,
+            Action::ShotOnIgnore(v) => m.shot.on_ignore = v,
+            Action::ShotSecs(v) => m.shot.show_secs = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
             Action::DiskWarn(v) => m.disk_warn_gb = v,
             Action::RamWarn(v) => m.ram_warn_percent = v,

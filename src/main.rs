@@ -19,6 +19,7 @@ mod mole;
 mod notes;
 mod pomodoro;
 mod reminders;
+mod screenshot;
 mod shortcuts;
 mod sources;
 mod state;

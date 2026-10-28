@@ -55,7 +55,7 @@ use super::geometry::{
 };
 use super::render::{
     CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
-    RobotFrame, SystemView,
+    RobotFrame, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -228,6 +228,47 @@ enum DemoNotice {
     MoleFailed,
     /// "Disalin" after copying the first Clipboard card.
     Copied,
+    /// The screenshot preview (keputusan-v3.1 p6): 1280 × 720 · 245 KB.
+    Shot,
+    /// "Disimpan · Pictures\Screenshots" after Simpan.
+    ShotSaved,
+    /// "Dihapus · clipboard dikosongkan" after Hapus.
+    ShotDeleted,
+}
+
+/// The screenshot preview's id in the demo (`DemoNotice::Shot`).
+const DEMO_SHOT: u64 = 1;
+/// Its fixed figures: the design's 1280 × 720, a 245 KB file.
+const DEMO_SHOT_SIZE: (u32, u32, u64) = (1280, 720, 250_880);
+
+/// The preview's picture, drawn like the design's `.shot` (a dark title
+/// bar, a cream page, an orange heading and striped lines) at 460 × 259,
+/// the 1280 × 720 screenshot fitted to the 2× box. Never a real capture.
+fn demo_shot_thumb() -> Thumb {
+    let (w, h) = (460u32, 259u32);
+    let mut bgra = Vec::with_capacity((w * h * 4) as usize);
+    let bar_h = (h as f32 * 0.18) as u32;
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let rgb: [u8; 3] = if y < bar_h {
+                [0x2B, 0x22, 0x1C]
+            } else if (27.0..=203.0).contains(&fx) && (68.0..=88.0).contains(&fy) {
+                [0xC9, 0x54, 0x2B]
+            } else if fx >= 27.0
+                && fx <= w as f32 - 36.0
+                && fy >= 108.0
+                && fy <= h as f32 - 26.0
+                && ((fy - 108.0) as u32 / 15) % 2 == 0
+            {
+                [0xE6, 0xDC, 0xCF]
+            } else {
+                [0xF4, 0xEE, 0xE6]
+            };
+            bgra.extend([rgb[2], rgb[1], rgb[0], 255]);
+        }
+    }
+    Thumb { w, h, bgra }
 }
 
 const BASE: Scene = Scene {
@@ -336,7 +377,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 76] = [
+const SCENES: [Scene; 79] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -488,6 +529,26 @@ const SCENES: [Scene; 76] = [
         ShapeKind::Notice,
         View0::Notice(DemoNotice::Copied),
         Expr::Happy,
+    ),
+    // keputusan-v3.1 p6: the preview with Bata happy, then "Disimpan"
+    // (happy) and "Dihapus" (at rest). Fixed figures and a drawn picture.
+    bata(
+        "screenshot",
+        ShapeKind::NoticeShot,
+        View0::Notice(DemoNotice::Shot),
+        Expr::Happy,
+    ),
+    bata(
+        "screenshot-saved",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ShotSaved),
+        Expr::Happy,
+    ),
+    bata(
+        "screenshot-deleted",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ShotDeleted),
+        Expr::Idle,
     ),
     Scene {
         name: "bata-sheet",
@@ -784,6 +845,7 @@ fn run_scenes(scenes: &[Scene]) {
         artist: "Banda Neira feat. Hindia, Kunto Aji, Nadin Amizah & Friends".into(),
         ..media.clone()
     };
+    let shot_thumb = demo_shot_thumb();
     let today = Local::now().date_naive();
     let name = |var| std::env::var(var).unwrap_or_default();
     let palette = theme::island(
@@ -996,6 +1058,16 @@ fn run_scenes(scenes: &[Scene]) {
                 }),
                 system: Some(&system),
                 cleaner: cleaner.as_ref(),
+                shot: (scene.view == View0::Notice(DemoNotice::Shot)).then(|| {
+                    let (w, h, bytes) = DEMO_SHOT_SIZE;
+                    ShotView {
+                        id: DEMO_SHOT,
+                        thumb: &shot_thumb,
+                        w,
+                        h,
+                        bytes,
+                    }
+                }),
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");
@@ -1204,6 +1276,28 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             crate::clipboard::store::preview(DEMO_CLIPS[0].2, 120),
             NoticeKind::Copied,
         ),
+        DemoNotice::Shot => notice(
+            tr(Key::ShotTitle),
+            tr(Key::ShotTitle),
+            String::new(),
+            NoticeKind::Screenshot {
+                shot: DEMO_SHOT,
+                secs: 8,
+                delete_if_ignored: false,
+            },
+        ),
+        DemoNotice::ShotSaved => notice(
+            tr(Key::ShotTitle),
+            tr(Key::ShotSaved),
+            r"Pictures\Screenshots".into(),
+            NoticeKind::ShotSaved,
+        ),
+        DemoNotice::ShotDeleted => {
+            let lang = crate::i18n::lang();
+            let (title, body) =
+                crate::i18n::shot_deleted(lang, crate::screenshot::FileOutcome::Recycled, true);
+            notice(tr(Key::ShotTitle), title, body, NoticeKind::ShotDeleted)
+        }
         DemoNotice::ClaudeWorking => notice(
             "Claude",
             tr(Key::DemoClaudeWorking),

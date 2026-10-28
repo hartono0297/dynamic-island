@@ -99,8 +99,13 @@ pub fn dib_info(b: &[u8]) -> Option<DibInfo> {
 /// The thumbnail's size for a `w` × `h` image: scaled down to fit
 /// `THUMB_MAX_W` × `THUMB_MAX_H`, never up.
 pub fn thumb_size(w: u32, h: u32) -> (u32, u32) {
-    let k = (THUMB_MAX_W as f32 / w as f32)
-        .min(THUMB_MAX_H as f32 / h as f32)
+    fit_size(w, h, THUMB_MAX_W, THUMB_MAX_H)
+}
+
+/// `w` × `h` scaled down to fit `max_w` × `max_h`, never up.
+fn fit_size(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    let k = (max_w as f32 / w as f32)
+        .min(max_h as f32 / h as f32)
         .min(1.0);
     let s = |v: u32| ((v as f32 * k).round() as u32).max(1);
     (s(w), s(h))
@@ -110,7 +115,13 @@ pub fn thumb_size(w: u32, h: u32) -> (u32, u32) {
 /// area it covers, alpha forced opaque (clipboard bitmaps rarely carry a
 /// real alpha channel).
 pub fn thumbnail(b: &[u8], info: &DibInfo) -> Thumb {
-    let (tw, th) = thumb_size(info.w, info.h);
+    thumbnail_fit(b, info, THUMB_MAX_W, THUMB_MAX_H)
+}
+
+/// `thumbnail` at most `max_w` × `max_h` (the screenshot preview's larger
+/// one, made from the full DIB).
+pub fn thumbnail_fit(b: &[u8], info: &DibInfo, max_w: u32, max_h: u32) -> Thumb {
+    let (tw, th) = fit_size(info.w, info.h, max_w, max_h);
     let bytes_pp = (info.bpp / 8) as usize;
     let pixel = |x: u32, y: u32| -> [u32; 3] {
         let row = if info.top_down { y } else { info.h - 1 - y };
@@ -237,6 +248,10 @@ pub mod tests {
         assert_eq!(&t.bgra[..4], &[255, 0, 0, 255]);
         let last = t.bgra.len() - 4;
         assert_eq!(&t.bgra[last..], &[0, 0, 255, 255]);
+        // The preview's larger one, from the same pixels.
+        let big = thumbnail_fit(&d, &info, 460, 272);
+        assert_eq!((big.w, big.h), (460, 259));
+        assert_eq!(&big.bgra[..4], &[255, 0, 0, 255]);
         // Never scaled up.
         assert_eq!(thumb_size(40, 30), (40, 30));
         assert_eq!(thumb_size(100, 1000), (13, 128));

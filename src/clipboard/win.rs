@@ -88,7 +88,10 @@ pub fn read(hwnd: HWND, own_sequence: Option<u32>) -> Read {
         }
         ids.push(f);
     }
-    let mut snap = ClipSnapshot::default();
+    let mut snap = ClipSnapshot {
+        sequence,
+        ..ClipSnapshot::default()
+    };
     let mut names = Vec::new();
     for &id in ids.iter().filter(|&&id| id >= FIRST_REGISTERED) {
         let mut buf = [0u16; 256];
@@ -240,6 +243,40 @@ pub fn write(hwnd: HWND, formats: &[(u32, Vec<u8>)]) -> Option<u32> {
     }
     drop(open);
     any.then(|| unsafe { GetClipboardSequenceNumber() })
+}
+
+/// A packed DIB as the clipboard takes it (the screenshot's "Salin lagi").
+pub fn image_formats(dib: Vec<u8>) -> Vec<(u32, Vec<u8>)> {
+    vec![(CF_DIB, dib)]
+}
+
+/// The clipboard's sequence number now.
+pub fn sequence_now() -> u32 {
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+/// The screenshot's "Hapus": empties the clipboard, but only while its
+/// sequence number is still `recorded` (`screenshot::should_empty`), checked
+/// again with the clipboard open, so a copy made since is never lost.
+/// Returns the sequence number after emptying (the island's own change), or
+/// `None` when it left the clipboard alone.
+pub fn empty_if_unchanged(hwnd: HWND, recorded: u32) -> Option<u32> {
+    use crate::screenshot::should_empty;
+    if !should_empty(sequence_now(), recorded) {
+        return None;
+    }
+    let open = (0..4).find_map(|i| {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        Open::new(hwnd)
+    })?;
+    if !should_empty(sequence_now(), recorded) {
+        return None;
+    }
+    unsafe { EmptyClipboard() }.ok()?;
+    drop(open);
+    Some(sequence_now())
 }
 
 fn set(f: u32, bytes: &[u8]) -> bool {

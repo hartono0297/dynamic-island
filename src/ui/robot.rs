@@ -530,6 +530,12 @@ pub enum NoticeSort {
     Greeting,
     /// "Disalin" after a copy.
     Copied,
+    /// The screenshot preview.
+    Screenshot,
+    /// "Disimpan" after its Simpan.
+    ShotSaved,
+    /// "Dihapus" after its Hapus.
+    ShotDeleted,
 }
 
 impl NoticeSort {
@@ -547,6 +553,9 @@ impl NoticeSort {
             NoticeKind::MoleFailed => NoticeSort::MoleFailed,
             NoticeKind::Greeting => NoticeSort::Greeting,
             NoticeKind::Copied => NoticeSort::Copied,
+            NoticeKind::Screenshot { .. } => NoticeSort::Screenshot,
+            NoticeKind::ShotSaved => NoticeSort::ShotSaved,
+            NoticeKind::ShotDeleted => NoticeSort::ShotDeleted,
         }
     }
 }
@@ -641,7 +650,11 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
                 | NoticeSort::ClaudeDone
                 | NoticeSort::CleanDone
                 | NoticeSort::MoleDone
-                | NoticeSort::Copied => Some(Expr::Happy),
+                | NoticeSort::Copied
+                | NoticeSort::Screenshot
+                | NoticeSort::ShotSaved => Some(Expr::Happy),
+                // keputusan-v3.1 p6: "Dihapus" with Bata at rest.
+                NoticeSort::ShotDeleted => Some(Expr::Idle),
                 NoticeSort::BatteryLow | NoticeSort::SystemLow | NoticeSort::MoleFailed => {
                     Some(Expr::Sad)
                 }
@@ -1163,6 +1176,9 @@ mod tests {
             (NoticeSort::MoleFailed, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
             (NoticeSort::Copied, Expr::Happy),
+            (NoticeSort::Screenshot, Expr::Happy),
+            (NoticeSort::ShotSaved, Expr::Happy),
+            (NoticeSort::ShotDeleted, Expr::Idle),
         ] {
             let spot = Spot::Notice(sort);
             assert_eq!(e(RobotInputs { spot, ..busy }), Some(expr), "{sort:?}");

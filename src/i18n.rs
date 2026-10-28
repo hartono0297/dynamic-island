@@ -546,6 +546,28 @@ keys! {
     ClipClearDesc => "Item tersemat tetap disimpan", "Pinned items are kept";
     ClipClearButton => "Hapus", "Clear";
 
+    // The screenshot preview, its notices and Settings → Clipboard → Screenshot.
+    ShotTitle => "Screenshot", "Screenshot";
+    ShotCopiedNote => "sudah disalin", "already copied";
+    ShotCopyAgain => "Salin lagi", "Copy again";
+    ShotKeep => "Simpan", "Keep";
+    ShotDelete => "Hapus", "Delete";
+    ShotSaved => "Disimpan", "Saved";
+    ShotOnClipboard => "tetap di clipboard", "still on the clipboard";
+    ShotDeleted => "Dihapus", "Deleted";
+    ShotDeleteFailed => "Gagal menghapus", "Couldn't delete";
+    ShotClipEmptied => "clipboard dikosongkan", "clipboard cleared";
+    ShotClipUnchanged => "clipboard tidak diubah", "clipboard unchanged";
+    ShotRecycled => "dipindah ke Recycle Bin", "moved to the Recycle Bin";
+    ShotNoFile => "tidak ada file", "no file found";
+    ShotFileStays => "file masih ada", "the file is still there";
+    SecScreenshot => "Screenshot", "Screenshot";
+    ShotPreviewSetting => "Preview di notch", "Preview in the notch";
+    ShotIgnoreSetting => "Jika diabaikan", "If ignored";
+    ShotIgnoreDesc => "Setelah waktu tampil habis", "Once its time on screen runs out";
+    ShotShowFor => "Lama tampil", "Show for";
+    SecondsShort => "dtk", "s";
+
     // The demo's Claude notices (debug builds).
     DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";
     DemoClaudeAsks => "izin menjalankan perintah", "permission to run a command";
@@ -1142,6 +1164,53 @@ pub fn clip_files(lang: Lang, n: usize, first: &str) -> String {
         (Lang::Id, n) => format!("{n} file"),
         (Lang::En, n) => format!("{n} files"),
     }
+}
+
+/// The screenshot preview's size line: "1280 × 720 · 245 KB"; from
+/// 1000 KB on "1,8 MB" ("1.8 MB"). Binary units, as Explorer counts.
+pub fn shot_size(lang: Lang, w: u32, h: u32, bytes: u64) -> String {
+    let kb = (bytes as f64 / 1024.0).round();
+    let size = if kb < 1000.0 {
+        format!("{} KB", kb.max(1.0))
+    } else {
+        format!("{} MB", one_decimal(lang, bytes as f64 / MIB as f64))
+    };
+    format!("{w} × {h} · {size}")
+}
+
+/// "Dihapus" and what it did: the file (to the Recycle Bin, none matched,
+/// or still there) and the clipboard (emptied or left as it was). The
+/// design's "Dihapus · clipboard dikosongkan" when both went.
+pub fn shot_deleted(
+    lang: Lang,
+    file: crate::screenshot::FileOutcome,
+    emptied: bool,
+) -> (&'static str, String) {
+    use crate::screenshot::FileOutcome;
+    let title = match file {
+        FileOutcome::Failed => text(lang, Key::ShotDeleteFailed),
+        _ => text(lang, Key::ShotDeleted),
+    };
+    let clip = text(
+        lang,
+        if emptied {
+            Key::ShotClipEmptied
+        } else {
+            Key::ShotClipUnchanged
+        },
+    );
+    let body = match (file, emptied) {
+        (FileOutcome::Recycled, true) => clip.to_owned(),
+        (FileOutcome::Recycled, false) => format!("{} · {clip}", text(lang, Key::ShotRecycled)),
+        (FileOutcome::NoFile, _) => format!("{} · {clip}", text(lang, Key::ShotNoFile)),
+        (FileOutcome::Failed, _) => format!("{} · {clip}", text(lang, Key::ShotFileStays)),
+    };
+    (title, body)
+}
+
+/// "8 dtk", "8 s": the "Lama tampil" stepper's value.
+pub fn seconds_short(lang: Lang, secs: u32) -> String {
+    format!("{secs} {}", text(lang, Key::SecondsShort))
 }
 
 /// A running command's time on the clock: "0:42", "12:05", "1:02:03".
@@ -2072,6 +2141,45 @@ mod tests {
             "dihentikan · 3,8 dtk"
         );
         assert_eq!(cli_result(Lang::En, Some(1), true, took), "stopped · 3.8 s");
+    }
+
+    #[test]
+    fn screenshot_texts() {
+        use crate::screenshot::FileOutcome;
+        assert_eq!(
+            shot_size(Lang::Id, 1280, 720, 250_880),
+            "1280 × 720 · 245 KB"
+        );
+        assert_eq!(
+            shot_size(Lang::Id, 3840, 2160, 1_887_437),
+            "3840 × 2160 · 1,8 MB"
+        );
+        assert_eq!(
+            shot_size(Lang::En, 3840, 2160, 1_887_437),
+            "3840 × 2160 · 1.8 MB"
+        );
+        assert_eq!(shot_size(Lang::En, 2, 2, 90), "2 × 2 · 1 KB");
+        assert_eq!(
+            shot_deleted(Lang::Id, FileOutcome::Recycled, true),
+            ("Dihapus", "clipboard dikosongkan".to_owned())
+        );
+        assert_eq!(
+            shot_deleted(Lang::Id, FileOutcome::Recycled, false).1,
+            "dipindah ke Recycle Bin · clipboard tidak diubah"
+        );
+        assert_eq!(
+            shot_deleted(Lang::En, FileOutcome::NoFile, true).1,
+            "no file found · clipboard cleared"
+        );
+        assert_eq!(
+            shot_deleted(Lang::En, FileOutcome::Failed, false),
+            (
+                "Couldn't delete",
+                "the file is still there · clipboard unchanged".to_owned()
+            )
+        );
+        assert_eq!(seconds_short(Lang::Id, 8), "8 dtk");
+        assert_eq!(seconds_short(Lang::En, 8), "8 s");
     }
 
     #[test]

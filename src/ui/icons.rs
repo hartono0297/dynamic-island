@@ -100,11 +100,14 @@ pub enum Icon {
     Pin,
     Text,
     Swatch,
+    /// The screenshot preview's "Salin lagi" (`copy` in keputusan-v3.1.html;
+    /// its "Simpan" is `save`, the same path as `Download`). Line only.
+    Copy,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 55] = [
+    pub const ALL: [Icon; 56] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -160,6 +163,7 @@ impl Icon {
         Icon::Pin,
         Icon::Text,
         Icon::Swatch,
+        Icon::Copy,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -370,6 +374,10 @@ impl Icon {
             Icon::Pin => &[Part::Path("M9 4h6l-1 6 3 3H7l3-3zM12 13v7")],
             Icon::Text => &[Part::Path("M5 6h14M5 11h14M5 16h9")],
             Icon::Swatch => &[Part::Circle(12.0, 12.0, 8.5), Part::Path("M12 3.5v17")],
+            Icon::Copy => &[
+                Part::Rect(8.0, 8.0, 11.0, 11.0, 2.5),
+                Part::Path("M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"),
+            ],
         }
     }
 }
@@ -1175,6 +1183,14 @@ mod tests {
         assert_eq!(count(Icon::Code, 0), "MLLMLL");
         assert_eq!(count(Icon::Download, 0), "MLMLLML");
         assert_eq!(Icon::Windows.parts().len(), 4);
+        // The preview's copy: the front sheet, and the back one's corner.
+        assert!(
+            Icon::Copy
+                .parts()
+                .iter()
+                .all(|p| p.layer() == Layer::Stroke)
+        );
+        assert_eq!(count(Icon::Copy, 1), "MLALALAL");
     }
 
     #[test]

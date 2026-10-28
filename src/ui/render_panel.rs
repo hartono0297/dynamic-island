@@ -9,16 +9,15 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_FIGURE_BEGIN_FILLED,
-    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
+    D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
-    D2D1_BITMAP_PROPERTIES, D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS,
-    D2D1_ROUNDED_RECT, D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap, ID2D1Brush, ID2D1Geometry,
+    D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_ROUNDED_RECT,
+    D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap, ID2D1Brush, ID2D1Geometry,
 };
 use windows::Win32::Graphics::DirectWrite::IDWriteTextFormat;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -2035,28 +2034,8 @@ impl Renderer {
         if let Some((_, b)) = self.clip_thumbs.borrow().iter().find(|(i, _)| *i == id) {
             return Ok(Some(b.clone()));
         }
-        if thumb.w == 0 || thumb.h == 0 || thumb.bgra.len() != (thumb.w * thumb.h * 4) as usize {
+        let Some(bitmap) = self.thumb_bitmap(thumb)? else {
             return Ok(None);
-        }
-        let target = self.target.as_ref().expect("target ensured by paint");
-        let props = D2D1_BITMAP_PROPERTIES {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-        };
-        let bitmap = unsafe {
-            target.rt.CreateBitmap(
-                D2D_SIZE_U {
-                    width: thumb.w,
-                    height: thumb.h,
-                },
-                Some(thumb.bgra.as_ptr().cast()),
-                thumb.w * 4,
-                &props,
-            )?
         };
         self.clip_thumbs.borrow_mut().push((id, bitmap.clone()));
         Ok(Some(bitmap))

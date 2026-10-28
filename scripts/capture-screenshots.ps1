@@ -173,6 +173,12 @@ $shots = @(
     @{ name = 'clipboard'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard' } }
     @{ name = 'clipboard-search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard-search' } }
     @{ name = 'clipboard-copied'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:clipboard-copied' } }
+    # The screenshot preview with fixed figures and a drawn picture (never a
+    # real capture, never the real clipboard or folder), then "Saved" and
+    # "Deleted".
+    @{ name = 'screenshot'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:screenshot' } }
+    @{ name = 'screenshot-saved'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:screenshot-saved' } }
+    @{ name = 'screenshot-deleted'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:screenshot-deleted' } }
     # The System page with fixed figures (never this machine's), and the
     # low-disk notice with Bata looking low.
     @{ name = 'system'; args = '--demo'; env = @{ DI_DEMO_STEP = 'system' } }
@@ -205,6 +211,8 @@ $shots = @(
     # Appearance scrolled to its end: the assistant (Bata) rows.
     @{ name = 'settings'; args = "--settings appearance $Window en"; env = @{}; wheel = 6 }
     @{ name = 'settings-clipboard'; args = "--settings clipboard $Window en"; env = @{} }
+    # Clipboard scrolled to its end: the screenshot preview's card.
+    @{ name = 'settings-screenshot'; args = "--settings clipboard $Window en"; env = @{}; wheel = 6 }
 )
 
 $backdrop = New-Object System.Windows.Forms.Form

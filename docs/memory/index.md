@@ -31,6 +31,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[cleaner]]
 - [[mole-mode]]
 - [[clipboard-history]]
+- [[screenshot-preview]]
 
 ## Gotchas
 

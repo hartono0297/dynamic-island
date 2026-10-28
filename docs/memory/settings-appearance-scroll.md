@@ -19,9 +19,10 @@ scrolls instead of growing the window.
 - The painter clips the content to the viewport and draws a thin
   scrollbar thumb (`Layout::scrollbar`).
 - `WM_MOUSEWHEEL` scrolls one row (52 px) per notch (`scroll_by`); a
-  section change resets it. Appearance and General (its second card holds
-  the disk / RAM warnings, [[system-page]]) have a viewport; every other
-  section, Clipboard's seven rows included ([[clipboard-history]]), fits
+  section change resets it. Appearance, General (its second card holds
+  the disk / RAM warnings, [[system-page]]) and Clipboard (its second card,
+  under a "Screenshot" eyebrow, holds the screenshot preview,
+  [[screenshot-preview]]) have a viewport; every other section fits
   without one. The tests assert that, and that at the end the last card
   meets the margin.
 
