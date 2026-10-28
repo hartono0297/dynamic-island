@@ -52,8 +52,6 @@ pub(super) struct ShotState {
     pub clip: ClipCandidate,
     /// The clipboard sequence number read with it (or after "Salin lagi").
     pub sequence: u32,
-    /// Only bitmap formats were on the clipboard (PrtSc, Snipping Tool).
-    pub flagged: bool,
     /// The original, for "Salin lagi" (the history's own copy, shared).
     pub dib: Option<Arc<Vec<u8>>>,
     pub file: Option<FileCandidate>,
@@ -157,9 +155,9 @@ impl App {
                 at_ms: screenshot::unix_ms(SystemTime::now()),
                 w: img.width,
                 h: img.height,
+                hash: screenshot::thumb_hash(&img.thumb.bgra, img.thumb.w, img.thumb.h),
             },
             sequence,
-            flagged: img.screenshot,
             dib,
             file: None,
             checks: 0,
@@ -459,7 +457,7 @@ mod tests {
     use crate::clipboard::History;
     use crate::clipboard::image::tests::dib24;
     use crate::clipboard::store::{ClipSnapshot, Ingested, ingest};
-    use crate::screenshot::{ClipCandidate, FileCandidate, pick_match};
+    use crate::screenshot::{ClipCandidate, FileCandidate, pick_match, thumb_hash};
 
     #[test]
     fn one_screenshot_by_clipboard_and_file_is_one_card() {
@@ -473,11 +471,16 @@ mod tests {
         let Ingested::Added { id, image: true } = ingest(&mut h, snap.clone(), 100) else {
             panic!("an image entry");
         };
-        // Its file in the folder matches, and adds nothing to the history.
+        // Its file in the folder matches (the same picture's hash), and
+        // adds nothing to the history.
+        let thumb = &h.items()[0].image().unwrap().thumb;
+        let hash = thumb_hash(&thumb.bgra, thumb.w, thumb.h);
+        assert!(hash.is_some());
         let clip = ClipCandidate {
             at_ms: 100_000,
             w: 1280,
             h: 720,
+            hash,
         };
         let file = FileCandidate {
             path: "Screenshot 2026-10-28 101500.png".into(),
@@ -485,6 +488,7 @@ mod tests {
             bytes: 250_880,
             w: 1280,
             h: 720,
+            hash,
         };
         assert!(pick_match(&clip, std::slice::from_ref(&file)).is_some());
         assert_eq!(h.len(), 1);

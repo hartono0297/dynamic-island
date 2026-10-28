@@ -20,13 +20,19 @@ pub const AFTER_MS: i64 = 5_000;
 /// frame header can sit behind a large EXIF block.
 const HEADER_BYTES: u64 = 256 * 1024;
 
+/// Two thumbnail hashes further apart than this many bits are different
+/// pictures (out of 64; a re-encode or a resample moves a few).
+pub const HASH_MAX_DIST: u32 = 10;
+
 /// The new clipboard image, as far as matching cares: when it arrived
-/// (unix ms) and its size in pixels.
+/// (unix ms), its size in pixels and its thumbnail's hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClipCandidate {
     pub at_ms: i64,
     pub w: u32,
     pub h: u32,
+    /// `thumb_hash` of its thumbnail; `None` when it had none.
+    pub hash: Option<u64>,
 }
 
 /// An image file in the Screenshots folder.
@@ -38,18 +44,77 @@ pub struct FileCandidate {
     pub bytes: u64,
     pub w: u32,
     pub h: u32,
+    /// `thumb_hash` of the decoded file; `None` when it could not be read
+    /// (still being written, a codec missing).
+    pub hash: Option<u64>,
+}
+
+/// An 8 × 8 average hash of BGRA pixels (`w` × `h`, alpha ignored): each
+/// cell's mean brightness against the mean of all 64. Robust to the small
+/// differences between the clipboard's thumbnail and the file's decode.
+/// `None` for an empty or malformed buffer.
+pub fn thumb_hash(bgra: &[u8], w: u32, h: u32) -> Option<u64> {
+    let (w, h) = (w as usize, h as usize);
+    if w == 0 || h == 0 || bgra.len() != w * h * 4 {
+        return None;
+    }
+    let mut cells = [0f64; 64];
+    for (i, cell) in cells.iter_mut().enumerate() {
+        let (cx, cy) = (i % 8, i / 8);
+        // Each cell covers at least one pixel, even in a tiny image.
+        let (x0, x1) = (cx * w / 8, ((cx + 1) * w / 8).max(cx * w / 8 + 1).min(w));
+        let (y0, y1) = (cy * h / 8, ((cy + 1) * h / 8).max(cy * h / 8 + 1).min(h));
+        let mut sum = 0f64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = &bgra[(y * w + x) * 4..][..3];
+                // Rec. 601 luma from B, G, R.
+                sum += 0.114 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.299 * f64::from(p[2]);
+            }
+        }
+        *cell = sum / ((x1 - x0) * (y1 - y0)) as f64;
+    }
+    let mean = cells.iter().sum::<f64>() / 64.0;
+    Some(
+        cells
+            .iter()
+            .enumerate()
+            .fold(0u64, |acc, (i, &c)| if c > mean { acc | 1 << i } else { acc }),
+    )
+}
+
+/// The hashes say the same picture, or one of them is unknown.
+fn hash_agrees(clip: Option<u64>, file: Option<u64>) -> bool {
+    match (clip, file) {
+        (Some(a), Some(b)) => (a ^ b).count_ones() <= HASH_MAX_DIST,
+        _ => true,
+    }
 }
 
 /// The file that is this screenshot: inside `BEFORE_MS` .. `AFTER_MS` of
-/// the clipboard's arrival with the very same size, the closest in time
-/// winning (the later one on a tie). A different size or a time outside the
-/// window is no match: never a guess.
+/// the clipboard's arrival with the very same size and a thumbnail hash
+/// that agrees. A file whose hash was read and agrees beats one whose hash
+/// is unknown; then the closest in time wins (the later one on a tie). A
+/// different size, a different picture or a time outside the window is no
+/// match: never a guess.
 pub fn pick_match<'a>(clip: &ClipCandidate, files: &'a [FileCandidate]) -> Option<&'a FileCandidate> {
-    let (from, to) = (clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
     files
         .iter()
-        .filter(|f| (from..=to).contains(&f.at_ms) && (f.w, f.h) == (clip.w, clip.h))
-        .min_by_key(|f| ((f.at_ms - clip.at_ms).abs(), std::cmp::Reverse(f.at_ms)))
+        .filter(|f| in_window(clip, f) && hash_agrees(clip.hash, f.hash))
+        .min_by_key(|f| {
+            let unconfirmed = clip.hash.is_none() || f.hash.is_none();
+            (
+                unconfirmed,
+                (f.at_ms - clip.at_ms).abs(),
+                std::cmp::Reverse(f.at_ms),
+            )
+        })
+}
+
+/// Inside the time window with the very same size: worth hashing.
+fn in_window(clip: &ClipCandidate, f: &FileCandidate) -> bool {
+    let (from, to) = (clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
+    (from..=to).contains(&f.at_ms) && (f.w, f.h) == (clip.w, clip.h)
 }
 
 /// "Hapus" empties the clipboard only while it still holds this
@@ -169,14 +234,25 @@ pub fn list_folder(dir: &Path, from_ms: i64, to_ms: i64) -> Vec<FileCandidate> {
             bytes: meta.len(),
             w,
             h,
+            hash: None,
         });
     }
     out
 }
 
-/// One folder check for `clip`: the listing of its window, then the match.
-pub fn find_in(dir: &Path, clip: &ClipCandidate) -> Option<FileCandidate> {
-    let files = list_folder(dir, clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
+/// One folder check for `clip`: the listing of its window, the hash of
+/// each file of its size (`hash_of` decodes one; only those are decoded),
+/// then the match.
+pub fn find_in(
+    dir: &Path,
+    clip: &ClipCandidate,
+    hash_of: impl Fn(&Path) -> Option<u64>,
+) -> Option<FileCandidate> {
+    let mut files = list_folder(dir, clip.at_ms - BEFORE_MS, clip.at_ms + AFTER_MS);
+    files.retain(|f| in_window(clip, f));
+    for f in &mut files {
+        f.hash = hash_of(&f.path);
+    }
     pick_match(clip, &files).cloned()
 }
 
@@ -242,6 +318,14 @@ mod tests {
             bytes: 1000,
             w,
             h,
+            hash: None,
+        }
+    }
+
+    fn hashed(f: FileCandidate, hash: u64) -> FileCandidate {
+        FileCandidate {
+            hash: Some(hash),
+            ..f
         }
     }
 
@@ -250,7 +334,66 @@ mod tests {
         at_ms: AT,
         w: 1280,
         h: 720,
+        hash: None,
     };
+    const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+
+    /// BGRA pixels: a white left half, a black right half, or the reverse.
+    fn halves(w: u32, h: u32, white_left: bool) -> Vec<u8> {
+        let mut b = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                let white = (x < w / 2) == white_left;
+                let v = if white { 250 } else { 5 };
+                b.extend([v, v, v, 255]);
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn thumb_hash_keeps_the_picture_across_sizes() {
+        let a = thumb_hash(&halves(184, 104, true), 184, 104).unwrap();
+        // The same picture at another size (the file's decode): the same bits.
+        let b = thumb_hash(&halves(160, 90, true), 160, 90).unwrap();
+        assert!((a ^ b).count_ones() <= HASH_MAX_DIST);
+        // The mirror image is far apart.
+        let c = thumb_hash(&halves(184, 104, false), 184, 104).unwrap();
+        assert!((a ^ c).count_ones() > HASH_MAX_DIST);
+        // Tiny images still hash; bad buffers do not.
+        assert!(thumb_hash(&halves(2, 2, true), 2, 2).is_some());
+        assert_eq!(thumb_hash(&[0; 7], 2, 2), None);
+        assert_eq!(thumb_hash(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn matching_by_hash() {
+        let clip = ClipCandidate {
+            hash: Some(PIC),
+            ..CLIP
+        };
+        // A different picture of the same size, in time: no match.
+        let other = [hashed(file("other.png", AT + 100, 1280, 720), !PIC)];
+        assert_eq!(pick_match(&clip, &other), None);
+        // A few bits off (a re-encode): still the same picture.
+        let close = [hashed(file("close.png", AT + 100, 1280, 720), PIC ^ 0b111)];
+        assert!(pick_match(&clip, &close).is_some());
+        // A confirmed hash beats a closer file whose hash is unknown.
+        let files = [
+            file("unknown.png", AT + 50, 1280, 720),
+            hashed(file("same.png", AT + 2_000, 1280, 720), PIC),
+        ];
+        assert_eq!(pick_match(&clip, &files).unwrap().path, PathBuf::from("same.png"));
+        // An unknown hash on either side falls back to time and size.
+        assert!(pick_match(&clip, &files[..1]).is_some());
+        assert!(pick_match(&CLIP, &files[1..]).is_some());
+        // The hash never rescues a file outside the window or of another size.
+        let off = [
+            hashed(file("late.png", AT + AFTER_MS + 1, 1280, 720), PIC),
+            hashed(file("small.png", AT + 10, 1279, 720), PIC),
+        ];
+        assert_eq!(pick_match(&clip, &off), None);
+    }
 
     #[test]
     fn png_ihdr_valid_truncated_and_not_png() {
@@ -380,10 +523,20 @@ mod tests {
             at_ms: now,
             w: 1280,
             h: 720,
+            hash: Some(PIC),
         };
-        assert!(find_in(&dir, &clip).is_some());
+        // The hasher sees only the files of the clipboard's size.
+        let seen = std::cell::RefCell::new(Vec::new());
+        let same = |p: &Path| {
+            seen.borrow_mut().push(p.to_path_buf());
+            Some(PIC)
+        };
+        assert!(find_in(&dir, &clip, same).is_some());
+        assert_eq!(seen.borrow().len(), 2);
+        // Another picture: nothing, though time and size agree.
+        assert_eq!(find_in(&dir, &clip, |_| Some(!PIC)), None);
         let other = ClipCandidate { w: 800, ..clip };
-        assert_eq!(find_in(&dir, &other), None);
+        assert_eq!(find_in(&dir, &other, |_| Some(PIC)), None);
         assert!(list_folder(&dir.join("missing"), 0, i64::MAX).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

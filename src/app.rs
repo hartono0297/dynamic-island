@@ -2880,6 +2880,9 @@ impl App {
                 self.on_clip_setting(ClipSetting::FeedbackAll(on))
             }
             SettingsAction::ClipClear => self.on_clip_setting(ClipSetting::Clear),
+            SettingsAction::ShotPreview(on) => self.on_shot_setting(ShotSetting::Preview(on)),
+            SettingsAction::ShotOnIgnore(v) => self.on_shot_setting(ShotSetting::OnIgnore(v)),
+            SettingsAction::ShotSecs(n) => self.on_shot_setting(ShotSetting::Secs(n)),
             // Handled outside the app borrow (`deliver_settings_action`).
             SettingsAction::DndHelp | SettingsAction::Closed => {}
         }

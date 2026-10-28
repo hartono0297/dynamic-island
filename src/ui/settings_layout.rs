@@ -12,7 +12,10 @@ use crate::claude::install::HookState;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
-use crate::config::{ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, RAM_WARN_RANGE, Style};
+use crate::config::{
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, RAM_WARN_RANGE, SHOT_SECS_RANGE,
+    ScreenshotSettings, ShotIgnore, Style,
+};
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::PomoField;
 use crate::pomodoro::{self, PomoSettings};
@@ -297,6 +300,11 @@ pub enum Hit {
     ClipHotkey(ClipHotkey),
     ClipFeedbackAll,
     ClipClear,
+    /// Settings → Clipboard → Screenshot: "Preview di notch", "Jika
+    /// diabaikan" (Simpan / Hapus) and "Lama tampil" (−1 / +1).
+    ShotPreview,
+    ShotIgnore(ShotIgnore),
+    ShotSecs(i32),
     Battery(i32),
     /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
     DiskWarn(i32),
@@ -352,6 +360,7 @@ pub enum Group {
     Shell,
     Motion,
     ClipHotkey,
+    ShotIgnore,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -645,6 +654,8 @@ pub struct State<'a> {
     /// registered.
     pub clip: ClipboardSettings,
     pub clip_hotkey_failed: bool,
+    /// Settings → Clipboard → Screenshot.
+    pub shot: ScreenshotSettings,
     pub version: &'a str,
 }
 
@@ -1687,6 +1698,60 @@ fn clipboard_page(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::ClipClearDesc), Tone::Secondary));
     b.row_text(card, rows[6], b.t(Key::ClipClear), desc, false, x);
     b.divider(card, rows[6]);
+
+    screenshot_card(b, s);
+}
+
+/// "Lama tampil" one step (2 s) up or down, kept in `SHOT_SECS_RANGE`; a
+/// hand-edited value off the grid snaps onto it.
+pub fn shot_secs_step(n: u32, dir: i32) -> u32 {
+    let (min, max, step) = SHOT_SECS_RANGE;
+    let stepped = if dir > 0 {
+        n.saturating_add(step)
+    } else {
+        n.saturating_sub(step)
+    };
+    (stepped / step * step).clamp(min, max)
+}
+
+/// The screenshot preview (keputusan-v3.1.html p6, its `settingsWin`
+/// "Screenshot") in a second card under the history's seven rows, named by
+/// an eyebrow; the section scrolls to reach it. With the preview off the
+/// other two rows fade and take no clicks. Simpan is the default.
+fn screenshot_card(b: &mut Builder, s: &State) {
+    let c = s.shot;
+    b.eyebrow(Key::SecScreenshot, CONTENT_W);
+    let card = b.card(3.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+    let on = c.preview;
+
+    let x = b.toggle(Hit::ShotPreview, RIGHT, cy(rows[0]), on);
+    b.row_text(card, rows[0], b.t(Key::ShotPreviewSetting), None, false, x);
+
+    let items = vec![
+        (Hit::ShotIgnore(ShotIgnore::Keep), b.t(Key::ShotKeep)),
+        (Hit::ShotIgnore(ShotIgnore::Delete), b.t(Key::ShotDelete)),
+    ];
+    let selected = index_of(ShotIgnore::ALL, &c.on_ignore);
+    let x = b.segmented_if(Group::ShotIgnore, RIGHT, cy(rows[1]), items, selected, on);
+    let desc = Some((b.t(Key::ShotIgnoreDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::ShotIgnoreSetting), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let (min, max, _) = SHOT_SECS_RANGE;
+    let n = c.show_secs;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[2]),
+        crate::i18n::seconds_short(b.lang, n),
+        Hit::ShotSecs(-1),
+        Hit::ShotSecs(1),
+        (n > min, n < max),
+        on,
+    );
+    b.row_text(card, rows[2], b.t(Key::ShotShowFor), None, false, x);
+    b.divider(card, rows[2]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -2052,6 +2117,15 @@ mod tests {
                             ..ClipboardSettings::default()
                         },
                         clip_hotkey_failed: !battery,
+                        shot: ScreenshotSettings {
+                            preview: !locked,
+                            on_ignore: if locked {
+                                ShotIgnore::Delete
+                            } else {
+                                ShotIgnore::Keep
+                            },
+                            show_secs: if locked { 30 } else { 4 },
+                        },
                         version: "2.1.0",
                     });
                 }
@@ -2269,8 +2343,8 @@ mod tests {
     }
 
     /// Every section fits the window's height; Appearance (with Bata's
-    /// rows) and General (with the System warnings) scroll by exactly what
-    /// they lack and then fit.
+    /// rows), General (with the System warnings) and Clipboard (with the
+    /// screenshot preview) scroll by exactly what they lack and then fit.
     #[test]
     fn everything_fits_in_the_window_height() {
         for (section, lang, l) in all_layouts() {
@@ -2285,7 +2359,10 @@ mod tests {
                 unscrolled - l.scroll_max <= CLIENT_H - PAD + 0.01,
                 "{section:?} {lang:?}: {bottom}"
             );
-            if matches!(section, Section::Appearance | Section::General) {
+            if matches!(
+                section,
+                Section::Appearance | Section::General | Section::Clipboard
+            ) {
                 assert!(l.scroll_max > 0.0 && l.viewport.is_some());
                 // Scrolled to the end, the last card ends at the margin.
                 if l.scroll == l.scroll_max {
@@ -2454,6 +2531,97 @@ mod tests {
             let l = layout(Section::General, &ends, &Estimate);
             assert_eq!(warn_hits(&l), [Hit::DiskWarn(-1), Hit::RamWarn(1)]);
         }
+    }
+
+    #[test]
+    fn clipboard_scrolls_to_the_screenshot_card() {
+        let shot_hits = |l: &Layout| -> Vec<Hit> {
+            l.hits()
+                .into_iter()
+                .map(|(h, _)| h)
+                .filter(|h| matches!(h, Hit::ShotPreview | Hit::ShotIgnore(_) | Hit::ShotSecs(_)))
+                .collect()
+        };
+        for lang in [Lang::Id, Lang::En] {
+            let base = State {
+                lang,
+                shot: ScreenshotSettings::default(),
+                ..states()[0].clone()
+            };
+            let top = layout(Section::Clipboard, &base, &Estimate);
+            assert!(top.viewport.is_some() && top.scrollbar().is_some());
+            assert_eq!(top.cards.len(), 2, "the screenshot has its own card");
+            for (_, r) in top.hits() {
+                assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
+            }
+            let end = State {
+                scroll: 1e6,
+                ..base.clone()
+            };
+            let l = layout(Section::Clipboard, &end, &Estimate);
+            assert_eq!(l.scroll, l.scroll_max);
+            assert!((l.cards[1].bottom() - (CLIENT_H - PAD)).abs() < 0.01);
+            assert_eq!(
+                shot_hits(&l),
+                [
+                    Hit::ShotPreview,
+                    Hit::ShotIgnore(ShotIgnore::Keep),
+                    Hit::ShotIgnore(ShotIgnore::Delete),
+                    Hit::ShotSecs(-1),
+                    Hit::ShotSecs(1),
+                ]
+            );
+            // The defaults: Simpan chosen, 8 s.
+            let chosen = l.controls.iter().find_map(|c| match c {
+                Control::Segmented { group, selected, .. } if *group == Group::ShotIgnore => {
+                    Some(*selected)
+                }
+                _ => None,
+            });
+            assert_eq!(chosen, Some(0), "Simpan");
+            let secs = l.controls.iter().find_map(|c| match c {
+                Control::Stepper { minus, value, .. }
+                    if matches!(minus.1, Some(Hit::ShotSecs(_))) =>
+                {
+                    Some(value.text.clone())
+                }
+                _ => None,
+            });
+            assert_eq!(secs, Some(crate::i18n::seconds_short(lang, 8)));
+            for key in [
+                Key::ShotPreviewSetting,
+                Key::ShotIgnoreSetting,
+                Key::ShotIgnoreDesc,
+                Key::ShotShowFor,
+            ] {
+                assert!(
+                    l.texts.iter().any(|t| t.text == text(lang, key)),
+                    "{lang:?} {key:?}"
+                );
+            }
+            assert!(l.texts.iter().any(|t| t.text == text(lang, Key::SecScreenshot).to_uppercase()));
+            // The preview off: only its toggle takes clicks.
+            let off = State {
+                shot: ScreenshotSettings {
+                    preview: false,
+                    ..ScreenshotSettings::default()
+                },
+                ..end
+            };
+            let l = layout(Section::Clipboard, &off, &Estimate);
+            assert_eq!(shot_hits(&l), [Hit::ShotPreview]);
+        }
+    }
+
+    #[test]
+    fn shot_seconds_step_by_two_within_range() {
+        assert_eq!(shot_secs_step(8, 1), 10);
+        assert_eq!(shot_secs_step(8, -1), 6);
+        assert_eq!(shot_secs_step(4, -1), 4);
+        assert_eq!(shot_secs_step(30, 1), 30);
+        // Off the grid: snapped onto it.
+        assert_eq!(shot_secs_step(9, 1), 10);
+        assert_eq!(shot_secs_step(9, -1), 6);
     }
 
     #[test]
