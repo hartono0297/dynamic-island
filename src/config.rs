@@ -59,7 +59,11 @@ pub struct Config {
     /// "Mode buka": how the pointer opens the panel (by name; a typo is
     /// Hover).
     pub open_mode: OpenMode,
-    /// "Pencarian cepat": the hotkey that opens the quick search.
+    /// "Pencarian cepat": the hotkey that opens the quick search. Saved as
+    /// `quick_search_hotkey`: 3.2.0 wrote `search_hotkey: "Off"` into every
+    /// config, and reading that key again would keep the search off for
+    /// everyone who never chose it.
+    #[serde(rename = "quick_search_hotkey")]
     pub search_hotkey: SearchHotkey,
     /// Swipe, sideways wheel and middle button on the island while music
     /// plays (`gestures`): on unless switched off here.
@@ -1066,17 +1070,22 @@ mod tests {
             SearchHotkey::CtrlAltSpace
         );
         assert_eq!(
-            parse(r#"{"search_hotkey":"Off"}"#).search_hotkey,
+            parse(r#"{"quick_search_hotkey":"Off"}"#).search_hotkey,
             SearchHotkey::Off
         );
-        let named = |name: &str| parse(&format!(r#"{{"search_hotkey":"{name}"}}"#)).search_hotkey;
+        let named = |name: &str| parse(&format!(r#"{{"quick_search_hotkey":"{name}"}}"#)).search_hotkey;
         assert_eq!(named("CtrlAltSpace"), SearchHotkey::CtrlAltSpace);
         assert_eq!(named("WinAltS"), SearchHotkey::WinAltS);
         // Alt+Space is the window menu: never a choice.
         assert_eq!(named("AltSpace"), SearchHotkey::Off);
         assert_eq!(named("ctrlaltspaces"), SearchHotkey::Off);
         assert_eq!(named(""), SearchHotkey::Off);
-        let odd = parse(r#"{"search_hotkey":"Nope","style":"Notch"}"#);
+        // A 3.2.0 file's key is not read: the search is on for them too.
+        assert_eq!(
+            parse(r#"{"search_hotkey":"Off"}"#).search_hotkey,
+            SearchHotkey::CtrlAltSpace
+        );
+        let odd = parse(r#"{"quick_search_hotkey":"Nope","style":"Notch"}"#);
         assert_eq!((odd.search_hotkey, odd.style), (SearchHotkey::Off, Style::Notch));
     }
 
