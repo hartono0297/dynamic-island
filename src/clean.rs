@@ -189,8 +189,40 @@ impl Roots {
                 roots = roots.with(root, path);
             }
         }
-        roots.with(Root::Temp, std::env::temp_dir())
+        match safe_temp(std::env::temp_dir(), &roots) {
+            Some(temp) => roots.with(Root::Temp, temp),
+            None => roots,
+        }
     }
+}
+
+/// `temp` (GetTempPath) if it is a real temp folder: absolute, named Temp
+/// or Tmp, and not Windows' own nor a folder that holds the profile,
+/// AppData, Downloads or Windows. Without TMP and TEMP, GetTempPath falls
+/// back to the profile or the Windows folder, and "delete what is older than
+/// 7 days" there would take the user's documents.
+pub fn safe_temp(temp: PathBuf, roots: &Roots) -> Option<PathBuf> {
+    let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+    let t = lower(&temp);
+    let named = t.file_name().is_some_and(|n| n == "temp" || n == "tmp");
+    if !temp.is_absolute() || t.parent().is_none() || !named {
+        return None;
+    }
+    let mine = [
+        Root::Profile,
+        Root::LocalAppData,
+        Root::RoamingAppData,
+        Root::Downloads,
+        Root::Windows,
+    ];
+    let unsafe_here = mine.iter().filter_map(|r| roots.get(*r)).any(|r| {
+        let r = lower(r);
+        r.starts_with(&t)
+    });
+    let in_windows = roots
+        .get(Root::Windows)
+        .is_some_and(|w| t.starts_with(lower(w)));
+    (!unsafe_here && !in_windows).then_some(temp)
 }
 
 fn known_folder(id: &GUID) -> Option<PathBuf> {
@@ -1221,6 +1253,37 @@ mod tests {
             .collect();
         p.sort();
         p
+    }
+
+    #[test]
+    fn temp_is_only_a_real_temp_folder() {
+        let roots = Roots::default()
+            .with(Root::Profile, PathBuf::from(r"C:\Users\vale"))
+            .with(
+                Root::LocalAppData,
+                PathBuf::from(r"C:\Users\vale\AppData\Local"),
+            )
+            .with(
+                Root::RoamingAppData,
+                PathBuf::from(r"C:\Users\vale\AppData\Roaming"),
+            )
+            .with(Root::Downloads, PathBuf::from(r"C:\Users\vale\Downloads"))
+            .with(Root::Windows, PathBuf::from(r"C:\Windows"));
+        let temp = |p: &str| safe_temp(PathBuf::from(p), &roots);
+        assert_eq!(
+            temp(r"C:\Users\vale\AppData\Local\Temp\"),
+            Some(PathBuf::from(r"C:\Users\vale\AppData\Local\Temp\"))
+        );
+        assert_eq!(temp(r"D:\tmp"), Some(PathBuf::from(r"D:\tmp")));
+        // GetTempPath falls back to the profile or Windows without TMP/TEMP.
+        assert_eq!(temp(r"C:\Users\vale\"), None);
+        assert_eq!(temp(r"C:\Windows"), None);
+        assert_eq!(temp(r"C:\Windows\Temp"), None, "the system's, needs admin");
+        // A drive root, or a folder holding the user's own.
+        assert_eq!(temp(r"D:\"), None);
+        assert_eq!(temp(r"C:\Users"), None);
+        assert_eq!(temp(r"C:\Users\vale\Documents"), None, "not named temp");
+        assert_eq!(temp(r"temp"), None, "relative");
     }
 
     fn none() -> HashSet<String> {
