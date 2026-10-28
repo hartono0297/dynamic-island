@@ -624,6 +624,8 @@ keys! {
     ShotSaved => "Disimpan", "Saved";
     ShotNotSaved => "Belum ada file", "No file yet";
     ShotOnClipboard => "tetap di clipboard", "still on the clipboard";
+    ShotMaybeBlocked => "mungkin diblokir Controlled folder access",
+        "maybe blocked by Controlled folder access";
     ShotDeleted => "Dihapus", "Deleted";
     ShotDeleteFailed => "Gagal menghapus", "Couldn't delete";
     ShotClipEmptied => "clipboard dikosongkan", "clipboard cleared";

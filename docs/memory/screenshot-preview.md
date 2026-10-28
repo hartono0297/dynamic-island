@@ -123,3 +123,16 @@ Now:
   clipboard at all (the only trigger is `WM_CLIPBOARDUPDATE`; there is no
   folder watcher); whether Pictures is OneDrive-redirected (its files can look
   like reparse points, which `list_folder` skips).
+
+## Gotcha: Controlled folder access (found 2026-10-28)
+
+Windows Security's *Controlled folder access* ("Protected folder access
+blocked", app `vale.exe`, folder `%userprofile%\Pictures\Screenshots`) blocks a
+program it does not know from creating or changing files in Pictures. Vale only
+*reads* that folder to match the clipboard picture to Snipping Tool's file
+(allowed); the two things that write there are blocked: **Simpan** with no file
+(`screenshot::win::spawn_save`, a new PNG) and **Hapus** (`clean::recycle`, a
+move to the Recycle Bin). The app cannot ask for the exception; the owner
+allows `vale.exe` once. A failed save now says "mungkin diblokir Controlled
+folder access" (`Key::ShotMaybeBlocked`); README Troubleshooting has the steps.
+A new release may need the exception again (the file is replaced).

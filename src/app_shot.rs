@@ -624,7 +624,13 @@ impl App {
                 key: "shot-saved".into(),
                 source: tr(Key::ShotTitle).into(),
                 title: tr(Key::ShotSaveFailed).into(),
-                body: tr(Key::ShotOnClipboard).into(),
+                // Windows Security's Controlled folder access blocks a new
+                // program from writing in Pictures until it is allowed.
+                body: format!(
+                    "{} · {}",
+                    tr(Key::ShotOnClipboard),
+                    tr(Key::ShotMaybeBlocked)
+                ),
                 kind: NoticeKind::ShotSaved,
             },
         };
