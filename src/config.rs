@@ -55,6 +55,9 @@ pub struct Config {
     /// "Mode buka": how the pointer opens the panel (by name; a typo is
     /// Hover).
     pub open_mode: OpenMode,
+    /// Swipe, sideways wheel and middle button on the island while music
+    /// plays (`gestures`): on unless switched off here.
+    pub gestures: bool,
     /// Bata, the robot, beside the clock and on the island's own notices.
     pub robot: bool,
     /// How much Bata moves: Full, Saver or Off (by name; a typo is Full).
@@ -265,6 +268,7 @@ impl Default for Config {
             idle_clock: true,
             lyrics: false,
             lyrics_offset_ms: 0,
+            gestures: true,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
             open_mode: OpenMode::Hover,
@@ -679,6 +683,7 @@ mod tests {
     #[test]
     fn round_trips_through_json() {
         let c = Config {
+            gestures: false,
             shortcut_tiles: vec![TileEntry {
                 tile: "Lock".into(),
                 on: false,
@@ -1026,6 +1031,13 @@ mod tests {
         // A typo keeps the rest of the file: only the language falls back.
         let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    #[test]
+    fn gestures_are_on_unless_switched_off() {
+        assert!(Config::default().gestures);
+        assert!(parse(r#"{"style":"Notch"}"#).gestures);
+        assert!(!parse(r#"{"gestures":false}"#).gestures);
     }
 
     #[test]

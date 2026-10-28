@@ -40,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY,
     WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
+    WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
     WM_WTSSESSION_CHANGE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
@@ -61,6 +61,7 @@ use crate::media_log;
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
+use crate::gestures;
 use crate::pages::PanelPages;
 use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoStatus;
@@ -279,6 +280,8 @@ pub fn run(media_log_flag: bool) {
             mole: MoleState::default(),
             hover: HoverTracking::default(),
             click: ClickPair::default(),
+            swipe: gestures::Swipe::default(),
+            hwheel: gestures::HWheel::default(),
             media_click: None,
             eq_timer: false,
             outside_timer: false,
@@ -450,6 +453,10 @@ struct App {
     hover: HoverTracking,
     /// A left press on the island waiting for its release.
     click: ClickPair,
+    /// A left-button press that may turn into a swipe, and the sideways
+    /// wheel's flicks (`gestures`).
+    swipe: gestures::Swipe,
+    hwheel: gestures::HWheel,
     /// The transport-button click being reduced, for the diagnosis log; its
     /// `Effect::Media` takes it.
     media_click: Option<media_log::Click>,
@@ -2760,16 +2767,62 @@ impl App {
     /// `WM_LBUTTONDOWN`: remembers what the press is on.
     fn on_press(&mut self, lparam: LPARAM) {
         let hit = self.hit_at(lparam);
+        if hit.is_some() && self.gestures_active() {
+            let (x, y) = client_xy(lparam);
+            self.swipe.press(x, y, Instant::now());
+        } else {
+            self.swipe.cancel();
+        }
         self.click.press(hit);
     }
 
     /// `WM_LBUTTONUP`: a click only when the press was on the island too, on
     /// the same target. A button pressed in another window and let go over
-    /// the island does nothing.
+    /// the island does nothing. A swipe is not a click: it skips the song.
     fn on_release(&mut self, lparam: LPARAM) {
+        let (x, y) = client_xy(lparam);
+        let min_px = (gestures::SWIPE_MIN_DIP * self.gesture_scale()).round() as i32;
+        let swipe = self.swipe.release(x, y, Instant::now(), min_px);
+        if let Some(dir) = swipe.filter(|_| self.gestures_active()) {
+            self.click.clear();
+            self.apply_now(Event::Click(gesture_hit(dir)));
+            return;
+        }
         let hit = self.hit_at(lparam);
         if let Some(hit) = self.click.release(hit) {
             self.apply_now(Event::Click(hit));
+        }
+    }
+
+    /// Gestures count while music plays and the island shows it, or its
+    /// page is open, and the setting is on.
+    fn gestures_active(&self) -> bool {
+        self.config.gestures
+            && self.state.media().is_some()
+            && matches!(
+                self.state.view(),
+                View::MediaCompact | View::MediaLyric | View::Panel(Page::Media)
+            )
+    }
+
+    fn gesture_scale(&self) -> f32 {
+        self.win.as_ref().map_or(1.0, IslandWindow::scale)
+    }
+
+    /// `WM_MBUTTONUP`: the middle button over the island plays or pauses.
+    fn on_middle_release(&mut self, lparam: LPARAM) {
+        if self.gestures_active() && self.hit_at(lparam).is_some() {
+            self.apply_now(Event::Click(Hit::PlayPause));
+        }
+    }
+
+    /// `WM_MOUSEHWHEEL`: a sideways flick skips the song.
+    fn on_hwheel(&mut self, delta: i32) {
+        if !self.gestures_active() {
+            return;
+        }
+        if let Some(dir) = self.hwheel.push(delta, Instant::now()) {
+            self.apply_now(Event::Click(gesture_hit(dir)));
         }
     }
 
@@ -3308,6 +3361,22 @@ impl ClickPair {
 
     fn clear(&mut self) {
         self.pressed = None;
+    }
+}
+
+/// A mouse message's client position, in physical pixels.
+fn client_xy(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xFFFF) as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    )
+}
+
+/// The song a gesture asks for, as the button that would ask for it.
+fn gesture_hit(dir: gestures::Dir) -> Hit {
+    match dir {
+        gestures::Dir::Prev => Hit::Prev,
+        gestures::Dir::Next => Hit::Next,
     }
 }
 
@@ -4311,6 +4380,15 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_MOUSELEAVE => {
             with_app(App::on_mouse_leave);
+            LRESULT(0)
+        }
+        WM_MBUTTONUP => {
+            with_app(|app| app.on_middle_release(lparam));
+            LRESULT(0)
+        }
+        WM_MOUSEHWHEEL => {
+            let delta = (wparam.0 >> 16) as u16 as i16;
+            with_app(|app| app.on_hwheel(i32::from(delta)));
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

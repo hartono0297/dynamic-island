@@ -11,6 +11,7 @@ mod clipboard;
 mod config;
 mod data_dir;
 mod dpapi;
+mod gestures;
 mod google;
 mod i18n;
 mod lyrics;

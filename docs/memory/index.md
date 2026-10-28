@@ -39,6 +39,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[open-mode]]: Mode buka (Hover, Hover & tetap, Klik) and notices with a button
 - [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
+- [[gestures]]: middle click, swipe and sideways wheel on the music views
 
 ## Gotchas
 
