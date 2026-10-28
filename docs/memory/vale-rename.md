@@ -31,4 +31,9 @@ say Vale.
 - `scripts/make-fonts.ps1` keeps the `dynamic-island-subset` tag in the font
   names, since changing it changes the font files for no visible gain.
 
+- Verify pass: an empty `%APPDATA%\Vale` (any app may make one) is removed and
+  the data moves in; a non-empty one is still taken as Vale's. The old
+  `Run\DynamicIsland` value is deleted only when it starts
+  `dynamic-island.exe`.
+
 Related: [[v3-1-handoff]], [[v3-studio-overview]]

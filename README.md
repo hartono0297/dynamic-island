@@ -2,7 +2,9 @@
 
 # Vale for Windows
 
-A macOS-style island for the top of your Windows 11 screen: notifications, calendar, pomodoro, reminders, notes, music, a command line and more, in a native Rust app (Win32 + Direct2D, no browser engine). Version 3 brings the **Studio** look: warm terracotta and espresso colours, its own fonts and icons, and a small cat that lives in the notch.
+A macOS-style island for the top of your Windows 11 screen: notifications, calendar, pomodoro, reminders, notes, music, a command line and more, in a native Rust app (Win32 + Direct2D, no browser engine), with the **Studio** look: warm terracotta and espresso colours, its own fonts and icons, and a small cat that lives in the notch.
+
+**Vale was called Dynamic Island** until version 3.1. Installing 3.1 over it replaces the old install, and Vale moves your data from `%APPDATA%\DynamicIsland` to `%APPDATA%\Vale` on its first start. Version 3.1 also adds a clipboard history, a screenshot preview, a System page with a cleaner, a CLI that follows Explorer, panel pages you can reorder or hide, and one-click Google sign-in.
 
 <p align="center">
   <img src="assets/screenshots/calendar.png" width="420" alt="Calendar page in month view: October 2026 with today circled in terracotta, and today's events listed on the right">
@@ -35,21 +37,24 @@ On first run, Windows asks for access to your notifications: allow it.
 ## Features
 
 - **Always-visible notch** at the top centre, with a clock when idle. It hides only for fullscreen apps; clicks outside its shape pass through.
-- **Hover to open the panel**, scroll the mouse wheel to change pages: **Calendar → Pomodoro → Reminders → Notes → Music → CLI → Shortcuts**.
+- **Hover to open the panel**, scroll the mouse wheel to change pages: **Calendar → Pomodoro → Reminders → Notes → Music → Clipboard → System → CLI → Shortcuts**. Settings → Appearance → *Panel pages* changes the order and hides pages you don't use (a hidden page still opens from its own button).
 - **Calendar:** Google Calendar with Month, Week and Day views. The day view is an hour timeline with a line at the current time. Add and edit events in the island's own editor; repeating events, events over several days and events on calendars you can only view open read-only. Events can't be deleted from the island. Works offline from the last sync.
 - **Pomodoro:** progress ring, start/pause/reset/skip, a small timer in the notch while it runs. Durations are set in Settings.
 - **Reminders:** once, daily, or weekly on one or more days of the week, set in the island's own reminder editor with time shortcuts (*In 30 min*, *In 1 hour*, *Tonight*, *Tomorrow morning*) and a summary of when it rings next. Reminders that came due while the island was off fire at startup, marked "Missed".
 - **Notes:** quick local notes, saved when the editor closes.
-- **Music:** cover, title, a progress bar and controls for whatever is playing (Spotify, browser, ...), an animated equalizer in the notch, and optional synced lyrics in the notch from [lrclib.net](https://lrclib.net).
+- **Music:** cover, title, a progress bar and controls for whatever is playing (Spotify, browser, ...), an animated equalizer in the notch, and optional synced lyrics in the notch from [lrclib.net](https://lrclib.net). The lyric notch grows with the line and scrolls a line that is still too long. A button only acts when it is both pressed and released on it, and not in the first half second after the panel opens under the pointer, so music is not paused by accident.
 - **Notifications:** every Windows toast shows in the island; click one to open its app. Turn on Windows *Do Not Disturb* to avoid seeing them twice (Settings → General → *Turn off Windows pop-ups* shows how). A low-battery notice comes at the threshold set in Settings.
 - **Claude Code:** "Claude finished" and "Claude needs you" notices through Claude Code hooks.
+- **Clipboard:** a history of what you copy (text, links, colours, files and images), searchable, with pins, in the panel. Password managers' copies are never kept. The history can be kept across restarts (encrypted with Windows DPAPI) or in memory only, and an optional hotkey (Ctrl+Alt+V or Win+Alt+V) opens it.
+- **Screenshot preview:** after PrtSc or Win+Shift+S the notch shows the shot with *Copy again*, *Keep* and *Delete* (to the Recycle Bin, and the clipboard is emptied). What an ignored preview does is set in Settings → Clipboard; the default keeps the file.
+- **System:** CPU, RAM and disk use on their own page, with one-time warnings when a drive runs low or RAM stays high.
 - **Shortcuts:** Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings, Lock screen.
 - **Clean up:** from the System page, measure and clean temp files and logs, browser and app caches, developer caches, Autodesk and Adobe caches, old installers in Downloads (to the Recycle Bin) and Windows Update leftovers (asks for admin through UAC). You tick what goes, and the button asks once more before anything is deleted. Open browsers and files in use are skipped and reported; the island reports the free space it measured afterwards.
 - **Clean up with Mole (experimental):** the cleaner's second mode, *Automatic · Mole*, hands the clean to [Mole for Windows](https://github.com/tw93/Mole/tree/windows) if you installed it yourself (see [Mole](#mole) below).
-- **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed.
-- **Bata, the assistant:** a small robot beside the clock and on the island's own notices (reminders, pomodoro, Claude Code, battery, greeting). It has faces for idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving; it blinks, falls asleep after a while without activity and wakes when you point at the island. Other apps' notifications keep their own badge, and the open panel shows no robot.
-- **Morning greeting:** once a day, before noon, Bata says good morning with the number of today's events and reminders, at startup, after a wake or when you unlock the PC.
-- **Studio look:** the Bata palette (terracotta, espresso, cream) with six accent colours, Espresso or Graphite island fill, light/dark windows; DM Sans and DM Mono built into the exe, with titles and the clocks in DM Sans Semibold; the island's own vector icons. Pill or Notch shape. Indonesian (default) or English.
+- **CLI:** run one command at a time in PowerShell or cmd on the panel's CLI page. The island takes the keyboard only while you type: click the terminal to start (the panel stays open while you type). Esc hands the keyboard back to the app you were in; a click outside the island releases it to whatever you clicked. History suggestions (Tab, ↑), `cd`, `cls`, Stop / Ctrl+C and an enlarge button. A command keeps running while the panel is closed. The CLI starts in the folder of the last active Explorer window (or in your last folder, Settings → General), and its folder chip opens a menu of open Explorer windows, favourites and recent folders.
+- **The cat, the assistant:** a small cat (round head, ears, eyes with lashes, a plum bow) beside the clock and on the island's own notices (reminders, pomodoro, Claude Code, battery, cleaner, greeting). It has faces for idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving, and its ears go up when alert and droop when asleep or low; it blinks, falls asleep after a while without activity and wakes when you point at the island. Other apps' notifications keep their own badge, and the open panel shows no cat.
+- **Morning greeting:** once a day, before noon, the cat says good morning with the number of today's events and reminders, at startup, after a wake or when you unlock the PC.
+- **Studio look:** the Vale palette (terracotta, espresso, cream) with six accent colours, Espresso or Graphite island fill, light/dark windows; DM Sans and DM Mono built into the exe, with titles and the clocks in DM Sans Semibold; the island's own vector icons. Pill or Notch shape. Indonesian (default) or English.
 
 <p align="center">
   <img src="assets/screenshots/calendar-day.png" width="420" alt="Calendar day view: an hour timeline with two all-day events on top, a design review and a coordination meeting, and a terracotta line at the current time">
@@ -63,7 +68,17 @@ On first run, Windows asks for access to your notifications: allow it.
 
 <p align="center">
   <img src="assets/screenshots/notes.png" width="420" alt="Notes page: four note cards with a title, two lines of text and when each was last changed">
-  <img src="assets/screenshots/music.png" width="420" alt="Music page: a sunset cover, the track title in italic serif, a progress bar at 1:42 of 3:58, playback controls and a Lyrics button">
+  <img src="assets/screenshots/music.png" width="420" alt="Music page: a sunset cover, the track title, a progress bar at 1:42 of 3:58, playback controls and a Lyrics button">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/clipboard.png" width="420" alt="Clipboard page: a search field and cards for copied text, a link, a colour and a screenshot, one of them pinned">
+  <img src="assets/screenshots/system.png" width="420" alt="System page: CPU, RAM and disk use with a Clean up button">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/screenshot.png" width="420" alt="Screenshot preview in the notch: a thumbnail with its size and Copy again, Keep and Delete">
+  <img src="assets/screenshots/cleaner.png" width="420" alt="Cleaner, Choose yourself mode: categories with the size each frees and a Clean button">
 </p>
 
 <p align="center">
@@ -76,26 +91,27 @@ On first run, Windows asks for access to your notifications: allow it.
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/robot.png" width="460" alt="Bata's faces: idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving, then a blink and the sizes from 48 to 20 px">
+  <img src="assets/screenshots/robot.png" width="460" alt="The cat's faces: idle, happy, focus, listening, singing, alert, thinking, asleep, low and waving, then a blink and the sizes from 48 to 20 px">
   <br>
-  <img src="assets/screenshots/greeting.png" width="300" alt="Morning greeting notice: Bata waving beside Good morning, 3 events and 2 reminders today">
+  <img src="assets/screenshots/greeting.png" width="300" alt="Morning greeting notice: the cat waving beside Good morning, 3 events and 2 reminders today">
 </p>
 
 ## Settings
 
 Open **Settings…** from the tray icon.
 
-<p align="center"><img src="assets/screenshots/settings.png" width="560" alt="Settings window, Appearance section scrolled down: accent colour, island fill, window mode, clock when idle, then the assistant card with Assistant in notch, Animation Full / Saver / Off, Sleep after 10 min and Morning greeting"></p>
+<p align="center"><img src="assets/screenshots/settings.png" width="560" alt="Settings window, Appearance section scrolled down: window mode, clock when idle, the assistant card with Assistant in notch, Animation Full / Saver / Off, Sleep after 10 min and Morning greeting, then Panel pages with an order stepper and a switch per page"></p>
 
 | Section | What's in it |
 |---|---|
-| Appearance | A live preview of the island; island style (Pill / Notch), accent colour (Terracotta, Sage, Ochre, Clay, Olive, Plum), island fill (Espresso / Graphite), window mode (Follow Windows / Dark / Light), clock when idle. Then the assistant: assistant in notch (Bata on or off), animation (Full / Saver / Off), sleep after 1–60 minutes without activity, morning greeting |
-| General | Language (Indonesia / English), start with Windows, battery alert threshold, how to turn off Windows pop-ups, lyrics in notch, CLI shell (PowerShell / cmd), protect Cargo & Autodesk caches in Mole |
+| Appearance | A live preview of the island; island style (Pill / Notch), accent colour (Terracotta, Sage, Ochre, Clay, Olive, Plum), island fill (Espresso / Graphite), window mode (Follow Windows / Dark / Light), clock when idle. Then the assistant: assistant in notch (the cat on or off), animation (Full / Saver / Off), sleep after 1–60 minutes without activity, morning greeting. Then *Panel pages*: the order of the nine pages and which ones the wheel shows |
+| General | Language (Indonesia / English), start with Windows, battery alert threshold, how to turn off Windows pop-ups, lyrics in notch, CLI shell (PowerShell / cmd) and start folder (Explorer / last folder), disk and RAM warnings, protect Cargo & Autodesk caches in Mole |
+| Clipboard | History on or off, how many items, keep after restart, the optional hotkey, clear history; the screenshot preview and what an ignored preview does |
 | Pomodoro | Focus, break and long break length; sessions before a long break (locked while a pomodoro runs) |
-| Integrations | Google Calendar: status, client ID / secret, Save, Connect / Disconnect, setup guide. Claude Code: install or remove hooks |
+| Integrations | Google Calendar: status, *Sign in with Google* (or your own client ID / secret under *Advanced*), Disconnect, setup guide. Claude Code: install or remove hooks |
 | About | Version, source code, releases, data folder |
 
-**Animation:** *Full* blinks, lifts Bata when you point at it and bounces on alerts. *Saver* drops the blinking and motion but keeps the faces; Full also behaves like Saver while Windows Energy Saver is on. *Off* runs no robot timers at all: the faces still follow what happens, but Bata does not fall asleep. With the assistant off, the island looks and works as without Bata.
+**Animation:** *Full* blinks, lifts the cat when you point at it and bounces on alerts. *Saver* drops the blinking and motion but keeps the faces; Full also behaves like Saver while Windows Energy Saver is on. *Off* runs no assistant timers at all: the faces still follow what happens, but the cat does not fall asleep. With the assistant off, the island looks and works as without it.
 
 ## Mole
 
@@ -103,7 +119,7 @@ The cleaner's *Automatic · Mole* mode runs **Mole for Windows** by tw93, a sepa
 
 - **Preview first:** the mode always starts with `mo clean --dry-run`, which deletes nothing. Its lines are read into four groups (browser, app, developer caches, temp files and logs); a group the island cannot read says *see log* instead of guessing a number. Mole's own summary line is never used.
 - **Confirm:** *Run Mole* turns into *Sure? Delete for good* for 4 seconds; only a second click runs `mo clean`, and only with the options of the finished preview. Any other click, an option change or closing the panel disarms it. What Mole deletes is gone for good (no Recycle Bin).
-- **While it runs:** Mole's log shows in the panel (colours stripped, its internal tables left out). The panel may close; Bata thinks in the notch and a notice comes at the end: happy with the free space the island measured itself (before and after, per drive), or low with a *Log* button if Mole failed.
+- **While it runs:** Mole's log shows in the panel (colours stripped, its internal tables left out). The panel may close; the cat thinks in the notch and a notice comes at the end: happy with the free space the island measured itself (before and after, per drive), or low with a *Log* button if Mole failed.
 - **Options:** *+ System (admin)* (not ticked) runs `mo clean --system` through a UAC prompt in a separate PowerShell; the island itself never runs as admin. *+ Game media > 90 days* adds `--game-media`. *Protect folders…* opens `mo clean --whitelist`.
 - **Protected by default:** before Mole's first preview the island adds the Cargo caches (`.cargo\registry`, `.cargo\git`) and the Autodesk folders under AppData to Mole's whitelist (`%USERPROFILE%\.config\mole\whitelist.txt`), appending only what is missing and never changing your lines. Settings → General → *Protect Cargo & Autodesk caches in Mole* turns this off.
 - **Versions:** the island was tested with Mole 1.30.x; another version shows a warning and may still run.
@@ -114,14 +130,19 @@ The cleaner's *Automatic · Mole* mode runs **Mole for Windows** by tw93, a sepa
 
 ## Setup Google Calendar
 
-The Calendar page uses your own Google Cloud project (one-time setup):
+There are two ways to connect the Calendar page:
+
+- **Sign in with Google** (Settings → Integrations): one click, then pick your account in the browser. This uses Vale's own Google client, which is built into release builds; a build without it (for example one you build yourself) shows only the second way.
+- **Your own client ID** (Settings → Integrations → *Advanced: use your own Client ID*): your own Google Cloud project, set up once as below. An own client ID, when saved, is used instead of Vale's. Switching between the two asks you to sign in again.
+
+Setting up your own client:
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a new project.
 2. **APIs & Services → Library** → **Google Calendar API** → **Enable**.
 3. **Google Auth Platform** (OAuth consent screen) → **Get started**: any app name, your email, Audience **External**.
 4. **Audience → Test users → Add users**: add the Gmail account whose calendar you want.
 5. **Clients → Create client** → type **Desktop app**. Copy the **Client ID** and **Client secret** right away (the secret may be shown only once).
-6. In the island: Settings → Integrations → paste both → **Save** → **Connect**.
+6. In the island: Settings → Integrations → *Advanced: use your own Client ID* → paste both → **Save** → **Connect**.
 7. In the browser, pick your account, continue past "Google hasn't verified this app", and **tick both permissions**.
 
 While the project's publishing status is **Testing**, Google expires the login after 7 days and the island asks you to reconnect. To avoid that, choose **Audience → Publish app** (*In production*); no verification is needed for personal use, and the next login lasts.
@@ -132,14 +153,18 @@ Everything lives in `%APPDATA%\Vale\`:
 
 | File | Contents |
 |---|---|
-| `config.json` | Settings, including the Google client ID / secret (plain text) |
+| `config.json` | Settings, including your own Google client ID / secret if you set one (plain text) |
 | `notes.json`, `reminders.json` | Notes and reminders |
 | `calendar-cache.json` | Last calendar data, for offline use |
 | `google-token.bin` | Google login, encrypted with Windows DPAPI (only your Windows account can read it) |
 | `cli-history.txt`, `cli-cwd.txt` | CLI history and folder |
+| `cli-favorites.txt`, `cli-recent.txt` | The CLI folder menu's favourites and recent folders |
+| `clipboard-history.bin` | The clipboard history, encrypted with Windows DPAPI; only when *Keep after restart* is on (thumbnails only, no full-size images) |
+| `media.log` | Only with `--media-log`: when the island sent a media command and when playback changed (app id and state, never titles), up to 1 MB |
 | `lyrics-cache\` | Lyrics already fetched |
 
 - Nothing is sent anywhere except Google Calendar (when connected) and lrclib.net (when lyrics are on: the artist, title and length of the playing track).
+- A copy that a password manager marks as private never enters the clipboard history.
 - Notes and reminders are local only; there is no sync and no telemetry.
 
 ## Build from source
@@ -161,8 +186,9 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 ## Troubleshooting
 
 - **No notifications in the island:** check Windows Settings → Privacy & security → Notifications, then run `& "$env:LOCALAPPDATA\Programs\Vale\vale.exe" --probe-notifications` to print what arrives for 60 seconds.
-- **"Add a Google client ID first":** paste the client ID and secret in Settings → Integrations and press **Save**.
-- **"Access blocked" / Error 403 from Google:** your account is not a test user (step 4), or the client is not a *Desktop app*.
+- **"Add a Google client ID first":** this build has no built-in Google client: open Settings → Integrations → *Advanced*, paste your client ID and secret and press **Save**.
+- **"Sign in to Google again":** you switched between *Sign in with Google* and your own client ID; connect once more.
+- **"Access blocked" / Error 403 from Google (own client):** your account is not a test user (step 4), or the client is not a *Desktop app*.
 - **"Google Calendar API isn't enabled":** enable it (step 2) in the same project as the client, wait a few minutes, connect again.
 - **"Google permissions incomplete":** connect again and tick both permissions.
 - **"config.json is invalid":** usually a missing or extra comma. The island moves the broken file to `config.json.bak` on its next save; copy your values back from there.

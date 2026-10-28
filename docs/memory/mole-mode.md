@@ -88,3 +88,16 @@ never look for Mole; shots in [[screenshot-capture-script]]. The mode lives
 on the [[system-page]]'s cleaner.
 
 Listed in [[index]].
+
+## Verify pass (2026-10-28)
+
+- A whitelist saved as UTF-16LE (PowerShell 5.1 `Out-File`, Notepad
+  "Unicode") is read and extended as UTF-16LE; UTF-8 bytes appended to it were
+  garbage to Mole.
+- A whitelist that cannot be written says so in the preview log
+  (`MoleProtectFailed`) instead of failing silently.
+- `ps_quote` doubles U+2018..U+201B too: PowerShell ends a single-quoted
+  string at them, and the elevated command line is built from paths.
+- Owner check still open: whether Mole 1.30 honours `whitelist.txt` (its docs
+  describe it for later releases). The dry-run names groups, not paths, so the
+  island cannot check it.

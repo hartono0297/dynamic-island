@@ -72,6 +72,18 @@ the island's own. `NOTICE` carries the MIT text with its copyright line
 macOS code. Where the island is narrower than Mole (Teams databases, Zoom
 settings, NuGet packages, no system temp) the table says so.
 
+## Verify pass (2026-10-28)
+
+- **Prune only what the clean emptied** (`prune_emptied`): walk up from each
+  deleted file to its location folder. Pruning every empty folder under a
+  location deleted the user's own empty folders across the whole profile and
+  %APPDATA% (the profile-root and Roaming-root `*.log` locations), even an
+  empty git `refs`.
+- **Temp must be a real temp folder** (`safe_temp`): without TMP/TEMP,
+  GetTempPath returns the profile or Windows, and "older than 7 days" there
+  would take documents. A Temp root that is not named Temp/Tmp, holds the
+  profile, AppData, Downloads or Windows, or is Windows' own, is left out.
+
 Related: [[mole-mode]], [[system-page]], [[bata-robot-expressions]],
 [[bata-idle-power-budget]], [[studio-icons]], [[screenshot-capture-script]],
 [[studio-tabular-figures-word-gaps]]

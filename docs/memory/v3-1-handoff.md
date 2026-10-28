@@ -7,21 +7,29 @@ date: 2026-10-28
 
 Written so the work can continue on another PC. Plan: `docs/superpowers/plans/2026-10-27-v3.1.md`. Run order (not by number): 11, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, then the verify pass, then 10.
 
-## Done and merged on `main` (built with `defer`, NOT yet reviewed or checked)
+## Status (2026-10-28): v3.1 is complete on `main`
 
-Run 11, 1, 2, 3, 4, 5, 6, 7 and 8 are on `main`; `cargo test --locked` gave 814 passed at the last merge (`c6c0555`).
+All runs are in: 11, 1 to 8 (first PC), then 9, 12, 13, 14 and 10 (second
+PC, made directly in the main session while the `build` workflow was paused,
+see AGENTS.md). The verify pass ran as four fresh reviewers over every run;
+every Critical and Important finding was fixed test-first (cleaner pruning,
+Temp root, Mole whitelist encoding and quoting, screenshot file matching,
+clipboard full-size images, CLI network folders and stale Explorer folder,
+media sessions without an id, the empty `Vale` folder, the old autostart
+value). Version 3.1.0; `cargo test --locked` 858 passed. Minor findings left
+for later are the `Final: minor (deferred)` lines of the session's ledger and
+are listed in the session report.
 
-## Left to do
+Left for the owner:
 
-| Step | What | Notes |
-|---|---|---|
-| Run 9 | Nine pages and the "Halaman panel" setting | Order: Calendar, Pomodoro, Reminders, Notes, Media, Clipboard, System, CLI, Shortcuts (the interim order already matches) |
-| Run 12 | Rename to Vale and data migration | Repo rename on GitHub is the owner's job, not the agent's |
-| Run 13 | Cat mascot and eared logo | Replaces the Bata robot; mascot name is still open |
-| Run 14 | One-click Google sign-in | Client ID/secret are filled in by the owner; empty means the button is hidden |
-| Verify pass | Review and check of the heavy runs | See the table below |
-| Run 10 | i18n, screenshots, README, version 3.1.0 | Last, so screenshots show the final result |
-| Push | `git push origin main` once, after Run 10 | Tag `v3.1.0` is the owner's job |
+- Tag `v3.1.0` (the release workflow builds and publishes) and deploy.
+- Google: create the project and Desktop client, publish the consent screen
+  (path B, then verification C with `site/`), add the repository secrets
+  `VALE_GOOGLE_CLIENT_ID` and `VALE_GOOGLE_CLIENT_SECRET`
+  ([[google-built-in-client]]).
+- Rename the GitHub repo (for example `vale-island`); repo URLs then follow.
+- Check whether Mole 1.30 honours `whitelist.txt` ([[mole-mode]]), and
+  whether `Spotify\Storage` in "Cache aplikasi" holds offline downloads.
 
 Still open for the owner, never decided by an agent: mascot name, repo licence (no `LICENSE` yet), website contact email, website domain, Google Client ID.
 
@@ -38,7 +46,7 @@ Still open for the owner, never decided by an agent: mascot name, repo licence (
 - Model names: `build.js` uses the aliases `opus` and `sonnet`. On the first PC these failed with "issue with the selected model" and the session script used the full ids `claude-opus-5-5` and `claude-sonnet-5-5` (constants `OPUS` and `SONNET` at the top of the file). Do the same if you see that error.
 - Check agents must not click media buttons or do anything that interrupts playback; use the debug demo modes (`--demo`, `--demo-editor`, `--demo-cli`, `--demo-robot`, `--settings`) and `scripts/capture-screenshots.ps1`.
 
-## Verify list: ranges merged without review or check
+## Verify list (reviewed 2026-10-28): the ranges the verify pass covered
 
 `base..head` on `main` (use `git log` for the commits). Heavy runs only.
 
@@ -54,7 +62,7 @@ Still open for the owner, never decided by an agent: mascot name, repo licence (
 | 7 | clipboard-history | 67cc45a | a705a0f | History, DPAPI, password-manager exclusion; do not touch the real clipboard |
 | 8 | screenshot-preview | a705a0f | c6c0555 | Match of file and clipboard image; no delete without the Hapus click; ignored preview keeps the file |
 
-Heavy runs 9, 12, 13 and 14 get added here as they land.
+Runs 9, 12, 13 and 14 were reviewed too (64758c5..c49c2e0).
 
 ## Owner checks that no agent could do
 

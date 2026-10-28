@@ -14,3 +14,6 @@ Rules that keep the island from pausing music the user did not mean to pause:
 The progress timer for that same session is described in [[studio-media-progress-timer]]. When a pause has no island command behind it, see [[media-external-pause-causes]].
 
 Listed in [[index]].
+
+- A session without an AppUserModelId is still controlled: an empty target
+  means the current session when it has no id either (`pick_session`).

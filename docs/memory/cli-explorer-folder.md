@@ -56,3 +56,13 @@ Demo scenes `cli-from-explorer` and `cli-folder-menu` use a fixed "now"
 ([[demo-data-time-of-day]]); shots in [[screenshot-capture-script]].
 
 Listed in [[index]].
+
+## Verify pass (2026-10-28)
+
+- No existence check of a network folder on the UI thread
+  (`cli_folders::exists_quick`): UNC paths and mapped network drives
+  (GetDriveTypeW, which asks the mount manager, not the share) count as there;
+  an unreachable share used to freeze the island for the SMB timeout.
+- A folder taken from Explorer gives way to cli-cwd.txt (`back_to_last`) when
+  the page opens with no Explorer window, or in "Folder terakhir" mode; the
+  "dari Explorer" chip goes with it.

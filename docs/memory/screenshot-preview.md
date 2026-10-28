@@ -66,6 +66,16 @@ matching, PNG/JPEG headers, folder listing; Win32: `win`) and
   (`notch:screenshot`, `-saved`, `-deleted`) draws a fixed picture with
   fixed figures ([[clipboard-privacy]], [[screenshot-capture-script]]).
 
+## Verify pass (2026-10-28)
+
+- **Never another screenshot's file.** `ClipCandidate::from_ms`
+  (`claim_from`): when an image arrived shortly before, files before this
+  one's arrival belong to that one. `Shots::taken` (last 16) lists files
+  already matched; they are never matched again. Before this, a retake within
+  a few seconds could match the earlier file, and Hapus recycled it.
+- Simpan without a file (PrtSc with no auto-save) says "Belum ada file · tetap
+  di clipboard", not "Disimpan".
+
 Related: [[bata-robot-expressions]], [[system-page]]
 
 Listed in [[index]].

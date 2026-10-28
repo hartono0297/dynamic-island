@@ -78,6 +78,13 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
   `SystemLow`, `CleanDone`, `MoleDone` and `MoleFailed`; a newer "Disalin"
   replaces only an older "Disalin", never a cleaner or system notice.
 
+## Verify pass (2026-10-28)
+
+- The newest image always keeps its full-size original, even past
+  `FULL_BUDGET` (a 4K or 5K screenshot alone passes it); older ones share the
+  budget. A card with only its thumbnail left says so when copied ("pratinjau
+  kecil, aslinya tidak tersimpan").
+
 Related: [[clipboard-privacy]], [[settings-appearance-scroll]]
 
 Listed in [[index]].
