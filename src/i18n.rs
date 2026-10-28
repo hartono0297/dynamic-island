@@ -574,6 +574,7 @@ keys! {
     ShotKeep => "Simpan", "Keep";
     ShotDelete => "Hapus", "Delete";
     ShotSaved => "Disimpan", "Saved";
+    ShotNotSaved => "Belum ada file", "No file yet";
     ShotOnClipboard => "tetap di clipboard", "still on the clipboard";
     ShotDeleted => "Dihapus", "Deleted";
     ShotDeleteFailed => "Gagal menghapus", "Couldn't delete";

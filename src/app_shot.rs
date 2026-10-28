@@ -119,6 +119,23 @@ pub(super) fn shot_view<'a>(shots: &'a Shots, view: &View) -> Option<ShotView<'a
     })
 }
 
+/// The notice after "Simpan": "Disimpan · Pictures\Screenshots" when the
+/// screenshot has its file in `dir`; without one (a PrtSc with no auto-save)
+/// "Belum ada file · tetap di clipboard", so no one thinks it is on disk.
+pub(super) fn kept_notice(has_file: bool, dir: Option<PathBuf>) -> Notice {
+    let (title, body) = match (has_file, dir) {
+        (true, Some(dir)) => (Key::ShotSaved, screenshot::folder_label(&dir)),
+        _ => (Key::ShotNotSaved, tr(Key::ShotOnClipboard).into()),
+    };
+    Notice {
+        key: "shot-saved".into(),
+        source: tr(Key::ShotTitle).into(),
+        title: tr(title).into(),
+        body,
+        kind: NoticeKind::ShotSaved,
+    }
+}
+
 /// A preview that ran its full time untouched: the screenshot to delete,
 /// only while "Jika diabaikan" is Hapus now (set back to Simpan meanwhile,
 /// it is kept). Simpan, the default, never deletes.
@@ -384,17 +401,7 @@ impl App {
                     .as_ref()
                     .and_then(|f| f.path.parent().map(PathBuf::from))
                     .or_else(|| self.shots.dir.clone());
-                let body = match (&state.file, dir) {
-                    (Some(_), Some(dir)) => screenshot::folder_label(&dir),
-                    _ => tr(Key::ShotOnClipboard).into(),
-                };
-                Some(Event::Notice(Notice {
-                    key: "shot-saved".into(),
-                    source: tr(Key::ShotTitle).into(),
-                    title: tr(Key::ShotSaved).into(),
-                    body,
-                    kind: NoticeKind::ShotSaved,
-                }))
+                Some(Event::Notice(kept_notice(state.file.is_some(), dir)))
             }
             ShotAction::Open(id) => {
                 let state = self.shots.shown.as_ref().filter(|s| s.look.id == id)?;
@@ -502,7 +509,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::delete_when_ignored;
+    use std::path::PathBuf;
+
+    use super::{delete_when_ignored, kept_notice};
     use crate::clipboard::History;
     use crate::config::{Config, ShotIgnore};
 
@@ -556,5 +565,23 @@ mod tests {
         assert_eq!(ingest(&mut h, snap, 101), Ingested::Bumped { id });
         assert_eq!(h.len(), 1);
         assert!(h.items()[0].image().is_some_and(|i| i.screenshot));
+    }
+
+    #[test]
+    fn simpan_without_a_file_does_not_say_saved() {
+        let dir = PathBuf::from(r"C:\Users\x\Pictures\Screenshots");
+        let saved = kept_notice(true, Some(dir.clone()));
+        assert_eq!(
+            (saved.title.as_str(), saved.body.as_str()),
+            ("Disimpan", r"Pictures\Screenshots")
+        );
+        // A PrtSc without auto-save left no file: it is only on the clipboard.
+        for dir in [None, Some(dir)] {
+            let n = kept_notice(false, dir);
+            assert_eq!(
+                (n.title.as_str(), n.body.as_str()),
+                ("Belum ada file", "tetap di clipboard")
+            );
+        }
     }
 }
