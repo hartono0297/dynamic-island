@@ -171,6 +171,7 @@ $shots = @(
     # The Clipboard page (fixed data, never the real clipboard), a search,
     # and "Copied" in the notch.
     @{ name = 'clipboard'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard' } }
+    @{ name = 'clipboard-long'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard-long' } }
     @{ name = 'clipboard-search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'clipboard-search' } }
     @{ name = 'clipboard-copied'; args = '--demo'; env = @{ DI_DEMO_STEP = 'notch:clipboard-copied' } }
     # The screenshot preview with fixed figures and a drawn picture (never a

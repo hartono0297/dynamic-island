@@ -213,6 +213,9 @@ pub struct ClipLayout {
     pub buttons: Vec<(ClipButton, u64, Rect)>,
     /// Nothing to show (empty, no match, history off): the message's area.
     pub empty: Option<Rect>,
+    /// The thin thumb beside the cards when they scroll: where in the list
+    /// the view is.
+    pub scrollbar: Option<Rect>,
 }
 
 /// The Clipboard cards' height and gap (`.clip`, `.clips`).
@@ -1788,6 +1791,37 @@ pub fn clip_max_scroll(n: usize, rows: usize) -> usize {
     n.div_ceil(2).saturating_sub(rows)
 }
 
+/// One wheel notch (`delta`, 120 a notch, positive away from the user) over
+/// the cards at row `scroll` of `max`: the row it scrolls to, an end keeping
+/// the row (the notch is spent there, so a long scroll never turns the page by
+/// accident). `None` when there is nothing to scroll (`max` 0): the notch
+/// turns the page instead, as anywhere else on the panel.
+pub fn clip_wheel_step(delta: i32, scroll: usize, max: usize) -> Option<usize> {
+    if max == 0 {
+        return None;
+    }
+    let rows = (-delta / 120).clamp(-20, 20);
+    let rows = if rows == 0 { -delta.signum() } else { rows };
+    Some((scroll as i64 + i64::from(rows)).clamp(0, max as i64) as usize)
+}
+
+/// The thumb of the Clipboard scrollbar for `n` cards, `rows` shown from row
+/// `scroll`; `None` when everything fits. It sits in the page's right margin,
+/// as high as the share of the rows that shows (never under 24 px).
+pub fn clip_scrollbar(list: Rect, n: usize, rows: usize, scroll: usize) -> Option<Rect> {
+    let max = clip_max_scroll(n, rows);
+    if max == 0 {
+        return None;
+    }
+    let total = n.div_ceil(2) as f32;
+    let h = (list.h * rows as f32 / total).clamp(24.0, list.h);
+    let y = list.y + (list.h - h) * scroll.min(max) as f32 / max as f32;
+    Some(rect(list.right() + 6.0, y, CLIP_SCROLLBAR_W, h))
+}
+
+/// The scrollbar's width.
+pub const CLIP_SCROLLBAR_W: f32 = 3.0;
+
 /// The scroll that keeps card `selected` in view: unchanged when it shows,
 /// else just enough rows to bring it in.
 pub fn clip_scroll_to(selected: usize, scroll: usize, rows: usize) -> usize {
@@ -1848,6 +1882,7 @@ pub fn clipboard_layout(
         rows,
         scroll,
         empty: ids.is_empty().then_some(list),
+        scrollbar: clip_scrollbar(list, ids.len(), rows, scroll),
         cards,
         buttons,
     }
@@ -4456,6 +4491,60 @@ mod media_tests {
                 assert!(r.x >= a.x && r.right() <= a.right() && r.y >= a.y);
             }
             assert!(l.empty.is_none());
+        }
+    }
+
+    #[test]
+    fn a_wheel_notch_scrolls_a_row_or_turns_the_page_when_nothing_scrolls() {
+        // Nothing to scroll (6 cards or fewer fit): the notch turns the page.
+        let s = shape_for(Style::Pill, ShapeKind::Panel);
+        let rows = clip_rows(s, false);
+        for n in [0, 1, 2 * rows] {
+            assert_eq!(clip_max_scroll(n, rows), 0, "{n} cards");
+            assert_eq!(clip_wheel_step(-120, 0, 0), None);
+            assert_eq!(clip_wheel_step(120, 0, 0), None);
+        }
+        // 50 cards: 25 rows, `rows` shown; a notch down is a row.
+        let max = clip_max_scroll(50, rows);
+        assert_eq!(max, 25 - rows);
+        assert_eq!(clip_wheel_step(-120, 0, max), Some(1));
+        assert_eq!(clip_wheel_step(120, 5, max), Some(4));
+        // A big or a fine (touchpad) delta moves at least a row, at most 20.
+        assert_eq!(clip_wheel_step(-30, 0, max), Some(1));
+        assert_eq!(clip_wheel_step(-120 * 50, 0, max), Some(20.min(max)));
+        // The ends spend the notch (the row stays); the page does not turn.
+        assert_eq!(clip_wheel_step(120, 0, max), Some(0));
+        assert_eq!(clip_wheel_step(-120, max, max), Some(max));
+    }
+
+    #[test]
+    fn the_scrollbar_shows_only_when_the_cards_scroll_and_follows_the_row() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_for(style, ShapeKind::Panel);
+            let rows = clip_rows(s, false);
+            // Everything fits: no bar.
+            let few: Vec<u64> = (1..=2 * rows as u64).collect();
+            assert!(clipboard_layout(s, false, &few, None, 0, |_| false)
+                .scrollbar
+                .is_none());
+            // 50 cards: a bar in the right margin, inside the list's height.
+            let ids: Vec<u64> = (1..=50).collect();
+            let top = clipboard_layout(s, false, &ids, None, 0, |_| false);
+            let bar = top.scrollbar.expect("a scrollbar");
+            assert!(bar.x > top.list.right() && bar.right() <= s.x + s.w - 4.0, "{bar:?}");
+            assert_eq!(bar.y, top.list.y, "at the top");
+            assert!(bar.h >= 24.0 && bar.h < top.list.h);
+            let max = clip_max_scroll(50, rows);
+            let end = clipboard_layout(s, false, &ids, None, max, |_| false)
+                .scrollbar
+                .unwrap();
+            assert!((end.bottom() - top.list.bottom()).abs() < 0.01, "at the end");
+            let mid = clipboard_layout(s, false, &ids, None, max / 2, |_| false)
+                .scrollbar
+                .unwrap();
+            assert!(mid.y > bar.y && mid.y < end.y);
+            // Same height whatever the row.
+            assert!((bar.h - end.h).abs() < 0.01);
         }
     }
 

@@ -28,7 +28,7 @@ use crate::model::{ClipAction, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::ui::cli_input::{CliInput, Key as InputKey};
 use crate::ui::editor;
 use crate::ui::geometry::{ShapeKind, shape_for};
-use crate::ui::panel_layout::{clip_max_scroll, clip_rows, clip_scroll_to};
+use crate::ui::panel_layout::{clip_max_scroll, clip_rows, clip_scroll_to, clip_wheel_step};
 use crate::ui::render::ClipView;
 
 /// One-shot: the clipboard was busy; read it again. (17 and 18 are the
@@ -428,17 +428,19 @@ impl App {
         clip_rows(s, self.state.waiting_strip().is_some())
     }
 
-    /// The wheel over the cards: a row per notch.
-    pub(super) fn clip_wheel(&mut self, delta: i32) {
-        let rows = (-delta / 120).clamp(-20, 20);
-        let rows = if rows == 0 { -delta.signum() } else { rows };
+    /// The wheel over the cards: a row per notch. False when there is
+    /// nothing to scroll (the cards all fit): the caller turns the page.
+    pub(super) fn clip_wheel(&mut self, delta: i32) -> bool {
         let n = shown(&self.clip.history, &self.clip.query).len();
-        let max = clip_max_scroll(n, self.clip_rows()) as i64;
-        let to = (self.clip.scroll as i64 + i64::from(rows)).clamp(0, max);
-        if to as usize != self.clip.scroll {
-            self.clip.scroll = to as usize;
+        let max = clip_max_scroll(n, self.clip_rows());
+        let Some(to) = clip_wheel_step(delta, self.clip.scroll, max) else {
+            return false;
+        };
+        if to != self.clip.scroll {
+            self.clip.scroll = to;
             self.redraw_clip();
         }
+        true
     }
 
     /// A right-click on a card selects it (its buttons show); true when it

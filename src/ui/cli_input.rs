@@ -25,10 +25,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetWindowTextLengthW, GetWindowTextW, HMENU,
-    PostMessageW, SendMessageW, SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
-    WM_CLEAR, WM_CUT, WM_GETDLGCODE, WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
-    WM_KILLFOCUS, WM_NCDESTROY, WM_PASTE, WM_SETFOCUS, WM_UNDO, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetParent, GetWindowTextLengthW,
+    GetWindowTextW, HMENU, PostMessageW, SendMessageW, SetWindowTextW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLEAR, WM_CUT, WM_GETDLGCODE, WM_IME_COMPOSITION,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PASTE,
+    WM_SETFOCUS, WM_UNDO, WS_CHILD, WS_VISIBLE,
 };
 use windows::core::{HSTRING, Result, w};
 
@@ -297,6 +298,16 @@ unsafe extern "system" fn input_proc(
             place_ime(hwnd);
             request_redraw();
             return result;
+        }
+        // The input has the keyboard, but the wheel belongs to the panel
+        // (the cards, the CLI output, the pages): the island's window gets
+        // it, which a focused EDIT would otherwise swallow.
+        WM_MOUSEWHEEL => {
+            if let Ok(parent) = unsafe { GetParent(hwnd) }
+                && unsafe { PostMessageW(Some(parent), WM_MOUSEWHEEL, wparam, lparam) }.is_ok()
+            {
+                return LRESULT(0);
+            }
         }
         WM_SETFOCUS => {
             let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };

@@ -48,7 +48,8 @@ use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, s
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_THUMB_W,
+    CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
+    CLIP_THUMB_W,
     CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
     ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
     MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout,
@@ -1769,6 +1770,11 @@ impl Renderer {
             if !clip.enabled {
                 return Ok(());
             }
+        }
+
+        if let Some(bar) = l.scrollbar {
+            self.set_color(p.secondary, 0.55);
+            self.fill_round(bar, CLIP_SCROLLBAR_W / 2.0);
         }
 
         let mut drawn_images = Vec::new();

@@ -166,6 +166,8 @@ enum ClipDemo {
     Empty,
     /// "Riwayat clipboard" off.
     Off,
+    /// A long history scrolled down a row: the scrollbar's thumb shows.
+    Long,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -377,7 +379,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 79] = [
+const SCENES: [Scene; 80] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -523,6 +525,7 @@ const SCENES: [Scene; 79] = [
     clipboard("clipboard-search", ClipDemo::Search),
     clipboard("clipboard-empty", ClipDemo::Empty),
     clipboard("clipboard-off", ClipDemo::Off),
+    clipboard("clipboard-long", ClipDemo::Long),
     // keputusan-v3.1 §5 "Saat menyalin": Bata happy over the preview.
     bata(
         "clipboard-copied",
@@ -1216,6 +1219,15 @@ fn clip_view(clips: &[Clip], which: ClipDemo) -> ClipView<'_> {
                 ..ClipView::empty(now)
             }
         }
+        // Fourteen cards (the six again, then some): the panel shows three
+        // rows of two, so it scrolls; one row down.
+        ClipDemo::Long => ClipView {
+            items: clips.iter().cycle().take(14).collect(),
+            total: DEMO_CLIP_TOTAL,
+            selected: clips.get(1).map(|c| c.id),
+            scroll: 1,
+            ..ClipView::empty(now)
+        },
         ClipDemo::Empty => ClipView::empty(now),
         ClipDemo::Off => ClipView {
             enabled: false,

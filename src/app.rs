@@ -2776,8 +2776,11 @@ impl App {
             self.cli_menu_scroll = to.min(cli_folders::max_scroll(&self.cli_menu_all));
             self.rebuild_cli_menu();
             self.redraw_cli();
-        } else if over_clips && self.state.view() == View::Panel(Page::Clipboard) {
-            self.clip_wheel(delta);
+        } else if over_clips
+            && self.state.view() == View::Panel(Page::Clipboard)
+            && self.clip_wheel(delta)
+        {
+            // The cards scrolled (or an end spent the notch).
         } else if over && self.state.view() == View::Panel(Page::Cli) {
             // A notch away from the user scrolls up to older lines.
             let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);

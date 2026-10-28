@@ -97,3 +97,21 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
 Related: [[clipboard-privacy]], [[settings-appearance-scroll]]
 
 Listed in [[index]].
+
+## Scrolling (v3.2 Run 2)
+
+The wheel path was wired right; what made it feel dead: a notch over the
+cards was always swallowed, even with six cards or fewer (nothing to scroll)
+and the page did not turn either; there was no sign the list scrolls; and a
+focused search field (a hidden EDIT) took the wheel itself.
+
+- `clip_wheel_step` (pure, `panel_layout.rs`): `None` when everything fits
+  (`max_scroll` 0), so the notch turns the page like anywhere on the panel;
+  otherwise a row per notch, and an end spends the notch (a long scroll never
+  turns the page by accident).
+- `ClipLayout::scrollbar`: a 3 px thumb in the right margin, shown only when
+  the cards scroll, as tall as the share of rows shown (at least 24 px).
+- `cli_input.rs` forwards `WM_MOUSEWHEEL` of the focused EDIT to the island's
+  window (the cards, the CLI output and the pages all use it).
+- A card click still resets the scroll: the card moves to the front, so the
+  top is where it is. Demo scene `clipboard-long` shows the thumb.
