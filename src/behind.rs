@@ -69,7 +69,6 @@ impl Default for Behind {
 }
 
 impl Behind {
-    #[cfg(test)]
     pub fn z(&self) -> Z {
         self.z
     }
@@ -100,13 +99,16 @@ impl Behind {
     }
 }
 
-/// The strip along the top of a window `origin` (screen) wide `width` and the
-/// point `pt` on the screen: true when the point is on it.
-pub fn on_strip(origin: (i32, i32), width: i32, pt: (i32, i32)) -> bool {
-    pt.1 >= origin.1
-        && pt.1 < origin.1 + STRIP_PX
-        && pt.0 >= origin.0
-        && pt.0 < origin.0 + width
+/// How far past the drawn island the strip reaches on each side, in logical
+/// pixels.
+pub const STRIP_MARGIN_DIP: f32 = 12.0;
+
+/// The strip along the top of the screen (`top` is its first row) over the
+/// island's `span` (screen x, from and up to) and the point `pt` on the
+/// screen: true when the point is on it. The span is the drawn island plus a
+/// margin, not the window, which is wider than the island.
+pub fn on_strip(top: i32, span: (i32, i32), pt: (i32, i32)) -> bool {
+    pt.1 >= top && pt.1 < top + STRIP_PX && pt.0 >= span.0 && pt.0 < span.1
 }
 
 #[cfg(test)]
@@ -240,14 +242,16 @@ mod tests {
     }
 
     #[test]
-    fn the_strip_is_three_pixels_over_the_islands_width() {
-        let origin = (400, 0);
-        assert!(on_strip(origin, 600, (500, 0)));
-        assert!(on_strip(origin, 600, (500, 2)));
-        assert!(!on_strip(origin, 600, (500, 3)));
-        assert!(!on_strip(origin, 600, (399, 0)));
-        assert!(on_strip(origin, 600, (400, 0)));
-        assert!(!on_strip(origin, 600, (1000, 0)));
-        assert!(!on_strip(origin, 600, (500, -1)));
+    fn the_strip_is_three_pixels_over_the_drawn_island_only() {
+        // The island is drawn from x 400 to 600; the window around it is wider.
+        let span = (400, 600);
+        assert!(on_strip(0, span, (500, 0)));
+        assert!(on_strip(0, span, (500, 2)));
+        assert!(!on_strip(0, span, (500, 3)));
+        assert!(!on_strip(0, span, (399, 0)));
+        assert!(on_strip(0, span, (400, 0)));
+        assert!(!on_strip(0, span, (600, 0)));
+        assert!(!on_strip(0, span, (200, 0)), "beside the island, over the window");
+        assert!(!on_strip(0, span, (500, -1)));
     }
 }

@@ -68,12 +68,16 @@ per-pixel alpha only takes input on pixels it drew (alpha > 0), and the idle
 Pill has an empty strip above it: `WindowFromPoint` at y = 2 is the Windows
 search box, not Vale, so a drag aimed at "the top of the screen" never
 entered. Fix: `HALO_ALPHA` (0.012, 8-bit alpha 3: invisible) is drawn on a
-rectangle from y = 0 to 8 px under the island and 14 px beyond each side, for
-every non-panel view. The margin takes a drag but not the pointer: moves,
-dwell (`on_mouse_hover` disarms) and wheel over it are ignored
-(`hit_at(..).is_none()`), so it opens nothing and scrolls nothing.
-Side effect: clicks on whatever lies under that thin strip do not get
-through while the island is small.
+rectangle from y = 0 to 8 px under the island and 14 px beyond each side.
+**Only while a drag can be about to start** (3.2.1 review fix): `halo.rs`
+(`halo_wanted`) polls on `TIMER_HALO` (50 ms, only while the island is up in a
+non-panel view, not fullscreen) for "left button down and the pointer within
+100 dip of the island"; a drag from Explorer holds the button the whole way,
+so the margin is there when the pointer arrives, and it is gone otherwise, so
+it never blocks a click on the window beneath (a maximized window's tab
+strip). A press that began elsewhere keeps its capture. On the margin itself
+moves, dwell, wheel and right-click (no tray menu) are ignored
+(`hit_at(..).is_none()`); moving from the island onto it counts as leaving.
 
 - OLE reports `Event::ShelfDragOver(bool)`; `App::on_shelf_drag` lights the
   drop zone (`ShelfState::dragging`, `Frame::shelf_drag`), passes `true` on as
@@ -92,7 +96,7 @@ through while the island is small.
 
 **Still not verified:** the halo with a real Explorer drag (the harness aimed
 at y = 14 and at the idle island only; the y = 2 run was not completed), drops
-on the halo itself, drag-out, and what the thin strip does to clicks on
-windows behind it. `DI_SHELF_LOG` debugging was removed again.
+on the halo itself, and drag-out. (The halo no longer sits over clicks: it
+exists only with the button down.) `DI_SHELF_LOG` debugging was removed again.
 
 Related: [[mixer]], [[open-mode]].

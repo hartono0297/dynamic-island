@@ -36,3 +36,7 @@ the plan wanted a first-run confirmation). Own tiles are added in
 config.json for now (README shows how).
 
 Related: [[open-mode]].
+
+**3.2.1:** a built-in the file does not name (the new "Search" tile) comes in
+*off* when the page already shows twelve, so an upgrade never pushes an own
+tile off it (`from_saved`); it can be switched on in Settings.

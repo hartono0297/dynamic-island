@@ -19,7 +19,8 @@ Settings → Umum → **Di belakang jendela** (`config.stay_behind`, default
     and timer compact views and Hidden: notices, panels, search, previews,
     shelf drags);
   - the pointer is on the 3 px strip at the screen's top edge over the
-    island's window width (`STRIP_PX`, `on_strip`);
+    *drawn* island plus 12 dip each side (`STRIP_PX`, `STRIP_MARGIN_DIP`,
+    `on_strip`, `App::on_raise_strip`; not the 620 px window, which is wider);
   - the pointer is still over the drawn island while it is up.
   It goes back down 250 ms (`LOWER_AFTER`) after none of those holds.
 - Cost: one `TIMER_BEHIND` (29) at 80 ms (`POLL_MS`) reading `GetCursorPos`,

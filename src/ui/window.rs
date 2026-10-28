@@ -135,14 +135,9 @@ impl IslandWindow {
         true
     }
 
-    /// The screen point is on the strip along the screen's top edge over the
-    /// island's width (`behind::STRIP_PX` tall).
-    pub fn on_top_strip(&self, pt: POINT) -> bool {
-        crate::behind::on_strip(
-            (self.origin.x, self.origin.y),
-            self.size.cx,
-            (pt.x, pt.y),
-        )
+    /// The window's top-left corner on the screen, physical pixels.
+    pub fn screen_origin(&self) -> (i32, i32) {
+        (self.origin.x, self.origin.y)
     }
 
     /// Re-centers on the primary monitor at its current DPI. Call on

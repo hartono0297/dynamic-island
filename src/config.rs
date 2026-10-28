@@ -356,7 +356,26 @@ pub fn parse(text: &str) -> Config {
 /// `None` when `text` is not a config.
 pub fn try_parse(text: &str) -> Option<Config> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    serde_json::from_str(text).ok()
+    let mut value: serde_json::Value = serde_json::from_str(text).ok()?;
+    migrate_search_hotkey(&mut value);
+    serde_json::from_value(value).ok()
+}
+
+/// 3.2.0 saved the hotkey as `search_hotkey` (Off unless chosen). The key is
+/// now `quick_search_hotkey`; a file without it keeps an old *chosen* value
+/// (anything but "Off") and otherwise gets the default.
+fn migrate_search_hotkey(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    if map.contains_key("quick_search_hotkey") {
+        return;
+    }
+    if let Some(old) = map.get("search_hotkey").cloned()
+        && old.as_str().is_some_and(|s| s != "Off")
+    {
+        map.insert("quick_search_hotkey".into(), old);
+    }
 }
 
 /// config.json as found on disk.
@@ -409,6 +428,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         stay_behind: mem.stay_behind,
         lyrics: mem.lyrics,
         lyrics_offset_ms: mem.lyrics_offset_ms,
+        search_hotkey: mem.search_hotkey,
         cli_shell: mem.cli_shell,
         cli_start: mem.cli_start,
         open_mode: mem.open_mode,
@@ -1080,10 +1100,19 @@ mod tests {
         assert_eq!(named("AltSpace"), SearchHotkey::Off);
         assert_eq!(named("ctrlaltspaces"), SearchHotkey::Off);
         assert_eq!(named(""), SearchHotkey::Off);
-        // A 3.2.0 file's key is not read: the search is on for them too.
+        // A 3.2.0 file wrote "Off" for everyone: that is the default now. A
+        // hotkey it names is a choice and stays; the new key wins over it.
         assert_eq!(
             parse(r#"{"search_hotkey":"Off"}"#).search_hotkey,
             SearchHotkey::CtrlAltSpace
+        );
+        assert_eq!(
+            parse(r#"{"search_hotkey":"WinAltS"}"#).search_hotkey,
+            SearchHotkey::WinAltS
+        );
+        assert_eq!(
+            parse(r#"{"search_hotkey":"WinAltS","quick_search_hotkey":"Off"}"#).search_hotkey,
+            SearchHotkey::Off
         );
         let odd = parse(r#"{"quick_search_hotkey":"Nope","style":"Notch"}"#);
         assert_eq!((odd.search_hotkey, odd.style), (SearchHotkey::Off, Style::Notch));
@@ -1349,6 +1378,24 @@ mod tests {
             !tmp.file("config.json.tmp").exists(),
             "atomic write cleaned up"
         );
+    }
+
+    #[test]
+    fn a_hotkey_chosen_in_settings_survives_the_save() {
+        let tmp = TempDir::new("hotkey");
+        let path = tmp.file("config.json");
+        // A file from 3.2.1: the default is on disk; the user picks Off, then
+        // Win+Alt+S, and each choice is what the file keeps.
+        Config::default().save_to(&path).unwrap();
+        for choice in [SearchHotkey::Off, SearchHotkey::WinAltS] {
+            let mem = Config {
+                search_hotkey: choice,
+                ..Config::default()
+            };
+            let out = save_merged_at(&path, &mem);
+            assert_eq!(out.config.search_hotkey, choice);
+            assert_eq!(on_disk(&path).search_hotkey, choice);
+        }
     }
 
     #[test]

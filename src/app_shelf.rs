@@ -59,6 +59,10 @@ impl App {
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_SHELF_HOLD, SHELF_LEAVE_MS, None);
             }
+            // The drop zone's outline goes now, not with the panel.
+            if !self.animating() {
+                self.draw(Instant::now());
+            }
             None
         }
     }

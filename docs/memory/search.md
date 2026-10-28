@@ -9,8 +9,11 @@ A Spotlight-like search that opens on a hotkey. **Settings → Umum →
 Pencarian** (`config.search_hotkey`, `SearchHotkey`: `CtrlAltSpace` is the
 default since 3.2.1 (it was `Off` in 3.2.0, so nobody found it), `WinAltS`,
 `Off`; a file that never names it gets the default, "Off" stays off, a typo
-reads as `Off`, Alt+Space is never offered; a config the island saved under
-3.2.0 holds an explicit "Off" and keeps it). Registered as `RegisterHotKey` id 2 (the Clipboard's is 1) in
+reads as `Off`, Alt+Space is never offered). The key is saved as
+`quick_search_hotkey`: 3.2.0 wrote `search_hotkey: "Off"` into every config, so
+that old key is ignored when it says "Off" (never chosen) and honoured for
+any other value; the Settings control is island-owned (`merge_owned`), so a
+choice, Off included, sticks across saves (3.2.1 review fix). Registered as `RegisterHotKey` id 2 (the Clipboard's is 1) in
 `app_search.rs`; a failed registration shows "Sudah dipakai" in Settings.
 
 - **Where it lives:** `Page::Search` is a page of the panel but not one of

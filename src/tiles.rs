@@ -189,7 +189,10 @@ impl ShortcutTiles {
                 .iter()
                 .rev()
                 .find_map(|prev| entries.iter().position(|(t, _)| *t == Tile::Builtin(*prev)));
-            entries.insert(after.map_or(0, |a| a + 1), (tile, true));
+            // A tile the file never named comes in shown, unless the page is
+            // full already: it must not push the owner's own tile off it.
+            let room = entries.iter().filter(|(_, on)| *on).count() < MAX_SHOWN;
+            entries.insert(after.map_or(0, |a| a + 1), (tile, room));
         }
         if entries.iter().all(|(_, on)| !on) {
             for e in &mut entries {
@@ -443,6 +446,37 @@ mod tests {
             })
             .collect();
         assert_eq!(ShortcutTiles::from_saved(&many).customs(), MAX_CUSTOM);
+    }
+
+    #[test]
+    fn a_new_built_in_never_pushes_an_own_tile_off_a_full_page() {
+        // A saved list of 8 built-ins and 4 own tiles, all on (12 shown),
+        // from before "Search" existed.
+        let mut saved: Vec<TileEntry> = Shortcut::ALL
+            .iter()
+            .filter(|s| shortcut_name(**s) != "Search")
+            .map(|s| entry(shortcut_name(*s), true))
+            .collect();
+        for i in 0..4 {
+            saved.push(TileEntry {
+                tile: CUSTOM.into(),
+                on: true,
+                label: format!("T{i}"),
+                kind: "App".into(),
+                target: "a.exe".into(),
+            });
+        }
+        let t = ShortcutTiles::from_saved(&saved);
+        assert_eq!(t.entries().len(), 13);
+        assert_eq!(t.visible().len(), MAX_SHOWN);
+        assert!(
+            t.visible().iter().filter(|x| matches!(x, Tile::Custom(_))).count() == 4,
+            "every own tile still shows"
+        );
+        assert!(t.entries().iter().any(|(x, on)| *x == Tile::Builtin(Shortcut::Search) && !on));
+        // With room, it comes in shown; a fresh install shows all.
+        assert_eq!(ShortcutTiles::from_saved(&saved[..9]).shown(), 10, "8 + 1 own + the new one");
+        assert_eq!(ShortcutTiles::default().shown(), Shortcut::ALL.len());
     }
 
     #[test]

@@ -64,6 +64,7 @@ use crate::notes::NotesStore;
 use crate::audio;
 use crate::behind;
 use crate::gestures;
+use crate::halo;
 use crate::pages::PanelPages;
 use crate::shelf_ole;
 use crate::tiles::ShortcutTiles;
@@ -188,6 +189,10 @@ const OUTSIDE_MS: u32 = 40;
 /// is read to raise the island at the top edge and lower it again. Nothing
 /// runs with the setting off or in fullscreen.
 const TIMER_BEHIND: usize = 29;
+/// Repeating, `halo::POLL_MS`: while the island is up (not a panel, not
+/// fullscreen) the left button and the pointer are read, to draw the faint
+/// drag margin only while a drag can be about to start (`halo`).
+const TIMER_HALO: usize = 30;
 /// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
 const TIMER_MIXER: usize = 26;
@@ -323,6 +328,8 @@ pub fn run(media_log_flag: bool) {
             outside_timer: false,
             behind: behind::Behind::default(),
             behind_timer: false,
+            halo_timer: false,
+            halo_on: false,
             outside_edge: PressEdge::default(),
             audio: None,
             mixer: None,
@@ -519,6 +526,9 @@ struct App {
     /// `TIMER_BEHIND` runs.
     behind: behind::Behind,
     behind_timer: bool,
+    /// `TIMER_HALO` runs, and the margin is drawn now.
+    halo_timer: bool,
+    halo_on: bool,
     /// The mouse buttons as the last poll saw them.
     outside_edge: PressEdge,
     /// The Mixer page's audio thread (started on the first request), the
@@ -1095,6 +1105,10 @@ impl App {
     /// anywhere else the tray menu opens as always (false).
     fn on_right_click(&mut self, lparam: LPARAM) -> bool {
         let hit = self.hit_at(lparam);
+        // The faint drag margin is not the island: no menu from it.
+        if hit.is_none() {
+            return true;
+        }
         if self.clip_right_click(hit.as_ref()) {
             return true;
         }
@@ -2048,6 +2062,7 @@ impl App {
     /// one-shot goes (a sample still on its way is kept but re-arms nothing).
     fn sync_system_page(&mut self) {
         let wanted = system_sample_wanted(&self.state.view(), self.state.cleaner().is_some());
+        self.system.requests = requests_while(wanted, self.system.requests);
         match system_page_plan(wanted, self.system.page_timer, self.system.page_pending) {
             PagePlan::Request => {
                 let kind = crate::system::kind_for_request(self.system.requests);
@@ -2139,6 +2154,11 @@ impl App {
         } else {
             self.volume_pending = self.volume_pending.saturating_add(points);
             self.mixer_scan();
+            // No reading is on its way (the audio thread is gone): the turn
+            // is dropped, not kept for whatever reading comes minutes later.
+            if !self.mixer_pending {
+                self.volume_pending = 0;
+            }
         }
     }
 
@@ -2165,6 +2185,7 @@ impl App {
         }
         self.volume_hud = None;
         self.volume_cache = None;
+        self.volume_pending = 0;
         self.volume_sum = 0;
         if !self.animating() {
             self.draw(Instant::now());
@@ -2756,6 +2777,7 @@ impl App {
         self.sync_shelf();
         self.sync_outside_timer();
         self.sync_behind(now);
+        self.sync_halo_timer();
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -2794,6 +2816,67 @@ impl App {
         }
     }
 
+    /// The drag margin's poll runs only while the island is up in a view
+    /// that is not a panel, and not in fullscreen; otherwise the margin is
+    /// gone and nothing is read.
+    fn sync_halo_timer(&mut self) {
+        let wanted =
+            !self.fullscreen && !matches!(self.state.view(), View::Panel(_) | View::Hidden);
+        if wanted == self.halo_timer {
+            return;
+        }
+        self.halo_timer = wanted;
+        unsafe {
+            if wanted {
+                SetTimer(Some(self.hwnd), TIMER_HALO, halo::POLL_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), TIMER_HALO);
+            }
+        }
+        if !wanted {
+            self.set_halo(false);
+        }
+    }
+
+    /// `TIMER_HALO`: the margin follows "button down, pointer near".
+    fn on_halo_poll(&mut self) {
+        if !self.halo_timer {
+            return;
+        }
+        let down = unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) } as u16 & 0x8000 != 0;
+        // A raised-from-behind island is the only one a drag can reach.
+        let hidden_behind = self.config.stay_behind && self.behind.z() == behind::Z::Bottom;
+        let mut on = false;
+        if down && !hidden_behind {
+            let mut pt = POINT::default();
+            if unsafe { GetCursorPos(&mut pt) }.is_ok()
+                && let (Some(island), Some(win)) = (self.renderer.island_px(), self.win.as_ref())
+            {
+                let (ox, oy) = win.screen_origin();
+                let island = (
+                    island.0 + ox as f32,
+                    island.1 + oy as f32,
+                    island.2 + ox as f32,
+                    island.3 + oy as f32,
+                );
+                let near = halo::NEAR_DIP * win.scale();
+                on = halo::halo_wanted(down, (pt.x as f32, pt.y as f32), island, near);
+            }
+        }
+        self.set_halo(on);
+    }
+
+    fn set_halo(&mut self, on: bool) {
+        if on == self.halo_on {
+            return;
+        }
+        self.halo_on = on;
+        self.renderer.set_halo(on);
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
+    }
+
     /// `TIMER_BEHIND`.
     fn on_behind_timer(&mut self) {
         if self.behind_timer {
@@ -2805,7 +2888,7 @@ impl App {
     fn follow_behind(&mut self, now: Instant) {
         let mut pt = POINT::default();
         let have = unsafe { GetCursorPos(&mut pt).is_ok() };
-        let on_strip = have && self.win.as_ref().is_some_and(|w| w.on_top_strip(pt));
+        let on_strip = have && self.on_raise_strip(pt);
         let over_island = have && {
             let mut client = pt;
             unsafe { ScreenToClient(self.hwnd, &mut client) }.as_bool()
@@ -2821,6 +2904,19 @@ impl App {
         };
         let z = self.behind.decide(inputs, now);
         self.set_front(z == behind::Z::Top);
+    }
+
+    /// The screen point is on the strip along the top edge of the screen over
+    /// the drawn island (plus a margin), not over the whole window.
+    fn on_raise_strip(&self, pt: POINT) -> bool {
+        let (Some(win), Some((left, _, right, _))) = (self.win.as_ref(), self.renderer.island_px())
+        else {
+            return false;
+        };
+        let (ox, oy) = win.screen_origin();
+        let margin = behind::STRIP_MARGIN_DIP * win.scale();
+        let span = ((ox as f32 + left - margin) as i32, (ox as f32 + right + margin) as i32);
+        behind::on_strip(oy, span, (pt.x, pt.y))
     }
 
     fn set_front(&mut self, front: bool) {
@@ -3031,6 +3127,7 @@ impl App {
             TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BEHIND => self.on_behind_timer(),
+            TIMER_HALO => self.on_halo_poll(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
                 unsafe {
@@ -3123,6 +3220,11 @@ impl App {
         // The faint margin round a small island takes a drag (the shelf),
         // not the pointer: nothing hovers there.
         if self.hit_at(lparam).is_none() {
+            // From the island onto its margin is leaving it (no leave
+            // message comes while the pointer stays in the window).
+            if !self.hover.needs_arming() {
+                self.on_mouse_leave();
+            }
             return;
         }
         self.mixer_follow(lparam);
@@ -4101,6 +4203,13 @@ fn system_sample_wanted(view: &View, cleaner: bool) -> bool {
     *view == View::Panel(Page::System) && !cleaner
 }
 
+/// The System page's request counter: it counts only while the page shows, so
+/// the next showing starts with a full reading, whenever it was left (even
+/// before the first reply came back).
+fn requests_while(wanted: bool, requests: u32) -> u32 {
+    if wanted { requests } else { 0 }
+}
+
 /// What the System page's sampling does after a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PagePlan {
@@ -4600,13 +4709,21 @@ fn open_menu(hwnd: HWND) {
         return;
     };
     MENU_OPEN.set(true);
+    // The menu takes the foreground: the window that had the keyboard is
+    // what "Cari" hands it back to on Esc.
+    let before = unsafe { GetForegroundWindow() };
     let cmd = tray::show_menu(hwnd, &config);
     MENU_OPEN.set(false);
     match cmd {
         Some(MenuCmd::Settings) => open_settings(hwnd),
         // Whatever the hotkey is (off, taken): the menu always opens it.
         Some(MenuCmd::Search) => {
-            with_app(App::on_search_hotkey);
+            with_app(|app| {
+                if before != app.hwnd && !before.is_invalid() {
+                    app.cli_prev = Some(before);
+                }
+                app.on_search_hotkey();
+            });
         }
         Some(MenuCmd::StylePill) => {
             with_app(|app| app.set_style(Style::Pill));
@@ -5471,6 +5588,11 @@ mod tests {
         assert_eq!(system_page_plan(false, true, true), Stop);
         assert_eq!(system_page_plan(false, false, true), Keep);
         assert_eq!(system_page_plan(false, false, false), Keep);
+        // Left before the first reply came: the next showing still starts
+        // with a full reading (the counter restarts, `Keep` or not).
+        assert_eq!(requests_while(true, 3), 3);
+        assert_eq!(requests_while(false, 3), 0);
+        assert_eq!(requests_while(false, 0), 0);
         // The warning check: every 5 min, sooner to confirm RAM's minute.
         assert_eq!(warn_wait_ms(None), 300_000);
         assert_eq!(warn_wait_ms(Some(Duration::from_secs(60))), 60_250);

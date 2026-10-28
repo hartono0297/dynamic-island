@@ -15,6 +15,7 @@ mod data_dir;
 mod dpapi;
 mod gestures;
 mod google;
+mod halo;
 mod i18n;
 mod lyrics;
 mod media_log;

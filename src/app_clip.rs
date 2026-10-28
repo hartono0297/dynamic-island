@@ -461,6 +461,17 @@ impl App {
         if self.state.view() != View::Panel(Page::Clipboard) {
             return;
         }
+        // Every mouse move comes here: only a card or one of its buttons
+        // that is not the chosen card needs the list looked at.
+        let id = match hit {
+            Some(Hit::ClipCard(id) | Hit::ClipPin(id) | Hit::ClipPlain(id) | Hit::ClipDelete(id)) => {
+                *id
+            }
+            _ => return,
+        };
+        if self.clip.selected == Some(id) {
+            return;
+        }
         let ids: Vec<u64> = shown(&self.clip.history, &self.clip.query)
             .iter()
             .map(|c| c.id)

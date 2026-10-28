@@ -519,6 +519,8 @@ pub struct Renderer {
     art: Vec<CachedArt>,
     regions: HitRegions,
     scale: f32,
+    /// The faint drag margin is drawn (`halo::halo_wanted`).
+    halo: bool,
     /// Round caps for the pomodoro progress arcs.
     round_cap: ID2D1StrokeStyle,
     /// A dashed outline (the shelf's drop zone).
@@ -750,6 +752,7 @@ impl Renderer {
                 art: Vec::new(),
                 regions: HitRegions::default(),
                 scale: 1.0,
+                halo: false,
                 round_cap,
                 dashed,
                 epoch: Instant::now(),
@@ -948,6 +951,19 @@ impl Renderer {
         }
     }
 
+    /// The drag margin shows from the next frame on.
+    pub fn set_halo(&mut self, on: bool) {
+        self.halo = on;
+    }
+
+    /// The island the last frame drew, in client physical pixels: (left,
+    /// top, right, bottom).
+    pub fn island_px(&self) -> Option<(f32, f32, f32, f32)> {
+        let (_, s) = self.regions.shape?;
+        let k = self.scale;
+        Some((s.x * k, s.y * k, (s.x + s.w) * k, (s.y + s.h) * k))
+    }
+
     /// Maps a client point in physical pixels to what the last frame drew there.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
         self.regions.hit(x / self.scale, y / self.scale)
@@ -1109,7 +1125,7 @@ impl Renderer {
             // A nearly invisible margin around and above the small island:
             // Windows only offers a drag to the pixels a layered window
             // draws, and the top edge of the screen is where one aims.
-            if !matches!(view, View::Panel(_) | View::Hidden) {
+            if self.halo && !matches!(view, View::Panel(_) | View::Hidden) {
                 let r = shape_rect(shape);
                 target.brush.SetColor(&color(0x000000, HALO_ALPHA));
                 target.rt.FillRectangle(
