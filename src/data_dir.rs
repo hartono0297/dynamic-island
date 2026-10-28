@@ -69,7 +69,9 @@ fn migrate_with(
     if !old.is_dir() {
         return Migration::Nothing;
     }
-    if new.exists() {
+    // An empty folder of that name holds nothing of Vale's: it goes (only
+    // while empty) and the data moves in.
+    if new.exists() && std::fs::remove_dir(&new).is_err() {
         return Migration::AlreadyThere;
     }
     if rename(&old, &new).is_ok() {
@@ -175,6 +177,18 @@ mod tests {
         );
         assert!(root.join(OLD_DIR).join("config.json").is_file());
         assert_eq!(pick(&root), root.join(DIR));
+    }
+
+    #[test]
+    fn an_empty_new_folder_does_not_stop_the_move() {
+        // "Vale" is a common name: an empty folder of that name (made by
+        // anything) must not leave the user's data behind.
+        let root = temp_root("empty-new");
+        old_with_data(&root);
+        std::fs::create_dir_all(root.join(DIR)).unwrap();
+        assert_eq!(migrate(&root), Migration::Moved);
+        assert!(root.join(DIR).join("config.json").is_file());
+        assert!(!root.join(OLD_DIR).exists());
     }
 
     #[test]

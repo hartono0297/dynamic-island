@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-    RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegQueryValueExW, RegSetValueExW,
 };
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Shell::{
@@ -203,13 +203,47 @@ pub fn show_menu(hwnd: HWND, cfg: &Config) -> Option<MenuCmd> {
     }
 }
 
+/// The old `Run\DynamicIsland` command starts the island's old exe.
+fn is_old_island(command: &str) -> bool {
+    const EXE: &str = "dynamic-island.exe";
+    let command = command.to_lowercase();
+    command.match_indices(EXE).any(|(at, _)| {
+        command[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| matches!(c, '\\' | '/' | '"'))
+    })
+}
+
+/// The text of `HKCU\...\Run\<name>` in the open `key`; `None` when absent.
+unsafe fn read_run_value(key: HKEY, name: &str) -> Option<String> {
+    let mut buf = [0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key,
+            &HSTRING::from(name),
+            None,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if status.is_err() {
+        return None;
+    }
+    let len = (size as usize / 2).min(buf.len());
+    let text = String::from_utf16_lossy(&buf[..len]);
+    Some(text.trim_end_matches('\0').to_string())
+}
+
 /// `"<exe>"`, the command the Run value holds.
 fn run_command(exe: &Path) -> String {
     format!("\"{}\"", exe.display())
 }
 
-/// Writes or deletes `HKCU\...\Run\Vale` for the current exe, and always
-/// deletes the old `Run\DynamicIsland` (it points at the old exe). Debug
+/// Writes or deletes `HKCU\...\Run\Vale` for the current exe, and deletes
+/// the old `Run\DynamicIsland` when it starts the old exe. Debug
 /// builds leave the registry alone, so `cargo run` never points autostart at
 /// `target\debug`.
 pub fn set_autostart(enabled: bool) -> Result<()> {
@@ -224,14 +258,17 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
             None,
             None,
             REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
+            KEY_SET_VALUE | KEY_QUERY_VALUE,
             None,
             &mut key,
             None,
         )
         .ok()?;
-        // The old value starts a Dynamic Island that is no longer there.
-        let _ = RegDeleteValueW(key, &HSTRING::from(OLD_RUN_VALUE));
+        // The old value starts a Dynamic Island that is no longer there;
+        // under that name another app's entry is left alone.
+        if read_run_value(key, OLD_RUN_VALUE).is_some_and(|c| is_old_island(&c)) {
+            let _ = RegDeleteValueW(key, &HSTRING::from(OLD_RUN_VALUE));
+        }
         let result = if enabled {
             write_run_value(key)
         } else {
@@ -363,5 +400,17 @@ mod tests {
             run_command(Path::new(r"D:\Program Files\vale.exe")),
             r#""D:\Program Files\vale.exe""#
         );
+    }
+
+    #[test]
+    fn only_the_old_islands_autostart_is_removed() {
+        let old = r#""C:\Users\x\AppData\Local\Programs\DynamicIsland\dynamic-island.exe""#;
+        assert!(is_old_island(old));
+        assert!(is_old_island(r"D:\Tools\Dynamic-Island.EXE --quiet"));
+        assert!(is_old_island("dynamic-island.exe"));
+        // Another app under the same value name keeps its autostart.
+        assert!(!is_old_island(r#""C:\Apps\DynamicIsland\island.exe""#));
+        assert!(!is_old_island(r"C:\x\my-dynamic-island.exe"));
+        assert!(!is_old_island(""));
     }
 }
