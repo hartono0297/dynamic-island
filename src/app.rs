@@ -52,6 +52,7 @@ use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::data_dir;
+use crate::google::client::{self, Client};
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::media_log;
@@ -1253,7 +1254,7 @@ impl App {
     /// browser login waits is ignored.
     fn connect_google(&mut self) -> Option<Event> {
         let file_ok = self.reload_config();
-        match connect_action(file_ok, &self.config.google_client_id) {
+        match connect_action(file_ok, client::for_config(&self.config)) {
             // The ID may well be in there; say so rather than "fill it in".
             ConnectAction::InvalidConfig => Some(Event::Notice(invalid_config_notice(None))),
             ConnectAction::NoClientId => Some(Event::Notice(client_id_notice())),
@@ -3711,10 +3712,11 @@ enum ConnectAction {
     Login,
 }
 
-fn connect_action(file_ok: bool, client_id: &str) -> ConnectAction {
+/// `client`: what `client::for_config` gives for the reloaded config.
+fn connect_action(file_ok: bool, client: Option<Client>) -> ConnectAction {
     if !file_ok {
         ConnectAction::InvalidConfig
-    } else if client_id.trim().is_empty() {
+    } else if client.is_none() {
         ConnectAction::NoClientId
     } else {
         ConnectAction::Login
@@ -5079,12 +5081,16 @@ mod tests {
 
     #[test]
     fn connect_on_an_invalid_config_says_so() {
+        let own = |id: &str| client::choose((id, "s"), ("", ""));
         let id = "id.apps.googleusercontent.com";
         // The ID may be in the broken file; "fill in the ID" would mislead.
-        assert_eq!(connect_action(false, ""), ConnectAction::InvalidConfig);
-        assert_eq!(connect_action(false, id), ConnectAction::InvalidConfig);
-        assert_eq!(connect_action(true, "  "), ConnectAction::NoClientId);
-        assert_eq!(connect_action(true, id), ConnectAction::Login);
+        assert_eq!(connect_action(false, own("")), ConnectAction::InvalidConfig);
+        assert_eq!(connect_action(false, own(id)), ConnectAction::InvalidConfig);
+        assert_eq!(connect_action(true, own("  ")), ConnectAction::NoClientId);
+        assert_eq!(connect_action(true, own(id)), ConnectAction::Login);
+        // No own ID, but Vale's built-in client: log in with it.
+        let built_in = client::choose(("", ""), ("vale.apps.googleusercontent.com", "v"));
+        assert_eq!(connect_action(true, built_in), ConnectAction::Login);
     }
 
     #[test]

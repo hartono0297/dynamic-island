@@ -163,6 +163,12 @@ keys! {
     GoogleScopes => "Izin Google belum lengkap", "Google permissions incomplete";
     GoogleScopesBody => "Centang kedua izin saat login", "Check both permissions when you sign in";
     GoogleRefused => "Google menolak", "Google refused";
+    // Settings → Integrasi with Vale's own Google client.
+    SignInGoogle => "Masuk dengan Google", "Sign in with Google";
+    GoogleAdvanced => "Lanjutan: pakai Client ID sendiri", "Advanced: use your own Client ID";
+    GoogleClientChanged => "Masuk Google lagi", "Sign in to Google again";
+    GoogleClientChangedBody => "Cara masuk Google berganti, login lama tidak berlaku",
+        "The Google sign-in changed, so the old login no longer works";
     ClientRejected => "Client ID atau secret ditolak — cek Pengaturan → Integrasi",
         "Client ID or secret rejected — check Settings → Integrations";
     ApiDisabled => "Google Calendar API belum diaktifkan — lihat README",

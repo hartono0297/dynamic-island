@@ -18,6 +18,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
 
+use super::client::{self, Client};
 use super::http::{Http, form_encode, url_decode};
 use crate::config::{self, Config};
 use crate::dpapi;
@@ -61,6 +62,9 @@ pub enum AuthError {
     Google(String),
     /// The request never got an answer from Google (or a 5xx / rate limit).
     Network(String),
+    /// The stored tokens came from the other client (Vale's built-in one or
+    /// the user's own): a new login is needed.
+    ClientChanged,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +108,10 @@ pub struct Tokens {
     pub access: String,
     pub refresh: String,
     pub expires_at_unix: i64,
+    /// The client ID that issued them; empty in token files from before it
+    /// was recorded (always the user's own client then).
+    #[serde(default)]
+    pub client: String,
 }
 
 /// Redacted, so a stray `{:?}` cannot leak a token.
@@ -113,6 +121,7 @@ impl std::fmt::Debug for Tokens {
             .field("access", &"<redacted>")
             .field("refresh", &"<redacted>")
             .field("expires_at_unix", &self.expires_at_unix)
+            .field("client", &self.client)
             .finish()
     }
 }
@@ -208,7 +217,19 @@ pub fn merge_tokens(old: Option<&Tokens>, resp: TokenResponse, now: i64) -> Opti
         access: resp.access_token,
         refresh,
         expires_at_unix: now.saturating_add(i64::try_from(resp.expires_in).unwrap_or(i64::MAX)),
+        client: old.map(|t| t.client.clone()).unwrap_or_default(),
     })
+}
+
+/// The stored tokens, if `client` issued them: `NeedsLogin` without any,
+/// `ClientChanged` when the other client did.
+fn usable(tokens: Option<Tokens>, client: &Client) -> Result<Tokens, AuthError> {
+    let tokens = tokens.ok_or(AuthError::NeedsLogin)?;
+    if client::issued_to(&tokens.client, client) {
+        Ok(tokens)
+    } else {
+        Err(AuthError::ClientChanged)
+    }
 }
 
 /// Maps a token-endpoint failure using only its `error` / `error_description`
@@ -266,8 +287,9 @@ fn io_error(e: io::Error) -> AuthError {
 /// minutes for the loopback redirect, exchanges the code, checks the granted
 /// scopes and saves the tokens, and only then tells the browser how it went.
 /// Blocks; run it on a worker thread.
-pub fn login(http: &Http, client_id: &str, client_secret: &str) -> Result<Tokens, AuthError> {
-    if client_id.trim().is_empty() {
+pub fn login(http: &Http, client: &Client) -> Result<Tokens, AuthError> {
+    let (client_id, client_secret) = (client.id.as_str(), client.secret.as_str());
+    if client_id.is_empty() {
         return Err(AuthError::NotConfigured);
     }
     let rng_failed = || AuthError::Network("system RNG failed".into());
@@ -298,7 +320,10 @@ pub fn login(http: &Http, client_id: &str, client_secret: &str) -> Result<Tokens
                 ],
             )
             .map_err(network)?;
-        let tokens = token_result(status, &body, None)?;
+        let tokens = Tokens {
+            client: client_id.to_owned(),
+            ..token_result(status, &body, None)?
+        };
         save_tokens(&tokens)
             .map_err(|e| AuthError::Network(format!("could not save the token: {}", e.kind())))?;
         Ok(tokens)
@@ -341,33 +366,24 @@ fn token_result(status: u16, body: &str, old: Option<&Tokens>) -> Result<Tokens,
 /// A valid access token, refreshed (and saved) when it expires within a minute.
 /// `Reconnect` and `MissingScopes` also delete the stored tokens.
 pub fn access_token(http: &Http, cfg: &Config) -> Result<String, AuthError> {
-    if cfg.google_client_id.trim().is_empty() {
-        return Err(AuthError::NotConfigured);
-    }
-    let tokens = load_tokens().ok_or(AuthError::NeedsLogin)?;
+    let client = client::for_config(cfg).ok_or(AuthError::NotConfigured)?;
+    let tokens = usable(load_tokens(), &client)?;
     if !needs_refresh(&tokens, now_unix()) {
         return Ok(tokens.access);
     }
-    refresh_and_store(http, cfg, &tokens)
+    refresh_and_store(http, &client, &tokens)
 }
 
 /// A new access token even though the stored one has not expired: Google
 /// answered 401 to it (revoked, or the clock is off).
 pub fn force_refresh(http: &Http, cfg: &Config) -> Result<String, AuthError> {
-    if cfg.google_client_id.trim().is_empty() {
-        return Err(AuthError::NotConfigured);
-    }
-    let tokens = load_tokens().ok_or(AuthError::NeedsLogin)?;
-    refresh_and_store(http, cfg, &tokens)
+    let client = client::for_config(cfg).ok_or(AuthError::NotConfigured)?;
+    let tokens = usable(load_tokens(), &client)?;
+    refresh_and_store(http, &client, &tokens)
 }
 
-fn refresh_and_store(http: &Http, cfg: &Config, tokens: &Tokens) -> Result<String, AuthError> {
-    match refresh(
-        http,
-        &cfg.google_client_id,
-        &cfg.google_client_secret,
-        tokens,
-    ) {
+fn refresh_and_store(http: &Http, client: &Client, tokens: &Tokens) -> Result<String, AuthError> {
+    match refresh(http, &client.id, &client.secret, tokens) {
         Ok(fresh) => {
             // A failed save only costs another refresh next time.
             let _ = save_tokens(&fresh);
@@ -522,6 +538,7 @@ fn save_tokens_to(path: &Path, tokens: &Tokens) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::google::client::Client;
 
     #[test]
     fn pkce_rfc7636_vector() {
@@ -587,6 +604,7 @@ mod tests {
             access: "old-a".into(),
             refresh: "old-r".into(),
             expires_at_unix: 10,
+            client: "mine".into(),
         };
         let resp: TokenResponse = serde_json::from_str(
             r#"{"access_token":"new-a","expires_in":3599,"token_type":"Bearer"}"#,
@@ -598,7 +616,8 @@ mod tests {
             Tokens {
                 access: "new-a".into(),
                 refresh: "old-r".into(),
-                expires_at_unix: 4_599
+                expires_at_unix: 4_599,
+                client: "mine".into(),
             }
         );
 
@@ -608,6 +627,33 @@ mod tests {
             merge_tokens(None, fresh, 0).is_none(),
             "no refresh token at all"
         );
+    }
+
+    #[test]
+    fn tokens_are_used_only_with_the_client_that_issued_them() {
+        let own = Client {
+            id: "mine".into(),
+            secret: "s".into(),
+            own: true,
+        };
+        let tokens = |client: &str| Tokens {
+            access: "a".into(),
+            refresh: "r".into(),
+            expires_at_unix: 0,
+            client: client.into(),
+        };
+        assert_eq!(usable(None, &own), Err(AuthError::NeedsLogin));
+        assert_eq!(usable(Some(tokens("mine")), &own), Ok(tokens("mine")));
+        // Signed in with Vale's client, now the user's own: log in again.
+        assert_eq!(
+            usable(Some(tokens("vale")), &own),
+            Err(AuthError::ClientChanged)
+        );
+        // A token file from before the client was recorded still works.
+        assert_eq!(usable(Some(tokens("")), &own), Ok(tokens("")));
+        let old: Tokens =
+            serde_json::from_str(r#"{"access":"a","refresh":"r","expires_at_unix":0}"#).unwrap();
+        assert_eq!(old, tokens(""));
     }
 
     #[test]
@@ -624,6 +670,7 @@ mod tests {
             access: "a".into(),
             refresh: "r".into(),
             expires_at_unix: 1_000,
+            client: String::new(),
         };
         assert!(!needs_refresh(&t, 939));
         assert!(needs_refresh(&t, 940));
@@ -768,6 +815,7 @@ mod tests {
             access: "old".into(),
             refresh: "r".into(),
             expires_at_unix: 0,
+            client: String::new(),
         };
         let plain = r#"{"access_token":"b","expires_in":3599}"#;
         assert_eq!(token_result(200, plain, Some(&old)).unwrap().access, "b");
@@ -814,6 +862,7 @@ mod tests {
             access: "x".into(),
             refresh: "x".into(),
             expires_at_unix: 0,
+            client: String::new(),
         };
         assert_eq!(
             refresh(&http, "bogus-client", "bogus-secret", &bogus),
@@ -835,6 +884,7 @@ mod tests {
             access: "ya29.access-token-text".into(),
             refresh: "1//refresh-token-text".into(),
             expires_at_unix: 1_790_000_000,
+            client: String::new(),
         };
         save_tokens_to(&path, &tokens).unwrap();
         let bytes = std::fs::read(&path).unwrap();

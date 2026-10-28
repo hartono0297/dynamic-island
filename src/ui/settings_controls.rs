@@ -782,7 +782,7 @@ impl Painter<'_> {
                 self.fill_round(b.rect, FULL_RADIUS, quiet, a);
                 self.draw_str(&b.label, style, b.rect, ink, a);
             }
-            ButtonKind::Link => {
+            ButtonKind::Link | ButtonKind::Disclosure(_) => {
                 if hovered {
                     let fa = if pressed { 0.1 } else { 0.06 };
                     self.fill_round(b.rect, FULL_RADIUS, self.p.text, fa);
@@ -809,7 +809,12 @@ impl Painter<'_> {
                     w: LINK_GLYPH_W,
                     ..b.rect
                 };
-                self.icon(Icon::Ext, glyph, 12.0, rgb, a, true);
+                let icon = match b.kind {
+                    ButtonKind::Disclosure(true) => Icon::ChevD,
+                    ButtonKind::Disclosure(false) => Icon::ChevR,
+                    _ => Icon::Ext,
+                };
+                self.icon(icon, glyph, 12.0, rgb, a, true);
             }
             ButtonKind::External => {
                 if hovered {

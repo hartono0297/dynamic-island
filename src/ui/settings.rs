@@ -73,6 +73,7 @@ use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style};
+use crate::google::client;
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pages::PanelPages;
@@ -382,6 +383,8 @@ struct Settings {
     hook_note: Option<(String, Tone)>,
     /// "Putuskan" waits for its second click.
     confirm: bool,
+    /// "Lanjutan" under Google is open: the own Client ID fields show.
+    google_advanced: bool,
     /// Small and large window icons, owned (not shared) and destroyed with the window.
     icons: [HICON; 2],
     /// The mode the title bar and fields were last styled for.
@@ -646,6 +649,8 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         model.google_client_id.clone(),
         model.google_client_secret.clone(),
     ];
+    // Someone with their own Client ID sees it straight away.
+    let google_advanced = !field_text[0].trim().is_empty();
     let state = Settings {
         hwnd,
         owner,
@@ -668,6 +673,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         google_note: None,
         hook_note: None,
         confirm: false,
+        google_advanced,
         icons: [HICON::default(); 2],
         styled_light: None,
     };
@@ -943,6 +949,8 @@ impl Settings {
                 dirty: id != m.google_client_id.trim() || secret != m.google_client_secret.trim(),
                 has_id: !id.is_empty(),
                 confirm: self.confirm,
+                built_in: client::has_built_in(),
+                advanced: self.google_advanced,
             },
             google_note: self.google_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             hooks: self.hooks,
@@ -1332,6 +1340,10 @@ impl Settings {
                 unsafe {
                     SetTimer(Some(self.hwnd), TIMER_CONFIRM, CONFIRM_MS, None);
                 }
+                Vec::new()
+            }
+            Hit::GoogleAdvanced => {
+                self.google_advanced = !self.google_advanced;
                 Vec::new()
             }
             Hit::GoogleGuide => vec![After::Open(GUIDE_URL.into())],
@@ -2006,12 +2018,13 @@ pub fn run_demo(args: &[String]) {
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
         lyrics: env("DI_LYRICS") == "1",
         calendar,
-        google_client_id: if configured {
+        // A build with Vale's own client signs in without one.
+        google_client_id: if configured && !client::has_built_in() {
             "123456789012-demo.apps.googleusercontent.com".into()
         } else {
             String::new()
         },
-        google_client_secret: if configured {
+        google_client_secret: if configured && !client::has_built_in() {
             "demo-secret".into()
         } else {
             String::new()

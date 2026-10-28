@@ -322,6 +322,8 @@ pub enum Hit {
     GoogleConnect,
     GoogleDisconnect,
     GoogleGuide,
+    /// "Lanjutan: pakai Client ID sendiri", opening or closing the fields.
+    GoogleAdvanced,
     HooksInstall,
     HooksRemove,
     Repo,
@@ -383,6 +385,9 @@ pub enum ButtonKind {
     Confirm,
     /// Accent text without a fill, followed by an "open" glyph.
     Link,
+    /// Like `Link`, but it opens a part of the page in place: a chevron
+    /// (right while closed, down while open, the bool) instead of the glyph.
+    Disclosure(bool),
     /// Only the "open" glyph; the label names it but is not drawn.
     External,
 }
@@ -611,6 +616,10 @@ pub struct GoogleState {
     pub has_id: bool,
     /// "Putuskan" was clicked once and waits for the second click.
     pub confirm: bool,
+    /// This build carries Vale's own Google client: one click signs in.
+    pub built_in: bool,
+    /// "Lanjutan" is open: the user's own Client ID and secret show.
+    pub advanced: bool,
 }
 
 /// Everything a layout depends on besides the section.
@@ -1132,7 +1141,7 @@ impl Builder<'_> {
             .map(|s| self.w(s, Font::Control))
             .fold(0.0, f32::max);
         match kind {
-            ButtonKind::Link => widest + 2.0 * LINK_PAD + LINK_GLYPH_W,
+            ButtonKind::Link | ButtonKind::Disclosure(_) => widest + 2.0 * LINK_PAD + LINK_GLYPH_W,
             ButtonKind::External => ICON_BUTTON,
             _ => (widest + 2.0 * BUTTON_PAD).max(BUTTON_MIN_W),
         }
@@ -1152,7 +1161,7 @@ impl Builder<'_> {
         let left = x;
         for (hit, label, kind, enabled, w) in items {
             let h = match kind {
-                ButtonKind::Link => CONTROL_H,
+                ButtonKind::Link | ButtonKind::Disclosure(_) => CONTROL_H,
                 ButtonKind::External => ICON_BUTTON,
                 _ => BUTTON_H,
             };
@@ -1865,43 +1874,57 @@ fn integrations(b: &mut Builder, s: &State) {
         vec![item],
     );
     b.eyebrow(Key::GoogleCalendar, x - GAP - CONTENT_X - 2.0);
-    let card = b.card(6.0 + 2.0 * FIELD_ROW_H + ROW_H);
+    // With Vale's own client the card is one button; the user's own Client
+    // ID and secret wait under "Lanjutan".
+    let fields = !g.built_in || g.advanced;
+    let card = b.card(if fields {
+        6.0 + 2.0 * FIELD_ROW_H + ROW_H
+    } else {
+        ROW_H
+    });
 
     // Client ID and secret: label column, then the field.
-    let labels = [b.t(Key::ClientId), b.t(Key::ClientSecret)];
-    let label_w = labels
-        .iter()
-        .map(|l| b.w(l, Font::Label))
-        .fold(0.0, f32::max);
-    let field_x = card.x + INSET + label_w + 2.0 * GAP;
     let top = card.y + 6.0;
-    for (i, (field, label)) in [Field::ClientId, Field::ClientSecret]
-        .into_iter()
-        .zip(labels)
-        .enumerate()
-    {
-        let y = top + i as f32 * FIELD_ROW_H;
-        let rect = Rect {
-            x: card.x + INSET,
-            y: y + (FIELD_ROW_H - 20.0) / 2.0,
-            w: label_w + GAP,
-            h: 20.0,
-        };
-        b.text(rect, label, Font::Label, Tone::Primary, Align::Left);
-        b.l.fields.push((
-            field,
-            Rect {
-                x: field_x,
-                y: y + (FIELD_ROW_H - FIELD_H) / 2.0,
-                w: RIGHT - field_x,
-                h: FIELD_H,
-            },
-        ));
+    if fields {
+        let labels = [b.t(Key::ClientId), b.t(Key::ClientSecret)];
+        let label_w = labels
+            .iter()
+            .map(|l| b.w(l, Font::Label))
+            .fold(0.0, f32::max);
+        let field_x = card.x + INSET + label_w + 2.0 * GAP;
+        for (i, (field, label)) in [Field::ClientId, Field::ClientSecret]
+            .into_iter()
+            .zip(labels)
+            .enumerate()
+        {
+            let y = top + i as f32 * FIELD_ROW_H;
+            let rect = Rect {
+                x: card.x + INSET,
+                y: y + (FIELD_ROW_H - 20.0) / 2.0,
+                w: label_w + GAP,
+                h: 20.0,
+            };
+            b.text(rect, label, Font::Label, Tone::Primary, Align::Left);
+            b.l.fields.push((
+                field,
+                Rect {
+                    x: field_x,
+                    y: y + (FIELD_ROW_H - FIELD_H) / 2.0,
+                    w: RIGHT - field_x,
+                    h: FIELD_H,
+                },
+            ));
+        }
     }
-    let buttons_y = top + 2.0 * FIELD_ROW_H;
+    let buttons_y = if fields {
+        top + 2.0 * FIELD_ROW_H
+    } else {
+        card.y
+    };
 
     // Buttons, with the status chip (or a short message) on their left.
     let (save, connect) = (b.t(Key::Save), b.t(Key::Connect));
+    let sign_in = b.t(Key::SignInGoogle);
     let (disconnect, sure) = (b.t(Key::Disconnect), b.t(Key::ConfirmShort));
     // A login to forget: connected, offline, or one Google stopped accepting.
     let can_disconnect = matches!(
@@ -1916,40 +1939,43 @@ fn integrations(b: &mut Builder, s: &State) {
             ButtonKind::Secondary
         }
     };
-    // Connected already: nothing to connect.
-    let can_connect =
-        g.has_id && (g.status != CalStatus::NotConfigured || g.dirty) && g.status != CalStatus::Ok;
-    let items = vec![
-        (
+    // A client to log in with (Vale's, or a typed Client ID), and not
+    // connected already.
+    let has_client = g.built_in || (g.has_id && (g.status != CalStatus::NotConfigured || g.dirty));
+    let can_connect = has_client && g.status != CalStatus::Ok;
+    let mut items = Vec::new();
+    if fields {
+        items.push((
             Hit::GoogleSave,
             save.clone(),
             kind(g.dirty),
             g.dirty,
             b.button_w(&[&save], ButtonKind::Secondary),
-        ),
-        (
-            Hit::GoogleConnect,
-            connect.clone(),
-            kind(!g.dirty && can_connect && needs_login),
-            can_connect,
-            b.button_w(&[&connect], ButtonKind::Secondary),
-        ),
-        (
-            Hit::GoogleDisconnect,
-            if g.confirm {
-                sure.clone()
-            } else {
-                disconnect.clone()
-            },
-            if g.confirm {
-                ButtonKind::Confirm
-            } else {
-                ButtonKind::Secondary
-            },
-            can_disconnect,
-            b.button_w(&[&disconnect, &sure], ButtonKind::Secondary),
-        ),
-    ];
+        ));
+    }
+    let connect = if fields { connect } else { sign_in };
+    items.push((
+        Hit::GoogleConnect,
+        connect.clone(),
+        kind(!g.dirty && can_connect && needs_login),
+        can_connect,
+        b.button_w(&[&connect], ButtonKind::Secondary),
+    ));
+    items.push((
+        Hit::GoogleDisconnect,
+        if g.confirm {
+            sure.clone()
+        } else {
+            disconnect.clone()
+        },
+        if g.confirm {
+            ButtonKind::Confirm
+        } else {
+            ButtonKind::Secondary
+        },
+        can_disconnect,
+        b.button_w(&[&disconnect, &sure], ButtonKind::Secondary),
+    ));
     let row_cy = buttons_y + ROW_H / 2.0;
     let x = b.buttons(RIGHT, row_cy, items);
     let left_w = (x - 2.0 * GAP - card.x - INSET).max(0.0);
@@ -1968,6 +1994,16 @@ fn integrations(b: &mut Builder, s: &State) {
             let (key, tone) = status_key(g.status);
             b.chip(card.x + INSET, row_cy, b.t(key), tone, left_w);
         }
+    }
+    if g.built_in {
+        // Under the card, on the left: the way to the user's own client.
+        let advanced = b.t(Key::GoogleAdvanced);
+        let kind = ButtonKind::Disclosure(g.advanced);
+        let w = b.button_w(&[&advanced], kind);
+        let top = card.y + card.h + 4.0;
+        let item = (Hit::GoogleAdvanced, advanced, kind, true, w);
+        b.buttons(CONTENT_X + w, top + CONTROL_H / 2.0, vec![item]);
+        b.y = top + CONTROL_H + 4.0;
     }
 
     // Claude Code hooks.
@@ -2098,14 +2134,18 @@ mod tests {
     fn states() -> Vec<State<'static>> {
         let mut out = Vec::new();
         for lang in [Lang::Id, Lang::En] {
-            for (status, dirty, has_id, confirm) in [
-                (CalStatus::NotConfigured, false, false, false),
-                (CalStatus::NotConfigured, true, true, false),
-                (CalStatus::NeedsLogin, false, true, false),
-                (CalStatus::Reconnect, true, true, false),
-                (CalStatus::Ok, false, true, false),
-                (CalStatus::Ok, false, true, true),
-                (CalStatus::Offline, false, true, false),
+            for (status, dirty, has_id, confirm, built_in, advanced) in [
+                (CalStatus::NotConfigured, false, false, false, false, false),
+                (CalStatus::NotConfigured, true, true, false, false, false),
+                (CalStatus::NeedsLogin, false, true, false, false, false),
+                (CalStatus::Reconnect, true, true, false, false, false),
+                (CalStatus::Ok, false, true, false, false, false),
+                (CalStatus::Ok, false, true, true, false, false),
+                (CalStatus::Offline, false, true, false, false, false),
+                // A build with Vale's own Google client.
+                (CalStatus::NeedsLogin, false, false, false, true, false),
+                (CalStatus::Ok, false, false, true, true, false),
+                (CalStatus::Reconnect, true, true, false, true, true),
             ] {
                 for (hooks, locked, battery) in [
                     (Some((true, true)), false, true),
@@ -2155,6 +2195,8 @@ mod tests {
                             dirty,
                             has_id,
                             confirm,
+                            built_in,
+                            advanced,
                         },
                         google_note: None,
                         hooks,
@@ -2289,7 +2331,7 @@ mod tests {
                 let bounds = c.bounds();
                 // The setup guide link sits on the line above its card.
                 if let Control::Button(b) = c
-                    && b.kind == ButtonKind::Link
+                    && matches!(b.kind, ButtonKind::Link | ButtonKind::Disclosure(_))
                 {
                     assert!(inside(bounds, content), "{section:?} {lang:?}: {c:?}");
                     assert!(l.cards.iter().all(|card| !overlaps(bounds, *card)));
@@ -2380,7 +2422,9 @@ mod tests {
                         .iter()
                         .map(|s| (s.label.as_str(), s.rect, 0.0))
                         .collect(),
-                    Control::Button(b) if b.kind == ButtonKind::Link => {
+                    Control::Button(b)
+                        if matches!(b.kind, ButtonKind::Link | ButtonKind::Disclosure(_)) =>
+                    {
                         vec![(b.label.as_str(), b.rect, LINK_GLYPH_W)]
                     }
                     // The label is not drawn.
@@ -2914,6 +2958,8 @@ mod tests {
             dirty,
             has_id,
             confirm: false,
+            built_in: false,
+            advanced: false,
         };
         assert!(enabled(g(CalStatus::NotConfigured, false, false)).is_empty());
         assert_eq!(
@@ -2938,6 +2984,70 @@ mod tests {
             enabled(g(CalStatus::Offline, false, true)),
             [Hit::GoogleConnect, Hit::GoogleDisconnect]
         );
+    }
+
+    #[test]
+    fn built_in_client_offers_one_click_sign_in() {
+        let base = states()[0].clone();
+        let at = |google: GoogleState| {
+            let s = State {
+                google,
+                ..base.clone()
+            };
+            layout(Section::Integrations, &s, &Estimate)
+        };
+        let button = |l: &Layout, hit: Hit| {
+            l.controls.iter().find_map(|c| match c {
+                Control::Button(b) if b.hit == hit => Some(b.clone()),
+                _ => None,
+            })
+        };
+        let g = GoogleState {
+            status: CalStatus::NeedsLogin,
+            dirty: false,
+            has_id: false,
+            confirm: false,
+            built_in: true,
+            advanced: false,
+        };
+        // One click: no fields, "Masuk dengan Google" as the main button.
+        let simple = at(g);
+        assert!(simple.fields.is_empty());
+        let sign_in = button(&simple, Hit::GoogleConnect).expect("sign-in button");
+        assert_eq!(
+            (sign_in.label.as_str(), sign_in.kind, sign_in.enabled),
+            ("Masuk dengan Google", ButtonKind::Primary, true)
+        );
+        assert!(button(&simple, Hit::GoogleSave).is_none());
+        // Connected: nothing to sign in to, only to forget.
+        let ok = at(GoogleState {
+            status: CalStatus::Ok,
+            ..g
+        });
+        assert!(!button(&ok, Hit::GoogleConnect).unwrap().enabled);
+        assert!(button(&ok, Hit::GoogleDisconnect).unwrap().enabled);
+        // "Lanjutan" opens the own-client fields, as without a built-in client.
+        // It opens in place, so a chevron, not the "open" glyph of a link.
+        let link = button(&simple, Hit::GoogleAdvanced).expect("advanced link");
+        assert_eq!(link.kind, ButtonKind::Disclosure(false));
+        let open = at(GoogleState {
+            advanced: true,
+            ..g
+        });
+        assert_eq!(open.fields.len(), 2);
+        assert!(button(&open, Hit::GoogleSave).is_some());
+        assert_eq!(
+            button(&open, Hit::GoogleAdvanced).map(|b| b.kind),
+            Some(ButtonKind::Disclosure(true)),
+            "closes again"
+        );
+        // Without a built-in client: the fields, and no "Lanjutan".
+        let plain = at(GoogleState {
+            built_in: false,
+            ..g
+        });
+        assert_eq!(plain.fields.len(), 2);
+        assert!(button(&plain, Hit::GoogleAdvanced).is_none());
     }
 
     #[test]

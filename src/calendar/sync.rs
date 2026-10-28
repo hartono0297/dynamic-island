@@ -18,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 use super::{CalStatus, CalendarSnapshot, EventDraft, api, range_for};
 use crate::config::{self, Config};
+use crate::google::client;
 use crate::google::http::Http;
 use crate::google::oauth::{self, AuthError};
 use crate::i18n::{self, Key, Lang, text, tr};
@@ -164,9 +165,10 @@ fn login_failure_status(configured: bool) -> CalStatus {
 fn status_for(e: &AuthError) -> CalStatus {
     match e {
         AuthError::NotConfigured => CalStatus::NotConfigured,
-        AuthError::NeedsLogin | AuthError::MissingScopes | AuthError::Google(_) => {
-            CalStatus::NeedsLogin
-        }
+        AuthError::NeedsLogin
+        | AuthError::MissingScopes
+        | AuthError::Google(_)
+        | AuthError::ClientChanged => CalStatus::NeedsLogin,
         AuthError::Reconnect | AuthError::Unauthorized => CalStatus::Reconnect,
         AuthError::Network(_) => CalStatus::Offline,
     }
@@ -178,6 +180,10 @@ fn google_notice(e: &AuthError) -> Option<Notice> {
     let (title, body) = match e {
         AuthError::MissingScopes => (tr(Key::GoogleScopes), tr(Key::GoogleScopesBody).into()),
         AuthError::Google(message) => (tr(Key::GoogleRefused), message.clone()),
+        AuthError::ClientChanged => (
+            tr(Key::GoogleClientChanged),
+            tr(Key::GoogleClientChangedBody).into(),
+        ),
         _ => return None,
     };
     Some(Notice {
@@ -223,7 +229,7 @@ pub fn save_error_message(lang: Lang, e: &AuthError) -> String {
     let reason = |key| text(lang, key).to_string();
     let reason = match e {
         AuthError::NotConfigured => reason(Key::ReasonNotConfigured),
-        AuthError::NeedsLogin => reason(Key::ReasonNeedsLogin),
+        AuthError::NeedsLogin | AuthError::ClientChanged => reason(Key::ReasonNeedsLogin),
         AuthError::Reconnect | AuthError::Unauthorized => reason(Key::ReasonReconnect),
         AuthError::MissingScopes => reason(Key::ReasonScopes),
         AuthError::Google(m) => i18n::google_refused(lang, m),
@@ -447,16 +453,11 @@ impl Worker {
     /// on failure the snapshot shows why, and a notice too when Google refused
     /// or a permission was left unticked.
     fn connect(&mut self) -> bool {
-        let result = if configured(&self.cfg) {
-            ensure_http(&mut self.http).and_then(|http| {
-                oauth::login(
-                    http,
-                    &self.cfg.google_client_id,
-                    &self.cfg.google_client_secret,
-                )
-            })
-        } else {
-            Err(AuthError::NotConfigured)
+        let result = match client::for_config(&self.cfg) {
+            Some(client) => {
+                ensure_http(&mut self.http).and_then(|http| oauth::login(http, &client))
+            }
+            None => Err(AuthError::NotConfigured),
         };
         // The attempt is over, before the island hears of it: a new one may start.
         self.login.store(false, Ordering::Release);
@@ -529,8 +530,9 @@ impl Worker {
     }
 }
 
+/// A client to log in with: the user's own or the built-in one.
 fn configured(cfg: &Config) -> bool {
-    !cfg.google_client_id.trim().is_empty()
+    client::for_config(cfg).is_some()
 }
 
 fn ensure_http(slot: &mut Option<Http>) -> Result<&Http, AuthError> {

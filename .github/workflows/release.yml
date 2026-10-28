@@ -21,7 +21,13 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      # Vale's own Google client ("Masuk dengan Google"), from the repository
+      # secrets. Without them the build has no built-in client and Settings
+      # shows only the own Client ID fields (src/google/client.rs).
       - name: Build
+        env:
+          VALE_GOOGLE_CLIENT_ID: ${{ secrets.VALE_GOOGLE_CLIENT_ID }}
+          VALE_GOOGLE_CLIENT_SECRET: ${{ secrets.VALE_GOOGLE_CLIENT_SECRET }}
         run: cargo build --release --locked
 
       - name: Package
