@@ -17,7 +17,8 @@ use crate::config::{
     ScreenshotSettings, ShotIgnore, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
-use crate::model::PomoField;
+use crate::model::{Page, PomoField};
+use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::ui::icons::Icon;
@@ -311,6 +312,10 @@ pub enum Hit {
     RamWarn(i32),
     /// "Lindungi cache Cargo & Autodesk di Mole".
     MoleProtect,
+    /// "Halaman panel": a page's toggle, and its order stepper (−1 earlier,
+    /// +1 later).
+    PageOn(Page),
+    PageMove(Page, i32),
     DndHelp,
     Pomo(PomoField, i32),
     GoogleSave,
@@ -656,6 +661,8 @@ pub struct State<'a> {
     pub clip_hotkey_failed: bool,
     /// Settings → Clipboard → Screenshot.
     pub shot: ScreenshotSettings,
+    /// "Halaman panel": the pages' order and which the wheel shows.
+    pub pages: PanelPages,
     pub version: &'a str,
 }
 
@@ -1404,6 +1411,52 @@ fn appearance(b: &mut Builder, s: &State) {
     b.divider(card, rows[4]);
 
     robot_card(b, s);
+    pages_card(b, s);
+}
+
+fn page_key(p: Page) -> Key {
+    match p {
+        Page::Calendar => Key::PageCalendar,
+        Page::Pomodoro => Key::PagePomodoro,
+        Page::Reminders => Key::PageReminders,
+        Page::Notes => Key::PageNotes,
+        Page::Media => Key::PageMedia,
+        Page::Clipboard => Key::PageClipboard,
+        Page::System => Key::PageSystem,
+        Page::Cli => Key::PageCli,
+        Page::Shortcuts => Key::PageShortcuts,
+    }
+}
+
+/// "Halaman panel": one row per page in the owner's order, its order stepper
+/// (− earlier, + later; the position in between) and its toggle. The last
+/// page still shown cannot be switched off.
+fn pages_card(b: &mut Builder, s: &State) {
+    b.eyebrow(Key::PanelPages, CONTENT_W - 4.0);
+    let entries = s.pages.entries();
+    let card = b.card(entries.len() as f32 * ROW_H);
+    let shown = s.pages.visible().len();
+    let last = entries.len() - 1;
+    for (i, (page, on)) in entries.iter().enumerate() {
+        let y = card.y + i as f32 * ROW_H;
+        let cy = y + ROW_H / 2.0;
+        let locked = *on && shown == 1;
+        let x = b.toggle_if(Hit::PageOn(*page), RIGHT, cy, *on, !locked);
+        let x = b.stepper(
+            x - GAP,
+            cy,
+            (i + 1).to_string(),
+            Hit::PageMove(*page, -1),
+            Hit::PageMove(*page, 1),
+            (i > 0, i < last),
+            true,
+        );
+        let desc = (i == 0).then(|| (b.t(Key::PageOrderDesc), Tone::Secondary));
+        b.row_text(card, y, b.t(page_key(*page)), desc, false, x);
+        if i > 0 {
+            b.divider(card, y);
+        }
+    }
 }
 
 /// The width left for a row's label and description, left of `control_x`.
@@ -2126,6 +2179,14 @@ mod tests {
                             },
                             show_secs: if locked { 30 } else { 4 },
                         },
+                        pages: if locked {
+                            let mut p = PanelPages::default();
+                            p.toggle(Page::Cli);
+                            p.move_by(Page::Shortcuts, -8);
+                            p
+                        } else {
+                            PanelPages::default()
+                        },
                         version: "2.1.0",
                     });
                 }
@@ -2404,13 +2465,13 @@ mod tests {
         for (_, r) in top.hits() {
             assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
         }
-        // Scrolled to the end: all four rows, where they are drawn.
+        // Scrolled to the robot card: all four rows, where they are drawn.
         let end = State {
-            scroll: 1e6,
+            scroll: robot_card_scroll(&base),
             ..base.clone()
         };
         let l = layout(Section::Appearance, &end, &Estimate);
-        assert_eq!(l.scroll, l.scroll_max);
+        assert!(l.scroll > 0.0 && l.scroll <= l.scroll_max);
         assert_eq!(
             robot_hits(&l).len(),
             7,
@@ -2655,8 +2716,11 @@ mod tests {
                 robot_motion: Motion::Saver,
                 robot_sleep: 10,
                 greeting: false,
-                scroll: 1e6,
                 ..states()[0].clone()
+            };
+            let on = State {
+                scroll: robot_card_scroll(&on),
+                ..on
             };
             let l = layout(Section::Appearance, &on, &Estimate);
             let (_, items, selected) = l.segmented(Group::Motion).expect("Animasi");
@@ -2918,6 +2982,101 @@ mod tests {
             buttons(None),
             [(Hit::HooksInstall, true), (Hit::HooksRemove, true)]
         );
+    }
+
+    /// The scroll that brings Bata's card (no longer the last in Tampilan)
+    /// to the top of the viewport.
+    fn robot_card_scroll(s: &State) -> f32 {
+        let top = State {
+            scroll: 0.0,
+            ..s.clone()
+        };
+        let l = layout(Section::Appearance, &top, &Estimate);
+        let view = l.viewport.expect("viewport");
+        let toggle = l
+            .controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Toggle {
+                    hit: Hit::Robot,
+                    rect,
+                    ..
+                } => Some(*rect),
+                _ => None,
+            })
+            .expect("robot toggle");
+        let card_top = toggle.y + toggle.h / 2.0 - ROW_H / 2.0;
+        card_top - view.y
+    }
+
+    /// A page toggle (page, on, enabled) and an order stepper (−, +).
+    type PageToggle = (Page, bool, bool);
+    type OrderStepper = (Option<Hit>, Option<Hit>);
+
+    /// The "Halaman panel" toggles and order steppers, in card order.
+    fn page_controls(l: &Layout) -> (Vec<PageToggle>, Vec<OrderStepper>) {
+        let mut toggles = Vec::new();
+        let mut steppers = Vec::new();
+        for c in &l.controls {
+            match c {
+                Control::Toggle {
+                    hit: Hit::PageOn(p),
+                    on,
+                    enabled,
+                    ..
+                } => toggles.push((*p, *on, *enabled)),
+                Control::Stepper { minus, plus, .. }
+                    if matches!(minus.1.or(plus.1), Some(Hit::PageMove(..))) =>
+                {
+                    steppers.push((minus.1, plus.1));
+                }
+                _ => {}
+            }
+        }
+        (toggles, steppers)
+    }
+
+    #[test]
+    fn panel_pages_card_lists_every_page_with_a_toggle_and_an_order_stepper() {
+        for s in states().iter().take(8) {
+            let l = layout(Section::Appearance, s, &Estimate);
+            let (toggles, steppers) = page_controls(&l);
+            let expected: Vec<(Page, bool, bool)> = s
+                .pages
+                .entries()
+                .iter()
+                .map(|(p, on)| (*p, *on, true))
+                .collect();
+            assert_eq!(toggles, expected);
+            let order: Vec<Page> = s.pages.entries().iter().map(|e| e.0).collect();
+            assert_eq!(steppers.len(), order.len());
+            // "−" moves a page earlier, "+" later; none past the ends.
+            assert_eq!(steppers[0], (None, Some(Hit::PageMove(order[0], 1))));
+            assert_eq!(
+                steppers[4],
+                (
+                    Some(Hit::PageMove(order[4], -1)),
+                    Some(Hit::PageMove(order[4], 1))
+                )
+            );
+            assert_eq!(steppers[8], (Some(Hit::PageMove(order[8], -1)), None));
+        }
+    }
+
+    #[test]
+    fn the_last_page_still_shown_cannot_be_switched_off() {
+        let mut pages = PanelPages::default();
+        for p in &Page::ALL[1..] {
+            pages.toggle(*p);
+        }
+        let s = State {
+            pages,
+            ..states()[0].clone()
+        };
+        let l = layout(Section::Appearance, &s, &Estimate);
+        let (toggles, _) = page_controls(&l);
+        assert_eq!(toggles[0], (Page::Calendar, true, false), "locked on");
+        assert!(toggles[1..].iter().all(|(_, on, enabled)| !on && *enabled));
     }
 
     #[test]

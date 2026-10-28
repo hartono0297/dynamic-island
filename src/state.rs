@@ -12,6 +12,7 @@ use crate::model::{
     Shortcut, ShotAction, Timeline, View,
 };
 use crate::mole::MoleOpts;
+use crate::pages::PanelPages;
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 use crate::ui::geometry::ANIM_MS;
 
@@ -179,6 +180,8 @@ pub struct IslandState {
     pomodoro: Pomodoro,
     /// The panel page, kept across closes so the panel reopens where it was left.
     page: Page,
+    /// "Halaman panel": the order the wheel walks and the pages it skips.
+    pages: PanelPages,
     /// Wheel delta not yet worth a whole page; cleared when the panel closes.
     wheel: i32,
     notes_page: usize,
@@ -230,6 +233,7 @@ impl IslandState {
             collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
+            pages: PanelPages::default(),
             wheel: 0,
             notes_page: 0,
             reminders_page: 0,
@@ -397,6 +401,7 @@ impl IslandState {
             | Event::Tick => {}
             Event::CleanFinished => self.clean_busy = false,
             Event::CleanModeSetting(mode) => self.clean_mode = mode,
+            Event::PanelPages(pages) => self.set_pages(pages),
             Event::MoleFound(found) => self.mole_found(found, &mut effects),
             Event::MolePreviewed { opts, ok } => {
                 if self.mole == MolePhase::Scanning(opts) {
@@ -1081,9 +1086,23 @@ impl IslandState {
         self.wheel = self.wheel.saturating_add(delta);
         let steps = self.wheel / WHEEL_STEP;
         self.wheel -= steps * WHEEL_STEP;
-        let index = Page::ALL.iter().position(|p| *p == self.page).unwrap_or(0) as i64;
-        let last = Page::ALL.len() as i64 - 1;
-        self.page = Page::ALL[(index - i64::from(steps)).clamp(0, last) as usize];
+        // Steps count up the wheel; later pages are down it.
+        self.page = self.pages.step(self.page, -i64::from(steps));
+    }
+
+    /// "Halaman panel" changed: a page just turned off is left for the next
+    /// shown one (or the one before it at the end of the order).
+    fn set_pages(&mut self, pages: PanelPages) {
+        let was_on = self.pages.is_on(self.page);
+        self.pages = pages;
+        if was_on && !self.pages.is_on(self.page) {
+            let next = self.pages.step(self.page, 1);
+            self.page = if next == self.page {
+                self.pages.step(self.page, -1)
+            } else {
+                next
+            };
+        }
     }
 
     /// Day view: one day, and the selection follows. Week: 7 days. Month: one
@@ -1268,6 +1287,11 @@ impl IslandState {
 impl IslandState {
     pub fn page(&self) -> Page {
         self.page
+    }
+
+    /// "Halaman panel": the order and the pages shown.
+    pub fn pages(&self) -> &PanelPages {
+        &self.pages
     }
 
     /// The sticky notice (Claude waiting or a due reminder) to show at the top
@@ -1976,6 +2000,34 @@ mod tests {
         // Scrolling past the end is not stored up: one notch back moves one page.
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
+    }
+
+    #[test]
+    fn wheel_skips_pages_turned_off_in_the_settings() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Pomodoro);
+        pages.toggle(Page::Reminders);
+        s.apply(Event::PanelPages(pages), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        s.apply(Event::Wheel(120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+    }
+
+    #[test]
+    fn the_page_shown_moves_off_a_page_just_turned_off() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Notes);
+        s.apply(Event::PanelPages(pages), t0);
+        // The next shown page after it; the wheel then walks the rest.
+        assert_eq!(s.page(), Page::Media);
+        assert_eq!(s.pages().visible().len(), Page::ALL.len() - 1);
     }
 
     #[test]

@@ -1040,6 +1040,19 @@ fn run_scenes(scenes: &[Scene]) {
                 reminders_page: 0,
                 day_page: scene.day_page,
                 page_slide: slide,
+                // The demo slides between neighbours in the default order.
+                page_from: {
+                    let i = Page::ALL.iter().position(|p| *p == page).unwrap_or(0);
+                    let from = if slide > 0.0 {
+                        i.checked_sub(1)
+                    } else if slide < 0.0 {
+                        Some(i + 1).filter(|j| *j < Page::ALL.len())
+                    } else {
+                        None
+                    };
+                    from.map(|j| Page::ALL[j])
+                },
+                pages: Page::ALL.to_vec(),
                 palette,
                 clock: match scene.clock {
                     Some(fixed) => Some(fixed.to_owned()),

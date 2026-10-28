@@ -75,6 +75,7 @@ use crate::cli_folders::CliStart;
 use crate::config::{ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style};
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
+use crate::pages::PanelPages;
 use crate::pomodoro::PomoSettings;
 use crate::sources::battery::read_battery;
 use crate::theme::{self, Accent, Surface, WindowPalette, WindowTheme};
@@ -123,6 +124,8 @@ pub enum Action {
     RamWarn(u8),
     /// "Lindungi cache Cargo & Autodesk di Mole".
     MoleProtect(bool),
+    /// "Halaman panel": the whole new order and on/off list.
+    PanelPages(PanelPages),
     DndHelp,
     Pomo(PomoField, i32),
     SaveGoogle {
@@ -133,6 +136,18 @@ pub enum Action {
     DisconnectGoogle,
     /// The window closed.
     Closed,
+}
+
+/// "Halaman panel": the pages after a click on a page's toggle or order
+/// stepper, or `None` when it changes nothing (or is not such a click).
+fn page_action(pages: &PanelPages, hit: Hit) -> Option<PanelPages> {
+    let mut next = pages.clone();
+    let changed = match hit {
+        Hit::PageOn(p) => next.toggle(p),
+        Hit::PageMove(p, d) => next.move_by(p, d),
+        _ => false,
+    };
+    changed.then_some(next)
 }
 
 /// Takes ownership of a `WM_APP_SETTINGS_ACTION`'s `lparam`.
@@ -175,6 +190,8 @@ pub struct Model {
     /// The chosen Clipboard hotkey could not be registered.
     pub clip_hotkey_failed: bool,
     pub shot: ScreenshotSettings,
+    /// "Halaman panel".
+    pub pages: PanelPages,
 }
 
 impl Model {
@@ -206,6 +223,7 @@ impl Model {
             clip: cfg.clipboard,
             clip_hotkey_failed: false,
             shot: cfg.screenshot,
+            pages: PanelPages::from_saved(&cfg.panel_pages),
         }
     }
 }
@@ -932,6 +950,7 @@ impl Settings {
             clip: m.clip,
             clip_hotkey_failed: m.clip_hotkey_failed,
             shot: m.shot,
+            pages: m.pages.clone(),
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -1282,6 +1301,10 @@ impl Settings {
                 }
             }
             Hit::MoleProtect => post(Action::MoleProtect(!m.mole_protect)),
+            Hit::PageOn(_) | Hit::PageMove(..) => match page_action(&m.pages, hit) {
+                Some(pages) => post(Action::PanelPages(pages)),
+                None => Vec::new(),
+            },
             Hit::DndHelp => post(Action::DndHelp),
             Hit::Pomo(field, dir) => post(Action::Pomo(field, dir)),
             Hit::GoogleSave => {
@@ -1893,6 +1916,7 @@ pub fn run_demo(args: &[String]) {
             Action::DiskWarn(v) => m.disk_warn_gb = v,
             Action::RamWarn(v) => m.ram_warn_percent = v,
             Action::MoleProtect(v) => m.mole_protect = v,
+            Action::PanelPages(v) => m.pages = v,
             Action::Pomo(field, dir) => {
                 let (min, max, step) = crate::pomodoro::range(field);
                 let v = match field {
@@ -2050,6 +2074,24 @@ pub fn run_demo(args: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Page;
+
+    #[test]
+    fn page_clicks_give_the_changed_pages_or_nothing() {
+        let pages = PanelPages::default();
+        let off = page_action(&pages, Hit::PageOn(Page::Notes)).expect("toggled");
+        assert!(!off.is_on(Page::Notes));
+        let later = page_action(&pages, Hit::PageMove(Page::Notes, 1)).expect("moved");
+        assert_eq!(later.position(Page::Notes), 4);
+        // Nothing changes: no action.
+        assert_eq!(page_action(&pages, Hit::PageMove(Page::Calendar, -1)), None);
+        let mut one = PanelPages::default();
+        for p in &Page::ALL[1..] {
+            one.toggle(*p);
+        }
+        assert_eq!(page_action(&one, Hit::PageOn(Page::Calendar)), None);
+        assert_eq!(page_action(&pages, Hit::Robot), None);
+    }
 
     #[test]
     fn tweens_ease_toward_the_target_and_retarget_smoothly() {

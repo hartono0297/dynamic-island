@@ -416,6 +416,17 @@ keys! {
     ModeLight => "Terang", "Light";
     IdleClock => "Jam saat kosong", "Clock when idle";
     IdleClockDesc => "Tampilkan jam saat island kosong", "Show the time when the island is idle";
+    PanelPages => "Halaman panel", "Panel pages";
+    PageCalendar => "Kalender", "Calendar";
+    PagePomodoro => "Pomodoro", "Pomodoro";
+    PageReminders => "Pengingat", "Reminders";
+    PageNotes => "Catatan", "Notes";
+    PageMedia => "Musik", "Music";
+    PageClipboard => "Clipboard", "Clipboard";
+    PageSystem => "Sistem", "System";
+    PageCli => "CLI", "CLI";
+    PageShortcuts => "Pintasan", "Shortcuts";
+    PageOrderDesc => "Urutan: − lebih awal, + lebih akhir", "Order: − earlier, + later";
     Language => "Bahasa", "Language";
     LanguageDesc => "Island dan semua jendela", "The island and every window";
     LangIndonesian => "Indonesia", "Indonesia";

@@ -8,6 +8,7 @@ use crate::clean::{CleanCat, CleanEvent, CleanMode};
 use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
+use crate::pages::PanelPages;
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::system::SystemSample;
@@ -190,6 +191,8 @@ pub enum Event {
     },
     /// The cleaner's remembered mode (`clean_mode`), at startup.
     CleanModeSetting(CleanMode),
+    /// "Halaman panel", at startup and when the settings window changes it.
+    PanelPages(PanelPages),
     /// A folder check for screenshot `shot` ended: the Screenshots folder
     /// and the file that matched, if any. `App` keeps it, the reducer
     /// ignores it.

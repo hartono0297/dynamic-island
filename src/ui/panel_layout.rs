@@ -765,14 +765,17 @@ fn rows_that_fit(n: usize, avail: f32, pitch: f32, gap: f32, more_h: f32) -> usi
     }
 }
 
-/// The page dots and the index of the highlighted one.
-pub fn page_dots(s: ShapeRect, page: Page) -> ([Rect; Page::ALL.len()], usize) {
-    let active = Page::ALL.iter().position(|p| *p == page).unwrap_or(0);
-    let count = Page::ALL.len() as f32;
-    let total = count * DOT + (count - 1.0) * DOT_GAP;
+/// One dot per page `shown` ("Halaman panel"), and which one is lit: none
+/// for a page that is off but opened by its own button.
+pub fn page_dots(s: ShapeRect, shown: &[Page], page: Page) -> (Vec<Rect>, Option<usize>) {
+    let active = shown.iter().position(|p| *p == page);
+    let count = shown.len() as f32;
+    let total = count * DOT + (count - 1.0).max(0.0) * DOT_GAP;
     let x0 = s.x + (s.w - total) / 2.0;
     let y = s.y + s.h - DOT_BOTTOM - DOT;
-    let dots = std::array::from_fn(|i| rect(x0 + i as f32 * (DOT + DOT_GAP), y, DOT, DOT));
+    let dots = (0..shown.len())
+        .map(|i| rect(x0 + i as f32 * (DOT + DOT_GAP), y, DOT, DOT))
+        .collect();
     (dots, active)
 }
 
@@ -2649,7 +2652,7 @@ mod tests {
     fn system_page_fits_drives_and_keeps_clear_of_the_dots() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
-            let (dots, _) = page_dots(s, Page::System);
+            let (dots, _) = page_dots(s, &Page::ALL, Page::System);
             for (strip, most) in [(false, 3), (true, 2)] {
                 let l = system_layout(s, strip, &SYS_HEAD, &SIX_DRIVES, 3);
                 // As many drives as fit, in order; fewer under the strip.
@@ -3099,9 +3102,10 @@ mod tests {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
             for (i, page) in Page::ALL.into_iter().enumerate() {
-                let (dots, active) = page_dots(s, page);
-                assert_eq!(active, i, "{page:?}");
-                for d in dots {
+                let (dots, active) = page_dots(s, &Page::ALL, page);
+                assert_eq!(active, Some(i), "{page:?}");
+                assert_eq!(dots.len(), Page::ALL.len());
+                for d in &dots {
                     assert_eq!((d.w, d.h), (5.0, 5.0));
                     assert_eq!(d.bottom(), s.y + s.h - 11.0);
                 }
@@ -3113,6 +3117,21 @@ mod tests {
                 assert_eq!(left, right, "centered");
             }
         }
+    }
+
+    #[test]
+    fn page_dots_count_only_the_pages_shown() {
+        let s = panel(Style::Pill);
+        let shown = [Page::Calendar, Page::Notes, Page::Media, Page::Shortcuts];
+        let (dots, active) = page_dots(s, &shown, Page::Media);
+        assert_eq!(dots.len(), 4);
+        assert_eq!(active, Some(2));
+        let left = dots[0].x - s.x;
+        let right = s.x + s.w - dots[3].right();
+        assert_eq!(left, right, "centered");
+        // A page opened by its button while it is off lights no dot.
+        let (dots, active) = page_dots(s, &shown, Page::Clipboard);
+        assert_eq!((dots.len(), active), (4, None));
     }
 
     #[test]
@@ -3258,7 +3277,7 @@ mod tests {
         assert_eq!(l.rows.len(), 2);
         let (hidden, more) = l.more.expect("overflow");
         assert_eq!(hidden, 20 - l.rows.len());
-        let (dots, _) = page_dots(s, Page::Calendar);
+        let (dots, _) = page_dots(s, &Page::ALL, Page::Calendar);
         assert!(l.add.bottom() <= dots[0].y, "everything above the dots");
         assert!(more.y >= l.rows.last().unwrap().1.bottom());
         assert_eq!((more.y, more.h), (l.add.y, l.add.h), "beside the add row");
@@ -3533,7 +3552,7 @@ mod tests {
         assert_eq!(r[0].x, left(s));
         assert!((r[1].right() - right(s)).abs() < 0.01);
         assert!(l.groups.is_empty());
-        let (dots, _) = page_dots(s, Page::Notes);
+        let (dots, _) = page_dots(s, &Page::ALL, Page::Notes);
         assert!(l.more.unwrap().1.bottom() <= dots[0].y);
 
         // The next chunk starts after the first.
@@ -3619,7 +3638,7 @@ mod tests {
         assert_eq!(l.groups[1].1.bottom(), row("tomorrow").y);
         assert!(l.groups[1].1.y > row("today").bottom());
         assert_eq!(l.groups[2].1.bottom(), row("friday").y);
-        let (dots, _) = page_dots(s, Page::Reminders);
+        let (dots, _) = page_dots(s, &Page::ALL, Page::Reminders);
         assert!(row("friday").bottom() <= dots[0].y);
     }
 
@@ -3880,7 +3899,7 @@ mod tests {
                 assert!(edge < l.expand.x);
                 assert_eq!(l.chips[0].w, head.chips[0]);
                 // The dots stay clear.
-                let (dots, _) = page_dots(s, Page::Cli);
+                let (dots, _) = page_dots(s, &Page::ALL, Page::Cli);
                 assert!(l.term.bottom() < dots[0].y);
             }
             let s = panel(style);
@@ -4150,8 +4169,8 @@ mod tests {
     fn all_regions_inside_panel() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
-            let (dots, _) = page_dots(s, Page::Calendar);
-            for d in dots {
+            let (dots, _) = page_dots(s, &Page::ALL, Page::Calendar);
+            for &d in &dots {
                 assert!(rect_inside(style, s, d), "{style:?} dot {d:?}");
             }
             for strip in [false, true] {
@@ -4423,7 +4442,7 @@ mod media_tests {
             assert_eq!(a.x, l.list.x);
             assert!((b.right() - l.list.right()).abs() < 0.01);
             // All inside the panel, above the dots.
-            let (dots, _) = page_dots(s, Page::Clipboard);
+            let (dots, _) = page_dots(s, &Page::ALL, Page::Clipboard);
             for (_, _, r) in &l.cards {
                 assert!(r.bottom() <= dots[0].y - 6.0 + 0.01, "{r:?}");
             }

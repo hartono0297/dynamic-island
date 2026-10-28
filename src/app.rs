@@ -57,6 +57,7 @@ use crate::media_log;
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
+use crate::pages::PanelPages;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
 use crate::shortcuts;
@@ -313,6 +314,8 @@ pub fn run(media_log_flag: bool) {
         app.apply(Event::LyricsSetting(lyrics_on), now);
         let clean_mode = app.config.clean_mode;
         app.apply(Event::CleanModeSetting(clean_mode), now);
+        let pages = PanelPages::from_saved(&app.config.panel_pages);
+        app.apply(Event::PanelPages(pages), now);
         app.check_fullscreen();
         app.check_battery();
         app.clip_start();
@@ -1226,14 +1229,12 @@ impl App {
         if after == before || !matches!(self.state.view(), View::Panel(_)) {
             return;
         }
-        let index = |p: Page| Page::ALL.iter().position(|q| *q == p).unwrap_or(0);
-        // A later page comes in from the right.
-        let from = if index(after) > index(before) {
-            1.0
-        } else {
-            -1.0
-        };
-        self.slide = Some(Slide { from, start: now });
+        // A later page in the owner's order comes in from the right.
+        self.slide = Some(Slide {
+            from: slide_from(self.state.pages(), before, after),
+            from_page: before,
+            start: now,
+        });
         self.ensure_clock();
     }
 
@@ -2853,6 +2854,12 @@ impl App {
                 self.config.mole_protect_defaults = on;
                 self.save_config();
             }
+            SettingsAction::PanelPages(pages) => {
+                self.config.panel_pages = pages.to_saved();
+                self.save_config();
+                // The wheel, the dots and the page shown follow at once.
+                self.apply_now(Event::PanelPages(pages));
+            }
             SettingsAction::Pomo(field, dir) => {
                 // Through the reducer like a click: state, then config.
                 self.apply_now(Event::Click(Hit::PomoAdjust(field, dir)));
@@ -2991,6 +2998,8 @@ impl App {
             notes_page: state.notes_page(),
             day_page: state.day_page(),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
+            page_from: self.slide.map(|s| s.from_page),
+            pages: state.pages().visible(),
             palette: theme::island_palette(&self.config),
             clock: (self.config.idle_clock && self.drawn == View::Idle)
                 .then(|| Local::now().format("%H:%M").to_string()),
@@ -3224,7 +3233,19 @@ impl LyricFit {
 #[derive(Clone, Copy)]
 struct Slide {
     from: f32,
+    /// The page it slides away from, drawn beside the new one.
+    from_page: Page,
     start: Instant,
+}
+
+/// +1 when `after` comes later than `before` in the owner's page order
+/// (it slides in from the right), else -1.
+fn slide_from(pages: &PanelPages, before: Page, after: Page) -> f32 {
+    if pages.position(after) > pages.position(before) {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 impl Slide {
@@ -4786,11 +4807,23 @@ mod tests {
     }
 
     #[test]
+    fn a_page_later_in_the_owners_order_slides_in_from_the_right() {
+        let mut pages = PanelPages::default();
+        assert_eq!(slide_from(&pages, Page::Calendar, Page::Pomodoro), 1.0);
+        assert_eq!(slide_from(&pages, Page::Pomodoro, Page::Calendar), -1.0);
+        // Shortcuts moved to the front: going to it is going back.
+        pages.move_by(Page::Shortcuts, -8);
+        assert_eq!(slide_from(&pages, Page::Calendar, Page::Shortcuts), -1.0);
+        assert_eq!(slide_from(&pages, Page::Shortcuts, Page::Calendar), 1.0);
+    }
+
+    #[test]
     fn page_slide_eases_out_to_rest() {
         let t0 = Instant::now();
         let ms = |n| t0 + Duration::from_millis(n);
         let right = Slide {
             from: 1.0,
+            from_page: Page::Calendar,
             start: t0,
         };
         assert_eq!(right.offset(t0), 1.0);
@@ -4802,6 +4835,7 @@ mod tests {
         assert_eq!(right.offset(ms(500)), 0.0);
         let left = Slide {
             from: -1.0,
+            from_page: Page::Pomodoro,
             start: t0,
         };
         assert_eq!(left.offset(t0), -1.0);

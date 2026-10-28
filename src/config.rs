@@ -7,6 +7,7 @@ use crate::clean::CleanMode;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::i18n::Lang;
+use crate::pages::PageEntry;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::ui::robot::{Motion, clamp_sleep};
@@ -85,6 +86,10 @@ pub struct Config {
     /// The screenshot preview in the notch (Settings → Clipboard, its
     /// second card).
     pub screenshot: ScreenshotSettings,
+    /// "Halaman panel": the pages' order and which the wheel shows. Empty
+    /// means the default (all nine); `pages::PanelPages` fills in the rest.
+    #[serde(deserialize_with = "panel_pages")]
+    pub panel_pages: Vec<PageEntry>,
 }
 
 crate::theme::named_enum! {
@@ -253,8 +258,21 @@ impl Default for Config {
             mole_defaults_added: false,
             clipboard: ClipboardSettings::default(),
             screenshot: ScreenshotSettings::default(),
+            panel_pages: Vec::new(),
         }
     }
+}
+
+/// `panel_pages` read entry by entry: anything that is not a list, and any
+/// entry without a string `page` and a bool `on`, is dropped instead of
+/// making the whole file invalid.
+fn panel_pages<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PageEntry>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let list = value.as_array().map(Vec::as_slice).unwrap_or_default();
+    Ok(list
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect())
 }
 
 /// Missing or malformed config falls back to defaults rather than failing startup.
@@ -329,6 +347,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         mole_defaults_added: mem.mole_defaults_added,
         clipboard: mem.clipboard,
         screenshot: mem.screenshot,
+        panel_pages: mem.panel_pages.clone(),
         ..disk
     }
 }
@@ -661,6 +680,10 @@ mod tests {
                 on_ignore: ShotIgnore::Delete,
                 show_secs: 12,
             },
+            panel_pages: vec![PageEntry {
+                page: "Media".into(),
+                on: false,
+            }],
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -696,6 +719,40 @@ mod tests {
         };
         let merged = merge_owned(Config::default(), &mem);
         assert_eq!(merged.screenshot.on_ignore, ShotIgnore::Delete);
+    }
+
+    #[test]
+    fn panel_pages_default_empty_lenient_and_belong_to_the_island() {
+        use crate::pages::PageEntry;
+        assert!(Config::default().panel_pages.is_empty());
+        // An older config.json without the key loads empty (= all pages).
+        let old = parse(r#"{"style":"Notch"}"#);
+        assert!(old.panel_pages.is_empty());
+        // A bad value never throws the rest of the file away.
+        let bad = parse(r#"{"style":"Notch","panel_pages":"semua"}"#);
+        assert_eq!(bad.style, Style::Notch);
+        assert!(bad.panel_pages.is_empty());
+        // Bad entries are dropped, good ones kept.
+        let mixed = parse(r#"{"panel_pages":[{"page":"Notes","on":false},7,{"page":"Media"}]}"#);
+        assert_eq!(
+            mixed.panel_pages,
+            vec![PageEntry {
+                page: "Notes".into(),
+                on: false
+            }]
+        );
+        // Set in the settings window: the island's own, over the file.
+        let mem = Config {
+            panel_pages: mixed.panel_pages.clone(),
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert_eq!(merged.panel_pages, mixed.panel_pages);
+        let json = serde_json::to_string(&merged).unwrap();
+        assert!(
+            json.contains(r#""panel_pages":[{"page":"Notes","on":false}]"#),
+            "{json}"
+        );
     }
 
     #[test]

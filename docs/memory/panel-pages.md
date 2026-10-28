@@ -1,0 +1,29 @@
+---
+tags: [decision, panel, settings]
+date: 2026-10-28
+---
+
+# Panel pages: order and which ones the wheel shows
+
+Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all nine
+pages in the owner's order, each with an order stepper (− earlier, + later)
+and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
+
+- **Every page is always listed once.** `config.json` keeps `panel_pages` as
+  `[{page, on}]`; unknown and repeated names are dropped, a page the file
+  does not name (an older config) joins right after its default neighbour,
+  and a list with every page off shows them all. A bad value never throws the
+  rest of the file away (lenient deserializer).
+- **Off means skipped, not gone.** The wheel and the page dots only count the
+  pages that are on, but a page's own button still opens it (the Clipboard
+  tile, a disk warning's "Buka"); on such a page no dot is lit and the wheel
+  moves to the nearest page that is on.
+- **The last page shown cannot be switched off**: its toggle is disabled.
+- **A page switched off while it shows** hands over to the next page on (or
+  the one before it at the end of the order).
+- **Slides follow the owner's order**, and the page drawn beside the new one
+  is the page it came from (`Frame::page_from`), not a neighbour in
+  `Page::ALL`.
+- The card sits at the end of Tampilan, below Bata's card.
+
+Related: [[settings-appearance-scroll]], [[v3-studio-overview]]

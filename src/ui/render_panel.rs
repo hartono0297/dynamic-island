@@ -381,14 +381,8 @@ impl Renderer {
         let slide = frame.page_slide.clamp(-1.0, 1.0);
         if slide != 0.0 {
             // The page it came from sits one panel width further on.
-            let index = Page::ALL.iter().position(|p| *p == page).unwrap_or(0);
-            let from = if slide > 0.0 {
-                index.checked_sub(1)
-            } else {
-                Some(index + 1).filter(|i| *i < Page::ALL.len())
-            };
-            if let Some(from) = from {
-                let old = self.page_layout(s, frame, Page::ALL[from], strip);
+            if let Some(from) = frame.page_from.filter(|p| *p != page) {
+                let old = self.page_layout(s, frame, from, strip);
                 self.set_offset((slide - slide.signum()) * s.w);
                 self.paint_page(frame, &old)?;
             }
@@ -402,10 +396,17 @@ impl Renderer {
         }
         // The cleaner is not a page: its footer takes the dots' place.
         if !matches!(layout, PageLayout::Cleaner(_) | PageLayout::Mole(_)) {
-            let (dots, active) = page_dots(s, page);
+            let (dots, active) = page_dots(s, &frame.pages, page);
             for (i, dot) in dots.into_iter().enumerate() {
                 let p = &self.palette;
-                self.set_color(if i == active { p.accent } else { p.dot_off }, 1.0);
+                self.set_color(
+                    if Some(i) == active {
+                        p.accent
+                    } else {
+                        p.dot_off
+                    },
+                    1.0,
+                );
                 self.fill_round(dot, dot.w / 2.0);
             }
         }

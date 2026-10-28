@@ -17,6 +17,7 @@ mod media_log;
 mod model;
 mod mole;
 mod notes;
+mod pages;
 mod pomodoro;
 mod reminders;
 mod screenshot;

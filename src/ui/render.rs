@@ -117,6 +117,10 @@ pub struct Frame<'a> {
     /// came from beside it. Positive = it came in from the right (scrolled to
     /// a later page).
     pub page_slide: f32,
+    /// The page a slide comes from, drawn beside the new one.
+    pub page_from: Option<Page>,
+    /// The pages the dots show ("Halaman panel"), in order.
+    pub pages: Vec<Page>,
     /// Island colours (surface and accent).
     pub palette: Palette,
     /// "HH:MM" drawn while the view is `Idle`; `None` when the clock is off.
