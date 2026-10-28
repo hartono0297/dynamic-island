@@ -2823,8 +2823,6 @@ impl Renderer {
         self.text2(&total, &self.fonts.track_time_right, m.total);
     }
 
-    /// "Lirik" with a quote mark: outlined in the accent while lyrics show in
-    /// the notch, quiet otherwise.
     /// "−  −0,3 dtk  +" left of "Lirik": two small round buttons and the
     /// value between them, in the accent colour once it is not 0.
     fn paint_lyric_offset(&self, adj: &[Rect; 3], offset_ms: i32) {
@@ -2839,6 +2837,8 @@ impl Renderer {
         self.text_colored(&value, &self.fonts.small_center, adj[1], ink, 1.0);
     }
 
+    /// "Lirik" with a quote mark: outlined in the accent while lyrics show in
+    /// the notch, quiet otherwise.
     fn paint_lyrics_button(&self, r: Rect, on: bool) {
         let p = self.palette;
         let ink = if on { p.accent } else { p.secondary };
