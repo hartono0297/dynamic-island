@@ -468,6 +468,7 @@ impl IslandState {
             | Event::Clean(_)
             | Event::Mole(_)
             | Event::ShotFolder { .. }
+            | Event::ShotSaveDone { .. }
             | Event::ShotRecycled { .. }
             | Event::Tick => {}
             Event::CleanFinished => self.clean_busy = false,

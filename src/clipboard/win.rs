@@ -22,10 +22,15 @@ use super::image;
 use super::kinds::{Rule, excluded_rule, is_own_change, should_skip};
 use super::store::{Clip, ClipData, ClipSnapshot, MAX_IMAGE_BYTES, MAX_TEXT_BYTES};
 
+const CF_TEXT: u32 = 1;
 const CF_BITMAP: u32 = 2;
+const CF_METAFILEPICT: u32 = 3;
+const CF_OEMTEXT: u32 = 7;
 const CF_DIB: u32 = 8;
+#[cfg(test)]
 const CF_PALETTE: u32 = 9;
 const CF_UNICODETEXT: u32 = 13;
+const CF_ENHMETAFILE: u32 = 14;
 const CF_HDROP: u32 = 15;
 const CF_DIBV5: u32 = 17;
 /// Registered formats start here.
@@ -108,9 +113,7 @@ pub fn read(hwnd: HWND, own_sequence: Option<u32>) -> Read {
         drop(open);
         return Read::Snapshot(snap);
     }
-    snap.only_bitmaps = ids.iter().all(|id| {
-        matches!(*id, CF_BITMAP | CF_DIB | CF_DIBV5 | CF_PALETTE) || *id >= FIRST_REGISTERED
-    }) && names.iter().all(|n| n.eq_ignore_ascii_case("PNG"));
+    snap.only_bitmaps = picture_only(&ids, &names);
     if ids.contains(&CF_HDROP) {
         snap.files = read_files();
     }
@@ -127,6 +130,47 @@ pub fn read(hwnd: HWND, own_sequence: Option<u32>) -> Read {
     }
     drop(open);
     Read::Snapshot(snap)
+}
+
+/// Registered formats that mean a copy is more than a picture: a browser's
+/// or an Office program's "copy image" (it carries markup, rich text or an
+/// embedded object), a file drop, a shell item list.
+const NOT_A_SCREENSHOT: &[&str] = &[
+    "HTML Format",
+    "text/html",
+    "Rich Text Format",
+    "FileGroupDescriptorW",
+    "FileGroupDescriptor",
+    "FileContents",
+    "Shell IDList Array",
+    "Csv",
+    "Biff12",
+    "Biff8",
+    "Biff5",
+    "Link",
+    "Embed Source",
+    "Link Source",
+    "Object Descriptor",
+    "Link Source Descriptor",
+];
+
+/// The copy is a picture and nothing else: a screenshot tool offers bitmaps
+/// (and "PNG"), whatever else it registers, so this is a deny-list of what a
+/// screenshot never carries rather than an allow-list of what it does (which
+/// let Snipping Tool's extra formats turn the preview off). A bitmap with
+/// text, files or a vector picture beside it is some other program's copy.
+pub(crate) fn picture_only(ids: &[u32], names: &[String]) -> bool {
+    ids.iter()
+        .any(|id| matches!(*id, CF_BITMAP | CF_DIB | CF_DIBV5))
+        && !ids.iter().any(|id| {
+            matches!(
+                *id,
+                CF_TEXT | CF_OEMTEXT | CF_UNICODETEXT | CF_HDROP | CF_METAFILEPICT | CF_ENHMETAFILE
+            )
+        })
+        && !names
+            .iter()
+            .any(|n| NOT_A_SCREENSHOT.iter().any(|d| n.eq_ignore_ascii_case(d)))
 }
 
 /// The bitmap is the copy only without files and without text: a text that
@@ -379,5 +423,43 @@ mod tests {
             .map(|c| u16::from_le_bytes(*c))
             .collect();
         assert_eq!(names, [67, 58, 92, 97, 0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod picture_tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn a_screenshot_tool_with_any_extra_registered_format_still_counts() {
+        // The old allow-list wanted every registered name to be exactly "PNG".
+        assert!(picture_only(&[CF_DIB, CF_DIBV5], &names(&["PNG"])));
+        assert!(picture_only(
+            &[CF_BITMAP, CF_DIB, CF_DIBV5],
+            &names(&["PNG", "image/png", "Preferred DropEffect", "MSDEVColumnSelect"])
+        ));
+        assert!(picture_only(&[CF_DIB], &[]));
+    }
+
+    #[test]
+    fn a_browsers_or_offices_copy_is_not_a_screenshot() {
+        assert!(!picture_only(&[CF_DIB, CF_DIBV5], &names(&["PNG", "HTML Format"])));
+        assert!(!picture_only(&[CF_DIB], &names(&["text/HTML"])), "case-insensitive");
+        assert!(!picture_only(&[CF_DIB], &names(&["Rich Text Format"])));
+        assert!(!picture_only(&[CF_DIB, CF_ENHMETAFILE], &[]));
+        assert!(!picture_only(&[CF_DIB, CF_UNICODETEXT], &[]), "a picture with text");
+        assert!(!picture_only(&[CF_DIB, CF_HDROP], &[]), "files");
+        assert!(!picture_only(&[CF_DIB], &names(&["Embed Source", "Link"])));
+    }
+
+    #[test]
+    fn without_a_bitmap_nothing_is_a_screenshot() {
+        assert!(!picture_only(&[], &[]));
+        assert!(!picture_only(&[CF_UNICODETEXT], &[]));
+        assert!(!picture_only(&[CF_PALETTE], &names(&["PNG"])));
     }
 }

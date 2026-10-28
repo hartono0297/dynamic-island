@@ -754,6 +754,10 @@ impl App {
                     self.on_shot_folder(shot, dir, found);
                     continue;
                 }
+                Event::ShotSaveDone { path, .. } => {
+                    self.on_shot_save_done(path, now);
+                    continue;
+                }
                 Event::ShotRecycled { file, emptied, .. } => {
                     self.on_shot_recycled(file, emptied, now);
                     continue;
@@ -2537,6 +2541,7 @@ impl App {
                 self.on_clip_timer(id)
             }
             shot::TIMER_SHOT_RETRY => self.on_shot_timer(),
+            shot::TIMER_SHOT_SHOW => self.on_shot_show_timer(),
             TIMER_BATTERY => self.check_battery(),
             TIMER_DEADLINE => {
                 unsafe {
@@ -4876,6 +4881,7 @@ mod tests {
             clip::TIMER_CLIP_SAVE,
             clip::TIMER_CLIP_HOLD,
             shot::TIMER_SHOT_RETRY,
+            shot::TIMER_SHOT_SHOW,
             TIMER_OUTSIDE,
         ];
         for (i, a) in ids.iter().enumerate() {

@@ -5,8 +5,9 @@
 //! works on `App` directly. See docs/memory/screenshot-preview.md.
 //!
 //! Power: no watcher and no polling. One worker lists the folder when an
-//! image arrives, and `TIMER_SHOT_RETRY` (a one-shot) runs at most two more
-//! within about 3 s; then nothing runs until the next image.
+//! image arrives, and `TIMER_SHOT_RETRY` (a one-shot) runs at most four more
+//! within about 5.5 s; `TIMER_SHOT_SHOW` waits for a screen clip's overlay to
+//! close at most three times; then nothing runs until the next image.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,8 +30,16 @@ use crate::ui::render::ShotView;
 /// writes the file a moment after the clipboard). 20–22 are the
 /// clipboard's.
 pub(super) const TIMER_SHOT_RETRY: usize = 23;
-/// The waits before the second and third look: about 3 s in all.
-const RETRY_MS: [u32; 2] = [1000, 1800];
+/// One-shot: the preview waits for a fullscreen app to be gone.
+pub(super) const TIMER_SHOT_SHOW: usize = 25;
+/// The waits before the later looks: they cover the whole match window
+/// (`screenshot::AFTER_MS`), about 5.5 s in all.
+const RETRY_MS: [u32; 4] = [600, 900, 1500, 2500];
+/// The preview comes up while a fullscreen app is reported (a screen clip's
+/// overlay counts as one until it closes): look again this often, this many
+/// times, before it is taken for a game.
+const SHOW_RETRY_MS: u32 = 1200;
+const SHOW_TRIES: u8 = 3;
 /// The preview's thumbnail, made from the full DIB: its 230 × 136 box at 2×.
 const PREVIEW_MAX: (u32, u32) = (460, 272);
 
@@ -57,6 +66,9 @@ pub(super) struct ShotState {
     pub file: Option<FileCandidate>,
     /// Folder looks made so far.
     pub checks: u8,
+    /// The clipboard held a picture and nothing else (`picture_only`): its
+    /// preview does not wait for a file.
+    pub flagged: bool,
 }
 
 /// The screenshots the island knows of.
@@ -70,6 +82,8 @@ pub(super) struct Shots {
     /// The shot whose folder looks still run (the newest only).
     pub checking: Option<u64>,
     pub retry_timer: bool,
+    /// Times the preview waited for a fullscreen app to go.
+    pub show_tries: u8,
     pub next_id: u64,
     /// The Screenshots folder as the last look found it.
     pub dir: Option<PathBuf>,
@@ -130,8 +144,9 @@ pub(super) fn card_to_remove(
 }
 
 /// The notice after "Simpan": "Disimpan · Pictures\Screenshots" when the
-/// screenshot has its file in `dir`; without one (a PrtSc with no auto-save)
-/// "Belum ada file · tetap di clipboard", so no one thinks it is on disk.
+/// screenshot has its file in `dir` (found, or written by Simpan); without one
+/// (no picture to write) "Belum ada file · tetap di clipboard", so no one
+/// thinks it is on disk.
 pub(super) fn kept_notice(has_file: bool, dir: Option<PathBuf>) -> Notice {
     let (title, body) = match (has_file, dir) {
         (true, Some(dir)) => (Key::ShotSaved, screenshot::folder_label(&dir)),
@@ -151,6 +166,27 @@ pub(super) fn kept_notice(has_file: bool, dir: Option<PathBuf>) -> Notice {
 /// it is kept). Simpan, the default, never deletes.
 pub(super) fn delete_when_ignored(on_ignore: ShotIgnore, id: u64) -> Option<u64> {
     (on_ignore == ShotIgnore::Delete).then_some(id)
+}
+
+/// What the preview does about a fullscreen report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShowStep {
+    Show,
+    /// Try again soon: the overlay of a screen clip may still be closing.
+    Later,
+    /// It stayed: a game or a presentation. Nothing shows over it.
+    GiveUp,
+}
+
+/// `tries` waits made so far, `fullscreen` the fresh report.
+fn show_step(fullscreen: bool, tries: u8) -> ShowStep {
+    if !fullscreen {
+        ShowStep::Show
+    } else if tries < SHOW_TRIES {
+        ShowStep::Later
+    } else {
+        ShowStep::GiveUp
+    }
 }
 
 /// A change in Settings → Clipboard → Screenshot.
@@ -173,7 +209,7 @@ impl App {
         img: &ClipImage,
         sequence: u32,
     ) -> bool {
-        if !self.config.screenshot.preview || self.state.fullscreen() {
+        if !self.config.screenshot.preview {
             return false;
         }
         self.shots.next_id += 1;
@@ -207,6 +243,7 @@ impl App {
             dib,
             file: None,
             checks: 0,
+            flagged: img.screenshot,
         };
         // The shown screenshot's file not found yet: one last look for it
         // now, as the new image takes over the retries (a browser's "Copy
@@ -221,14 +258,64 @@ impl App {
             self.look_for_shot_file(prev);
         }
         self.stop_shot_retry();
+        self.stop_shot_show();
         self.shots.waiting = Some(state);
         self.shots.checking = Some(id);
         self.look_for_shot_file(id);
-        if img.screenshot {
-            self.show_waiting_shot();
-            return true;
+        img.screenshot && self.try_show_waiting()
+    }
+
+    /// A screen clip's overlay is a fullscreen window: Windows reports a
+    /// fullscreen app until it closes, and the island's own poll is up to a
+    /// second behind. Asks again now before trusting the flag.
+    fn fullscreen_now(&mut self) -> bool {
+        if self.state.fullscreen() {
+            self.check_fullscreen();
         }
-        false
+        self.state.fullscreen()
+    }
+
+    /// Raises the waiting preview unless a fullscreen app is really there:
+    /// then it tries again soon (`SHOW_TRIES` times) and gives up only for a
+    /// game or a presentation. True when it went up now.
+    fn try_show_waiting(&mut self) -> bool {
+        let fullscreen = self.fullscreen_now();
+        match show_step(fullscreen, self.shots.show_tries) {
+            ShowStep::Show => {
+                self.shots.show_tries = 0;
+                self.show_waiting_shot();
+                true
+            }
+            ShowStep::Later => {
+                self.shots.show_tries += 1;
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_SHOT_SHOW, SHOW_RETRY_MS, None);
+                }
+                false
+            }
+            ShowStep::GiveUp => {
+                self.shots.show_tries = 0;
+                self.shots.waiting = None;
+                false
+            }
+        }
+    }
+
+    fn stop_shot_show(&mut self) {
+        self.shots.show_tries = 0;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SHOT_SHOW);
+        }
+    }
+
+    /// `TIMER_SHOT_SHOW`: the preview that waited for the overlay tries again.
+    pub(super) fn on_shot_show_timer(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SHOT_SHOW);
+        }
+        if self.shots.waiting.is_some() && self.try_show_waiting() {
+            self.refresh(Instant::now());
+        }
     }
 
     /// The waiting shot's preview goes up; it replaces the one before.
@@ -333,8 +420,8 @@ impl App {
                     .as_ref()
                     .is_some_and(|s| s.look.id == shot);
                 if waiting {
-                    if self.config.screenshot.preview && !self.state.fullscreen() {
-                        self.show_waiting_shot();
+                    if self.config.screenshot.preview {
+                        self.try_show_waiting();
                     } else {
                         self.shots.waiting = None;
                     }
@@ -354,11 +441,13 @@ impl App {
                 if looking {
                     self.shots.checking = None;
                 }
+                // A picture without its file still shows (it waits for the
+                // overlay at most); one that is not flagged was no screenshot.
                 if self
                     .shots
                     .waiting
                     .as_ref()
-                    .is_some_and(|s| s.look.id == shot)
+                    .is_some_and(|s| s.look.id == shot && !s.flagged)
                 {
                     self.shots.waiting = None;
                 }
@@ -423,7 +512,25 @@ impl App {
                     .as_ref()
                     .and_then(|f| f.path.parent().map(PathBuf::from))
                     .or_else(|| self.shots.dir.clone());
-                Some(Event::Notice(kept_notice(state.file.is_some(), dir)))
+                if state.file.is_some() {
+                    return Some(Event::Notice(kept_notice(true, dir)));
+                }
+                // No file in the folder (a snip that was only copied): Simpan
+                // writes one. The notice follows in `on_shot_save_done`.
+                let started = state.dib.clone().is_some_and(|dib| {
+                    win::spawn_save(
+                        id,
+                        dib,
+                        chrono::Local::now().naive_local(),
+                        self.tx.clone(),
+                        poster(self.hwnd, WM_APP_EVENT),
+                    )
+                });
+                if started {
+                    None
+                } else {
+                    Some(Event::Notice(kept_notice(false, dir)))
+                }
             }
             ShotAction::Open(id) => {
                 let state = self.shots.shown.as_ref().filter(|s| s.look.id == id)?;
@@ -497,6 +604,33 @@ impl App {
         })
     }
 
+    /// The save worker is done: "Disimpan" with the folder, or why not. The
+    /// new file is this screenshot's: no later screenshot matches it.
+    pub(super) fn on_shot_save_done(&mut self, path: Option<PathBuf>, now: Instant) {
+        let notice = match path {
+            Some(path) => {
+                let dir = path.parent().map(PathBuf::from);
+                if dir.is_some() {
+                    self.shots.dir = dir.clone();
+                }
+                let taken = &mut self.shots.taken;
+                taken.push(path);
+                if taken.len() > TAKEN_CAP {
+                    taken.remove(0);
+                }
+                kept_notice(true, dir)
+            }
+            None => Notice {
+                key: "shot-saved".into(),
+                source: tr(Key::ShotTitle).into(),
+                title: tr(Key::ShotSaveFailed).into(),
+                body: tr(Key::ShotOnClipboard).into(),
+                kind: NoticeKind::ShotSaved,
+            },
+        };
+        self.apply(Event::Notice(notice), now);
+    }
+
     /// The delete worker is done: "Dihapus" (Bata at rest) says what went.
     pub(super) fn on_shot_recycled(&mut self, file: FileOutcome, emptied: bool, now: Instant) {
         let (title, body) = i18n::shot_deleted(i18n::lang(), file, emptied);
@@ -533,7 +667,30 @@ impl App {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{card_to_remove, delete_when_ignored, kept_notice};
+    use super::{
+        RETRY_MS, SHOW_RETRY_MS, SHOW_TRIES, ShowStep, card_to_remove, delete_when_ignored,
+        kept_notice, show_step,
+    };
+
+    #[test]
+    fn the_file_looks_cover_the_whole_match_window() {
+        // Snipping Tool may write its file seconds after the clipboard.
+        let total: u32 = RETRY_MS.iter().sum();
+        assert!(i64::from(total) >= crate::screenshot::AFTER_MS, "{total} ms");
+        assert!(RETRY_MS.iter().all(|&ms| ms >= 500), "no busy looping");
+    }
+
+    #[test]
+    fn a_fullscreen_report_is_waited_out_before_it_is_taken_for_a_game() {
+        assert_eq!(show_step(false, 0), ShowStep::Show);
+        assert_eq!(show_step(false, SHOW_TRIES), ShowStep::Show);
+        for tries in 0..SHOW_TRIES {
+            assert_eq!(show_step(true, tries), ShowStep::Later, "try {tries}");
+        }
+        assert_eq!(show_step(true, SHOW_TRIES), ShowStep::GiveUp);
+        // The waits add up to a few seconds, no more.
+        assert!(u32::from(SHOW_TRIES) * SHOW_RETRY_MS <= 5_000);
+    }
     use crate::clipboard::History;
     use crate::config::{Config, ShotIgnore};
 

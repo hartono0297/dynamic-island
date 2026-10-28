@@ -83,3 +83,43 @@ matching, PNG/JPEG headers, folder listing; Win32: `win`) and
 Related: [[bata-robot-expressions]], [[system-page]]
 
 Listed in [[index]].
+
+## v3.2 Run 3: the preview always shows
+
+Why it could stay silent in 3.1.0 (read from the code; the Windows side was
+not seen live):
+
+1. `only_bitmaps` was an allow-list: every registered format name had to be
+   exactly "PNG". Any extra format a screenshot tool registers turned the
+   instant preview off, and the preview then waited for a FILE; Win+Shift+S
+   often writes none.
+2. A screen clip's overlay is a fullscreen window: `SHQueryUserNotificationState`
+   says BUSY until it closes, and the island's own poll is up to a second
+   behind. `shot_from_image` dropped the image when the cached flag said
+   fullscreen, with no retry (and the reducer drops screenshot notices too
+   while fullscreen).
+3. The file looks stopped at about 2.8 s, short of the 5 s match window.
+
+Now:
+
+- `picture_only` (`clipboard/win.rs`) is a deny-list: a bitmap and none of
+  text, files, a metafile, or HTML / rich text / Office / shell-list formats
+  (`NOT_A_SCREENSHOT`). A browser's "Copy image" carries HTML Format, so it is
+  still no screenshot.
+- `fullscreen_now` asks Windows again before trusting the cached flag;
+  `try_show_waiting` waits `SHOW_RETRY_MS` (1.2 s) up to `SHOW_TRIES` (3)
+  times on `TIMER_SHOT_SHOW` (25), and gives up only for a game or a
+  presentation. A flagged picture without a file is never dropped.
+- `RETRY_MS` = 0.6, 0.9, 1.5, 2.5 s after the first look: the looks cover the
+  whole match window.
+- Simpan with no file writes one: `spawn_save` encodes the clipboard DIB at
+  full size as a PNG through WIC on a worker, in the Screenshots folder (made
+  if missing), `Screenshot YYYY-MM-DD HHMMSS.png`, " (2)"... never over
+  another file (`save_name`). The path joins `taken`, so no later screenshot
+  matches it. Failure says "Gagal menyimpan". Without the full picture (a
+  history restored after a restart) it still says nothing was written.
+- Must be verified live: the exact clipboard formats and owner of Win+Shift+S,
+  PrtSc, Win+PrtSc and `ms-screenclip:`; whether Win+PrtSc touches the
+  clipboard at all (the only trigger is `WM_CLIPBOARDUPDATE`; there is no
+  folder watcher); whether Pictures is OneDrive-redirected (its files can look
+  like reparse points, which `list_folder` skips).

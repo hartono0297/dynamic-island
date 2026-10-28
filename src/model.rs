@@ -207,6 +207,12 @@ pub enum Event {
         dir: Option<PathBuf>,
         found: Option<FileCandidate>,
     },
+    /// "Simpan" wrote screenshot `shot` as a PNG: its path, `None` when it
+    /// could not be written. `App` raises the notice; the reducer ignores it.
+    ShotSaveDone {
+        shot: u64,
+        path: Option<PathBuf>,
+    },
     /// "Hapus" ran for `shot`: what became of the file, and whether the
     /// clipboard was emptied. `App` raises the notice; the reducer ignores it.
     ShotRecycled {

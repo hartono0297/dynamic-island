@@ -459,6 +459,7 @@ keys! {
     ShellCliDesc => "Untuk perintah di halaman CLI", "Runs the CLI page's commands";
     ShellPowerShell => "PowerShell", "PowerShell";
     ShellCmd => "cmd", "cmd";
+    ShotSaveFailed => "Gagal menyimpan", "Could not save";
     OpenModeSetting => "Mode buka", "Open mode";
     OpenModeDesc => "Cara panel dibuka", "How the panel opens";
     OpenModeHover => "Hover", "Hover";

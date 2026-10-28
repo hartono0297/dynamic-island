@@ -615,3 +615,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// "Screenshot 2026-10-28 143012.png", the way Windows names them, with " (2)",
+/// " (3)" ... before the extension while `exists` says a name is taken: a
+/// saved screenshot never overwrites another file.
+pub fn save_name(now: chrono::NaiveDateTime, exists: impl Fn(&str) -> bool) -> String {
+    let stem = format!("Screenshot {}", now.format("%Y-%m-%d %H%M%S"));
+    let first = format!("{stem}.png");
+    if !exists(&first) {
+        return first;
+    }
+    (2..1000)
+        .map(|n| format!("{stem} ({n}).png"))
+        .find(|name| !exists(name))
+        .unwrap_or_else(|| format!("{stem} (1000).png"))
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn at() -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 28)
+            .and_then(|d| d.and_hms_opt(14, 30, 12))
+            .expect("valid time")
+    }
+
+    #[test]
+    fn the_name_follows_windows_and_never_overwrites() {
+        assert_eq!(save_name(at(), |_| false), "Screenshot 2026-10-28 143012.png");
+        let taken = |n: &str| n == "Screenshot 2026-10-28 143012.png";
+        assert_eq!(save_name(at(), taken), "Screenshot 2026-10-28 143012 (2).png");
+        let two = |n: &str| {
+            n == "Screenshot 2026-10-28 143012.png" || n == "Screenshot 2026-10-28 143012 (2).png"
+        };
+        assert_eq!(save_name(at(), two), "Screenshot 2026-10-28 143012 (3).png");
+    }
+}
