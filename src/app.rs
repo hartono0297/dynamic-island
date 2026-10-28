@@ -4705,7 +4705,11 @@ fn open_menu(hwnd: HWND) {
     if MENU_OPEN.get() {
         return;
     }
-    let Some(config) = with_app(|app| app.config.clone()) else {
+    let Some(config) = with_app(|app| {
+        // A hotkey another app held may be free by now.
+        app.retry_hotkeys();
+        app.config.clone()
+    }) else {
         return;
     };
     MENU_OPEN.set(true);
@@ -4716,14 +4720,10 @@ fn open_menu(hwnd: HWND) {
     MENU_OPEN.set(false);
     match cmd {
         Some(MenuCmd::Settings) => open_settings(hwnd),
-        // Whatever the hotkey is (off, taken): the menu always opens it.
+        // Whatever the hotkey is (off, taken): the menu always opens it
+        // (and never closes it).
         Some(MenuCmd::Search) => {
-            with_app(|app| {
-                if before != app.hwnd && !before.is_invalid() {
-                    app.cli_prev = Some(before);
-                }
-                app.on_search_hotkey();
-            });
+            with_app(|app| app.on_search_menu(before));
         }
         Some(MenuCmd::StylePill) => {
             with_app(|app| app.set_style(Style::Pill));
@@ -4739,7 +4739,11 @@ fn open_menu(hwnd: HWND) {
 /// Opens the settings window, or brings the open one forward. Outside
 /// `with_app`: creating and focusing a window sends messages.
 fn open_settings(hwnd: HWND) {
-    let Some(model) = with_app(|app| app.settings_model()) else {
+    let Some(model) = with_app(|app| {
+        // Settings shows whether a hotkey is taken: try a failed one again.
+        app.retry_hotkeys();
+        app.settings_model()
+    }) else {
         return;
     };
     if let Err(error) = settings::open(hwnd, model, None) {

@@ -153,6 +153,9 @@ pub enum Event {
     /// The quick search's hotkey: opens it over the page shown (and takes the
     /// keyboard for its field), or closes it when it is open.
     SearchHotkey,
+    /// The tray's "Cari…": the quick search opens, or, when it is open
+    /// already, its field takes the keyboard again (never a close).
+    SearchOpen,
     /// The quick search closes: Esc, Enter on a result, the keyboard leaving.
     SearchClose,
     /// The Start Menu's apps, indexed on a background thread. `App` keeps

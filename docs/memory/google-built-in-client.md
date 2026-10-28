@@ -37,7 +37,9 @@ with `DI_GOOGLE=needslogin`.
 
 - A rejected client (`invalid_client`) is a refusal with advice, not "not
   set up": the user's own → "cek Pengaturan → Integrasi", Vale's → "coba lagi
-  nanti, atau pakai Client ID sendiri" (`sync::rejected`).
+  nanti, atau pakai Client ID sendiri" (`sync::rejected`). The browser page
+  after a login follows the same split (`oauth::page_key`: own →
+  `OauthRejected`, Vale's → `OauthBuiltInRejected`).
 - While an own Client ID is filled in, its fields and "Hubungkan" show and
   the disclosure is hidden: the button never logs in with a client its label
   does not name. `Client`'s Debug redacts the secret.

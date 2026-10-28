@@ -191,6 +191,8 @@ keys! {
         "Sign-in cancelled — press Sign in with Google in the island to try again.";
     OauthRejected => "Google menolak Client ID — cek Pengaturan → Integrasi di island.",
         "Google rejected the Client ID — check Settings → Integrations in the island.";
+    OauthBuiltInRejected => "Google sedang menolak login Vale — coba lagi nanti, atau pakai Client ID sendiri (Pengaturan → Integrasi → Lanjutan di island).",
+        "Google is refusing Vale's sign-in right now — try again later, or use your own Client ID (Settings → Integrations → Advanced in the island).";
     OauthFailed => "Gagal terhubung — coba lagi dari island.",
         "Couldn't connect — try again from the island.";
     OauthScopes => "Izin Google belum lengkap — centang kedua izin, lalu coba lagi dari island.",
@@ -348,6 +350,8 @@ keys! {
     TileKindUrl => "Alamat web", "Web address";
     TilesOwnHint => "Tile sendiri: tambahkan di config.json (lihat README)",
         "Your own tiles: add them in config.json (see the README)";
+    TileNotShown => "Tidak tampil (maks. 12)", "Not shown (12 max)";
+    TilePageFull => "Halaman penuh (maks. 12)", "Page full (12 max)";
     ShortcutScreenshot => "Screenshot", "Screenshot";
     ShortcutClipboard => "Clipboard", "Clipboard";
     ShortcutSearch => "Cari", "Search";

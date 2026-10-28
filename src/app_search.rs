@@ -12,7 +12,13 @@ use std::time::Instant;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey, VK_SPACE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::UI::WindowsAndMessaging::{
+    ASFW_ANY, AllowSetForegroundWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW,
+    GetForegroundWindow, GetTopWindow, GetWindow, GetWindowLongW, IsIconic, IsWindowVisible,
+    SetForegroundWindow, WINDOW_EX_STYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+};
 
 use super::{App, WM_APP_EVENT, poster};
 use crate::clipboard::win;
@@ -78,10 +84,12 @@ pub(super) fn move_selection(at: usize, n: usize, up: bool) -> usize {
 
 impl App {
     /// Registers the chosen hotkey (none by default). A failure (another app
-    /// has it) shows in Settings; nothing else happens.
+    /// has it) shows in Settings and is tried again on the next sync (a
+    /// config read, the tray menu or Settings opening), since the app that
+    /// held it may have let go.
     pub(super) fn sync_search_hotkey(&mut self) {
         let want = self.config.search_hotkey;
-        if self.search.hotkey == Some(want) {
+        if self.search.hotkey == Some(want) && !self.search.hotkey_failed {
             return;
         }
         unsafe {
@@ -102,6 +110,17 @@ impl App {
         self.search.hotkey = Some(want);
     }
 
+    /// Tries a hotkey whose registration failed again (the tray menu or
+    /// Settings opening); one that works is left alone.
+    pub(super) fn retry_hotkeys(&mut self) {
+        if self.search.hotkey_failed {
+            self.sync_search_hotkey();
+        }
+        if self.clip.hotkey_failed {
+            self.sync_clip_hotkey();
+        }
+    }
+
     /// `WM_DESTROY`: the hotkey goes.
     pub(super) fn search_shutdown(&mut self) {
         unsafe {
@@ -114,6 +133,19 @@ impl App {
     pub(super) fn on_search_hotkey(&mut self) {
         self.start_search_index();
         self.apply_now(Event::SearchHotkey);
+    }
+
+    /// The tray's "Cari…": the search opens, or its field takes the
+    /// keyboard again when it is open already. `before` had the foreground
+    /// when the menu opened; it is where Esc hands the keyboard back,
+    /// unless that was the taskbar (a click on the tray icon activates it)
+    /// or the island itself.
+    pub(super) fn on_search_menu(&mut self, before: HWND) {
+        if let Some(prev) = window_to_return_to(before, self.hwnd) {
+            self.cli_prev = Some(prev);
+        }
+        self.start_search_index();
+        self.apply_now(Event::SearchOpen);
     }
 
     /// Reads the Start Menu on its own thread, once.
@@ -153,7 +185,10 @@ impl App {
         if editor::focus_open_editor() {
             return Some(Event::SearchClose);
         }
-        let input = self.search_input.as_ref()?;
+        // The field could not be made when the island started: no search.
+        let Some(input) = self.search_input.as_ref() else {
+            return Some(Event::SearchClose);
+        };
         input.set_text("");
         self.search.query.clear();
         self.search.results.clear();
@@ -258,37 +293,116 @@ impl App {
 
     /// Runs result `i` (the search is closing already). `Some(event)` is
     /// what to show after (the "Disalin" notice of a copied result).
+    ///
+    /// An app, a settings page or the web opens while the island still has
+    /// the foreground, so Windows lets the new window come to the front:
+    /// the keyboard is not handed back to the window from before (the
+    /// release that follows finds nowhere to go and only clears the field's
+    /// focus), and the shell runs on the shortcut timer, outside the app
+    /// borrow, a moment later with the island still in front. Every process
+    /// may also take the foreground once (`ASFW_ANY`), for a browser or the
+    /// Settings app that is already running and is asked through a broker.
+    /// Clicking elsewhere meanwhile simply wins.
     pub(super) fn run_search(&mut self, i: usize) -> Option<Event> {
         let result = self.search.results.get(i)?.clone();
-        match result.action {
-            Action::Launch(path) => {
-                self.queue_shortcut(shortcuts::Action::Shell(path));
-                None
-            }
-            Action::OpenSetting(uri) => {
-                self.queue_shortcut(shortcuts::Action::Shell(uri.to_owned()));
-                None
-            }
-            Action::OpenWeb(url) => {
-                if search::is_web_url(&url) {
-                    self.queue_shortcut(shortcuts::Action::Shell(url));
-                }
-                None
-            }
-            Action::Copy(text) => {
-                let sequence = win::write(self.hwnd, &text_formats(&text))?;
-                // Written here: not a copy for the history to take again.
-                self.clip.own_sequence = Some(sequence);
-                Some(Event::Notice(Notice {
-                    key: "search-copied".into(),
-                    source: tr(Key::SearchTitle).into(),
-                    title: tr(Key::ClipCopied).into(),
-                    body: text,
-                    kind: NoticeKind::Copied,
-                }))
+        let target = match result.action {
+            Action::Launch(path) => path,
+            Action::OpenSetting(uri) => uri.to_owned(),
+            Action::OpenWeb(url) if search::is_web_url(&url) => url,
+            Action::OpenWeb(_) => return None,
+            Action::Copy(text) => return self.copy_search_result(text),
+        };
+        self.cli_prev = None;
+        unsafe {
+            if GetForegroundWindow() == self.hwnd {
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
             }
         }
+        self.queue_shortcut(shortcuts::Action::Shell(target));
+        None
     }
+
+    /// A calculation's result goes to the clipboard and "Disalin" shows; the
+    /// keyboard goes back to the window from before.
+    fn copy_search_result(&mut self, text: String) -> Option<Event> {
+        let sequence = win::write(self.hwnd, &text_formats(&text))?;
+        // Written here: not a copy for the history to take again.
+        self.clip.own_sequence = Some(sequence);
+        Some(Event::Notice(Notice {
+            key: "search-copied".into(),
+            source: tr(Key::SearchTitle).into(),
+            title: tr(Key::ClipCopied).into(),
+            body: text,
+            kind: NoticeKind::Copied,
+        }))
+    }
+}
+
+/// Window classes of the shell's own bars: the taskbar (main and other
+/// screens) and the tray overflow. A click on a tray icon activates one of
+/// them, so it is never the window to give the keyboard back to.
+const SHELL_CLASSES: [&str; 4] = [
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "NotifyIconOverflowWindow",
+    "TopLevelWindowForOverflowXamlIsland",
+];
+
+fn is_shell_class(class: &str) -> bool {
+    SHELL_CLASSES.iter().any(|c| c.eq_ignore_ascii_case(class))
+}
+
+/// The window the search hands the keyboard back to after the tray menu:
+/// `before` (the foreground when the menu opened) when it is an ordinary
+/// window; when it is the taskbar or the island, the topmost ordinary
+/// window under it in the z-order (the one that had the keyboard before the
+/// click, in practice); else none. Ordinary: visible, not minimised, not
+/// cloaked (another virtual desktop, a suspended app), not a tool window,
+/// not always-on-top and not the shell.
+fn window_to_return_to(before: HWND, island: HWND) -> Option<HWND> {
+    let ordinary = |hwnd: HWND| unsafe {
+        if hwnd.is_invalid() || hwnd == island {
+            return false;
+        }
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
+        let ex = WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32);
+        if ex.contains(WS_EX_TOOLWINDOW) || ex.contains(WS_EX_TOPMOST) || ex.contains(WS_EX_NOACTIVATE) {
+            return false;
+        }
+        let mut cloaked = 0u32;
+        let read = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        );
+        if read.is_ok() && cloaked != 0 {
+            return false;
+        }
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        !is_shell_class(&String::from_utf16_lossy(&class[..n]))
+    };
+    if before.is_invalid() || before == island {
+        // The island had it: the search already knows where to go back to.
+        return None;
+    }
+    let mut class = [0u16; 64];
+    let n = unsafe { GetClassNameW(before, &mut class) }.max(0) as usize;
+    if !is_shell_class(&String::from_utf16_lossy(&class[..n])) {
+        return Some(before);
+    }
+    // At most a few hundred windows: a z-order walk is cheap, and bounded.
+    let mut at = unsafe { GetTopWindow(None) }.ok()?;
+    for _ in 0..512 {
+        if ordinary(at) {
+            return Some(at);
+        }
+        at = unsafe { GetWindow(at, GW_HWNDNEXT) }.ok()?;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -303,6 +417,26 @@ mod tests {
         assert_eq!(move_selection(3, 4, true), 2);
         assert_eq!(move_selection(0, 0, false), 0);
         assert_eq!(move_selection(5, 0, true), 0);
+    }
+
+    #[test]
+    fn the_taskbar_and_tray_overflow_are_never_returned_to() {
+        for class in [
+            "Shell_TrayWnd",
+            "shell_traywnd",
+            "Shell_SecondaryTrayWnd",
+            "NotifyIconOverflowWindow",
+            "TopLevelWindowForOverflowXamlIsland",
+        ] {
+            assert!(is_shell_class(class), "{class}");
+        }
+        for class in ["Chrome_WidgetWin_1", "Notepad", "CabinetWClass", "", "Shell_Tray"] {
+            assert!(!is_shell_class(class), "{class}");
+        }
+        // The island, or nothing, before the menu: nothing new to remember.
+        let island = HWND(std::ptr::dangling_mut());
+        assert_eq!(window_to_return_to(island, island), None);
+        assert_eq!(window_to_return_to(HWND::default(), island), None);
     }
 
     #[test]

@@ -109,9 +109,13 @@ pub struct Calc {
 }
 
 /// `+ - * / % ^` (also `×` and `÷`), parentheses, decimals (`.` or `,`) and
-/// spaces. `%` is the remainder. Anything else, a division by zero or a
-/// result that is not a finite number gives `None`; it never panics.
-pub fn calculate(line: &str) -> Option<Calc> {
+/// spaces. `%` is the remainder. The language's thousands mark (`.` in
+/// Indonesian, `,` in English) is read as one when exactly three digits
+/// follow it, before any decimal mark: "1.000 + 500" is 1500 in Indonesian,
+/// "1,000 + 500" in English; otherwise either mark is a decimal one.
+/// Anything else, a division by zero or a result that is not a finite number
+/// gives `None`; it never panics.
+pub fn calculate(line: &str, lang: Lang) -> Option<Calc> {
     if line.chars().count() > QUERY_MAX {
         return None;
     }
@@ -123,6 +127,10 @@ pub fn calculate(line: &str) -> Option<Calc> {
         at: 0,
         depth: 0,
         compound: false,
+        group: match lang {
+            Lang::Id => '.',
+            Lang::En => ',',
+        },
     };
     let value = p.expr()?;
     if p.peek().is_some() || !value.is_finite() {
@@ -139,6 +147,8 @@ struct Parser {
     at: usize,
     depth: usize,
     compound: bool,
+    /// The thousands mark of the line's language.
+    group: char,
 }
 
 impl Parser {
@@ -243,26 +253,37 @@ impl Parser {
 
     fn number(&mut self) -> Option<f64> {
         self.peek();
-        let start = self.at;
+        let mut text = String::new();
         let mut dot = false;
         while let Some(&c) = self.chars.get(self.at) {
             match c {
-                '0'..='9' => self.at += 1,
+                '0'..='9' => {
+                    text.push(c);
+                    self.at += 1;
+                }
+                // A thousands mark: after a digit, before any decimal mark,
+                // with exactly three digits after it. It adds nothing.
+                c if c == self.group && !dot && !text.is_empty() && self.three_digits_follow() => {
+                    self.at += 1;
+                }
                 '.' | ',' if !dot => {
                     dot = true;
+                    text.push('.');
                     self.at += 1;
                 }
                 _ => break,
             }
         }
-        let text: String = self.chars[start..self.at]
-            .iter()
-            .map(|c| if *c == ',' { '.' } else { *c })
-            .collect();
         if text.is_empty() || text == "." {
             return None;
         }
         text.parse::<f64>().ok().filter(|v| v.is_finite())
+    }
+
+    /// Exactly three digits follow the mark at `at`, and no fourth.
+    fn three_digits_follow(&self) -> bool {
+        let digit = |k: usize| self.chars.get(self.at + k).is_some_and(|c| c.is_ascii_digit());
+        (1..=3).all(digit) && !digit(4)
     }
 }
 
@@ -383,7 +404,7 @@ pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec
             .unwrap_or_default();
     }
     let mut out = Vec::new();
-    if let Some(calc) = calculate(line).filter(|c| c.compound) {
+    if let Some(calc) = calculate(line, lang).filter(|c| c.compound) {
         let shown = format_number(calc.value, lang);
         out.push(SearchResult {
             kind: Kind::Calc,
@@ -527,8 +548,16 @@ mod tests {
         }
     }
 
+    /// The line's value, the same in both languages (no thousands mark in
+    /// it).
     fn calc(line: &str) -> Option<f64> {
-        calculate(line).map(|c| c.value)
+        let id = calc_in(line, Lang::Id);
+        assert_eq!(id, calc_in(line, Lang::En), "{line:?}");
+        id
+    }
+
+    fn calc_in(line: &str, lang: Lang) -> Option<f64> {
+        calculate(line, lang).map(|c| c.value)
     }
 
     #[test]
@@ -576,9 +605,40 @@ mod tests {
 
     #[test]
     fn a_lone_number_is_not_compound() {
-        assert_eq!(calculate("42").map(|c| c.compound), Some(false));
-        assert_eq!(calculate("(42)").map(|c| c.compound), Some(true));
-        assert_eq!(calculate("1+1").map(|c| c.compound), Some(true));
+        for lang in [Lang::Id, Lang::En] {
+            assert_eq!(calculate("42", lang).map(|c| c.compound), Some(false));
+            assert_eq!(calculate("(42)", lang).map(|c| c.compound), Some(true));
+            assert_eq!(calculate("1+1", lang).map(|c| c.compound), Some(true));
+            assert_eq!(calculate("1.000", lang).map(|c| c.compound), Some(false));
+        }
+    }
+
+    #[test]
+    fn the_thousands_mark_follows_the_language() {
+        // Indonesian: "." groups thousands, "," is the decimal mark.
+        assert_eq!(calc_in("1.000 + 500", Lang::Id), Some(1500.0));
+        assert_eq!(calc_in("1.000.000 / 1.000", Lang::Id), Some(1000.0));
+        assert_eq!(calc_in("1.000,5 * 2", Lang::Id), Some(2001.0));
+        assert_eq!(calc_in("2,5 * 2", Lang::Id), Some(5.0));
+        assert_eq!(calc_in("1,000 + 1", Lang::Id), Some(2.0), "a comma is decimal");
+        // Not exactly three digits after it: a decimal point after all.
+        assert_eq!(calc_in("1.5 + 1", Lang::Id), Some(2.5));
+        assert_eq!(calc_in("1.25 + 1", Lang::Id), Some(2.25));
+        assert_eq!(calc_in("1.0000 + 1", Lang::Id), Some(2.0));
+        assert_eq!(calc_in(".500 * 2", Lang::Id), Some(1.0), "no digit before");
+        // English: "," groups thousands, "." is the decimal mark.
+        assert_eq!(calc_in("1,000 + 500", Lang::En), Some(1500.0));
+        assert_eq!(calc_in("1,000,000 / 1,000", Lang::En), Some(1000.0));
+        assert_eq!(calc_in("1,000.5 * 2", Lang::En), Some(2001.0));
+        assert_eq!(calc_in("1.000 + 500", Lang::En), Some(501.0), "a point is decimal");
+        assert_eq!(calc_in("1,5 + 1", Lang::En), Some(2.5));
+        // No thousands mark after the decimal one.
+        assert_eq!(calc_in("1,5.000 + 1", Lang::Id), None);
+        assert_eq!(calc_in("1.5,000 + 1", Lang::En), None);
+        assert_eq!(calc_in("1..000", Lang::Id), None);
+        // The search row shows the Indonesian sum.
+        let r = search("1.000 + 500", &[], Lang::Id, &labels());
+        assert_eq!(r[0].title, "= 1500");
     }
 
     #[test]
