@@ -909,23 +909,42 @@ pub fn append_defaults(path: &Path, wanted: &[String]) -> io::Result<usize> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
-    let text = existing
+    // A file with a UTF-16LE BOM (PowerShell 5.1's Out-File, Notepad's
+    // "Unicode") is read and extended as UTF-16LE.
+    let utf16 = existing
         .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
+        .is_some_and(|b| b.starts_with(&[0xFF, 0xFE]));
+    let text = match existing.as_deref() {
+        Some(b) if utf16 => String::from_utf16_lossy(
+            &b[2..]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<u16>>(),
+        ),
+        Some(b) => String::from_utf8_lossy(b).into_owned(),
+        None => String::new(),
+    };
     let missing = missing_entries(&text, wanted);
     if missing.is_empty() {
         return Ok(0);
     }
+    let encode = |s: &str| -> Vec<u8> {
+        if utf16 {
+            s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+        } else {
+            s.as_bytes().to_vec()
+        }
+    };
     let mut out = existing
         .clone()
         .unwrap_or_else(|| "\u{feff}".as_bytes().to_vec());
-    if out.last().is_some_and(|b| *b != b'\n') && !out.ends_with("\u{feff}".as_bytes()) {
-        out.extend_from_slice(b"\r\n");
+    let body = text.trim_start_matches('\u{feff}');
+    if !body.is_empty() && !body.ends_with('\n') {
+        out.extend(encode("\r\n"));
     }
     for entry in &missing {
-        out.extend_from_slice(entry.as_bytes());
-        out.extend_from_slice(b"\r\n");
+        out.extend(encode(entry));
+        out.extend(encode("\r\n"));
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -940,6 +959,19 @@ pub fn append_defaults(path: &Path, wanted: &[String]) -> io::Result<usize> {
         let _ = std::fs::remove_file(&tmp);
     })?;
     Ok(missing.len())
+}
+
+/// What adding the default protections before preview `run` tells the
+/// island: done, or a line in the preview's log saying the folders are not
+/// protected (the preview still runs; nothing was promised to Mole).
+fn defaults_event(result: &io::Result<usize>, run: u64) -> MoleEvent {
+    match result {
+        Ok(_) => MoleEvent::DefaultsAdded,
+        Err(_) => MoleEvent::Lines {
+            run,
+            lines: vec![i18n::tr(Key::MoleProtectFailed).into()],
+        },
+    }
 }
 
 /// The default protections for this user, appended to Mole's whitelist.
@@ -1257,8 +1289,8 @@ fn serve(rx: &Receiver<Request>, mut runner: RealRunner, tx: &Sender<Event>, wak
                 opts,
                 protect_defaults,
             } => {
-                if protect_defaults && add_defaults_here().is_ok() {
-                    send(MoleEvent::DefaultsAdded);
+                if protect_defaults {
+                    send(defaults_event(&add_defaults_here(), run));
                 }
                 let result = run_preview(&mut runner, &install, opts, &mut |lines| {
                     send(MoleEvent::Lines { run, lines });
@@ -1959,6 +1991,49 @@ mod tests {
             &wanted[1..2]
         );
         assert!(!dir.join("whitelist.txt.di-tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_whitelist_that_cannot_be_written_says_so_in_the_log() {
+        assert_eq!(defaults_event(&Ok(4), 7), MoleEvent::DefaultsAdded);
+        let failed = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        assert_eq!(
+            defaults_event(&Err(failed), 7),
+            MoleEvent::Lines {
+                run: 7,
+                lines: vec![text(Lang::Id, Key::MoleProtectFailed).into()]
+            }
+        );
+    }
+
+    #[test]
+    fn a_utf16_whitelist_stays_utf16() {
+        // Windows PowerShell 5.1's Out-File and Notepad's "Unicode" write
+        // UTF-16LE with a BOM; UTF-8 bytes appended to it would be garbage.
+        let dir = temp_dir("whitelist-utf16");
+        let path = dir.join("whitelist.txt");
+        let utf16 = |s: &str| -> Vec<u8> {
+            let mut b = vec![0xFF, 0xFE];
+            b.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
+            b
+        };
+        let before = "# mine\r\nC:\\Users\\x\\.cargo\\registry\r\n";
+        std::fs::write(&path, utf16(before)).unwrap();
+        let wanted = [
+            r"C:\Users\x\.cargo\registry".to_string(),
+            r"C:\Users\x\.cargo\git".to_string(),
+        ];
+        assert_eq!(
+            append_defaults(&path, &wanted).unwrap(),
+            1,
+            "registry is there"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            utf16(&format!("{before}C:\\Users\\x\\.cargo\\git\r\n"))
+        );
+        assert_eq!(append_defaults(&path, &wanted).unwrap(), 0, "never twice");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

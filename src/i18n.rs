@@ -312,6 +312,8 @@ keys! {
     MoleOptSystem => "+ Sistem (admin)", "+ System (admin)";
     MoleOptGame => "+ Media game > 90 hari", "+ Game media > 90 days";
     MoleProtect => "Lindungi folder…", "Protect folders…";
+    MoleProtectFailed => "Whitelist Mole tidak bisa ditulis: cache Cargo & Autodesk tidak terlindungi",
+        "Could not write Mole's whitelist: the Cargo & Autodesk caches are not protected";
     MoleRun => "Jalankan Mole", "Run Mole";
     MoleConfirm => "Yakin? Hapus permanen", "Sure? Delete for good";
     MoleRunning => "Mole membersihkan…", "Mole is cleaning…";
