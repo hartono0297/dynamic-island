@@ -86,8 +86,8 @@ Rust (edition 2024), Windows 11 x64 only. Needs the stable Rust toolchain with
 the MSVC target (`rustup`, `cargo`); CI builds with `cargo build --release --locked`.
 
 - Install: `rustup toolchain install stable --profile minimal` (deps come via cargo)
-- Build: `cargo build --release --locked` → `target/release/dynamic-island.exe`
+- Build: `cargo build --release --locked` → `target/release/vale.exe`
 - Test: `cargo test --locked` (unit tests live inside `src/**` as `#[cfg(test)]` modules)
 - Run locally: `cargo run --release`. The island is a single-instance UI at the
-  top of the screen; stop any installed copy first (`Stop-Process -Name dynamic-island`).
+  top of the screen; stop any installed copy first (`Stop-Process -Name vale, dynamic-island`).
 - Release: push a `v*` tag; `.github/workflows/release.yml` builds and publishes.

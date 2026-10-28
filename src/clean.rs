@@ -766,17 +766,29 @@ pub fn delete_files(targets: &[Target]) -> Tally {
     tally
 }
 
-/// Removes the empty folders under `dir` (not `dir` itself), deepest first.
-/// Folders that are not empty, links and errors are left.
-pub fn prune_empty(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.metadata().is_ok_and(|m| m.is_dir() && plain(&m)) {
-            let sub = entry.path();
-            prune_empty(&sub);
-            let _ = fs::remove_dir(&sub);
+/// After a delete: removes the folders that the files of `targets` now gone
+/// left empty, walking up from each one to (not including) the location
+/// folder in `folders` it came from. A folder that was empty before the
+/// clean, or that still holds anything, stays, and so does every location
+/// folder (the whole profile or %APPDATA% among them). Links are never
+/// followed: a reparse point is not a parent of anything selected.
+pub fn prune_emptied(targets: &[Target], folders: &[(CleanCat, PathBuf)]) {
+    for t in targets.iter().filter(|t| !t.path.exists()) {
+        // The deepest location holding the file.
+        let Some(stop) = folders
+            .iter()
+            .map(|(_, dir)| dir)
+            .filter(|dir| t.path.starts_with(dir))
+            .max_by_key(|dir| dir.components().count())
+        else {
+            continue;
+        };
+        let mut dir = t.path.parent();
+        while let Some(d) = dir {
+            if d == stop.as_path() || !d.starts_with(stop) || fs::remove_dir(d).is_err() {
+                break;
+            }
+            dir = d.parent();
         }
     }
 }
@@ -909,9 +921,7 @@ pub fn run_admin(job: Option<&str>) -> i32 {
         return ADMIN_FAILED;
     }
     let tally = delete_files(&sel.targets);
-    for (_, dir) in &sel.folders {
-        prune_empty(dir);
-    }
+    prune_emptied(&sel.targets, &sel.folders);
     tally.skipped.min(ADMIN_SKIPPED_MAX) as i32
 }
 
@@ -1110,11 +1120,7 @@ fn clean(cats: &[CleanCat]) -> CleanReport {
     let tally = delete_files(&permanent);
     let paths: Vec<PathBuf> = recycled.into_iter().map(|t| t.path).collect();
     let mut skipped = tally.skipped.saturating_add(recycle(&paths));
-    for (cat, dir) in &sel.folders {
-        if cat.removal() == Removal::Permanent {
-            prune_empty(dir);
-        }
-    }
+    prune_emptied(&permanent, &sel.folders);
     let admin = if admin {
         run_admin_helper()
     } else {
@@ -1451,20 +1457,45 @@ mod tests {
         );
         assert!(!free.exists() && locked.exists() && outside.exists());
         drop(holder);
-        for (_, dir) in &sel.folders {
-            prune_empty(dir);
-        }
+        prune_emptied(&sel.targets, &sel.folders);
         // The folder with the skipped file stays; the location itself too.
         assert!(locked.parent().unwrap().exists());
         assert!(t.base.join("Roaming\\Code\\Cache").exists());
         // Once free, the next clean takes it and prunes its folder.
         let again = select(&roots, &[CleanCat::AppCache], SystemTime::now(), &none());
         assert_eq!(delete_files(&again.targets).skipped, 0);
-        for (_, dir) in &again.folders {
-            prune_empty(dir);
-        }
+        prune_emptied(&again.targets, &again.folders);
         assert!(!locked.parent().unwrap().exists());
         assert!(t.base.join("Roaming\\Code\\Cache").exists());
+    }
+
+    #[test]
+    fn only_folders_emptied_by_the_clean_are_pruned() {
+        let t = TestTree::new("prune-emptied");
+        let roots = t.roots();
+        let old = t.file(r"Temp\a\b\old.tmp", 10, days(30.0));
+        let fresh = t.file(r"Temp\c\new.tmp", 10, days(1.0));
+        let log = t.file(r"Profile\old.log", 10, days(30.0));
+        // Empty before the clean: the user's (or an app's) own folders.
+        let mine = [
+            t.base.join(r"Temp\working"),
+            t.base.join(r"Profile\Documents\Klien\2027"),
+            t.base.join(r"Roaming\SomeApp\empty"),
+        ];
+        for dir in &mine {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let sel = select(&roots, &[CleanCat::TempLogs], SystemTime::now(), &none());
+        delete_files(&sel.targets);
+        assert!(!old.exists() && !log.exists() && fresh.exists());
+        prune_emptied(&sel.targets, &sel.folders);
+        // The folders the old file sat in go, up to the location.
+        assert!(!t.base.join(r"Temp\a").exists());
+        assert!(t.base.join("Temp").exists() && t.base.join("Profile").exists());
+        assert!(fresh.parent().unwrap().exists());
+        for dir in &mine {
+            assert!(dir.exists(), "{dir:?} was empty before and stays");
+        }
     }
 
     /// A junction from `link` to `target` (no privilege needed), or a
@@ -1506,9 +1537,7 @@ mod tests {
         assert_eq!(paths(&sel, CleanCat::TempLogs), [real]);
         assert!(paths(&sel, CleanCat::AppCache).is_empty());
         delete_files(&sel.targets);
-        for (_, dir) in &sel.folders {
-            prune_empty(dir);
-        }
+        prune_emptied(&sel.targets, &sel.folders);
         assert!(precious.exists(), "nothing behind a link is touched");
         assert!(inside.exists() && as_location.exists());
         // Remove the links before the tree goes (never through them).
