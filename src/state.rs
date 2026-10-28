@@ -168,6 +168,13 @@ pub struct IslandState {
     /// The visit began over a notice with a button: hover does not open the
     /// panel (a wheel notch does) until the pointer leaves.
     hover_blocked: bool,
+    /// The pointer's visit began on the current notice: only then does its
+    /// expiry wait for the pointer. A notice that arrives under a pointer
+    /// already there (over an open panel, say) runs its time as usual.
+    visit_on_notice: bool,
+    /// The sticky reminder that already kept one visit's hover off: the
+    /// next visit opens the panel, with the reminder in its strip.
+    reminder_seen: Option<Notice>,
     /// "Mode buka": how the pointer opens the panel.
     open_mode: OpenMode,
     /// The panel was opened to stay (hover-and-stay, or a click): it closes
@@ -260,6 +267,8 @@ impl IslandState {
             fullscreen: false,
             hover: false,
             hover_blocked: false,
+            visit_on_notice: false,
+            reminder_seen: None,
             open_mode: OpenMode::Hover,
             latched: false,
             hover_opened: None,
@@ -389,19 +398,25 @@ impl IslandState {
                 }
             }
             Event::Hover(on) => {
-                // The pointer left the preview: at least the grace more.
+                // The pointer left the notice it held: at least the grace more.
+                let held = self.current.as_ref().is_some_and(|(n, _)| self.notice_held(n));
                 if !on
-                    && self.hover
-                    && let Some((n, expires)) = &mut self.current
-                    && notice_has_action(n)
+                    && held
+                    && let Some((_, expires)) = &mut self.current
                 {
                     *expires = (*expires).max(now + SHOT_LEAVE_GRACE);
                 }
                 if on && !self.hover {
                     self.hover_blocked = !panel_was_open && self.notice_blocks_hover();
+                    self.visit_on_notice = self.current.is_some();
+                    // A sticky reminder keeps hover off for one visit only.
+                    if self.hover_blocked && self.current.is_none() {
+                        self.reminder_seen = self.sticky.last().cloned();
+                    }
                 }
                 if !on {
                     self.hover_blocked = false;
+                    self.visit_on_notice = false;
                 }
                 self.hover = on;
                 // The pointer arrived: hover holds the hotkey's panel now,
@@ -416,16 +431,6 @@ impl IslandState {
                     (Collapse::Left, true) => Collapse::No,
                     (c, _) => c,
                 };
-                // Hover and stay: the visit that opens the panel keeps it
-                // open until a click outside.
-                if on
-                    && self.open_mode == OpenMode::HoverStay
-                    && !self.hover_blocked
-                    && self.collapsed == Collapse::No
-                    && !self.fullscreen
-                {
-                    self.latched = true;
-                }
             }
             Event::OpenMode(mode) => {
                 self.open_mode = mode;
@@ -480,14 +485,17 @@ impl IslandState {
                 }
             }
             Event::Wheel(delta) => {
-                // A wheel notch over a blocking notice peeks at the panel.
-                if self.hover_blocked && self.open_mode != OpenMode::Click {
+                // A wheel notch over the sticky reminder peeks at the panel
+                // (its strip), and that notch is spent on opening it, not on
+                // turning the page. Over a temporary notice the wheel is the
+                // notice's: the panel stays behind it.
+                if self.hover_blocked && self.current.is_none() && self.open_mode != OpenMode::Click
+                {
                     self.hover_blocked = false;
-                    if self.open_mode == OpenMode::HoverStay && self.collapsed == Collapse::No {
-                        self.latched = true;
-                    }
+                    self.wheel = 0;
+                } else {
+                    self.wheel(delta)
                 }
-                self.wheel(delta)
             }
             Event::Today(date) => self.set_today(date),
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
@@ -592,12 +600,18 @@ impl IslandState {
         if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
             self.cli_menu = false;
         }
+        // Hover and stay: the panel the pointer opened stays until a click
+        // outside, once it is what shows (not while a notice covers it).
+        if self.hover_stay_latches() {
+            self.latched = true;
+        }
         if hover_on && !panel_was_open && self.panel_open() {
             self.hover_opened = Some(now);
         }
-        // Closed, or no longer open by hover (an editor or the CLI input
-        // holds it after the pointer left): no guard.
-        if !self.panel_open() || !self.hover {
+        // Closed, or no longer open by hover or a click (an editor or the
+        // CLI input holds it after the pointer left): no guard. A click can
+        // beat the hover dwell, so a latched panel keeps its guard.
+        if !self.panel_open() || (!self.hover && !self.latched) {
             self.hover_opened = None;
         }
         if panel_was_open && !self.panel_open() {
@@ -730,13 +744,31 @@ impl IslandState {
         let notice = self
             .current
             .as_ref()
-            .filter(|(n, _)| !(self.hover && notice_has_action(n)))
+            .filter(|(n, _)| !self.notice_held(n))
             .map(|(_, expires)| *expires);
         let armed = self.cleaner.and_then(|c| c.armed_until);
         [notice, self.pomodoro.next_deadline(), armed]
             .into_iter()
             .flatten()
             .min()
+    }
+
+    /// The current notice waits for the pointer: it has a button and the
+    /// pointer's visit began on it. One that arrived under the pointer (over
+    /// an open panel) runs its time, so it never hides the panel for good.
+    fn notice_held(&self, notice: &Notice) -> bool {
+        self.hover && self.visit_on_notice && notice_has_action(notice)
+    }
+
+    /// Hover and stay latches the panel the pointer holds, once the panel is
+    /// what shows: no notice over it, no notice keeping hover off, not shut.
+    fn hover_stay_latches(&self) -> bool {
+        self.open_mode == OpenMode::HoverStay
+            && self.hover
+            && !self.hover_blocked
+            && self.current.is_none()
+            && self.collapsed == Collapse::No
+            && !self.fullscreen
     }
 
     /// The armed cleaner button turns back once `CLEAN_CONFIRM` has passed.
@@ -998,11 +1030,13 @@ impl IslandState {
         match &self.current {
             Some((n, _)) => notice_has_action(n),
             // The newest sticky one is what shows: only a reminder has the
-            // Selesai button.
-            None => self
-                .sticky
-                .last()
-                .is_some_and(|n| matches!(n.kind, NoticeKind::Reminder { .. })),
+            // Selesai button, and it keeps hover off for the first visit
+            // after it appeared; later visits open the panel with it in the
+            // strip (as in v3.1).
+            None => self.sticky.last().is_some_and(|n| {
+                matches!(n.kind, NoticeKind::Reminder { .. })
+                    && self.reminder_seen.as_ref() != Some(n)
+            }),
         }
     }
 
@@ -1061,19 +1095,24 @@ impl IslandState {
         match hit {
             // Click mode: the compact island opens the panel (a ready
             // pomodoro starts from inside it).
+            // A sticky notice (Claude waiting, a due reminder) is what the
+            // closed island shows: the click opens the panel, whose strip
+            // keeps the notice and its own click.
             Hit::Body
                 if self.open_mode == OpenMode::Click
-                    && matches!(
+                    && (matches!(
                         self.view(),
                         View::Idle | View::MediaCompact | View::MediaLyric | View::PomodoroCompact
-                    ) =>
+                    ) || (self.current.is_none()
+                        && matches!(self.view(), View::Notice(_)))) =>
             {
                 self.open_by_click(now)
             }
             Hit::Body => match self.view() {
                 View::Notice(n) => {
                     // These notices lead to the panel: it opens under the
-                    // pointer after the click.
+                    // pointer after the click, and in the modes that keep it
+                    // open, it stays (the pointer alone would not hold it).
                     let opens_panel = matches!(
                         n.kind,
                         NoticeKind::SystemLow | NoticeKind::MoleDone | NoticeKind::MoleFailed
@@ -1081,6 +1120,9 @@ impl IslandState {
                     effects.extend(self.dismiss_visible_notice(now));
                     if opens_panel {
                         self.hover_blocked = false;
+                        if self.open_mode != OpenMode::Hover && !self.fullscreen {
+                            self.open_by_click(now);
+                        }
                     }
                 }
                 View::PomodoroCompact if self.pomodoro.status() == PomoStatus::Ready => {
@@ -1480,7 +1522,7 @@ impl IslandState {
     /// asks for the delete (the only way besides the Hapus click).
     fn advance(&mut self, now: Instant, effects: &mut Vec<Effect>) {
         if let Some((n, expires)) = &self.current {
-            let held = self.hover && notice_has_action(n);
+            let held = self.notice_held(n);
             if !held && *expires <= now {
                 if let NoticeKind::Screenshot {
                     shot,
@@ -1501,6 +1543,8 @@ impl IslandState {
             if shot_of(&next).is_some() {
                 self.shot_touched = false;
             }
+            // It arrives under the pointer, if any: the visit began elsewhere.
+            self.visit_on_notice = false;
             self.current = Some((next, expires));
         }
     }
@@ -2309,17 +2353,155 @@ mod tests {
             vec![Effect::ReminderDone("r1".into())]
         );
         assert_eq!(s.view(), View::Idle);
-        // Another reminder: a wheel notch peeks at the panel (its strip).
+        // Another reminder: a wheel notch peeks at the panel (its strip),
+        // and that notch only opens it: the page stays.
         s.apply(Event::Notice(reminder("r2")), t0);
         assert_eq!(s.view(), View::Notice(reminder("r2")));
         s.apply(Event::Wheel(-120), t0);
-        assert!(matches!(s.view(), View::Panel(_)));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
         assert_eq!(s.waiting_strip(), Some(&reminder("r2")));
-        // Leaving and coming back is a new visit.
+        // The next notch turns the page as usual.
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+        // Leaving and coming back is a new visit: the first one since r2
+        // appeared keeps hover off.
         s.apply(Event::Hover(false), t0);
         assert_eq!(s.view(), View::Notice(reminder("r2")));
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Notice(reminder("r2")));
+        // Only that one: the visit after it opens the panel with the strip.
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0);
+        assert!(matches!(s.view(), View::Panel(_)));
+        assert_eq!(s.waiting_strip(), Some(&reminder("r2")));
+    }
+
+    #[test]
+    fn a_waiting_reminder_opens_the_panel_with_its_strip_after_one_visit() {
+        // The v3.1 order: the reminder is there before the pointer is.
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        // The first visit is for its Selesai button.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        s.apply(Event::Hover(false), t0);
+        // Every later visit opens the panel, the reminder in the strip.
+        for _ in 0..3 {
+            s.apply(Event::Hover(true), t0);
+            assert_eq!(s.view(), View::Panel(Page::Calendar));
+            assert_eq!(s.waiting_strip(), Some(&reminder("r1")));
+            s.apply(Event::Hover(false), t0);
+        }
+        // A new reminder gets its own first visit.
+        s.apply(Event::Notice(reminder("r2")), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r2")));
+    }
+
+    #[test]
+    fn the_wheel_over_a_temporary_notice_leaves_the_panel_shut() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::HoverStay, t0);
+        s.apply(Event::Notice(app_notice("k1")), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Notice(app_notice("k1")));
+        assert!(!s.outside_click_wanted(), "nothing latched behind it");
+        // It goes once the pointer leaves: nothing was kept open.
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Tick, t0 + secs(60));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.page(), Page::Calendar, "the notch turned no page");
+    }
+
+    #[test]
+    fn a_notice_with_a_button_over_an_open_panel_runs_its_time_in_every_mode() {
+        let t0 = Instant::now();
+        for m in [OpenMode::Hover, OpenMode::HoverStay, OpenMode::Click] {
+            let mut s = mode(m, t0);
+            s.apply(Event::Hover(true), t0);
+            if m == OpenMode::Click {
+                s.apply(Event::Click(Hit::Body), t0);
+            }
+            assert_eq!(s.view(), View::Panel(Page::Calendar), "{m:?}");
+            // It arrives under the pointer, over the open panel.
+            s.apply(Event::Notice(app_notice("k1")), t0 + secs(1));
+            assert_eq!(s.view(), View::Notice(app_notice("k1")), "{m:?}");
+            assert_eq!(s.next_deadline(), Some(t0 + secs(6)), "{m:?}");
+            s.apply(Event::Tick, t0 + secs(6));
+            assert_eq!(s.view(), View::Panel(Page::Calendar), "{m:?}: the panel is back");
+        }
+        // A visit that begins on it still holds it.
+        let mut s = st();
+        s.apply(Event::Notice(app_notice("k1")), t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn hover_and_stay_latches_only_once_the_panel_shows() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::HoverStay, t0);
+        // A plain notice covers the panel: the pointer passing does not keep it.
+        s.apply(Event::Notice(plain_notice("k1")), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(plain_notice("k1")));
+        s.apply(Event::Hover(false), t0 + secs(1));
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Idle, "not opened behind the notice");
+        // The notice ends under the pointer: the panel shows, and stays.
+        s.apply(Event::Notice(plain_notice("k2")), t0 + secs(10));
+        s.apply(Event::Hover(true), t0 + secs(10));
+        s.apply(Event::Tick, t0 + secs(15));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Hover(false), t0 + secs(16));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        assert!(s.outside_click_wanted());
+    }
+
+    #[test]
+    fn notices_that_lead_to_the_panel_keep_it_open_in_the_staying_modes() {
+        let t0 = Instant::now();
+        for m in [OpenMode::HoverStay, OpenMode::Click] {
+            let mut s = mode(m, t0);
+            s.apply(Event::Notice(Notice {
+                key: "sys".into(),
+                source: "Vale".into(),
+                title: "Disk".into(),
+                body: "9 GB".into(),
+                kind: NoticeKind::SystemLow,
+            }), t0);
+            s.apply(Event::Hover(true), t0);
+            s.apply(Event::Click(Hit::Body), t0);
+            assert_eq!(s.view(), View::Panel(Page::System), "{m:?}");
+            s.apply(Event::Hover(false), t0 + secs(1));
+            assert_eq!(s.view(), View::Panel(Page::System), "{m:?}: it stays");
+            assert!(s.outside_click_wanted(), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn a_click_before_the_hover_dwell_still_guards_the_media_buttons() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Click, t0);
+        s.apply(Event::Media(Some(media(true))), t0);
+        // The click lands before `Hover(true)` (the dwell) arrives.
+        s.apply(Event::Click(Hit::Body), t0);
+        assert!(matches!(s.view(), View::Panel(_)));
+        let early = t0 + Duration::from_millis(100);
+        assert!(s.media_guarded(early));
+        for hit in [Hit::Prev, Hit::PlayPause, Hit::Next] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), early), vec![], "{hit:?}");
+        }
+        // The dwell arrives during the morph: still guarded.
+        s.apply(Event::Hover(true), t0 + Duration::from_millis(150));
+        assert!(s.media_guarded(t0 + Duration::from_millis(200)));
+        assert_eq!(
+            s.apply(Event::Click(Hit::PlayPause), t0 + MEDIA_HOVER_GUARD),
+            vec![Effect::Media(MediaCommand::Pause)]
+        );
     }
 
     #[test]
@@ -2439,12 +2621,35 @@ mod tests {
     fn click_mode_still_dismisses_a_notice_with_a_click() {
         let t0 = Instant::now();
         let mut s = mode(OpenMode::Click, t0);
-        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Notice(app_notice("k1")), t0);
         assert_eq!(
             s.apply(Event::Click(Hit::Body), t0),
-            vec![Effect::ReminderDone("r1".into())]
+            vec![Effect::OpenApp("WhatsApp.Desktop!App".into())]
         );
         assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn click_mode_opens_the_panel_over_a_sticky_notice_and_its_strip_keeps_it() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Click, t0);
+        s.apply(Event::Notice(reminder("r1")), t0);
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+        // The click opens the panel; the reminder is not marked done.
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert!(!effects.contains(&Effect::ReminderDone("r1".into())), "{effects:?}");
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        assert_eq!(s.waiting_strip(), Some(&reminder("r1")));
+        // The strip's own click is Selesai.
+        assert_eq!(
+            s.apply(Event::Click(Hit::Strip), t0),
+            vec![Effect::ReminderDone("r1".into())]
+        );
+        // Claude waiting likewise.
+        let mut s = mode(OpenMode::Click, t0);
+        s.apply(Event::Notice(waiting("s1")), t0);
+        s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(s.waiting_strip(), Some(&waiting("s1")));
     }
 
     #[test]

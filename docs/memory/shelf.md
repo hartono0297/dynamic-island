@@ -70,14 +70,14 @@ search box, not Vale, so a drag aimed at "the top of the screen" never
 entered. Fix: `HALO_ALPHA` (0.012, 8-bit alpha 3: invisible) is drawn on a
 rectangle from y = 0 to 8 px under the island and 14 px beyond each side.
 **Only while a drag can be about to start** (3.2.1 review fix): `halo.rs`
-(`halo_wanted`) polls on `TIMER_HALO` (50 ms, only while the island is up in a
-non-panel view, not fullscreen) for "left button down and the pointer within
+polls on `TIMER_HALO` (since the later review only after a trigger, see
+below) for "left button down and the pointer within
 100 dip of the island"; a drag from Explorer holds the button the whole way,
 so the margin is there when the pointer arrives, and it is gone otherwise, so
 it never blocks a click on the window beneath (a maximized window's tab
 strip). A press that began elsewhere keeps its capture. On the margin itself
 moves, dwell, wheel and right-click (no tray menu) are ignored
-(`hit_at(..).is_none()`); moving from the island onto it counts as leaving.
+(`Under::Halo`); moving from the island onto it counts as leaving.
 
 - OLE reports `Event::ShelfDragOver(bool)`; `App::on_shelf_drag` lights the
   drop zone (`ShelfState::dragging`, `Frame::shelf_drag`), passes `true` on as
@@ -110,5 +110,41 @@ exists only with the button down.) `DI_SHELF_LOG` debugging was removed again.
   re-add). After `drag_out` returns, `shelf_after_drag_out` cancels the swipe
   (its release was swallowed) and runs the leave path if the pointer ended
   off the island. Still not verified live.
+
+## v3.2.1 review: no idle halo poll (2026-10-29)
+
+The 50 ms `TIMER_HALO` ran whenever the island was up: ~20 wake-ups a second
+on an idle island, against [[bata-idle-power-budget]]. Now the poll only
+starts from a cheap trigger and stops by itself (`halo.rs`):
+
+- **Triggers:** a `WM_MOUSEMOVE` on the island window (the island or its
+  margin) and an OLE `DragEnter` on it (`ShelfDragOver(true)` arms it; the
+  panel opening pauses it, and it resumes when the panel closes, so a drag
+  that strays above the island afterwards finds the margin).
+- **Runs while** the left button is down (until the release) or the pointer
+  stays within `NEAR_DIP` for `LINGER` (3 s) after the trigger
+  (`keep_polling`); then it stops until the next trigger. Pace: `SLOW_MS`
+  (250) and `FAST_MS` (50) only with the button down within 3 × `NEAR_DIP`
+  (`poll_ms`), coalescable. Never while the session is locked, the display is
+  off, fullscreen, or the island is lowered behind windows.
+- **Trade-off, honestly:** OLE gives no message while a drag is still away
+  from the island (the drag source holds the capture), so the poll cannot see
+  a drag coming from far off. A drag aimed straight at the empty strip *above*
+  an island it never touched finds no margin: it has to land on the drawn
+  island itself (the idle island is 190 x 34 at the top, and that path,
+  `DragEnter` on its pixels, is the one checked with a real OLE drag and works
+  without the halo). The margin helps a drag that started near the island
+  within a few seconds of the pointer passing over it, and a drag that
+  touched the island, left and came back above it.
+- The hit test now treats drawn pixels as the island: the Notch shoulders and
+  a 1 px anti-aliased edge (`geometry::island_contains`, `AA_MARGIN`) give
+  `Hit::Body`, and the margin has its own result (`Under::Halo`, from
+  `HitRegions::halo`), so leave, dwell, wheel and right-click (no tray menu)
+  skip only the margin, and a click on a shoulder never counts as outside.
+- The logical left button is read (`left_button_down` checks
+  `SM_SWAPBUTTON`), for the halo, the drag-out and the Mixer slider drag.
+
+**Not verified live:** the trigger path with a real Explorer drag, and the
+swapped-buttons case.
 
 Related: [[mixer]], [[open-mode]].

@@ -1,6 +1,6 @@
 ---
 tags: [decision, gestures, media, v3.2]
-date: 2026-10-28
+date: 2026-10-29
 ---
 
 # Gestures on the island (v3.2 Run 8)
@@ -8,7 +8,7 @@ date: 2026-10-28
 `src/gestures.rs` (pure: `Swipe`, `HWheel`, `Dir`); `App` feeds them from plain
 window messages, no global hook (the plan's "hook + evaluator" was not
 needed): `WM_LBUTTONDOWN/UP` for a swipe, `WM_MOUSEHWHEEL` for the sideways
-wheel, `WM_MBUTTONUP` for the middle button.
+wheel, `WM_MBUTTONDOWN/UP` for the middle button.
 
 - Count only while `App::gestures_active`: `config.gestures` (default on,
   hand-edited, no Settings row) **and** a media session **and** the view is
@@ -17,9 +17,13 @@ wheel, `WM_MBUTTONUP` for the middle button.
   twice as far across as up/down, within 700 ms. Left = next, right = prev. A
   swipe clears the pending click so it never opens the panel in Click mode.
 - Sideways wheel: deltas add up to one notch (120); a flick fires once and
-  the rest of the same scroll (touchpad momentum) is ignored for 500 ms.
+  the rest of the same scroll (touchpad momentum) is ignored until it has
+  been still for 500 ms: each delta meanwhile pushes the end out, so a
+  momentum tail longer than 500 ms still fires once (tested with 1 s).
   Right = next.
-- Middle button over the drawn island = play/pause.
+- Middle button over the drawn island = play/pause, only when the press
+  (`WM_MBUTTONDOWN`) was on the island too (`middle_click`); a press that
+  began elsewhere, or a pointer that left in between, does nothing.
 - All three go through `Event::Click(Hit::Prev/Next/PlayPause)`, so the
   existing media guard and the media log see them like button clicks.
 

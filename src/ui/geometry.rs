@@ -266,6 +266,53 @@ pub fn shape_contains(style: Style, s: ShapeRect, x: f32, y: f32) -> bool {
     (x - cx).powi(2) + (y - cy).powi(2) <= r * r
 }
 
+/// How far past the outline (logical px) a point still counts as the island:
+/// the edge's anti-aliased pixels are drawn, so Windows hands them the
+/// pointer too.
+pub const AA_MARGIN: f32 = 1.0;
+
+/// Whether a logical point lies on the drawn island: the main shape, the
+/// Notch's top shoulders, and `margin` around both (the anti-aliased edge).
+pub fn island_contains(style: Style, s: ShapeRect, x: f32, y: f32, margin: f32) -> bool {
+    let grown = ShapeRect {
+        x: s.x - margin,
+        y: s.y - margin,
+        w: s.w + 2.0 * margin,
+        h: s.h + 2.0 * margin,
+        radius: corner_radius(style, s) + margin,
+    };
+    shape_contains(style, grown, x, y) || (style == Style::Notch && in_shoulder(s, x, y, margin))
+}
+
+/// A Notch shoulder: the square beside the shape's top corner, outside the
+/// circle its inward curve follows (centred `SHOULDER` out and down).
+fn in_shoulder(s: ShapeRect, x: f32, y: f32, margin: f32) -> bool {
+    if y < s.y - margin || y > s.y + SHOULDER {
+        return false;
+    }
+    let (left, right) = (s.x, s.x + s.w);
+    let cx = if x >= left - SHOULDER - margin && x <= left {
+        left - SHOULDER
+    } else if x >= right && x <= right + SHOULDER + margin {
+        right + SHOULDER
+    } else {
+        return false;
+    };
+    let cy = s.y + SHOULDER;
+    (x - cx).powi(2) + (y - cy).powi(2) >= (SHOULDER - margin).powi(2)
+}
+
+/// What a client point is over, for the pointer's own messages.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Under {
+    /// A drawn pixel of the island, and what it does when clicked.
+    Island(Hit),
+    /// Only the faint drag margin: it takes a drag, nothing else.
+    Halo,
+    /// Nothing the island drew.
+    Off,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -646,6 +693,8 @@ pub struct HitRegions {
     pub mixer_tracks: Vec<Rect>,
     /// The Music page's cover: where the wheel turns the volume.
     pub media_art: Option<Rect>,
+    /// The faint drag margin, while it is drawn.
+    pub halo: Option<Rect>,
 }
 
 impl HitRegions {
@@ -654,10 +703,26 @@ impl HitRegions {
         self.cli_output.is_some_and(|r| r.contains(x, y))
     }
 
+    /// What the point is over: the island (its shoulders and anti-aliased
+    /// edge included), only the drag margin, or nothing drawn.
+    pub fn under(&self, x: f32, y: f32) -> Under {
+        if let Some(hit) = self.hit(x, y) {
+            return Under::Island(hit);
+        }
+        if self.halo.is_some_and(|r| r.contains(x, y)) {
+            Under::Halo
+        } else {
+            Under::Off
+        }
+    }
+
+    /// What a click at the point does: `None` off the drawn island (the
+    /// drag margin included). The shoulders and the anti-aliased edge are
+    /// the island's body.
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let (style, shape) = self.shape?;
         if !shape_contains(style, shape, x, y) {
-            return None;
+            return island_contains(style, shape, x, y, AA_MARGIN).then_some(Hit::Body);
         }
         if let Some(region) = self.regions.iter().find(|r| r.rect.contains(x, y)) {
             return Some(region.hit.clone());
@@ -1215,6 +1280,44 @@ mod tests {
         assert_eq!(regions.hit(strip.x + 1.0, strip.y + 1.0), Some(Hit::Strip));
         assert_eq!(regions.hit(p.x + p.w / 2.0, 200.0), Some(Hit::Body));
         assert_eq!(regions.hit(p.x - 5.0, 200.0), None);
+    }
+
+    #[test]
+    fn the_drawn_shoulders_and_edge_are_the_island_and_the_halo_is_its_own() {
+        let n = shape_for(Style::Notch, ShapeKind::Idle);
+        let mut regions = HitRegions {
+            shape: Some((Style::Notch, n)),
+            ..Default::default()
+        };
+        // The shoulders' filled corner, right against the top edge.
+        assert_eq!(regions.hit(n.x - 2.0, n.y + 1.0), Some(Hit::Body));
+        assert_eq!(regions.hit(n.x + n.w + 2.0, n.y + 1.0), Some(Hit::Body));
+        // Inside the shoulder's curve is not drawn.
+        assert_eq!(regions.hit(n.x - SHOULDER + 1.0, n.y + SHOULDER - 1.0), None);
+        // The anti-aliased pixel just past the side and the bottom.
+        assert_eq!(regions.hit(n.x - 0.5, n.y + 15.0), Some(Hit::Body));
+        assert_eq!(regions.hit(n.x - 3.0, n.y + 15.0), None);
+        assert_eq!(regions.hit(n.x + n.w / 2.0, n.y + n.h + 0.5), Some(Hit::Body));
+        assert_eq!(regions.hit(n.x + n.w / 2.0, n.y + n.h + 3.0), None);
+        // A Pill has no shoulders.
+        let p = shape_for(Style::Pill, ShapeKind::Idle);
+        regions.shape = Some((Style::Pill, p));
+        assert_eq!(regions.hit(p.x - 2.0, p.y + 1.0), None);
+        assert_eq!(regions.hit(p.x + p.w / 2.0, p.y - 0.5), Some(Hit::Body));
+        // The drag margin is neither the island nor nothing.
+        assert_eq!(regions.under(p.x - 6.0, 2.0), Under::Off);
+        regions.halo = Some(Rect {
+            x: p.x - 14.0,
+            y: 0.0,
+            w: p.w + 28.0,
+            h: p.y + p.h + 8.0,
+        });
+        assert_eq!(regions.under(p.x - 6.0, 2.0), Under::Halo);
+        assert_eq!(regions.hit(p.x - 6.0, 2.0), None);
+        assert_eq!(
+            regions.under(p.x + p.w / 2.0, p.y + p.h / 2.0),
+            Under::Island(Hit::Body)
+        );
     }
 
     #[test]

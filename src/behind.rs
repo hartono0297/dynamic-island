@@ -14,8 +14,25 @@ pub const STRIP_PX: i32 = 3;
 /// How long the island stays up after the pointer leaves it (and nothing is
 /// showing) before it goes back down.
 pub const LOWER_AFTER: Duration = Duration::from_millis(250);
-/// How often the pointer is read while the setting is on.
+/// How often the pointer is read near the top edge, or while lowering is due.
 pub const POLL_MS: u32 = 80;
+/// How often it is read otherwise: the pointer far below the top edge cannot
+/// reach the strip within one slow poll unnoticed for long.
+pub const SLOW_MS: u32 = 350;
+/// "Near the top edge", in logical pixels from it.
+pub const NEAR_TOP_DIP: f32 = 150.0;
+
+/// The poll's pace: quick while lowering is due (`LOWER_AFTER` must be kept)
+/// or the pointer is near the top edge (the strip, the island); slow
+/// otherwise. A view that must be seen needs no poll to stay up: a change of
+/// view re-reads at once.
+pub fn poll_ms(lower_pending: bool, pointer_near_top: bool) -> u32 {
+    if lower_pending || pointer_near_top {
+        POLL_MS
+    } else {
+        SLOW_MS
+    }
+}
 
 /// Where the island sits in the window order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +88,11 @@ impl Default for Behind {
 impl Behind {
     pub fn z(&self) -> Z {
         self.z
+    }
+
+    /// Up and counting down to going back down.
+    pub fn lower_pending(&self) -> bool {
+        self.idle_since.is_some()
     }
 
     /// Back to the start: up, nothing waiting.
@@ -206,6 +228,21 @@ mod tests {
         b.decide(over, t0 + ms(220));
         assert_eq!(b.decide(quiet(), t0 + ms(240)), Z::Top, "a new wait");
         assert_eq!(b.decide(quiet(), t0 + ms(490)), Z::Bottom);
+    }
+
+    #[test]
+    fn the_poll_slows_down_only_far_from_the_top_with_nothing_due() {
+        assert_eq!(poll_ms(false, false), SLOW_MS);
+        assert_eq!(poll_ms(false, true), POLL_MS, "near the strip");
+        assert_eq!(poll_ms(true, false), POLL_MS, "lowering is due");
+        // The countdown to lowering shows as pending until it lands.
+        let t0 = Instant::now();
+        let mut b = Behind::default();
+        assert!(!b.lower_pending());
+        b.decide(quiet(), t0);
+        assert!(b.lower_pending());
+        b.decide(quiet(), t0 + LOWER_AFTER);
+        assert!(!b.lower_pending() && b.z() == Z::Bottom);
     }
 
     #[test]

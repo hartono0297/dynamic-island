@@ -29,13 +29,21 @@ use windows::Win32::System::RemoteDesktop::{
 };
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, SetFocus, TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, ReleaseCapture, SetCapture, SetFocus,
+    TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_LBUTTON, VK_MBUTTON,
+    VK_RBUTTON,
 };
+use windows::Win32::System::Power::{
+    HPOWERNOTIFY, POWERBROADCAST_SETTING, RegisterPowerSettingNotification,
+    UnregisterPowerSettingNotification,
+};
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetCursorPos, GetForegroundWindow,
-    GetMessageW,
+    GetMessageW, GetSystemMetrics, SM_SWAPBUTTON, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, SetCoalescableTimer,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND,
@@ -86,7 +94,7 @@ use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
-    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect,
+    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect, Under,
     ease_out_back, lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
     lyric_shape, lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
@@ -180,19 +188,25 @@ const TIMER_SYSTEM_PAGE: usize = 17;
 /// (sooner to confirm RAM's minute above its limit). It reads memory and
 /// drives on the sampler thread and draws nothing unless a notice is raised.
 const TIMER_SYSTEM_WARN: usize = 18;
-/// Repeating, 40 ms: a mouse button going down outside the island while the
+/// Repeating, 40 ms (250 ms after a second without input,
+/// `outside_poll_ms`): a mouse button going down outside the island while the
 /// panel is kept open (`outside_click_wanted`) closes it. No hook, no capture:
 /// the click still goes where it was aimed, and nothing runs while the panel
-/// is shut or follows the pointer.
+/// is shut or follows the pointer, or the session is locked or the display off.
 const TIMER_OUTSIDE: usize = 24;
 const OUTSIDE_MS: u32 = 40;
-/// Repeating, `behind::POLL_MS`: with "Di belakang jendela" on, the pointer
-/// is read to raise the island at the top edge and lower it again. Nothing
-/// runs with the setting off or in fullscreen.
+/// Repeating, `behind::POLL_MS` near the top edge or while lowering is due,
+/// `behind::SLOW_MS` otherwise (`behind::poll_ms`): with "Di belakang
+/// jendela" on, the pointer is read to raise the island at the top edge and
+/// lower it again. Nothing runs with the setting off, in fullscreen, locked
+/// or with the display off.
 const TIMER_BEHIND: usize = 29;
-/// Repeating, `halo::POLL_MS`: while the island is up (not a panel, not
-/// fullscreen) the left button and the pointer are read, to draw the faint
-/// drag margin only while a drag can be about to start (`halo`).
+/// Repeating, `halo::SLOW_MS` (`halo::FAST_MS` while a drag is close,
+/// `halo::poll_ms`), but only after a trigger (the pointer moving over the
+/// island, a drag entering it) and only while the left button is down or the
+/// pointer stays near for `halo::LINGER`: the faint drag margin is drawn while
+/// a drag can be about to start (`halo`). An idle island runs no poll; nor
+/// does a locked, display-off, fullscreen or behind-windows one.
 const TIMER_HALO: usize = 30;
 /// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
@@ -230,6 +244,8 @@ thread_local! {
     /// Work that arrived while `APP` was borrowed (a message sent back into the
     /// window procedure mid-handler); done once the outer handler returns.
     static DEFERRED_DRAIN: Cell<bool> = const { Cell::new(false) };
+    /// The display on/off notification's handle (`HPOWERNOTIFY`), 0 without one.
+    static DISPLAY_NOTIFY: Cell<isize> = const { Cell::new(0) };
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
@@ -329,12 +345,16 @@ pub fn run(media_log_flag: bool) {
             hwheel: gestures::HWheel::default(),
             media_click: None,
             eq_timer: false,
-            outside_timer: false,
+            outside_ms: 0,
             behind: behind::Behind::default(),
-            behind_timer: false,
-            halo_timer: false,
+            behind_ms: 0,
+            halo_ms: 0,
+            display_off: false,
             halo_on: false,
-            outside_edge: PressEdge::default(),
+            halo_armed: None,
+            outside_edge: OutsidePress::default(),
+            middle_down: false,
+            last_paging: None,
             audio: None,
             mixer: None,
             mixer_pending: false,
@@ -430,6 +450,14 @@ pub fn run(media_log_flag: bool) {
             SetTimer(Some(hwnd), TIMER_SYSTEM_WARN, SYSTEM_WARN_MS, None);
             // Unlocking the session may greet; without it, startup and wake still do.
             let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+            // The display going off pauses the pointer polls, like a lock.
+            if let Ok(note) = RegisterPowerSettingNotification(
+                windows::Win32::Foundation::HANDLE(hwnd.0),
+                &GUID_CONSOLE_DISPLAY_STATE,
+                DEVICE_NOTIFY_WINDOW_HANDLE,
+            ) {
+                DISPLAY_NOTIFY.set(note.0);
+            }
         }
     });
 
@@ -528,17 +556,30 @@ struct App {
     media_click: Option<media_log::Click>,
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
-    /// `TIMER_OUTSIDE` runs.
-    outside_timer: bool,
+    /// `TIMER_OUTSIDE`'s interval now; 0 while it does not run.
+    outside_ms: u32,
     /// "Di belakang jendela": the island's place in the window order, and
-    /// `TIMER_BEHIND` runs.
+    /// `TIMER_BEHIND`'s interval now (0: not running).
     behind: behind::Behind,
-    behind_timer: bool,
-    /// `TIMER_HALO` runs, and the margin is drawn now.
-    halo_timer: bool,
+    behind_ms: u32,
+    /// `TIMER_HALO`'s interval now (0: not running), and the margin is drawn.
+    halo_ms: u32,
     halo_on: bool,
-    /// The mouse buttons as the last poll saw them.
-    outside_edge: PressEdge,
+    /// The display is off (`GUID_CONSOLE_DISPLAY_STATE`): like a locked
+    /// session, the pointer polls pause.
+    display_off: bool,
+    /// When the last trigger (a move over the island, a drag entering it)
+    /// asked for the halo poll; `None` once the poll has stopped.
+    halo_armed: Option<Instant>,
+    /// The mouse buttons as the last poll saw them, and a press the island
+    /// took itself.
+    outside_edge: OutsidePress,
+    /// The middle button went down on the island while gestures count; its
+    /// release there plays or pauses.
+    middle_down: bool,
+    /// When the wheel last turned a panel page: a paging scroll that passes
+    /// over the Music page's cover keeps paging.
+    last_paging: Option<Instant>,
     /// The Mixer page's audio thread (started on the first request), the
     /// rows it last read and whether a reading is on its way.
     audio: Option<audio::Audio>,
@@ -895,10 +936,18 @@ impl App {
                     self.on_search_index(apps);
                     continue;
                 }
-                Event::ShelfDragOver(on) => match self.on_shelf_drag(on) {
-                    Some(event) => event,
-                    None => continue,
-                },
+                Event::ShelfDragOver(on) => {
+                    // A drag that entered the island is a halo trigger: if
+                    // it strays above the island once the panel has gone,
+                    // the margin can catch it (the refresh starts the poll).
+                    if on {
+                        self.halo_armed = Some(Instant::now());
+                    }
+                    match self.on_shelf_drag(on) {
+                        Some(event) => event,
+                        None => continue,
+                    }
+                }
                 Event::ShelfDrop(paths) => {
                     self.on_shelf_drop(paths, now);
                     continue;
@@ -1145,11 +1194,11 @@ impl App {
     /// A right-click on a favourite in the open menu unstars it (true);
     /// anywhere else the tray menu opens as always (false).
     fn on_right_click(&mut self, lparam: LPARAM) -> bool {
-        let hit = self.hit_at(lparam);
         // The faint drag margin is not the island: no menu from it.
-        if hit.is_none() {
-            return true;
-        }
+        let hit = match self.under_at(lparam) {
+            Under::Island(hit) => Some(hit),
+            Under::Halo | Under::Off => return true,
+        };
         if self.clip_right_click(hit.as_ref()) {
             return true;
         }
@@ -2918,74 +2967,126 @@ impl App {
     /// above every window and nothing is read. A view that must be seen
     /// raises it at once, without waiting for the poll.
     fn sync_behind(&mut self, now: Instant) {
-        let wanted = self.config.stay_behind && !self.fullscreen;
-        if wanted != self.behind_timer {
-            self.behind_timer = wanted;
-            unsafe {
-                if wanted {
-                    SetTimer(Some(self.hwnd), TIMER_BEHIND, behind::POLL_MS, None);
-                } else {
-                    let _ = KillTimer(Some(self.hwnd), TIMER_BEHIND);
-                }
-            }
-            if !wanted {
+        let wanted = self.config.stay_behind && !self.fullscreen && !self.screen_away();
+        if !wanted {
+            if self.behind_ms != 0 {
+                self.pace(TIMER_BEHIND, 0);
                 self.behind.reset();
                 self.set_front(true);
             }
+            return;
         }
-        if wanted {
-            self.follow_behind(now);
+        // `follow_behind` sets the pace from what it reads.
+        if self.behind_ms == 0 {
+            self.pace(TIMER_BEHIND, behind::POLL_MS);
+        }
+        self.follow_behind(now);
+    }
+
+    /// The session is locked or the display is off: nobody is at the
+    /// pointer, so the pointer polls pause.
+    fn screen_away(&self) -> bool {
+        self.session_locked || self.display_off
+    }
+
+    /// Locking, unlocking, the display going off or on: the pointer polls
+    /// stop or start again.
+    fn sync_pointer_polls(&mut self) {
+        self.sync_outside_timer();
+        self.sync_behind(Instant::now());
+        self.sync_halo_timer();
+    }
+
+    /// Sets repeating timer `id` to `ms` (0 stops it), only when its interval
+    /// changes. Windows may coalesce it with other wake-ups within a small
+    /// slack (`timer_slack`).
+    fn pace(&mut self, id: usize, ms: u32) {
+        let current = match id {
+            TIMER_HALO => &mut self.halo_ms,
+            TIMER_OUTSIDE => &mut self.outside_ms,
+            TIMER_BEHIND => &mut self.behind_ms,
+            _ => return,
+        };
+        if *current == ms {
+            return;
+        }
+        *current = ms;
+        unsafe {
+            if ms == 0 {
+                let _ = KillTimer(Some(self.hwnd), id);
+            } else {
+                SetCoalescableTimer(Some(self.hwnd), id, ms, None, timer_slack(ms));
+            }
         }
     }
 
-    /// The drag margin's poll runs only while the island is up in a view
-    /// that is not a panel, and not in fullscreen; otherwise the margin is
-    /// gone and nothing is read.
+    /// The drag margin may be offered at all: the island is up in a view
+    /// that is not a panel, the screen is not locked, off or fullscreen, and
+    /// the island is not lowered behind windows.
+    fn halo_allowed(&self) -> bool {
+        let hidden_behind = self.config.stay_behind && self.behind.z() == behind::Z::Bottom;
+        !self.fullscreen
+            && !self.screen_away()
+            && !hidden_behind
+            && !matches!(self.state.view(), View::Panel(_) | View::Hidden)
+    }
+
+    /// A trigger for the margin's poll: the pointer moved over the island,
+    /// or a drag entered it. Cheap; the poll itself decides when to stop.
+    fn arm_halo(&mut self) {
+        self.halo_armed = Some(Instant::now());
+        self.sync_halo_timer();
+    }
+
+    /// The margin's poll runs only after a trigger and while it is allowed;
+    /// otherwise the margin is gone and nothing is read. A panel over the
+    /// island pauses an armed poll (it resumes when the panel closes, and its
+    /// first reading decides whether to go on).
     fn sync_halo_timer(&mut self) {
-        let wanted =
-            !self.fullscreen && !matches!(self.state.view(), View::Panel(_) | View::Hidden);
-        if wanted == self.halo_timer {
+        let wanted = self.halo_armed.is_some() && self.halo_allowed();
+        if wanted == (self.halo_ms != 0) {
             return;
         }
-        self.halo_timer = wanted;
-        unsafe {
-            if wanted {
-                SetTimer(Some(self.hwnd), TIMER_HALO, halo::POLL_MS, None);
-            } else {
-                let _ = KillTimer(Some(self.hwnd), TIMER_HALO);
-            }
-        }
+        // It starts slow; the first reading speeds it up for a drag.
+        self.pace(TIMER_HALO, if wanted { halo::SLOW_MS } else { 0 });
         if !wanted {
             self.set_halo(false);
         }
     }
 
-    /// `TIMER_HALO`: the margin follows "button down, pointer near".
+    /// `TIMER_HALO`: the margin follows "button down, pointer near"; the poll
+    /// stops when neither can start a drag any more (`halo::keep_polling`),
+    /// and runs fast only while a drag is close (`halo::poll_ms`).
     fn on_halo_poll(&mut self) {
-        if !self.halo_timer {
+        if self.halo_ms == 0 {
             return;
         }
-        let down = unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) } as u16 & 0x8000 != 0;
-        // A raised-from-behind island is the only one a drag can reach.
-        let hidden_behind = self.config.stay_behind && self.behind.z() == behind::Z::Bottom;
-        let mut on = false;
-        if down && !hidden_behind {
-            let mut pt = POINT::default();
-            if unsafe { GetCursorPos(&mut pt) }.is_ok()
-                && let (Some(island), Some(win)) = (self.renderer.island_px(), self.win.as_ref())
-            {
-                let (ox, oy) = win.screen_origin();
-                let island = (
-                    island.0 + ox as f32,
-                    island.1 + oy as f32,
-                    island.2 + ox as f32,
-                    island.3 + oy as f32,
-                );
-                let near = halo::NEAR_DIP * win.scale();
-                on = halo::halo_wanted(down, (pt.x as f32, pt.y as f32), island, near);
-            }
+        let down = left_button_down();
+        let (mut near, mut close) = (false, false);
+        let mut pt = POINT::default();
+        if unsafe { GetCursorPos(&mut pt) }.is_ok()
+            && let (Some(island), Some(win)) = (self.renderer.island_px(), self.win.as_ref())
+        {
+            let (ox, oy) = win.screen_origin();
+            let island = (
+                island.0 + ox as f32,
+                island.1 + oy as f32,
+                island.2 + ox as f32,
+                island.3 + oy as f32,
+            );
+            let cursor = (pt.x as f32, pt.y as f32);
+            let near_px = halo::NEAR_DIP * win.scale();
+            near = halo::is_near(cursor, island, near_px);
+            close = halo::is_near(cursor, island, near_px * halo::FAST_REACH);
         }
-        self.set_halo(on);
+        let since = self.halo_armed.map_or(Duration::MAX, |at| at.elapsed());
+        if !self.halo_allowed() || !halo::keep_polling(down, near, since) {
+            self.halo_armed = None;
+            self.sync_halo_timer();
+            return;
+        }
+        self.pace(TIMER_HALO, halo::poll_ms(down, close));
+        self.set_halo(down && near);
     }
 
     fn set_halo(&mut self, on: bool) {
@@ -3001,15 +3102,22 @@ impl App {
 
     /// `TIMER_BEHIND`.
     fn on_behind_timer(&mut self) {
-        if self.behind_timer {
+        if self.behind_ms != 0 {
             self.follow_behind(Instant::now());
         }
     }
 
-    /// Reads the pointer and puts the island where `behind` says.
+    /// Reads the pointer and puts the island where `behind` says; the poll
+    /// slows down while the pointer is far from the top edge and nothing is
+    /// about to change (`behind::poll_ms`).
     fn follow_behind(&mut self, now: Instant) {
         let mut pt = POINT::default();
         let have = unsafe { GetCursorPos(&mut pt).is_ok() };
+        let near_top = !have
+            || self.win.as_ref().is_none_or(|win| {
+                let (_, oy) = win.screen_origin();
+                ((pt.y - oy) as f32) < behind::NEAR_TOP_DIP * win.scale()
+            });
         let on_strip = have && self.on_raise_strip(pt);
         let over_island = have && {
             let mut client = pt;
@@ -3026,6 +3134,9 @@ impl App {
         };
         let z = self.behind.decide(inputs, now);
         self.set_front(z == behind::Z::Top);
+        if self.behind_ms != 0 {
+            self.pace(TIMER_BEHIND, behind::poll_ms(self.behind.lower_pending(), near_top));
+        }
     }
 
     /// The screen point is on the strip along the top edge of the screen over
@@ -3050,35 +3161,32 @@ impl App {
     /// Polls the mouse buttons only while the panel is kept open: a press
     /// already down when the poll starts is not a click outside.
     fn sync_outside_timer(&mut self) {
-        let wanted = self.state.outside_click_wanted();
-        if wanted == self.outside_timer {
+        let wanted = self.state.outside_click_wanted() && !self.screen_away();
+        if wanted == (self.outside_ms != 0) {
             return;
         }
-        self.outside_timer = wanted;
-        unsafe {
-            if wanted {
-                self.outside_edge.reset(any_mouse_button_down());
-                SetTimer(Some(self.hwnd), TIMER_OUTSIDE, OUTSIDE_MS, None);
-            } else {
-                let _ = KillTimer(Some(self.hwnd), TIMER_OUTSIDE);
-            }
+        if wanted {
+            // Reading also spends the "pressed since" bits of old presses.
+            self.outside_edge.reset(mouse_buttons().0);
         }
+        self.pace(TIMER_OUTSIDE, if wanted { OUTSIDE_MS } else { 0 });
     }
 
-    /// A button went down since the last poll: outside the island's shape
-    /// (the part that is drawn) closes the panel.
+    /// A button went down since the last poll (held, or a quick click that
+    /// came and went between two polls): unless the island took that press
+    /// itself (its own button-down message), it was outside and closes the
+    /// panel. With no input for a while the poll slows down; the "pressed
+    /// since" bit still catches a click between two slow polls.
     fn on_outside_poll(&mut self) {
-        if !self.outside_edge.poll(any_mouse_button_down()) {
+        if self.outside_ms == 0 {
             return;
         }
-        let mut pt = POINT::default();
-        let inside = unsafe {
-            GetCursorPos(&mut pt).is_ok()
-                && ScreenToClient(self.hwnd, &mut pt).as_bool()
-                && self.renderer.hit_test(pt.x as f32, pt.y as f32).is_some()
-        };
-        if !inside {
+        let (down, tapped) = mouse_buttons();
+        if self.outside_edge.poll(down, tapped) {
             self.apply_now(Event::Dismiss);
+        }
+        if self.outside_ms != 0 {
+            self.pace(TIMER_OUTSIDE, outside_poll_ms(input_idle_ms()));
         }
     }
 
@@ -3346,6 +3454,15 @@ impl App {
     /// Arms hover and leave tracking when the pointer enters; the island
     /// expands only once `WM_MOUSEHOVER` reports a dwell.
     fn on_mouse_move(&mut self, lparam: LPARAM) {
+        // The pointer over the island (or its margin) is the halo poll's
+        // trigger: a drag may start from here. A no-op while it runs.
+        if self.halo_allowed() {
+            self.arm_halo();
+        }
+        // The user is at the mouse: a slowed outside-click poll speeds up.
+        if self.outside_ms > OUTSIDE_MS {
+            self.pace(TIMER_OUTSIDE, OUTSIDE_MS);
+        }
         // A slider drag holds the capture: the pointer may be anywhere, and
         // leaving the island mid-drag is not leaving it (`on_release` checks).
         if self.mixer_drag.is_some() {
@@ -3354,7 +3471,7 @@ impl App {
         }
         // The faint margin round a small island takes a drag (the shelf),
         // not the pointer: nothing hovers there.
-        if self.hit_at(lparam).is_none() {
+        if !self.on_island(lparam) {
             // From the island onto its margin is leaving it (no leave
             // message comes while the pointer stays in the window).
             if !self.hover.needs_arming() {
@@ -3387,7 +3504,7 @@ impl App {
 
     fn on_mouse_hover(&mut self, lparam: LPARAM) {
         // The faint margin round a small island takes a drag, not a hover.
-        if self.hit_at(lparam).is_none() {
+        if !self.on_island(lparam) {
             self.hover.disarm();
             return;
         }
@@ -3399,6 +3516,7 @@ impl App {
     fn on_mouse_leave(&mut self) {
         self.click.clear();
         self.shelf_release();
+        self.middle_down = false;
         self.bata.brain.hover(false, Instant::now());
         match self.hover.on_leave() {
             Some(event) => self.apply_now(event),
@@ -3414,8 +3532,21 @@ impl App {
         self.renderer.hit_test(x, y)
     }
 
+    /// What the pointer at `lparam` (client coordinates) is over.
+    fn under_at(&self, lparam: LPARAM) -> Under {
+        let (x, y) = client_xy(lparam);
+        self.renderer.under(x as f32, y as f32)
+    }
+
+    /// The point at `lparam` is a drawn pixel of the island: its shoulders
+    /// and anti-aliased edge too, but not the drag margin.
+    fn on_island(&self, lparam: LPARAM) -> bool {
+        matches!(self.under_at(lparam), Under::Island(_))
+    }
+
     /// `WM_LBUTTONDOWN`: remembers what the press is on.
     fn on_press(&mut self, lparam: LPARAM) {
+        self.outside_edge.press_inside();
         let hit = self.hit_at(lparam);
         self.shelf_press(
             match hit {
@@ -3476,9 +3607,24 @@ impl App {
         self.win.as_ref().map_or(1.0, IslandWindow::scale)
     }
 
-    /// `WM_MBUTTONUP`: the middle button over the island plays or pauses.
+    /// `WM_RBUTTONDOWN`: the island took the press, so a kept panel's poll
+    /// does not count it as a click outside.
+    fn on_right_press(&mut self) {
+        self.outside_edge.press_inside();
+    }
+
+    /// `WM_MBUTTONDOWN`: a middle press on the island, paired with its
+    /// release below.
+    fn on_middle_press(&mut self, lparam: LPARAM) {
+        self.outside_edge.press_inside();
+        self.middle_down = self.gestures_active() && self.on_island(lparam);
+    }
+
+    /// `WM_MBUTTONUP`: the middle button pressed and let go over the island
+    /// plays or pauses. A press that began elsewhere does nothing.
     fn on_middle_release(&mut self, lparam: LPARAM) {
-        if self.gestures_active() && self.hit_at(lparam).is_some() {
+        let pressed = std::mem::take(&mut self.middle_down);
+        if middle_click(pressed, self.gestures_active(), self.on_island(lparam)) {
             self.apply_now(Event::Click(Hit::PlayPause));
         }
     }
@@ -3503,7 +3649,7 @@ impl App {
         };
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
         // Not on the faint margin round a small island.
-        if client && self.renderer.hit_test(pt.x as f32, pt.y as f32).is_none() {
+        if client && !matches!(self.renderer.under(pt.x as f32, pt.y as f32), Under::Island(_)) {
             return;
         }
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
@@ -3535,9 +3681,13 @@ impl App {
             self.state.media().is_some_and(|m| m.playing),
             &self.state.view(),
             over_art,
+            paging_recent(self.last_paging, Instant::now()),
         ) {
             self.volume_wheel(delta);
         } else {
+            if matches!(self.state.view(), View::Panel(_)) {
+                self.last_paging = Some(Instant::now());
+            }
             self.apply_now(Event::Wheel(delta));
         }
     }
@@ -4046,33 +4196,90 @@ impl HoverTracking {
     }
 }
 
-/// Mouse-button presses seen by polling: true only on the poll where a button
-/// went from up to down.
+/// Mouse-button presses seen by polling, for the click outside a kept panel.
+/// A press is an up-to-down edge between two polls, or the "pressed since
+/// the last read" bit (a click quicker than the poll). A press the island
+/// took itself (its own button-down message, handled before the timer's) is
+/// not outside, wherever the pointer is by the time of the poll.
 #[derive(Default)]
-struct PressEdge {
+struct OutsidePress {
     down: bool,
+    inside: bool,
 }
 
-impl PressEdge {
-    fn poll(&mut self, down: bool) -> bool {
-        let pressed = down && !self.down;
+impl OutsidePress {
+    /// A button went down on the island: the next press the poll sees is
+    /// that one.
+    fn press_inside(&mut self) {
+        self.inside = true;
+    }
+
+    /// True on the poll that sees a press outside the island.
+    fn poll(&mut self, down: bool, tapped: bool) -> bool {
+        let pressed = (down && !self.down) || tapped;
         self.down = down;
-        pressed
+        if !pressed {
+            // A press the poll never saw (its bit spent elsewhere) must
+            // not excuse the next one.
+            if !down {
+                self.inside = false;
+            }
+            return false;
+        }
+        !std::mem::take(&mut self.inside)
     }
 
     /// Starts from `down`: a press that began before the polling did is not
     /// an edge.
     fn reset(&mut self, down: bool) {
         self.down = down;
+        self.inside = false;
     }
 }
 
-/// Any physical mouse button is down (left, right or middle: a swapped
-/// button pair makes no difference).
-fn any_mouse_button_down() -> bool {
+/// The outside-click poll's slow pace, once no input has come for
+/// `OUTSIDE_IDLE_MS`.
+const OUTSIDE_SLOW_MS: u32 = 250;
+const OUTSIDE_IDLE_MS: u32 = 1_000;
+
+/// The outside-click poll's interval: quick while the user is at the mouse
+/// or keyboard, slow after a second without input.
+fn outside_poll_ms(input_idle_ms: u32) -> u32 {
+    if input_idle_ms > OUTSIDE_IDLE_MS {
+        OUTSIDE_SLOW_MS
+    } else {
+        OUTSIDE_MS
+    }
+}
+
+/// Milliseconds since the last keyboard or mouse input in this session.
+fn input_idle_ms() -> u32 {
+    let mut info = LASTINPUTINFO {
+        cbSize: size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+        unsafe { GetTickCount() }.wrapping_sub(info.dwTime)
+    } else {
+        0
+    }
+}
+
+/// How late Windows may fire a polling timer to batch it with other
+/// wake-ups: up to 30 ms, never more than half the interval.
+fn timer_slack(ms: u32) -> u32 {
+    (ms / 2).min(30)
+}
+
+/// (Any mouse button is down, any went down since the last read.) Left,
+/// right and middle, so a swapped button pair makes no difference.
+fn mouse_buttons() -> (bool, bool) {
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
         .iter()
-        .any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } as u16 & 0x8000 != 0)
+        .map(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } as u16)
+        .fold((false, false), |(down, tapped), s| {
+            (down || s & 0x8000 != 0, tapped || s & 0x0001 != 0)
+        })
 }
 
 /// Pairs a left press with its release: a click counts only when both land
@@ -4101,20 +4308,52 @@ impl ClickPair {
     }
 }
 
-/// Whether the left button is down right now.
+/// A middle release plays or pauses only when its press was on the island
+/// too, gestures still count, and the release is on a drawn island pixel.
+fn middle_click(pressed_on_island: bool, gestures: bool, released_on_island: bool) -> bool {
+    pressed_on_island && gestures && released_on_island
+}
+
+/// The key `GetAsyncKeyState` must read for the logical left (primary)
+/// button: it reads the physical buttons, so with the pair swapped in
+/// Settings the primary one is the physical right.
+fn primary_button_vk(swapped: bool) -> VIRTUAL_KEY {
+    if swapped { VK_RBUTTON } else { VK_LBUTTON }
+}
+
+/// Whether the logical left (primary) button is down right now, the one that
+/// sends `WM_LBUTTONDOWN`.
 fn left_button_down() -> bool {
-    (unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) }) as u16 & 0x8000 != 0
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
+    let vk = primary_button_vk(swapped);
+    (unsafe { GetAsyncKeyState(i32::from(vk.0)) }) as u16 & 0x8000 != 0
+}
+
+/// After the wheel turns a page, the Music page's cover leaves the wheel to
+/// the pages this long: a paging scroll that passes over it keeps paging.
+const PAGING_HOLD: Duration = Duration::from_millis(600);
+
+/// The wheel turned a page less than `PAGING_HOLD` ago.
+fn paging_recent(last_paging: Option<Instant>, now: Instant) -> bool {
+    last_paging.is_some_and(|at| now.saturating_duration_since(at) < PAGING_HOLD)
 }
 
 /// Whether the wheel turns the music's volume rather than the pages: the
 /// setting is on and a song plays, over the compact notch (both views of
-/// it) or the Music page's cover. Anywhere else the wheel turns pages.
-fn volume_wheel_applies(enabled: bool, playing: bool, view: &View, over_art: bool) -> bool {
+/// it) or the Music page's cover, unless that page is in the middle of a
+/// paging scroll. Anywhere else the wheel turns pages.
+fn volume_wheel_applies(
+    enabled: bool,
+    playing: bool,
+    view: &View,
+    over_art: bool,
+    paging: bool,
+) -> bool {
     enabled
         && playing
         && match view {
             View::MediaCompact | View::MediaLyric => true,
-            View::Panel(Page::Media) => over_art,
+            View::Panel(Page::Media) => over_art && !paging,
             _ => false,
         }
 }
@@ -4437,6 +4676,22 @@ fn query_session_locked() -> Option<bool> {
 }
 
 /// Messages after which the wall clock may have jumped.
+/// `GUID_CONSOLE_DISPLAY_STATE`'s value: 0 off, 1 on, 2 dimmed (still on).
+fn display_state_off(state: u8) -> bool {
+    state == 0
+}
+
+/// From a `PBT_POWERSETTINGCHANGE` message: `Some(true)` when the display
+/// went off, `Some(false)` when it is on; `None` for any other setting.
+///
+/// # Safety
+/// `lparam` is that message's, a `POWERBROADCAST_SETTING` (or null).
+unsafe fn display_off_from(lparam: LPARAM) -> Option<bool> {
+    let setting = unsafe { (lparam.0 as *const POWERBROADCAST_SETTING).as_ref() }?;
+    (setting.PowerSetting == GUID_CONSOLE_DISPLAY_STATE && setting.DataLength >= 1)
+        .then(|| display_state_off(setting.Data[0]))
+}
+
 fn is_clock_jump(msg: u32, wparam: WPARAM) -> bool {
     match msg {
         WM_TIMECHANGE => true,
@@ -5142,6 +5397,15 @@ unsafe extern "system" fn wnd_proc(
                     PBT_APMPOWERSTATUSCHANGE => {
                         with_app(App::check_battery);
                     }
+                    // The display went off or came back (dimmed counts as on).
+                    w if w == PBT_POWERSETTINGCHANGE as usize => {
+                        if let Some(off) = unsafe { display_off_from(lparam) } {
+                            with_app(|app| {
+                                app.display_off = off;
+                                app.sync_pointer_polls();
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -5153,11 +5417,13 @@ unsafe extern "system" fn wnd_proc(
                     with_app(|app| {
                         app.session_locked = true;
                         app.clip_on_lock();
+                        app.sync_pointer_polls();
                     });
                 }
                 WTS_SESSION_UNLOCK => {
                     with_app(|app| {
                         app.session_locked = false;
+                        app.sync_pointer_polls();
                         app.maybe_greet(GreetTrigger::Unlock);
                     });
                 }
@@ -5183,8 +5449,16 @@ unsafe extern "system" fn wnd_proc(
             with_app(App::on_mouse_leave);
             LRESULT(0)
         }
+        WM_MBUTTONDOWN => {
+            with_app(|app| app.on_middle_press(lparam));
+            LRESULT(0)
+        }
         WM_MBUTTONUP => {
             with_app(|app| app.on_middle_release(lparam));
+            LRESULT(0)
+        }
+        WM_RBUTTONDOWN => {
+            with_app(App::on_right_press);
             LRESULT(0)
         }
         WM_MOUSEHWHEEL => {
@@ -5309,6 +5583,10 @@ unsafe extern "system" fn wnd_proc(
             with_app(App::search_shutdown);
             unsafe {
                 let _ = WTSUnRegisterSessionNotification(hwnd);
+                let note = DISPLAY_NOTIFY.replace(0);
+                if note != 0 {
+                    let _ = UnregisterPowerSettingNotification(HPOWERNOTIFY(note));
+                }
             }
             tray::remove_tray(hwnd);
             unsafe { PostQuitMessage(0) };
@@ -5791,17 +6069,76 @@ mod tests {
 
     #[test]
     fn a_press_is_the_up_to_down_edge_only() {
-        let mut e = PressEdge::default();
-        assert!(!e.poll(false));
-        assert!(e.poll(true), "the press");
-        assert!(!e.poll(true), "held down: no second edge");
-        assert!(!e.poll(false), "the release");
-        assert!(e.poll(true), "the next press");
+        let mut e = OutsidePress::default();
+        assert!(!e.poll(false, false));
+        assert!(e.poll(true, true), "the press");
+        assert!(!e.poll(true, false), "held down: no second edge");
+        assert!(!e.poll(false, false), "the release");
+        assert!(e.poll(true, false), "the next press");
         // A button already down when the polling starts is not a click.
         e.reset(true);
-        assert!(!e.poll(true));
-        assert!(!e.poll(false));
-        assert!(e.poll(true));
+        assert!(!e.poll(true, false));
+        assert!(!e.poll(false, false));
+        assert!(e.poll(true, false));
+    }
+
+    #[test]
+    fn a_click_quicker_than_the_poll_still_counts() {
+        let mut e = OutsidePress::default();
+        // Down and up again between two polls: only the "pressed since" bit.
+        assert!(e.poll(false, true));
+        assert!(!e.poll(false, false));
+    }
+
+    #[test]
+    fn a_press_the_island_took_is_not_outside() {
+        let mut e = OutsidePress::default();
+        e.press_inside();
+        assert!(!e.poll(true, true), "the island's own press");
+        assert!(!e.poll(false, false));
+        // The next press elsewhere counts again.
+        assert!(e.poll(true, true));
+        assert!(!e.poll(false, false));
+        // A quick click on the island, seen only by its bit.
+        e.press_inside();
+        assert!(!e.poll(false, true));
+        // An island press the poll never saw does not excuse a later one.
+        e.press_inside();
+        assert!(!e.poll(false, false));
+        assert!(e.poll(true, false));
+        // Starting the poll forgets one too.
+        e.press_inside();
+        e.reset(false);
+        assert!(e.poll(true, false));
+    }
+
+    #[test]
+    fn swapped_buttons_read_the_physical_right_one() {
+        assert_eq!(primary_button_vk(false), VK_LBUTTON);
+        assert_eq!(primary_button_vk(true), VK_RBUTTON);
+    }
+
+    #[test]
+    fn a_middle_click_needs_its_press_and_release_on_the_island() {
+        assert!(middle_click(true, true, true));
+        assert!(!middle_click(false, true, true), "pressed elsewhere");
+        assert!(!middle_click(true, true, false), "let go elsewhere");
+        assert!(!middle_click(true, false, true), "gestures off by now");
+    }
+
+    #[test]
+    fn the_pointer_polls_slow_down_when_nobody_is_there() {
+        assert_eq!(outside_poll_ms(0), OUTSIDE_MS);
+        assert_eq!(outside_poll_ms(OUTSIDE_IDLE_MS), OUTSIDE_MS);
+        assert_eq!(outside_poll_ms(OUTSIDE_IDLE_MS + 1), OUTSIDE_SLOW_MS);
+        // The slack never exceeds half the interval, nor 30 ms.
+        assert_eq!(timer_slack(OUTSIDE_MS), 20);
+        assert_eq!(timer_slack(halo::FAST_MS), 25);
+        assert_eq!(timer_slack(OUTSIDE_SLOW_MS), 30);
+        // The display state: off pauses, on and dimmed do not.
+        assert!(display_state_off(0));
+        assert!(!display_state_off(1));
+        assert!(!display_state_off(2));
     }
 
     #[test]
@@ -5846,7 +6183,7 @@ mod tests {
 
     #[test]
     fn the_wheel_turns_the_volume_only_over_the_music() {
-        let on = |view: &View, art| volume_wheel_applies(true, true, view, art);
+        let on = |view: &View, art| volume_wheel_applies(true, true, view, art, false);
         assert!(on(&View::MediaCompact, false));
         assert!(on(&View::MediaLyric, false));
         // The Music page: the cover turns the volume, the rest the page.
@@ -5858,8 +6195,24 @@ mod tests {
         // A paused song (the caller passes `m.playing`, not that a song is
         // there) or nothing at all: the wheel turns pages. So does the
         // setting off.
-        assert!(!volume_wheel_applies(true, false, &View::MediaCompact, false));
-        assert!(!volume_wheel_applies(false, true, &View::MediaCompact, false));
+        assert!(!volume_wheel_applies(true, false, &View::MediaCompact, false, false));
+        assert!(!volume_wheel_applies(false, true, &View::MediaCompact, false, false));
+    }
+
+    #[test]
+    fn a_paging_scroll_passing_over_the_cover_keeps_paging() {
+        let t0 = Instant::now();
+        let paging = |at| paging_recent(Some(t0), at);
+        assert!(paging(t0 + Duration::from_millis(100)));
+        assert!(!paging(t0 + PAGING_HOLD));
+        assert!(!paging_recent(None, t0));
+        let media = View::Panel(Page::Media);
+        // Over the cover right after a page turned: the wheel stays a page.
+        assert!(!volume_wheel_applies(true, true, &media, true, true));
+        // A moment later the cover turns the volume again.
+        assert!(volume_wheel_applies(true, true, &media, true, false));
+        // The compact notch is the volume's whatever the pages did.
+        assert!(volume_wheel_applies(true, true, &View::MediaCompact, false, true));
     }
 
     #[test]

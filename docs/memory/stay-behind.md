@@ -23,11 +23,13 @@ Settings → Umum → **Di belakang jendela** (`config.stay_behind`, default
     `on_strip`, `App::on_raise_strip`; not the 620 px window, which is wider);
   - the pointer is still over the drawn island while it is up.
   It goes back down 250 ms (`LOWER_AFTER`) after none of those holds.
-- Cost: one `TIMER_BEHIND` (29) at 80 ms (`POLL_MS`) reading `GetCursorPos`,
-  only while the setting is on and the screen is not fullscreen
-  (`App::sync_behind`). Fullscreen or turning it off puts the island back on
-  top and stops the poll. A view change raises it at once (`sync_timers`), not
-  at the next poll.
+- Cost: one `TIMER_BEHIND` (29) reading `GetCursorPos`, only while the
+  setting is on, the screen is not fullscreen, the session not locked and the
+  display not off (`App::sync_behind`). 80 ms (`POLL_MS`) with the pointer
+  within 150 dip of the top edge or while lowering is due; 350 ms (`SLOW_MS`)
+  otherwise (`behind::poll_ms`, coalescable). Fullscreen, a lock or turning it
+  off puts the island back on top and stops the poll. A view change raises it
+  at once (`sync_timers`), not at the next poll.
 
 **Limits (not verified live):**
 - `HWND_BOTTOM` is the bottom of the *normal* order. Whether the island stays

@@ -17,6 +17,9 @@ share one id), and `audio::Target::Master` is what the Mixer already sets.
   the panel opens within ~120 ms of the pointer arriving, so the compact notch
   is reachable mainly in Click mode or in that dwell; the cover is the usual
   place. Decision function: `app::volume_wheel_applies` (pure, tested).
+  A paging scroll that passes over the cover keeps paging: for 600 ms after
+  a notch turned a page (`PAGING_HOLD`, `paging_recent`) the cover leaves the
+  wheel to the pages. The compact notch is unaffected.
 - **Only while it plays:** the caller passes `m.playing`, not "a song is
   there", so over a paused song the wheel turns pages (3.2.1 review fix; it
   used to pass `media().is_some()`).

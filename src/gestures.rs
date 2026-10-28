@@ -65,10 +65,13 @@ pub struct HWheel {
 impl HWheel {
     /// One `WM_MOUSEHWHEEL` delta (positive: scrolled right). Scrolling
     /// right is the next song, left the one before. A flick fires once; what
-    /// follows it within `HWHEEL_COOLDOWN` is spent.
+    /// follows it is spent until the scroll has been still for
+    /// `HWHEEL_COOLDOWN` (each delta meanwhile pushes the end out), so a
+    /// touchpad's long momentum tail never fires a second time.
     pub fn push(&mut self, delta: i32, now: Instant) -> Option<Dir> {
         if self.quiet_until.is_some_and(|t| now < t) {
             self.last = Some(now);
+            self.quiet_until = Some(now + HWHEEL_COOLDOWN);
             return None;
         }
         if self.last.is_none_or(|t| now.saturating_duration_since(t) > HWHEEL_GAP) {
@@ -139,6 +142,21 @@ mod tests {
         assert_eq!(w.push(-50, t1), None);
         assert_eq!(w.push(-50, t1 + ms(30)), None);
         assert_eq!(w.push(-50, t1 + ms(60)), Some(Dir::Prev));
+    }
+
+    #[test]
+    fn a_whole_second_of_momentum_fires_once() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        assert_eq!(w.push(120, t0), Some(Dir::Next));
+        // A touchpad's tail: a delta every 20 ms for a full second, well past
+        // the cooldown counted from the flick.
+        for i in 1..=50 {
+            assert_eq!(w.push(40, t0 + ms(i * 20)), None, "delta {i}");
+        }
+        // Once the scroll has been still for the cooldown, a flick counts.
+        let after = t0 + ms(1_000) + HWHEEL_COOLDOWN;
+        assert_eq!(w.push(120, after), Some(Dir::Next));
     }
 
     #[test]
