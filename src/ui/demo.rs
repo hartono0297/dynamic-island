@@ -118,6 +118,8 @@ struct Scene {
     volume: Option<f32>,
     /// The Pintasan page with custom tiles among the built-in ones.
     custom_tiles: bool,
+    /// The shelf with files being dragged over the island (its drop zone lit).
+    shelf_drag: bool,
     /// The quick search is open with the demo's made-up apps.
     search: bool,
     /// What the CLI page's card shows.
@@ -295,6 +297,7 @@ const BASE: Scene = Scene {
     lyrics_on: false,
     volume: None,
     custom_tiles: false,
+    shelf_drag: false,
     search: false,
     cli: CliDemo::Empty,
     long_media: false,
@@ -389,7 +392,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 86] = [
+const SCENES: [Scene; 89] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -511,6 +514,15 @@ const SCENES: [Scene; 86] = [
     },
     panel("mixer", Page::Mixer),
     panel("shelf", Page::Shelf),
+    panel("shelf-empty", Page::Shelf),
+    Scene {
+        shelf_drag: true,
+        ..panel("shelf-drop", Page::Shelf)
+    },
+    Scene {
+        shelf_drag: true,
+        ..panel("shelf-drop-files", Page::Shelf)
+    },
     Scene {
         search: true,
         ..panel("search", Page::Search)
@@ -1053,7 +1065,7 @@ fn run_scenes(scenes: &[Scene]) {
                 }
             });
             let mixer_rows = demo_mixer();
-            let shelf_cards = demo_shelf(scene.name == "shelf");
+            let shelf_cards = demo_shelf(matches!(scene.name, "shelf" | "shelf-drop-files"));
             let search_results = if scene.search {
                 demo_search_results()
             } else {
@@ -1077,6 +1089,7 @@ fn run_scenes(scenes: &[Scene]) {
                 calendar: &snapshot,
                 mixer: Some(&mixer_rows),
                 shelf: &shelf_cards,
+                shelf_drag: scene.shelf_drag,
                 notes,
                 notes_page: 0,
                 reminders: if scene.reminders == 12 {
@@ -2143,7 +2156,7 @@ fn demo_shelf(filled: bool) -> Vec<crate::shelf::ShelfCard> {
         stale,
     };
     vec![
-        card("denah-lt2.pdf", ShelfKind::Document, false),
+        card("denah-lantai-2-revisi-final.pdf", ShelfKind::Document, false),
         card("foto-lokasi.png", ShelfKind::Image, false),
         card("Gambar kerja", ShelfKind::Folder, false),
         card("rab-v3.xlsx", ShelfKind::Document, false),

@@ -610,7 +610,7 @@ impl Renderer {
                 Ok(())
             }
             PageLayout::Shelf(l) => {
-                self.paint_shelf(l, frame.shelf);
+                self.paint_shelf(l, frame.shelf, frame.shelf_drag);
                 Ok(())
             }
             PageLayout::Search(l) => {
@@ -2186,28 +2186,99 @@ impl Renderer {
     /// The shelf: a card per file (its type icon over its name, an X on the
     /// corner), "Kosongkan" beside the heading. A card whose file is gone is
     /// dimmed.
-    fn paint_shelf(&self, l: &ShelfLayout, cards: &[ShelfCard]) {
+    /// The shelf: its title with the count and a quiet "Kosongkan", cards
+    /// with an icon over a name of up to two lines, and a dashed zone that
+    /// lights in the accent while files are dragged over the island.
+    fn paint_shelf(&self, l: &ShelfLayout, cards: &[ShelfCard], dragging: bool) {
         let lang = i18n::lang();
         let p = self.palette;
-        self.heading(text(lang, Key::PageShelf), l.header);
+        let title = match cards.len() {
+            0 => text(lang, Key::PageShelf).to_owned(),
+            n => format!("{} \u{b7} {n}", text(lang, Key::PageShelf)),
+        };
+        self.heading(&title, l.header);
         if let Some(clear) = l.clear {
             self.set_color(p.raised, 1.0);
             self.fill_round(clear, clear.h / 2.0);
-            self.text(text(lang, Key::ShelfClear), &self.fonts.small_center, clear, 1.0);
+            self.text_colored(
+                text(lang, Key::ShelfClear),
+                &self.fonts.small_center,
+                clear,
+                p.secondary,
+                1.0,
+            );
+        }
+        if dragging {
+            self.set_color(p.accent, 0.08);
+            self.fill_round(l.zone, radius::TILE);
         }
         if let Some(empty) = l.empty {
-            self.set_color(p.raised, 0.5);
-            self.fill_round(empty, radius::TILE);
-            self.text2(text(lang, Key::ShelfEmpty), &self.fonts.secondary, empty);
+            if !dragging {
+                self.stroke_dashed(empty, radius::TILE, p.track, 1.5);
+            }
+            let (icon_area, text_area) = (
+                Rect {
+                    y: empty.y + empty.h / 2.0 - 34.0,
+                    h: 30.0,
+                    ..empty
+                },
+                Rect {
+                    y: empty.y + empty.h / 2.0 + 2.0,
+                    h: 20.0,
+                    ..empty
+                },
+            );
+            let ink = if dragging { p.accent } else { p.secondary };
+            self.icon_colored(Icon::Download, icon_area, 26.0, ink, 1.0, None);
+            let hint = text(lang, if dragging { Key::ShelfDropHere } else { Key::ShelfEmpty });
+            self.text_colored(hint, &self.fonts.eleven_center, text_area, ink, 1.0);
         }
+        let per_line = ((l.cards.first().map_or(100.0, |c| c.label.w)) / 6.4) as usize;
         for (lay, card) in l.cards.iter().zip(cards) {
             let alpha = if card.stale { 0.4 } else { 1.0 };
             self.set_color(p.raised, 1.0);
             self.fill_round(lay.card, radius::TILE);
-            let (glyph, label) = tile_parts(lay.card);
-            self.icon(crate::shelf::icon(card.kind), glyph, 24.0, alpha, true);
-            self.text(&card.name, &self.fonts.eleven_center, label, alpha);
-            self.icon_colored(Icon::X, lay.remove, 11.0, p.secondary, 1.0, None);
+            self.icon(crate::shelf::icon(card.kind), lay.glyph, 26.0, alpha, true);
+            let lines = crate::shelf::wrap_name(&card.name, per_line.max(6), l.lines);
+            for (i, line) in lines.iter().enumerate() {
+                let row = Rect {
+                    y: lay.label.y + i as f32 * (lay.label.h / l.lines as f32),
+                    h: lay.label.h / l.lines as f32,
+                    ..lay.label
+                };
+                self.text(line, &self.fonts.eleven_center, row, alpha);
+            }
+            // The X on a small round chip, so it reads on any card.
+            self.set_color(p.raised_hi, 0.9);
+            self.fill_round(lay.remove, lay.remove.h / 2.0);
+            self.icon_colored(Icon::X, lay.remove, 10.0, p.secondary, 1.0, None);
+            if card.stale {
+                self.set_color(p.track, 1.0);
+                self.fill_round(lay.missing, lay.missing.h / 2.0);
+                self.text(text(lang, Key::ShelfMissing), &self.fonts.micro_center, lay.missing, 1.0);
+            }
+        }
+        // The outline last, so cards never cut it.
+        if dragging {
+            self.stroke_dashed(l.zone, radius::TILE, p.accent, 1.5);
+        }
+    }
+
+    /// A dashed outline of `r` (the shelf's drop zone).
+    fn stroke_dashed(&self, r: Rect, radius: f32, rgb: u32, width: f32) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            target.brush.SetColor(&color(rgb, 1.0));
+            target.rt.DrawRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(inset(r, width / 2.0, width / 2.0)),
+                    radiusX: radius,
+                    radiusY: radius,
+                },
+                &target.brush,
+                width,
+                Some(&self.dashed),
+            );
         }
     }
 

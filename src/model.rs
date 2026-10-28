@@ -222,6 +222,10 @@ pub enum Event {
     /// Files are being dragged over the island (`true`: it opens on the
     /// shelf) or the drag left without a drop (`false`).
     ShelfDrag(bool),
+    /// The same, as the OLE drop target reports it: `App` lights the drop
+    /// zone, passes `true` on as `ShelfDrag(true)` and ends `false` a
+    /// moment later (a drag that strays off the island and back keeps it).
+    ShelfDragOver(bool),
     /// Files were dropped on the island. `App` puts them on the shelf, the
     /// reducer ignores it.
     ShelfDrop(Vec<std::path::PathBuf>),

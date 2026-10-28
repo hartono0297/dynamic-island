@@ -192,20 +192,33 @@ pub struct ShelfLayout {
     pub header: Rect,
     /// "Kosongkan"; only with something on the shelf.
     pub clear: Option<Rect>,
-    /// The hint of an empty shelf.
+    /// Everything under the header: where files are dropped, outlined while
+    /// a drag hovers.
+    pub zone: Rect,
+    /// The hint of an empty shelf (the whole zone).
     pub empty: Option<Rect>,
+    /// Lines a card's name gets: two, or one with three rows of cards.
+    pub lines: usize,
     pub cards: Vec<ShelfCardLayout>,
 }
 
-/// A card and the X on its corner (a click takes the file off the shelf).
+/// A card, the X on its corner (a click takes the file off the shelf), its
+/// icon and its name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShelfCardLayout {
     pub card: Rect,
     pub remove: Rect,
+    pub glyph: Rect,
+    pub label: Rect,
+    /// Where "hilang" sits on a card whose file is gone.
+    pub missing: Rect,
 }
 
 const SHELF_CLEAR_W: f32 = 84.0;
 const SHELF_X: f32 = 18.0;
+const SHELF_GLYPH_H: f32 = 28.0;
+const SHELF_LINE_H: f32 = 13.5;
+const SHELF_GAP: f32 = 6.0;
 
 /// The Mixer page: a row per volume.
 #[derive(Clone, Debug, PartialEq)]
@@ -2042,6 +2055,8 @@ pub fn shelf_layout(s: ShapeRect, strip: bool, n: usize) -> ShelfLayout {
     let w = (r - l - 3.0 * TILE_GAP) / 4.0;
     let rows = n.div_ceil(4).max(2) as f32;
     let h = ((bottom - body - (rows - 1.0) * TILE_GAP) / rows).min(TILE_MAX_H);
+    let lines = if rows > 2.0 { 1 } else { 2 };
+    let group = SHELF_GLYPH_H + SHELF_GAP + lines as f32 * SHELF_LINE_H;
     let cards = (0..n)
         .map(|i| {
             let (row, col) = ((i / 4) as f32, (i % 4) as f32);
@@ -2052,14 +2067,32 @@ pub fn shelf_layout(s: ShapeRect, strip: bool, n: usize) -> ShelfLayout {
                 h,
             );
             let remove = rect(card.right() - SHELF_X - 4.0, card.y + 4.0, SHELF_X, SHELF_X);
-            ShelfCardLayout { card, remove }
+            let top = card.y + (card.h - group) / 2.0;
+            let glyph = rect(card.x, top, card.w, SHELF_GLYPH_H);
+            let label = rect(
+                card.x + 6.0,
+                glyph.bottom() + SHELF_GAP,
+                card.w - 12.0,
+                lines as f32 * SHELF_LINE_H,
+            );
+            let missing = rect(card.x + 6.0, card.y + 6.0, 40.0, 15.0);
+            ShelfCardLayout {
+                card,
+                remove,
+                glyph,
+                label,
+                missing,
+            }
         })
         .collect();
-    let empty = (n == 0).then(|| rect(l, body, r - l, 2.0 * h + TILE_GAP));
+    let zone = rect(l, body, r - l, (bottom - body).max(0.0));
+    let empty = (n == 0).then_some(zone);
     ShelfLayout {
         header,
         clear,
+        zone,
         empty,
+        lines,
         cards,
     }
 }
@@ -4222,8 +4255,22 @@ mod tests {
                         assert_eq!(c.card.w, l.cards[0].card.w);
                         assert_eq!(c.card.h, l.cards[0].card.h);
                         assert!(c.card.h >= 56.0, "{style:?} strip={strip}: {:?}", c.card);
-                        let (glyph, label) = tile_parts(c.card);
-                        assert!(glyph.y >= c.card.y && label.bottom() <= c.card.bottom());
+                        // The icon and the name sit inside the card, the icon
+                        // over the name, and neither under the X.
+                        assert!(c.glyph.y >= c.card.y && c.label.bottom() <= c.card.bottom());
+                        assert!(c.glyph.bottom() <= c.label.y);
+                        assert!(c.card.contains(c.label.x, c.label.y));
+                        assert!(c.remove.y >= c.card.y && c.remove.right() <= c.card.right());
+                        assert!(c.missing.right() <= c.remove.x, "the tag clears the X");
+                        assert_eq!(l.lines, if n > 8 { 1 } else { 2 }, "{n}");
+                        assert!(c.card.bottom() <= l.zone.bottom() + 0.01);
+                    }
+                    assert!(l.zone.y >= l.header.bottom());
+                    assert!(l.zone.bottom() <= content_bottom(s) + 0.01);
+                    for pair in l.cards.windows(2) {
+                        let (a, b) = (pair[0].card, pair[1].card);
+                        let same_row = (a.y - b.y).abs() < 0.01;
+                        assert!(!same_row || a.right() <= b.x, "{n}: no overlap in a row");
                     }
                 }
             }

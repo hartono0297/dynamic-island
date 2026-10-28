@@ -491,6 +491,7 @@ impl IslandState {
             | Event::Audio(_)
             | Event::SearchIndex(_)
             | Event::ShelfDrop(_)
+            | Event::ShelfDragOver(_)
             | Event::Clean(_)
             | Event::Mole(_)
             | Event::ShotFolder { .. }
@@ -502,13 +503,12 @@ impl IslandState {
             Event::PanelPages(pages) => self.set_pages(pages),
             Event::ShortcutTiles(tiles) => self.tiles = tiles,
             // Files over the island: the panel opens on the shelf and stays
-            // while they hover (nothing else changes: not in a game).
+            // while they hover. In a fullscreen game the island is hidden, so
+            // no drag reaches it (and `view` stays hidden if one did).
             Event::ShelfDrag(true) => {
-                if !self.fullscreen {
-                    self.page = Page::Shelf;
-                    self.collapsed = Collapse::No;
-                    self.shelf_held = true;
-                }
+                self.page = Page::Shelf;
+                self.collapsed = Collapse::No;
+                self.shelf_held = true;
             }
             Event::ShelfDrag(false) => self.shelf_held = false,
             // Only the open Mixer page takes a level.
@@ -4594,6 +4594,14 @@ mod tests {
         g.apply(Event::Fullscreen(true), t0);
         g.apply(Event::ShelfDrag(true), t0);
         assert!(!matches!(g.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn the_drop_targets_own_report_is_for_app_and_the_reducer_ignores_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert!(s.apply(Event::ShelfDragOver(true), t0).is_empty());
+        assert!(!matches!(s.view(), View::Panel(_)), "App turns it into ShelfDrag");
     }
 
     #[test]

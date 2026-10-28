@@ -172,6 +172,9 @@ $shots = @(
     @{ name = 'music-lyrics'; args = '--demo'; env = @{ DI_DEMO_STEP = 'media-lyrics-on' } }
     @{ name = 'mixer'; args = '--demo'; env = @{ DI_DEMO_STEP = 'mixer' } }
     @{ name = 'shelf'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf' } }
+    @{ name = 'shelf-empty'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf-empty' } }
+    @{ name = 'shelf-drop'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf-drop' } }
+    @{ name = 'shelf-drop-files'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf-drop-files' } }
     @{ name = 'search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'search' } }
     @{ name = 'shortcuts-custom'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts-custom' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }

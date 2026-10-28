@@ -9,8 +9,6 @@ use crate::ui::icons::Icon;
 
 /// Files on the shelf at most (three rows of four cards).
 pub const MAX_ITEMS: usize = 12;
-/// A card's name, in characters, before it is cut short.
-pub const NAME_MAX: usize = 14;
 
 /// What a card's icon shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +77,7 @@ pub fn probe(path: &Path) -> Probe {
 /// One card as it is drawn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShelfCard {
-    /// The file's name, cut to `NAME_MAX` characters.
+    /// The file's whole name; the page breaks it into lines (`wrap_name`).
     pub name: String,
     pub kind: ShelfKind,
     /// The path is gone: the card is dimmed and cannot be dragged.
@@ -111,6 +109,29 @@ pub fn short_name(name: &str, max: usize) -> String {
     out.push('…');
     out.extend(&chars[chars.len() - ext_len..]);
     out
+}
+
+/// `name` as the page shows it: one line cut with an ellipsis, or (`lines`
+/// 2) a first line broken after the last separator (space, `-`, `_`, `.`,
+/// `(`) in its first `per_line` characters, and the rest cut like
+/// `short_name` on the second.
+pub fn wrap_name(name: &str, per_line: usize, lines: usize) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    if lines < 2 || chars.len() <= per_line {
+        return vec![short_name(name, per_line)];
+    }
+    let cut = chars[..per_line]
+        .iter()
+        .rposition(|c| matches!(c, ' ' | '-' | '_' | '.' | '('))
+        .map(|i| i + 1)
+        .filter(|&i| i >= per_line / 2)
+        .unwrap_or(per_line);
+    let first: String = chars[..cut].iter().collect();
+    let rest: String = chars[cut..].iter().collect();
+    vec![
+        first.trim_end().to_owned(),
+        short_name(rest.trim_start(), per_line),
+    ]
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -175,7 +196,7 @@ impl Shelf {
             .map(|p| {
                 let found = probe(p);
                 ShelfCard {
-                    name: short_name(&display_name(p), NAME_MAX),
+                    name: display_name(p),
                     kind: kind_of(p, found == Probe::Folder),
                     stale: found == Probe::Missing,
                 }
@@ -260,6 +281,28 @@ mod tests {
         assert_eq!(kind("a.xlsx"), ShelfKind::Document);
         assert_eq!(kind("noext"), ShelfKind::Document);
         assert_eq!(kind_of(Path::new("a.jpg"), true), ShelfKind::Folder);
+    }
+
+    #[test]
+    fn a_name_breaks_into_two_lines_at_a_separator_and_the_second_is_cut() {
+        // Fits: one line, untouched.
+        assert_eq!(wrap_name("denah.pdf", 16, 2), ["denah.pdf"]);
+        // Breaks after the last separator in the first 16 characters.
+        assert_eq!(
+            wrap_name("kemang-denah-lantai-dua.pdf", 16, 2),
+            ["kemang-denah-", "lantai-dua.pdf"]
+        );
+        // No separator: a hard break, the rest cut with the extension kept.
+        let long = wrap_name("abcdefghijklmnopqrstuvwxyzabcdefghijklmnop.pdf", 16, 2);
+        assert_eq!(long[0], "abcdefghijklmnop");
+        assert_eq!(long[1].chars().count(), 16);
+        assert!(long[1].ends_with(".pdf") && long[1].contains('…'));
+        // A separator too early in the line is not worth a break.
+        assert_eq!(wrap_name("a-bcdefghijklmnopqrstuvwxyz", 16, 2)[0], "a-bcdefghijklmno");
+        // One line only: cut like `short_name`.
+        assert_eq!(wrap_name("kemang-denah-lantai-dua.pdf", 14, 1), ["kemang-de….pdf"]);
+        // Never more than two lines, whatever the name.
+        assert!(wrap_name(&"x ".repeat(80), 12, 2).len() <= 2);
     }
 
     #[test]

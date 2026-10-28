@@ -5,7 +5,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
-    D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
     D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
     D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND,
     D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
@@ -114,6 +114,8 @@ pub struct Frame<'a> {
     pub mixer: Option<&'a [MixerRow]>,
     /// The file shelf's cards.
     pub shelf: &'a [ShelfCard],
+    /// Files are being dragged over the island: the shelf's drop zone lights.
+    pub shelf_drag: bool,
     pub notes: &'a [Note],
     pub notes_page: usize,
     /// Upcoming (not done) reminders, earliest first.
@@ -519,6 +521,8 @@ pub struct Renderer {
     scale: f32,
     /// Round caps for the pomodoro progress arcs.
     round_cap: ID2D1StrokeStyle,
+    /// A dashed outline (the shelf's drop zone).
+    dashed: ID2D1StrokeStyle,
     /// Origin of the equalizer animation's clock.
     epoch: Instant,
     /// The palette of the frame being drawn.
@@ -721,6 +725,18 @@ impl Renderer {
                 },
                 None,
             )?;
+            let dashed = d2d.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_DASH,
+                    dashOffset: 0.0,
+                },
+                None,
+            )?;
             Ok(Self {
                 d2d,
                 wic,
@@ -735,6 +751,7 @@ impl Renderer {
                 regions: HitRegions::default(),
                 scale: 1.0,
                 round_cap,
+                dashed,
                 epoch: Instant::now(),
                 palette: theme::island(Accent::default(), theme::Surface::default()),
                 cli_caret: std::cell::Cell::new(None),
@@ -1089,6 +1106,22 @@ impl Renderer {
         let radius = corner_radius(style, shape);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
+            // A nearly invisible margin around and above the small island:
+            // Windows only offers a drag to the pixels a layered window
+            // draws, and the top edge of the screen is where one aims.
+            if !matches!(view, View::Panel(_) | View::Hidden) {
+                let r = shape_rect(shape);
+                target.brush.SetColor(&color(0x000000, HALO_ALPHA));
+                target.rt.FillRectangle(
+                    &d2d_rect(Rect {
+                        x: r.x - HALO_SIDE,
+                        y: 0.0,
+                        w: r.w + 2.0 * HALO_SIDE,
+                        h: r.bottom() + HALO_BELOW,
+                    }),
+                    &target.brush,
+                );
+            }
             target.brush.SetColor(&color(self.palette.surface, 1.0));
             match style {
                 Style::Pill => target.rt.FillRoundedRectangle(
@@ -2025,6 +2058,13 @@ fn line_format(
         Ok(format)
     }
 }
+
+/// The margin's opacity: enough to count as a pixel the window owns (8-bit
+/// alpha 3), too little to see.
+const HALO_ALPHA: f32 = 0.012;
+/// How far the margin reaches beside and below the island, logical px.
+const HALO_SIDE: f32 = 14.0;
+const HALO_BELOW: f32 = 8.0;
 
 fn shape_rect(s: ShapeRect) -> Rect {
     Rect {

@@ -21,6 +21,9 @@ use crate::shortcuts;
 /// pointer where hover never arrives (it ends at once when hover does).
 pub(super) const TIMER_SHELF_HOLD: usize = 27;
 const SHELF_HOLD_MS: u32 = 2_500;
+/// A drag that leaves the island keeps the panel this long, so one that
+/// strays off the edge and back does not flicker it away.
+const SHELF_LEAVE_MS: u32 = 600;
 /// A press on a card turns into a drag out after this many logical pixels.
 const DRAG_START_DIP: f32 = 6.0;
 
@@ -31,6 +34,8 @@ pub(super) struct ShelfState {
     pub cards: Vec<ShelfCard>,
     /// The page showed at the last `sync_shelf`.
     shown: bool,
+    /// Files are over the island right now (the drop zone lights).
+    pub dragging: bool,
     /// A left press on card `i` at this client point: it may become a drag.
     press: Option<(usize, i32, i32)>,
 }
@@ -39,6 +44,23 @@ impl App {
     /// Looks at the files again (the page opened, the list changed).
     fn shelf_look(&mut self) {
         self.shelf.cards = self.shelf.shelf.cards(shelf::probe);
+    }
+
+    /// The OLE drop target saw files enter the island or leave it.
+    pub(super) fn on_shelf_drag(&mut self, on: bool) -> Option<Event> {
+        self.shelf.dragging = on;
+        if on {
+            // A drag that comes back cancels the pending close.
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_SHELF_HOLD);
+            }
+            Some(Event::ShelfDrag(true))
+        } else {
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_SHELF_HOLD, SHELF_LEAVE_MS, None);
+            }
+            None
+        }
     }
 
     /// The Shelf page showed: look at the files once, then not again until
@@ -54,6 +76,7 @@ impl App {
     /// Files dropped on the island: they go on the shelf, the panel stays
     /// on it a moment longer so the cards are seen arriving.
     pub(super) fn on_shelf_drop(&mut self, paths: Vec<PathBuf>, now: Instant) {
+        self.shelf.dragging = false;
         self.shelf.shelf.add(paths);
         self.shelf_look();
         self.apply(Event::ShelfDrag(true), now);

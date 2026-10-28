@@ -833,6 +833,10 @@ impl App {
                     self.on_search_index(apps);
                     continue;
                 }
+                Event::ShelfDragOver(on) => match self.on_shelf_drag(on) {
+                    Some(event) => event,
+                    None => continue,
+                },
                 Event::ShelfDrop(paths) => {
                     self.on_shelf_drop(paths, now);
                     continue;
@@ -3043,6 +3047,11 @@ impl App {
     /// Arms hover and leave tracking when the pointer enters; the island
     /// expands only once `WM_MOUSEHOVER` reports a dwell.
     fn on_mouse_move(&mut self, lparam: LPARAM) {
+        // The faint margin round a small island takes a drag (the shelf),
+        // not the pointer: nothing hovers there.
+        if self.hit_at(lparam).is_none() {
+            return;
+        }
         self.mixer_follow(lparam);
         if self.state.view() == View::Panel(Page::Clipboard) {
             let hit = self.hit_at(lparam);
@@ -3067,7 +3076,12 @@ impl App {
         }
     }
 
-    fn on_mouse_hover(&mut self) {
+    fn on_mouse_hover(&mut self, lparam: LPARAM) {
+        // The faint margin round a small island takes a drag, not a hover.
+        if self.hit_at(lparam).is_none() {
+            self.hover.disarm();
+            return;
+        }
         if let Some(event) = self.hover.on_hover() {
             self.apply_now(event);
         }
@@ -3171,6 +3185,10 @@ impl App {
             y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
         };
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
+        // Not on the faint margin round a small island.
+        if client && self.renderer.hit_test(pt.x as f32, pt.y as f32).is_none() {
+            return;
+        }
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
         let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
         let over_art = client && self.renderer.over_media_art(pt.x as f32, pt.y as f32);
@@ -3592,6 +3610,7 @@ impl App {
             calendar: &self.calendar,
             mixer: self.mixer.as_deref(),
             shelf: &self.shelf.cards,
+            shelf_drag: self.shelf.dragging,
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
             reminders_page: state.reminders_page(),
@@ -3680,6 +3699,12 @@ struct HoverTracking {
 impl HoverTracking {
     fn needs_arming(&self) -> bool {
         !self.armed
+    }
+
+    /// A dwell that landed outside the island: the next move over it arms
+    /// the tracking again.
+    fn disarm(&mut self) {
+        self.armed = false;
     }
 
     fn armed(&mut self) {
@@ -4804,7 +4829,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEHOVER => {
-            with_app(App::on_mouse_hover);
+            with_app(|app| app.on_mouse_hover(lparam));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {

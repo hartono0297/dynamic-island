@@ -452,8 +452,10 @@ keys! {
     MixerUnavailable => "Tidak ada perangkat suara", "No sound device";
     PageShelf => "Rak berkas", "File shelf";
     ShelfClear => "Kosongkan", "Clear";
-    ShelfEmpty => "Jatuhkan berkas ke sini, seret keluar lagi nanti",
-        "Drop files here, drag them out later";
+    ShelfMissing => "hilang", "missing";
+    ShelfDropHere => "Jatuhkan di sini", "Drop here";
+    ShelfEmpty => "Seret berkas ke notch, ambil lagi nanti",
+        "Drag files to the notch, take them out later";
     PageSystem => "Sistem", "System";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
