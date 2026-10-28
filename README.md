@@ -10,6 +10,11 @@ A macOS-style island for the top of your Windows 11 screen: notifications, calen
   <img src="assets/screenshots/calendar.png" width="420" alt="Calendar page in month view: October 2026 with today circled in terracotta, and today's events listed on the right">
   <img src="assets/screenshots/shortcuts.png" width="420" alt="Shortcuts page: eight tiles for Screenshot, Clipboard, Emoji, Explorer, Calculator, Task Manager, Windows Settings and Lock screen">
 </p>
+<p align="center">
+  <img src="assets/screenshots/mixer.png" width="280" alt="Mixer page: a master volume slider and sliders for three apps">
+  <img src="assets/screenshots/search.png" width="280" alt="Quick search: a field with an app, a Windows settings page, a calculator result and a web search row">
+  <img src="assets/screenshots/shelf.png" width="280" alt="File shelf: cards for dropped files, one dimmed because the file is gone">
+</p>
 
 Design documents (in Indonesian) are in [`docs/design/`](docs/design/).
 
