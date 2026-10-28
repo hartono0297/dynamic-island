@@ -3918,16 +3918,6 @@ mod tests {
         }
     }
 
-    fn copied() -> Notice {
-        Notice {
-            key: "clip-copied".into(),
-            source: "Clipboard".into(),
-            title: "Disalin".into(),
-            body: "x".into(),
-            kind: NoticeKind::Copied,
-        }
-    }
-
     fn deletes(effects: &[Effect]) -> usize {
         effects
             .iter()
@@ -4065,7 +4055,7 @@ mod tests {
         let mut s = st();
         let other = Notice {
             kind: NoticeKind::CleanDone,
-            ..copied()
+            ..copied("x")
         };
         s.apply(Event::Notice(other.clone()), t0);
         s.apply(Event::Notice(shot(1, true)), t0 + secs(1));
@@ -4107,7 +4097,7 @@ mod tests {
     fn a_newer_screenshot_replaces_previews_and_copied_only() {
         let t0 = Instant::now();
         let mut s = st();
-        s.apply(Event::Notice(copied()), t0);
+        s.apply(Event::Notice(copied("x")), t0);
         s.apply(Event::Notice(shot(1, false)), t0);
         assert_eq!(s.view(), View::Notice(shot(1, false)), "over Disalin");
         s.apply(Event::Notice(shot(2, false)), t0 + secs(1));
@@ -4144,7 +4134,7 @@ mod tests {
         let mut s = st();
         let saved = Notice {
             kind: NoticeKind::ShotSaved,
-            ..copied()
+            ..copied("x")
         };
         s.apply(Event::Notice(saved.clone()), t0);
         assert_eq!(s.view(), View::Notice(saved));
