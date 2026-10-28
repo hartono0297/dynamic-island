@@ -33,3 +33,24 @@ press/release guard, outside-click poll); IME in the search and clipboard
 fields; hotkey conflicts; fullscreen focus; Core Audio sessions and drag feel
 in the Mixer; OLE drop onto the layered window and drag-out of the shelf;
 a touchpad's sideways scroll.
+
+## 3.2.1 (2026-10-29): fixes after the owner's first week with 3.2.0
+
+Plan: `docs/superpowers/plans/2026-10-29-v3.2.1.md`. Done: clipboard card
+buttons follow the pointer ([[clipboard-history]]); wheel volume on the notch
+([[scroll-volume]]); lyrics never early ([[lyrics-sync]]); the shelf opens on
+drag-over and a tidier page ([[shelf]]); the System page eases and samples
+only while shown ([[system-page]]); stay-behind-windows, experimental and off
+([[stay-behind]]); the search on by default with a tray entry and a Pintasan
+tile ([[search]]); the cat head logo everywhere ([[logo]]). A blind review of
+the whole diff found eight real issues; all were fixed (hotkey setting that
+did not stick, a drag margin that blocked clicks, a raise strip as wide as the
+window, tiles pushed out of the 12, tray search keyboard, System request
+counter, stale volume points, two redraws).
+
+Still unverified live: a real Explorer drag onto the idle island (the halo
+appears from a 50 ms poll while the left button is down near it), the 20 Hz
+wake-ups of that poll, `HWND_BOTTOM` above wallpaper and icons, master volume
+on a PC with sound, lyric timing on Spotify/YouTube Music, a refreshed tray
+icon (Windows caches icons; restart Vale, maybe Explorer).
+
