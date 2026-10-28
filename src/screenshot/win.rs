@@ -5,11 +5,14 @@
 //! system temp dir (the others would read the owner's folder or delete a
 //! file).
 //!
-//! No watcher and no polling: each worker lists the folder once and ends.
+//! No watcher and no polling: the check worker lists the folder once and
+//! ends; the Simpan and Hapus workers keep looking (a few times a second)
+//! only until the screenshot's match window has closed, then end.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::time::{Duration, SystemTime};
 
 use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Graphics::Imaging::{
@@ -27,7 +30,10 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
 
-use super::{ClipCandidate, FileOutcome, find_in, save_name, thumb_hash};
+use super::{
+    Arrivals, ClipCandidate, FileOutcome, SETTLE_MS, confirmed, delete_outcome, find_confirmed_in,
+    find_in, thumb_hash, unix_ms, wait_for,
+};
 use crate::clipboard::image::{self, thumb_size};
 use crate::model::Event;
 
@@ -151,26 +157,60 @@ fn full_pixels(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     Some((full.w, full.h, full.bgra))
 }
 
-/// "Simpan" for a screenshot with no file: writes the picture as a PNG in the
-/// Screenshots folder (made if it is missing), named like Windows names them
-/// and never over another file, on a short-lived thread. Posts
-/// `Event::ShotSaveDone` with the path, `None` when anything failed. False
-/// when the thread could not start.
-pub fn spawn_save(
-    shot: u64,
-    dib: Arc<Vec<u8>>,
-    now: chrono::NaiveDateTime,
-    tx: Sender<Event>,
-    wake: impl Fn() + Send + 'static,
-) -> bool {
+/// Looks for `clip`'s file until its window has closed (`wait_for`): Simpan
+/// and Hapus may be clicked before Snipping Tool has written it. Only a file
+/// whose hash is confirmed counts. Needs COM on the calling thread (WIC).
+fn wait_for_file(clip: ClipCandidate, taken: &[PathBuf], arrivals: &Arrivals) -> Option<PathBuf> {
+    let dir = screenshots_dir()?;
+    let end = || arrivals.window_end(clip.at_ms);
+    wait_for(
+        || end() + SETTLE_MS,
+        || unix_ms(SystemTime::now()),
+        || {
+            let clip = ClipCandidate {
+                to_ms: end(),
+                ..clip
+            };
+            find_confirmed_in(&dir, &clip, taken, file_hash).map(|f| f.path)
+        },
+        |ms| std::thread::sleep(Duration::from_millis(ms)),
+    )
+}
+
+/// What "Simpan" hands the worker.
+pub struct SaveJob {
+    pub shot: u64,
+    pub dib: Arc<Vec<u8>>,
+    /// Where a new file goes, named on the UI thread (and already in `taken`
+    /// there, so the next screenshot cannot claim it).
+    pub path: PathBuf,
+    pub clip: ClipCandidate,
+    /// Files other screenshots matched (this job's own `path` among them).
+    pub taken: Vec<PathBuf>,
+    pub arrivals: Arrivals,
+}
+
+/// "Simpan" for a screenshot with no file yet, on a short-lived thread:
+/// first it waits for Snipping Tool's own file (its window); found, that is
+/// the saved file. Else it writes the picture as a PNG at `job.path` (the
+/// folder made if it is missing). Posts `Event::ShotSaveDone` with the path,
+/// `None` when anything failed. False when the thread could not start.
+pub fn spawn_save(job: SaveJob, tx: Sender<Event>, wake: impl Fn() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .name("shot-save".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-            let path = screenshots_dir().and_then(|dir| {
-                std::fs::create_dir_all(&dir).ok()?;
-                let name = save_name(now, |n| dir.join(n).exists());
-                let path = dir.join(name);
+            let SaveJob {
+                shot,
+                dib,
+                path,
+                clip,
+                mut taken,
+                arrivals,
+            } = job;
+            taken.retain(|p| *p != path);
+            let path = wait_for_file(clip, &taken, &arrivals).or_else(|| {
+                std::fs::create_dir_all(path.parent()?).ok()?;
                 let (w, h, bgra) = full_pixels(&dib)?;
                 write_png(&path, w, h, &bgra)?;
                 Some(path)
@@ -188,36 +228,38 @@ pub fn spawn_save(
 /// What "Hapus" hands the worker.
 pub struct DeleteJob {
     pub shot: u64,
-    /// The file matched so far; `None` runs one last check first.
+    /// The file matched so far (its hash is checked again before it goes);
+    /// `None`, or a hash that does not confirm, waits for the file first.
     pub file: Option<PathBuf>,
     pub clip: ClipCandidate,
     /// Files other screenshots matched: never this one's.
     pub taken: Vec<PathBuf>,
+    pub arrivals: Arrivals,
     /// The clipboard was emptied (on the UI thread, before this).
     pub emptied: bool,
 }
 
 /// Moves the screenshot's file to the Recycle Bin on a short-lived thread
 /// (COM single-threaded there, as `IFileOperation` wants) through the
-/// cleaner's `recycle`: never a permanent delete. Without a matched file it
-/// looks once more, right now, and acts only on what that finds. Posts
-/// `Event::ShotRecycled`. False when the thread could not start.
+/// cleaner's `recycle`: never a permanent delete. Only a file whose hash
+/// confirms the clipboard's goes: the matched one if it does, else the one
+/// that turns up before its window closes (`wait_for_file`). A file gone by
+/// then is no file. Posts `Event::ShotRecycled`. False when the thread could
+/// not start.
 pub fn spawn_delete(job: DeleteJob, tx: Sender<Event>, wake: impl Fn() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .name("shot-delete".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-            let file = job.file.or_else(|| {
-                screenshots_dir()
-                    .and_then(|d| find_in(&d, &job.clip, &job.taken, file_hash))
-                    .map(|f| f.path)
-            });
+            let file = job
+                .file
+                .filter(|p| confirmed(job.clip.hash, file_hash(p)))
+                .or_else(|| wait_for_file(job.clip, &job.taken, &job.arrivals));
             let outcome = match file {
                 None => FileOutcome::NoFile,
-                Some(path) if crate::clean::recycle(std::slice::from_ref(&path)) == 0 => {
-                    FileOutcome::Recycled
-                }
-                Some(_) => FileOutcome::Failed,
+                Some(path) => delete_outcome(path.exists(), || {
+                    crate::clean::recycle(std::slice::from_ref(&path))
+                }),
             };
             if inited {
                 unsafe { CoUninitialize() };

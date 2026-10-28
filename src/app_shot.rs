@@ -7,7 +7,9 @@
 //! Power: no watcher and no polling. One worker lists the folder when an
 //! image arrives, and `TIMER_SHOT_RETRY` (a one-shot) runs at most four more
 //! within about 5.5 s; `TIMER_SHOT_SHOW` waits for a screen clip's overlay to
-//! close at most three times; then nothing runs until the next image.
+//! close at most three times; then nothing runs until the next image. A
+//! Simpan or Hapus worker looks a few times a second at most until the
+//! screenshot's match window has closed (about 5.5 s after it), then ends.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,10 +97,38 @@ pub(super) struct Shots {
     /// The files matched to screenshots, newest last (`TAKEN_CAP`): never
     /// matched to another.
     pub taken: Vec<PathBuf>,
+    /// When the latest images arrived, shared with the workers: a
+    /// screenshot's window ends where the next one's begins.
+    pub arrivals: screenshot::Arrivals,
 }
 
 /// How many matched files `Shots::taken` remembers.
 const TAKEN_CAP: usize = 16;
+
+/// `path` joins the files no other screenshot may match (once).
+fn remember_taken(taken: &mut Vec<PathBuf>, path: PathBuf) {
+    if !taken.contains(&path) {
+        taken.push(path);
+        if taken.len() > TAKEN_CAP {
+            taken.remove(0);
+        }
+    }
+}
+
+/// Where Simpan writes a screenshot that has no file: in `dir`, named like
+/// Windows names them, never a name on disk (`exists`) or one already
+/// handed out (`taken`, a save still running).
+fn save_path(
+    dir: &std::path::Path,
+    now: chrono::NaiveDateTime,
+    taken: &[PathBuf],
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> PathBuf {
+    dir.join(screenshot::save_name(now, |n| {
+        let p = dir.join(n);
+        taken.contains(&p) || exists(&p)
+    }))
+}
 
 impl Shots {
     fn get_mut(&mut self, id: u64) -> Option<&mut ShotState> {
@@ -161,11 +191,30 @@ pub(super) fn kept_notice(has_file: bool, dir: Option<PathBuf>) -> Notice {
     }
 }
 
+/// "Gagal menyimpan": Simpan could not write the file.
+fn save_failed_notice() -> Notice {
+    Notice {
+        key: "shot-saved".into(),
+        source: tr(Key::ShotTitle).into(),
+        title: tr(Key::ShotSaveFailed).into(),
+        // Windows Security's Controlled folder access blocks a new program
+        // from writing in Pictures until it is allowed.
+        body: format!(
+            "{} · {}",
+            tr(Key::ShotOnClipboard),
+            tr(Key::ShotMaybeBlocked)
+        ),
+        kind: NoticeKind::ShotSaved,
+    }
+}
+
 /// A preview that ran its full time untouched: the screenshot to delete,
 /// only while "Jika diabaikan" is Hapus now (set back to Simpan meanwhile,
-/// it is kept). Simpan, the default, never deletes.
-pub(super) fn delete_when_ignored(on_ignore: ShotIgnore, id: u64) -> Option<u64> {
-    (on_ignore == ShotIgnore::Delete).then_some(id)
+/// it is kept) and only when a file was matched to it (`has_file`): a
+/// picture copied from an image editor has none, and its clipboard and card
+/// stay. Simpan, the default, never deletes.
+pub(super) fn delete_when_ignored(on_ignore: ShotIgnore, id: u64, has_file: bool) -> Option<u64> {
+    (on_ignore == ShotIgnore::Delete && has_file).then_some(id)
 }
 
 /// What the preview does about a fullscreen report.
@@ -235,6 +284,7 @@ impl App {
             clip: ClipCandidate {
                 at_ms,
                 from_ms: screenshot::claim_from(at_ms, self.shots.last_at_ms.replace(at_ms)),
+                to_ms: at_ms + screenshot::AFTER_MS,
                 w: img.width,
                 h: img.height,
                 hash: screenshot::thumb_hash(&img.thumb.bgra, img.thumb.w, img.thumb.h),
@@ -245,6 +295,9 @@ impl App {
             checks: 0,
             flagged: img.screenshot,
         };
+        // From now on the files are the new image's: every earlier one's
+        // window ends here (`look_for_shot_file`, the workers).
+        self.shots.arrivals.push(at_ms);
         // The shown screenshot's file not found yet: one last look for it
         // now, as the new image takes over the retries (a browser's "Copy
         // image" must not leave the preview without its file).
@@ -346,10 +399,12 @@ impl App {
 
     /// One look in the Screenshots folder for `id`, on a short-lived thread.
     fn look_for_shot_file(&mut self, id: u64) {
+        let arrivals = self.shots.arrivals.clone();
         let Some(state) = self.shots.get_mut(id) else {
             return;
         };
         state.checks += 1;
+        state.clip.to_ms = arrivals.window_end(state.clip.at_ms);
         let clip = state.clip;
         let taken = self.shots.taken.clone();
         if !win::spawn_check(
@@ -395,21 +450,19 @@ impl App {
             self.shots.dir = dir;
         }
         let looking = self.shots.checking == Some(shot);
+        let arrivals = self.shots.arrivals.clone();
         let Some(state) = self.shots.get_mut(shot) else {
             return;
         };
-        match found {
+        // A look that set out before a newer image arrived: a file from
+        // after that arrival is the newer one's.
+        let end = arrivals.window_end(state.clip.at_ms);
+        match found.filter(|f| f.at_ms <= end) {
             Some(file) => {
                 state.look.bytes = file.bytes;
                 let path = file.path.clone();
                 state.file = Some(file);
-                let taken = &mut self.shots.taken;
-                if !taken.contains(&path) {
-                    taken.push(path);
-                    if taken.len() > TAKEN_CAP {
-                        taken.remove(0);
-                    }
-                }
+                remember_taken(&mut self.shots.taken, path);
                 if looking {
                     self.shots.checking = None;
                     self.stop_shot_retry();
@@ -515,21 +568,32 @@ impl App {
                 if state.file.is_some() {
                     return Some(Event::Notice(kept_notice(true, dir)));
                 }
-                // No file in the folder (a snip that was only copied): Simpan
-                // writes one. The notice follows in `on_shot_save_done`.
-                let started = state.dib.clone().is_some_and(|dib| {
-                    win::spawn_save(
-                        id,
-                        dib,
-                        chrono::Local::now().naive_local(),
-                        self.tx.clone(),
-                        poster(self.hwnd, WM_APP_EVENT),
-                    )
-                });
-                if started {
+                let Some(dib) = state.dib.clone() else {
+                    return Some(Event::Notice(kept_notice(false, dir)));
+                };
+                // No file yet: the worker waits for Snipping Tool's (it may
+                // still be on its way), else writes one. Its name is chosen
+                // here and taken now, so the next screenshot never claims
+                // it. The notice follows in `on_shot_save_done`.
+                let Some(dir) = dir.or_else(win::screenshots_dir) else {
+                    return Some(Event::Notice(save_failed_notice()));
+                };
+                let clip = state.clip;
+                let now = chrono::Local::now().naive_local();
+                let path = save_path(&dir, now, &self.shots.taken, std::path::Path::exists);
+                remember_taken(&mut self.shots.taken, path.clone());
+                let job = win::SaveJob {
+                    shot: id,
+                    dib,
+                    path,
+                    clip,
+                    taken: self.shots.taken.clone(),
+                    arrivals: self.shots.arrivals.clone(),
+                };
+                if win::spawn_save(job, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
                     None
                 } else {
-                    Some(Event::Notice(kept_notice(false, dir)))
+                    Some(Event::Notice(save_failed_notice()))
                 }
             }
             ShotAction::Open(id) => {
@@ -542,7 +606,12 @@ impl App {
             }
             ShotAction::Delete(id) => self.delete_shot(id),
             ShotAction::DeleteIgnored(id) => {
-                let id = delete_when_ignored(self.config.screenshot.on_ignore, id)?;
+                let has_file = self
+                    .shots
+                    .shown
+                    .as_ref()
+                    .is_some_and(|s| s.look.id == id && s.file.is_some());
+                let id = delete_when_ignored(self.config.screenshot.on_ignore, id, has_file)?;
                 self.delete_shot(id)
             }
         }
@@ -550,8 +619,9 @@ impl App {
 
     /// "Hapus": the clipboard is emptied only while it still holds this
     /// image; its history card goes; the file goes to the Recycle Bin on a
-    /// worker (one last look first if none was matched). The notice follows
-    /// in `on_shot_recycled`.
+    /// worker, only once its hash confirms the picture (none matched or
+    /// confirmed yet: the worker waits for it until the match window has
+    /// closed). The notice follows in `on_shot_recycled`.
     fn delete_shot(&mut self, id: u64) -> Option<Event> {
         if self.shots.shown.as_ref().is_none_or(|s| s.look.id != id) {
             return None;
@@ -588,6 +658,7 @@ impl App {
             file: state.file.map(|f| f.path),
             clip: state.clip,
             taken: self.shots.taken.clone(),
+            arrivals: self.shots.arrivals.clone(),
             emptied,
         };
         if win::spawn_delete(job, self.tx.clone(), poster(self.hwnd, WM_APP_EVENT)) {
@@ -605,7 +676,8 @@ impl App {
     }
 
     /// The save worker is done: "Disimpan" with the folder, or why not. The
-    /// new file is this screenshot's: no later screenshot matches it.
+    /// file (Snipping Tool's own, or the one written) is this screenshot's:
+    /// no later screenshot matches it.
     pub(super) fn on_shot_save_done(&mut self, path: Option<PathBuf>, now: Instant) {
         let notice = match path {
             Some(path) => {
@@ -613,26 +685,10 @@ impl App {
                 if dir.is_some() {
                     self.shots.dir = dir.clone();
                 }
-                let taken = &mut self.shots.taken;
-                taken.push(path);
-                if taken.len() > TAKEN_CAP {
-                    taken.remove(0);
-                }
+                remember_taken(&mut self.shots.taken, path);
                 kept_notice(true, dir)
             }
-            None => Notice {
-                key: "shot-saved".into(),
-                source: tr(Key::ShotTitle).into(),
-                title: tr(Key::ShotSaveFailed).into(),
-                // Windows Security's Controlled folder access blocks a new
-                // program from writing in Pictures until it is allowed.
-                body: format!(
-                    "{} · {}",
-                    tr(Key::ShotOnClipboard),
-                    tr(Key::ShotMaybeBlocked)
-                ),
-                kind: NoticeKind::ShotSaved,
-            },
+            None => save_failed_notice(),
         };
         self.apply(Event::Notice(notice), now);
     }
@@ -705,8 +761,45 @@ mod tests {
         // The default is Simpan: an ignored preview keeps its file.
         let default = Config::default().screenshot.on_ignore;
         assert_eq!(default, ShotIgnore::Keep);
-        assert_eq!(delete_when_ignored(default, 3), None);
-        assert_eq!(delete_when_ignored(ShotIgnore::Delete, 3), Some(3));
+        assert_eq!(delete_when_ignored(default, 3, true), None);
+        assert_eq!(delete_when_ignored(ShotIgnore::Delete, 3, true), Some(3));
+    }
+
+    #[test]
+    fn an_ignored_copy_without_a_file_is_never_deleted() {
+        // A picture copied from an image editor: no file was matched, so
+        // its clipboard and history card stay even with Hapus set.
+        assert_eq!(delete_when_ignored(ShotIgnore::Delete, 3, false), None);
+        assert_eq!(delete_when_ignored(ShotIgnore::Keep, 3, false), None);
+    }
+
+    #[test]
+    fn simpan_names_its_file_before_the_worker_runs() {
+        use super::{remember_taken, save_path};
+        let dir = PathBuf::from(r"C:\Users\x\Pictures\Screenshots");
+        let at = chrono::NaiveDate::from_ymd_opt(2026, 10, 28)
+            .and_then(|d| d.and_hms_opt(14, 30, 12))
+            .expect("valid time");
+        let first = dir.join("Screenshot 2026-10-28 143012.png");
+        let mut taken = Vec::new();
+        let p = save_path(&dir, at, &taken, |_| false);
+        assert_eq!(p, first);
+        remember_taken(&mut taken, p.clone());
+        remember_taken(&mut taken, p);
+        assert_eq!(taken.len(), 1, "once");
+        // A second Simpan in the same second, the first not written yet:
+        // another name, never the one handed out.
+        let second = save_path(&dir, at, &taken, |_| false);
+        assert_eq!(second, dir.join("Screenshot 2026-10-28 143012 (2).png"));
+        // A file on disk counts as taken too.
+        let on_disk = save_path(&dir, at, &[], |p| p == first.as_path());
+        assert_eq!(on_disk, second);
+        // The list keeps the newest few.
+        for i in 0..40 {
+            remember_taken(&mut taken, PathBuf::from(format!("{i}.png")));
+        }
+        assert_eq!(taken.len(), super::TAKEN_CAP);
+        assert_eq!(taken.last(), Some(&PathBuf::from("39.png")));
     }
     use crate::clipboard::image::tests::dib24;
     use crate::clipboard::store::{ClipSnapshot, Ingested, ingest};
@@ -732,6 +825,7 @@ mod tests {
         let clip = ClipCandidate {
             at_ms: 100_000,
             from_ms: 100_000 - crate::screenshot::BEFORE_MS,
+            to_ms: 100_000 + crate::screenshot::AFTER_MS,
             w: 1280,
             h: 720,
             hash,

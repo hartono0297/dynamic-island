@@ -33,6 +33,9 @@ pub struct ClipCandidate {
     /// arrival when another screenshot came just before (files before it
     /// are that one's).
     pub from_ms: i64,
+    /// The latest file time it may claim: `at_ms + AFTER_MS`, or just before
+    /// the next image's arrival when one came sooner (`window_end`).
+    pub to_ms: i64,
     pub w: u32,
     pub h: u32,
     /// `thumb_hash` of its thumbnail; `None` when it had none.
@@ -85,12 +88,20 @@ pub fn thumb_hash(bgra: &[u8], w: u32, h: u32) -> Option<u64> {
     ))
 }
 
-/// The hashes say the same picture, or one of them is unknown.
+/// The hashes say the same picture, or one of them is unknown. Lax: good
+/// enough to show a file's size, never enough to delete it (`confirmed`).
 fn hash_agrees(clip: Option<u64>, file: Option<u64>) -> bool {
     match (clip, file) {
         (Some(a), Some(b)) => (a ^ b).count_ones() <= HASH_MAX_DIST,
         _ => true,
     }
+}
+
+/// Both hashes were read and say the same picture. What a delete (and a
+/// save that takes a file instead of writing one) needs: an unknown hash on
+/// either side is no proof.
+pub fn confirmed(clip: Option<u64>, file: Option<u64>) -> bool {
+    clip.is_some() && file.is_some() && hash_agrees(clip, file)
 }
 
 /// The file that is this screenshot: from `from_ms` to `AFTER_MS` after
@@ -116,6 +127,95 @@ pub fn pick_match<'a>(
         })
 }
 
+/// `pick_match` among the files whose hash `confirmed`s the clipboard's:
+/// the file Hapus may move to the Recycle Bin.
+pub fn pick_confirmed<'a>(
+    clip: &ClipCandidate,
+    files: &'a [FileCandidate],
+) -> Option<&'a FileCandidate> {
+    files
+        .iter()
+        .filter(|f| in_window(clip, f) && confirmed(clip.hash, f.hash))
+        .min_by_key(|f| ((f.at_ms - clip.at_ms).abs(), std::cmp::Reverse(f.at_ms)))
+}
+
+/// The `to_ms` of an image that arrived at `at_ms`, `arrivals` the images
+/// seen since (any order): `AFTER_MS` later, or just before the first image
+/// that came after it, whose files those are. So the earlier screenshot's
+/// last looks never claim the next one's file.
+pub fn window_end(at_ms: i64, arrivals: &[i64]) -> i64 {
+    let end = at_ms + AFTER_MS;
+    arrivals
+        .iter()
+        .filter(|&&a| a > at_ms)
+        .min()
+        .map_or(end, |&next| end.min(next - 1))
+}
+
+/// The arrival times of the latest clipboard images, shared with the
+/// workers that keep looking for a file (`window_end` while they wait).
+#[derive(Clone, Default)]
+pub struct Arrivals(std::sync::Arc<std::sync::Mutex<Vec<i64>>>);
+
+impl Arrivals {
+    /// How many arrivals are kept: more than ever fall in one window.
+    const CAP: usize = 16;
+
+    pub fn push(&self, at_ms: i64) {
+        let mut v = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        v.push(at_ms);
+        if v.len() > Self::CAP {
+            v.remove(0);
+        }
+    }
+
+    /// `window_end` of an image that arrived at `at_ms`, as of now.
+    pub fn window_end(&self, at_ms: i64) -> i64 {
+        window_end(at_ms, &self.0.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+/// How often a worker that needs the file looks again while it waits.
+pub const LOOK_EVERY_MS: i64 = 300;
+/// A worker's last look comes this long after the window closes: a file
+/// stamped at its end may still be being written.
+pub const SETTLE_MS: i64 = 500;
+
+/// Looks (`look`) until it finds something or the clock (`now`, unix ms)
+/// passes `deadline` (asked again each time: a newer image can bring it
+/// closer), sleeping `LOOK_EVERY_MS` at most between looks. There is always
+/// one look at or after the deadline before it gives up.
+pub fn wait_for<T>(
+    deadline: impl Fn() -> i64,
+    now: impl Fn() -> i64,
+    mut look: impl FnMut() -> Option<T>,
+    mut sleep: impl FnMut(u64),
+) -> Option<T> {
+    loop {
+        if let Some(found) = look() {
+            return Some(found);
+        }
+        let left = deadline() - now();
+        if left <= 0 {
+            return None;
+        }
+        sleep(left.min(LOOK_EVERY_MS) as u64);
+    }
+}
+
+/// What Hapus reports for a matched file: one that is gone already (moved
+/// or deleted meanwhile) is no file; otherwise `recycle` runs and gives its
+/// failures (`clean::recycle`).
+pub fn delete_outcome(exists: bool, recycle: impl FnOnce() -> u32) -> FileOutcome {
+    if !exists {
+        FileOutcome::NoFile
+    } else if recycle() == 0 {
+        FileOutcome::Recycled
+    } else {
+        FileOutcome::Failed
+    }
+}
+
 /// The `from_ms` of an image arriving at `at_ms` when the image before it
 /// arrived at `previous`: its own arrival when that one's files (written up
 /// to `AFTER_MS` after it) could fall in its window, else `BEFORE_MS` earlier.
@@ -129,7 +229,7 @@ pub fn claim_from(at_ms: i64, previous: Option<i64>) -> i64 {
 
 /// Inside the time window with the very same size: worth hashing.
 fn in_window(clip: &ClipCandidate, f: &FileCandidate) -> bool {
-    let (from, to) = (clip.from_ms, clip.at_ms + AFTER_MS);
+    let (from, to) = (clip.from_ms, clip.to_ms.min(clip.at_ms + AFTER_MS));
     (from..=to).contains(&f.at_ms) && (f.w, f.h) == (clip.w, clip.h)
 }
 
@@ -267,12 +367,33 @@ pub fn find_in(
     taken: &[PathBuf],
     hash_of: impl Fn(&Path) -> Option<u64>,
 ) -> Option<FileCandidate> {
-    let mut files = list_folder(dir, clip.from_ms, clip.at_ms + AFTER_MS);
+    pick_match(clip, &hashed_files(dir, clip, taken, hash_of)).cloned()
+}
+
+/// `find_in` for a delete or a save: only a file whose hash was read and
+/// agrees (`pick_confirmed`).
+pub fn find_confirmed_in(
+    dir: &Path,
+    clip: &ClipCandidate,
+    taken: &[PathBuf],
+    hash_of: impl Fn(&Path) -> Option<u64>,
+) -> Option<FileCandidate> {
+    pick_confirmed(clip, &hashed_files(dir, clip, taken, hash_of)).cloned()
+}
+
+/// The files in `clip`'s window, of its size and not `taken`, hashed.
+fn hashed_files(
+    dir: &Path,
+    clip: &ClipCandidate,
+    taken: &[PathBuf],
+    hash_of: impl Fn(&Path) -> Option<u64>,
+) -> Vec<FileCandidate> {
+    let mut files = list_folder(dir, clip.from_ms, clip.to_ms.min(clip.at_ms + AFTER_MS));
     files.retain(|f| in_window(clip, f) && !taken.contains(&f.path));
     for f in &mut files {
         f.hash = hash_of(&f.path);
     }
-    pick_match(clip, &files).cloned()
+    files
 }
 
 /// How the folder is named in "Disimpan · …": its parent and itself
@@ -352,11 +473,120 @@ mod tests {
     const CLIP: ClipCandidate = ClipCandidate {
         at_ms: AT,
         from_ms: AT - BEFORE_MS,
+        to_ms: AT + AFTER_MS,
         w: 1280,
         h: 720,
         hash: None,
     };
     const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+
+    #[test]
+    fn a_delete_needs_both_hashes_read_and_agreeing() {
+        assert!(confirmed(Some(PIC), Some(PIC ^ 0b11)));
+        assert!(!confirmed(Some(PIC), Some(!PIC)), "another picture");
+        // Unknown on either side: fine to show the size, never to delete.
+        assert!(!confirmed(None, Some(PIC)));
+        assert!(!confirmed(Some(PIC), None));
+        assert!(!confirmed(None, None));
+        let clip = ClipCandidate {
+            hash: Some(PIC),
+            ..CLIP
+        };
+        let writing = file("writing.png", AT + 100, 1280, 720);
+        let same = hashed(file("same.png", AT + 3_000, 1280, 720), PIC);
+        // The lax match takes a file still being written; the strict one never.
+        assert!(pick_match(&clip, std::slice::from_ref(&writing)).is_some());
+        assert_eq!(pick_confirmed(&clip, std::slice::from_ref(&writing)), None);
+        assert_eq!(
+            pick_confirmed(&clip, &[writing, same]).unwrap().path,
+            PathBuf::from("same.png")
+        );
+        // Without a clipboard hash nothing is ever confirmed.
+        let hashless = [hashed(file("x.png", AT + 100, 1280, 720), PIC)];
+        assert_eq!(pick_confirmed(&CLIP, &hashless), None);
+        // The window and the size still hold.
+        let late = [hashed(file("late.png", AT + AFTER_MS + 1, 1280, 720), PIC)];
+        assert_eq!(pick_confirmed(&clip, &late), None);
+    }
+
+    #[test]
+    fn the_last_look_of_a_screenshot_stops_where_the_next_one_arrives() {
+        // No image since: the whole window.
+        assert_eq!(window_end(AT, &[]), AT + AFTER_MS);
+        assert_eq!(window_end(AT, &[AT - 9_000, AT]), AT + AFTER_MS);
+        // The next image 2 s later: files from then on are its own.
+        assert_eq!(window_end(AT, &[AT, AT + 2_000, AT + 4_000]), AT + 1_999);
+        // One after the window changes nothing.
+        assert_eq!(window_end(AT, &[AT + 7_000]), AT + AFTER_MS);
+        let arrivals = Arrivals::default();
+        arrivals.push(AT);
+        assert_eq!(arrivals.window_end(AT), AT + AFTER_MS);
+        arrivals.push(AT + 2_000);
+        assert_eq!(arrivals.window_end(AT), AT + 1_999);
+        // The previous screenshot's file written after the next arrived is
+        // not matched to it any more.
+        let prev = ClipCandidate {
+            to_ms: window_end(AT, &[AT + 2_000]),
+            ..CLIP
+        };
+        let next_file = [file("next.png", AT + 2_500, 1280, 720)];
+        assert_eq!(pick_match(&prev, &next_file), None);
+        assert!(pick_match(&CLIP, &next_file).is_some());
+    }
+
+    #[test]
+    fn a_worker_keeps_looking_until_the_window_closes() {
+        use std::cell::Cell;
+        let clock = Cell::new(0i64);
+        let looks = Cell::new(0u32);
+        // The file turns up at 1.2 s: found then, no more waiting.
+        let found = wait_for(
+            || 5_000,
+            || clock.get(),
+            || {
+                looks.set(looks.get() + 1);
+                (clock.get() >= 1_200).then_some("file")
+            },
+            |ms| clock.set(clock.get() + ms as i64),
+        );
+        assert_eq!(found, Some("file"));
+        assert!(clock.get() < 1_200 + LOOK_EVERY_MS, "{}", clock.get());
+        // Never there: it gives up only after a look at the deadline.
+        clock.set(0);
+        looks.set(0);
+        let last = Cell::new(-1i64);
+        let none: Option<()> = wait_for(
+            || 1_000,
+            || clock.get(),
+            || {
+                looks.set(looks.get() + 1);
+                last.set(clock.get());
+                None
+            },
+            |ms| clock.set(clock.get() + ms as i64),
+        );
+        assert_eq!(none, None);
+        assert_eq!(last.get(), 1_000, "the last look is at the deadline");
+        assert!(looks.get() >= 4, "{} looks", looks.get());
+        // Past the deadline already: one look, no sleep.
+        clock.set(9_000);
+        let slept = Cell::new(false);
+        let _: Option<()> = wait_for(|| 1_000, || clock.get(), || None, |_| slept.set(true));
+        assert!(!slept.get());
+    }
+
+    #[test]
+    fn hapus_on_a_file_that_is_gone_reports_no_file() {
+        let ran = std::cell::Cell::new(false);
+        let gone = delete_outcome(false, || {
+            ran.set(true);
+            0
+        });
+        assert_eq!(gone, FileOutcome::NoFile);
+        assert!(!ran.get(), "nothing to recycle");
+        assert_eq!(delete_outcome(true, || 0), FileOutcome::Recycled);
+        assert_eq!(delete_outcome(true, || 1), FileOutcome::Failed);
+    }
 
     /// BGRA pixels: a white left half, a black right half, or the reverse.
     fn halves(w: u32, h: u32, white_left: bool) -> Vec<u8> {
@@ -489,9 +719,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Screenshot 1.png");
         std::fs::write(&path, png(1280, 720)).unwrap();
+        let now = unix_ms(SystemTime::now());
         let clip = ClipCandidate {
-            at_ms: unix_ms(SystemTime::now()),
-            from_ms: unix_ms(SystemTime::now()) - BEFORE_MS,
+            at_ms: now,
+            from_ms: now - BEFORE_MS,
+            to_ms: now + AFTER_MS,
             ..CLIP
         };
         assert!(find_in(&dir, &clip, &[], |_| Some(PIC)).is_some());
@@ -595,6 +827,7 @@ mod tests {
         let clip = ClipCandidate {
             at_ms: now,
             from_ms: now - BEFORE_MS,
+            to_ms: now + AFTER_MS,
             w: 1280,
             h: 720,
             hash: Some(PIC),

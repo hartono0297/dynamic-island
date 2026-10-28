@@ -70,6 +70,47 @@ pub(super) struct ClipState {
     /// The hotkey in effect, and whether registering the chosen one failed.
     pub hotkey: Option<ClipHotkey>,
     pub hotkey_failed: bool,
+    /// Where the last mouse move over the page was (client pixels).
+    pub pointer: Option<(i32, i32)>,
+    /// The keyboard moved the selection: the pointer selects nothing until it
+    /// really moves (`pointer_moved`).
+    pub keyboard_held: bool,
+}
+
+/// Whether a mouse move at `at` is the pointer really moving, `last` the
+/// move before (updated here). Windows also sends a move when the content
+/// under a still pointer changes (a scroll, a redraw): the same spot is no
+/// move. After the keyboard chose a card (`held`), a move only counts once
+/// the pointer has a known spot and leaves it; that ends the hold.
+pub(super) fn pointer_moved(
+    last: &mut Option<(i32, i32)>,
+    at: (i32, i32),
+    held: &mut bool,
+) -> bool {
+    let before = last.replace(at);
+    if before == Some(at) {
+        return false;
+    }
+    if *held {
+        if before.is_none() {
+            return false;
+        }
+        *held = false;
+    }
+    true
+}
+
+/// The card to keep selected after the cards scrolled to row `scroll` with
+/// `rows` rows shown: card `at` (of `n`, two a row) if it still shows, else
+/// the card in its column on the nearest row that does. So Enter never
+/// copies a card scrolled out of sight.
+pub(super) fn visible_card(at: usize, scroll: usize, rows: usize, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let last_row = scroll + rows.max(1) - 1;
+    let row = (at / 2).clamp(scroll, last_row);
+    (row * 2 + at % 2).min(n - 1)
 }
 
 /// The entries the page lists for `query`, newest first.
@@ -450,6 +491,13 @@ impl App {
         };
         if to != self.clip.scroll {
             self.clip.scroll = to;
+            // The selection stays on a card that shows.
+            let items = shown(&self.clip.history, &self.clip.query);
+            if let Some(id) = effective(&items, self.clip.selected) {
+                let at = items.iter().position(|c| c.id == id).unwrap_or(0);
+                let keep = visible_card(at, to, self.clip_rows(), items.len());
+                self.clip.selected = items.get(keep).map(|c| c.id);
+            }
             self.redraw_clip();
         }
         true
@@ -457,8 +505,14 @@ impl App {
 
     /// The pointer over a card selects it, so its buttons (pin, plain text,
     /// delete) show on the card under the pointer, not only on the first.
-    pub(super) fn clip_hover(&mut self, hit: Option<&Hit>) {
+    /// Only a real move does (`pointer_moved`): a still pointer over cards
+    /// that scrolled, or one resting after the keyboard chose, keeps the
+    /// selection.
+    pub(super) fn clip_hover(&mut self, at: (i32, i32), hit: Option<&Hit>) {
         if self.state.view() != View::Panel(Page::Clipboard) {
+            return;
+        }
+        if !pointer_moved(&mut self.clip.pointer, at, &mut self.clip.keyboard_held) {
             return;
         }
         // Every mouse move comes here: only a card or one of its buttons
@@ -505,6 +559,8 @@ impl App {
             self.clip.selected = None;
             self.clip.scroll = 0;
             self.clip.query.clear();
+            self.clip.pointer = None;
+            self.clip.keyboard_held = false;
             if let Some(input) = &self.clip_input
                 && !input.text().is_empty()
             {
@@ -582,9 +638,11 @@ impl App {
                 let rows = self.clip_rows();
                 self.clip.selected = Some(next);
                 self.clip.scroll = clip_scroll_to(to, self.clip.scroll, rows);
+                self.clip.keyboard_held = true;
                 self.redraw_clip();
             }
             InputKey::PageUp | InputKey::PageDown => {
+                self.clip.keyboard_held = true;
                 let rows = self.clip_rows() as i32 * 120;
                 self.clip_wheel(if key == InputKey::PageUp { rows } else { -rows });
             }
@@ -704,6 +762,45 @@ mod tests {
         assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipCard(77))), None);
         assert_eq!(hover_target(&ids, Some(20), None), None);
         assert_eq!(hover_target(&[], None, Some(&Hit::ClipCard(1))), None);
+    }
+
+    #[test]
+    fn a_still_pointer_never_takes_the_selection_from_the_keyboard() {
+        use super::pointer_moved;
+        let (mut last, mut held) = (None, false);
+        // The first move over the page counts.
+        assert!(pointer_moved(&mut last, (10, 10), &mut held));
+        // The same spot again (the cards scrolled under it): no move.
+        assert!(!pointer_moved(&mut last, (10, 10), &mut held));
+        assert!(pointer_moved(&mut last, (12, 10), &mut held));
+        // The keyboard chose a card: a move at the resting spot is nothing,
+        // a real move takes over again.
+        held = true;
+        assert!(!pointer_moved(&mut last, (12, 10), &mut held));
+        assert!(held);
+        assert!(pointer_moved(&mut last, (13, 11), &mut held));
+        assert!(!held);
+        // Held with no known spot: the first move only records where it is.
+        let (mut last, mut held) = (None, true);
+        assert!(!pointer_moved(&mut last, (5, 5), &mut held));
+        assert!(held);
+        assert!(pointer_moved(&mut last, (6, 5), &mut held));
+    }
+
+    #[test]
+    fn after_a_scroll_the_selection_stays_on_a_card_that_shows() {
+        use super::visible_card;
+        // 10 cards, 2 a row, 3 rows shown.
+        // Still in sight: kept.
+        assert_eq!(visible_card(4, 1, 3, 10), 4);
+        // Scrolled off the top: the same column on the first row shown.
+        assert_eq!(visible_card(1, 2, 3, 10), 5);
+        assert_eq!(visible_card(0, 2, 3, 10), 4);
+        // Off the bottom: the last row shown.
+        assert_eq!(visible_card(9, 0, 3, 10), 5);
+        // An odd count: the last row's right column does not exist.
+        assert_eq!(visible_card(1, 4, 3, 9), 8);
+        assert_eq!(visible_card(0, 0, 3, 0), 0);
     }
 
     use super::*;

@@ -71,6 +71,12 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
   the first card ever showed them. Now `WM_MOUSEMOVE` over a card, or over one
   of its buttons, selects that card (`app_clip::hover_target`, pure and tested;
   `App::clip_hover` redraws only when the selection changes).
+  **Hover vs keyboard (3.2.1 review):** Windows sends `WM_MOUSEMOVE` when the
+  cards scroll under a still pointer, which stole the keyboard's selection.
+  `pointer_moved` ignores a move at the last spot, and after Up/Down or
+  PageUp/PageDown (`keyboard_held`) the pointer selects nothing until it
+  really moves. A wheel scroll keeps the selection on a card that shows
+  (`visible_card`), so Enter never copies one scrolled out of sight.
   Keyboard: [[cli-panel-keyboard-focus]].
 - **"Disalin".** `NoticeKind::Copied`, 1.5 s on the notice deadline, a newer
   one replaces it, never over a fullscreen app; Bata Happy
