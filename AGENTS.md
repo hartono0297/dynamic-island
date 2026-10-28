@@ -1,6 +1,13 @@
 # Agent rules
 
-## Every code change goes through the `build` workflow
+> **Temporarily disabled (2026-10-28).** The `build` workflow is switched off for
+> this project: make code changes directly in the main session, without
+> multi-agent orchestration. The workflow file was moved to
+> `.claude/workflows-disabled/build.js`. To switch it back on, move it to
+> `.claude/workflows/build.js` and delete this note; the section below then
+> applies again.
+
+## Every code change goes through the `build` workflow (disabled, see above)
 
 I opt in to multi-agent orchestration for this project. Whenever I ask for a code
 change (new feature, bug fix, refactor), run the `build` workflow
