@@ -18,7 +18,7 @@ inset and top, pill, 2 px dot) so they stay crisp; the ears follow the snapped
 tile. Larger sizes are computed. `site/img/logo.svg` is a copy of
 `assets/logo.svg`. The 16 px icon reads as a cat on dark and light taskbars.
 
-The cat in the notch uses the same brand colours plus the plum bow, see
+The cat in the notch uses the same brand colours (no bow since 2026-10-28), see
 [[bata-robot-expressions]].
 
 Related: [[studio-palette-accent-aliases]]

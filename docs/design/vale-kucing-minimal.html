@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vale · kucing minimal</title>
+<style>
+  @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('../../assets/fonts/DMSans-400.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('../../assets/fonts/DMSans-500.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('../../assets/fonts/DMSans-600.ttf'); }
+  @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('../../assets/fonts/DMMono-400.ttf'); }
+  :root { --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1; --s: #17120F; --r: #241D18; --t: #332A23; --tx: #F4EDE4; --tx2: #A89A8B; --a: #E2683C; --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace; }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 26px 36px; background: var(--paper); break-after: page; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 36px; right: 36px; bottom: 14px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  h1 { font-weight: 600; font-size: 26px; letter-spacing: -.025em; margin: 2px 0 10px; }
+  h2 { font-weight: 600; font-size: 14px; letter-spacing: -.015em; }
+  p, li { font-size: 10.6px; line-height: 1.45; color: #3E3229; }
+  li { list-style: none; position: relative; padding-left: 12px; margin-bottom: 2px; }
+  li::before { content: ""; position: absolute; left: 0; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  b { font-weight: 600; }
+  code { font-family: var(--mono); font-size: 9.5px; background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  .grid { display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 10px 13px; }
+  .card.pick { border: 1.5px solid var(--a); }
+  .dk { background: var(--s); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+  .tag { display: inline-block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: rgba(226,104,60,.18); color: #A8431F; margin-left: 6px; }
+  .lbl { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 5px; }
+  .island { background: var(--s); color: var(--tx); border-radius: 0 0 22px 22px; display: inline-flex; align-items: flex-end; gap: 10px; padding: 0 16px 0 12px; height: 38px; font-size: 13px; font-weight: 600; overflow: hidden; }
+  .island .tx { align-self: center; }
+  .desk { background: linear-gradient(135deg, #3A3029, #5A4A3E 55%, #7C6552); border-radius: 12px; display: flex; justify-content: center; padding: 0 10px 12px; }
+  .sz { display: flex; gap: 12px; align-items: flex-end; font-size: 8.5px; color: var(--tx2); text-align: center; }
+</style>
+</head>
+<body>
+<script>
+const T = '#E2683C', T2 = '#F08A62', D = '#17120F', C = '#F4EDE4';
+const st = (d, w = 2.4, c = D, o = 1) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" opacity="${o}"/>`;
+const dot = (x, y, r, c = D) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}"/>`;
+const pill = (x, y, w, h, c = D) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${Math.min(w, h) / 2}" fill="${c}"/>`;
+const note = (x, y, c) => `<path d="M${x} ${y}v-8l5-1.5v8" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"/>` + dot(x - 1.7, y, 1.9, c) + dot(x + 3.3, y - 1.5, 1.9, c);
+const zzz = (c, y = 0) => `<path d="M53 ${8 + y}h5l-5 5.5h5M60 ${1 + y}h3.6l-3.6 4h3.6" fill="none" stroke="${c}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`;
+const EARS = { idle: [0, 0], blink: [0, 0], happy: [0, 0], sing: [0, 0], alert: [-4, 0], sleep: [0, 7], flick: [0, -9], pop: [-3, 0] };
+const sym = (e, c, y = 0) => e === 'sing' ? note(57, 13 + y, c) : e === 'sleep' ? zzz(c, y) : '';
+
+// ---- plain eyes (pill) -------------------------------------------------------
+function eyesPill(e, Lx, Rx, Y, ink) {
+  switch (e) {
+    case 'idle': return pill(Lx, Y, 5.6, 10, ink) + pill(Rx, Y, 5.6, 10, ink);
+    case 'blink': return st(`M${Lx - 3.4} ${Y + .8}h6.8M${Rx - 3.4} ${Y + .8}h6.8`, 2.3, ink);
+    case 'happy': case 'sing': return st(`M${Lx - 3.8} ${Y + 1.8}q3.8-5.4 7.6 0M${Rx - 3.8} ${Y + 1.8}q3.8-5.4 7.6 0`, 2.4, ink);
+    case 'alert': return dot(Lx, Y, 4.6, ink) + dot(Rx, Y, 4.6, ink);
+    case 'sleep': return st(`M${Lx - 3.6} ${Y}q3.6 3.4 7.2 0M${Rx - 3.6} ${Y}q3.6 3.4 7.2 0`, 2.2, ink);
+    case 'flick': case 'pop': return pill(Lx, Y, 5.6, 10, ink) + pill(Rx, Y, 5.6, 10, ink);
+  }
+}
+// ---- eyes with a slit pupil (cat-like). gaze: -1 left, 0 centre, 1 right ------
+function eyesSlit(e, Lx, Rx, Y, gaze = 0) {
+  const eye = (x) => pill(x, Y, 7.6, 10.8, C) + pill(x + gaze * 1.6, Y, 3, 8, D);
+  switch (e) {
+    case 'idle': case 'flick': case 'pop': return eye(Lx) + eye(Rx);
+    case 'blink': return st(`M${Lx - 4} ${Y + 1}h8M${Rx - 4} ${Y + 1}h8`, 2.3, D);
+    case 'happy': case 'sing': return st(`M${Lx - 4} ${Y + 2}q4-6 8 0M${Rx - 4} ${Y + 2}q4-6 8 0`, 2.5, D);
+    case 'alert': return dot(Lx, Y, 5.6, C) + dot(Rx, Y, 5.6, C) + dot(Lx + gaze * 1.2, Y, 2.6, D) + dot(Rx + gaze * 1.2, Y, 2.6, D);
+    case 'sleep': return st(`M${Lx - 4} ${Y}q4 3.6 8 0M${Rx - 4} ${Y}q4 3.6 8 0`, 2.3, D);
+  }
+}
+const earPath = (side, base, tipY, lift = 0) => side === 'L'
+  ? `M${base.x0} ${base.y0}L${base.xt} ${tipY + lift}L${base.x1} ${base.y1}Z`
+  : `M${64 - base.x0} ${base.y0}L${64 - base.xt} ${tipY + lift}L${64 - base.x1} ${base.y1}Z`;
+const ear = (side, e, b, pivot, w = 5, fill = T) => {
+  const [lift, dr] = EARS[e];
+  const rot = side === 'L' ? -dr : dr;
+  const cx = side === 'L' ? pivot.x : 64 - pivot.x;
+  return `<g transform="rotate(${rot} ${cx} ${pivot.y})"><path d="${earPath(side, b, b.yt, lift)}" fill="${fill}" stroke="${fill}" stroke-width="${w}" stroke-linejoin="round"/></g>`;
+};
+
+// ===== arah 1: MATA + KUPING saja (tanpa kepala) =====
+const V1 = (e, eyeColor = C) => {
+  const b = { x0: 9, y0: 36, xt: 11, yt: 12, x1: 26, y1: 36 };
+  return ear('L', e, b, { x: 17.5, y: 36 }) + ear('R', e, b, { x: 17.5, y: 36 }) + eyesPill(e, 24, 40, 45, eyeColor) + sym(e, C);
+};
+// ===== arah 2: MATA + KUMIS saja =====
+const V2 = (e) => {
+  const spread = e === 'alert' ? 5 : e === 'happy' || e === 'sing' ? -3 : e === 'sleep' ? 6 : 0; // sudut ujung kumis
+  const w = (sx, dir) => st(`M${sx} 39L${sx + dir * 12} ${35 - spread}M${sx} 44L${sx + dir * 13} ${44 + (e === 'sleep' ? 3 : 0)}M${sx} 49L${sx + dir * 12} ${53 + spread}`, 2, T);
+  return w(15, -1) + w(49, 1) + eyesPill(e, 24, 40, 40, C) + sym(e, C);
+};
+// ===== gabungan: mata + kuping + kumis =====
+const V3 = (e) => V1(e) + st('M14 50L4 48M14 54L4 56M50 50L60 48M50 54L60 56', 1.9, T, .9);
+
+// ===== arah 3: MENGINTIP =====
+const LEDGE = 56;
+const peekHead = `<path d="M7 ${LEDGE}V41Q7 24 32 24Q57 24 57 41V${LEDGE}Z" fill="${T}"/>`;
+const pb = { x0: 9, y0: 37, xt: 12, yt: 10, x1: 27, y1: 26 };
+const PE = (e, o) => {
+  const ears = ear('L', e, pb, { x: 17, y: 30 }) + ear('R', e, pb, { x: 17, y: 30 });
+  const lift = e === 'pop' ? -3 : 0;
+  let eyes;
+  if (o.slit) eyes = eyesSlit(e, 23.5, 40.5, 40 + lift, o.gaze || 0); else eyes = eyesPill(e, 24, 40, 41 + lift, D);
+  const paws = o.paws ? `<rect x="16" y="${LEDGE - 6.5}" width="11" height="7" rx="3.5" fill="${T2}"/><rect x="37" y="${LEDGE - 6.5}" width="11" height="7" rx="3.5" fill="${T2}"/>` : '';
+  const inner = o.inner ? `<path d="M13 30L14.6 17L23 24Z" fill="${D}" opacity=".22"/><path d="M51 30L49.4 17L41 24Z" fill="${D}" opacity=".22"/>` : '';
+  const ledge = o.ledge ? `<rect x="2" y="${LEDGE}" width="60" height="2.4" rx="1.2" fill="${C}" opacity=".28"/>` : '';
+  return `<g transform="translate(0 ${lift})">${ears}${peekHead}${inner}</g>` + eyes + paws + ledge + sym(e, C);
+};
+const PEEK = {
+  P1: (e) => PE(e, {}),
+  P2: (e) => PE(e, { slit: true, gaze: 0 }),
+  P3: (e) => PE(e, { slit: true, paws: true, ledge: true, gaze: 0 }),
+  P4: (e) => PE(e, { slit: true, inner: true, ledge: true, gaze: -1 }),
+};
+// intip dari samping: separuh kiri tersembunyi di balik tepi vertikal x=30
+const SIDE = (e) => `<g clip-path="url(#sideclip)">${PE(e, { slit: true, gaze: 1 })}</g><rect x="29" y="6" width="2.4" height="52" rx="1.2" fill="${C}" opacity=".28"/>`;
+
+const KINDS = {
+  V1: { f: (e) => V1(e), vb: '0 0 64 64', n: 'A · Mata + kuping', d: 'Tanpa kepala. Dua telinga terakota dan dua mata krem; wajahnya tersirat.' },
+  V1b: { f: (e) => V1(e, T), vb: '0 0 64 64', n: 'A2 · Semua terakota', d: 'Sama, tetapi mata ikut terakota: satu warna, lebih tenang di notch gelap.' },
+  V2: { f: V2, vb: '0 0 64 64', n: 'B · Mata + kumis', d: 'Tanpa telinga. Kumis jadi bahasa ekspresi: naik saat senang, mekar saat waspada, turun saat tidur.' },
+  V3: { f: V3, vb: '0 0 64 64', n: 'C · Mata + kuping + kumis', d: 'Gabungan dua arah, tanpa kepala. Paling banyak detail; hanya dua puluh piksel pertama yang terbaca.' },
+  P1: { f: PEEK.P1, vb: `0 5 64 ${LEDGE - 5}`, n: 'D1 · Mengintip, dasar', d: 'Versi yang lu suka, bentuk dikencangkan: alas rata di y=56, telinga lebih ke dalam.' },
+  P2: { f: PEEK.P2, vb: `0 5 64 ${LEDGE - 5}`, n: 'D2 · Mata celah', d: 'Mata krem dengan pupil celah: terbaca sebagai kucing walau tanpa bulu mata dan pita.' },
+  P3: { f: PEEK.P3, vb: `0 5 64 ${LEDGE + 3 - 5}`, n: 'D3 · Dengan cakar', d: 'Dua cakar di tepi dan garis alas. Paling "mengintip"; cakar menghilang di bawah 32 px.' },
+  P4: { f: PEEK.P4, vb: `0 5 64 ${LEDGE + 3 - 5}`, n: 'D4 · Menoleh', d: 'Pupil melihat ke kiri, bagian dalam telinga redup. Dipakai bila ingin karakter lebih hidup.' },
+};
+const cat = (k, e = 'idle', w = 64) => { const v = KINDS[k].vb.split(' ').map(Number); const h = w * v[3] / v[2];
+  return `<svg width="${w}" height="${h}" viewBox="${KINDS[k].vb}" style="overflow:visible"><defs><clipPath id="sideclip"><rect x="30" y="0" width="40" height="70"/></clipPath></defs>${KINDS[k].f(e)}</svg>`; };
+const catSide = (e, w = 64) => `<svg width="${w}" height="${w * 48 / 40}" viewBox="26 5 40 ${LEDGE - 5}" style="overflow:visible"><defs><clipPath id="sideclip"><rect x="30" y="0" width="40" height="70"/></clipPath></defs>${SIDE(e)}</svg>`;
+const folio = (r) => `<div class="folio"><span>Vale · Kucing minimal</span><span>${r}</span></div>`;
+const sizes = (k) => `<div class="sz">${[48, 32, 26, 20].map(s => `<div>${cat(k, 'idle', s)}<div style="margin-top:3px">${s}</div></div>`).join('')}</div>`;
+const inNotch = (k, text) => `<div class="desk" style="height:78px"><div class="island" style="height:44px">${cat(k, 'idle', 36)}<span class="tx">${text}</span></div></div>`;
+
+const pages = [];
+// ---------------- page 1: tiga arah ----------------
+pages.push(`<div class="eyebrow">Ikon kucing · putaran 2</div><h1>Tiga arah: mata + kuping, mata + kumis, dan Mengintip</h1>
+<p style="max-width:780px;margin-bottom:10px">Semua tanpa bulu mata dan pita. Baris pertama memakai ukuran asli di notch (48, 32, 26, 20 px); kolom kanan menunjukkan bagaimana ikon duduk di samping jam.</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+${['V1', 'V1b', 'V2', 'V3'].map(k => `<div class="card" style="display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center"><div class="dk" style="height:118px">${cat(k, 'idle', 92)}</div><div><b style="font-size:12.5px">${KINDS[k].n}</b><p style="font-size:10px;margin:2px 0 6px">${KINDS[k].d}</p><div class="dk" style="padding:7px 10px;justify-content:space-around">${sizes(k)}</div></div></div>`).join('')}
+</div>
+<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-top:10px">
+${['V1', 'V1b', 'V2', 'V3'].map(k => `<div><div class="lbl">${KINDS[k].n.split(' · ')[0]} di samping jam</div>${inNotch(k, '14.32')}</div>`).join('')}
+</div>
+<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
+ <div class="card"><h2>A · Mata + kuping</h2><ul><li>Paling jelas terbaca sebagai kucing; ciri kuatnya telinga.</li><li>Ringan digambar: dua segitiga dan dua pil.</li><li>Tanpa kepala, jadi selalu butuh latar gelap island.</li></ul></div>
+ <div class="card"><h2>B · Mata + kumis</h2><ul><li>Paling khas dan paling hemat bentuk; kumis jadi bahasa ekspresi.</li><li>Tanpa telinga bisa terbaca sebagai wajah lain; kumis tipis hilang di bawah 26 px.</li><li>Cocok sebagai ikon sekunder (tray, notifikasi) daripada maskot utama.</li></ul></div>
+ <div class="card"><h2>Mengintip (halaman berikut)</h2><ul><li>Punya kepala, jadi punya bobot visual sendiri dan tetap terbaca di 20 px.</li><li>Alas rata menyatu dengan tepi bawah pill: terasa "mengintip", bukan sekadar ikon.</li><li>Empat penyempurnaan: D1 sampai D4 dan intip dari samping.</li></ul></div>
+</div>${folio('Tiga arah')}`);
+
+// ---------------- page 2: ekspresi kuping/kumis ----------------
+const exprRow = (k, list) => `<div class="dk" style="padding:8px 10px;gap:8px;justify-content:space-around">${list.map(([e, n]) => `<div style="text-align:center">${cat(k, e, 50)}<div style="color:var(--tx2);font-size:8.8px;margin-top:2px">${n}</div></div>`).join('')}</div>`;
+const EX = [['idle', 'Diam'], ['blink', 'Kedip'], ['happy', 'Senang'], ['alert', 'Waspada'], ['sleep', 'Tidur'], ['sing', 'Bernyanyi']];
+pages.push(`<div class="eyebrow">Ikon kucing · putaran 2</div><h1>Enam ekspresi untuk tiga arah tanpa kepala</h1>
+<div style="display:grid;gap:9px">
+ ${[['V1', 'A · Mata + kuping', 'Ekspresi dari mata, dan telinga: tegak saat waspada, turun saat tidur atau lesu.'], ['V2', 'B · Mata + kumis', 'Ekspresi dari mata dan kumis: naik saat senang, mekar saat waspada, turun saat tidur.'], ['V3', 'C · Mata + kuping + kumis', 'Dua bahasa sekaligus; di 20 px kumis menjadi noise, jadi hanya cocok untuk ikon besar.']].map(([k, n, d]) => `<div class="card" style="display:grid;grid-template-columns:200px 1fr;gap:12px;align-items:center"><div><b style="font-size:12.5px">${n}</b><p style="font-size:10px;margin-top:3px">${d}</p></div>${exprRow(k, EX)}</div>`).join('')}
+</div>
+<div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px">
+ <div class="card"><h2>Catatan baca</h2><ul><li><b>A</b> paling mudah dibaca sebagai kucing karena telinga adalah ciri paling kuat.</li><li><b>B</b> paling unik dan paling hemat bentuk, tetapi tanpa telinga ia bisa dibaca sebagai "wajah" lain; kumis tipis hilang di bawah 26 px.</li><li>Tanpa kepala, ikon tidak punya latar sendiri, jadi selalu butuh latar gelap island.</li></ul></div>
+ <div class="card"><h2>Saran jika hanya salah satu</h2><p><b>A · Mata + kuping</b> bila ingin yang paling minimal tapi tetap jelas kucing. Kalau lu ingin yang paling khas, lanjut ke halaman berikut: <b>Mengintip</b> mempertahankan kepala sehingga ikon punya bobot visual sendiri di notch.</p></div>
+</div>${folio('Ekspresi')}`);
+
+// ---------------- page 3: mengintip, presisi ----------------
+const grid = `<svg width="260" height="${260 * 51 / 64}" viewBox="0 5 64 51" style="background:#17120F;border-radius:12px;overflow:visible">
+  ${Array.from({ length: 9 }, (_, i) => `<line x1="${i * 8}" y1="5" x2="${i * 8}" y2="56" stroke="#fff" stroke-opacity=".08" stroke-width=".3"/>`).join('')}
+  ${Array.from({ length: 7 }, (_, i) => `<line x1="0" y1="${5 + i * 8}" x2="64" y2="${5 + i * 8}" stroke="#fff" stroke-opacity=".08" stroke-width=".3"/>`).join('')}
+  ${PEEK.P2('idle')}
+  <line x1="0" y1="${LEDGE}" x2="64" y2="${LEDGE}" stroke="#5EC3C0" stroke-width=".5" stroke-dasharray="1.5 1"/>
+  <line x1="32" y1="8" x2="32" y2="56" stroke="#5EC3C0" stroke-width=".4" stroke-dasharray="1 1"/>
+  <line x1="23.5" y1="47.5" x2="40.5" y2="47.5" stroke="#D9A441" stroke-width=".5"/><line x1="23.5" y1="46" x2="23.5" y2="49" stroke="#D9A441" stroke-width=".4"/><line x1="40.5" y1="46" x2="40.5" y2="49" stroke="#D9A441" stroke-width=".4"/>
+  <text x="2" y="${LEDGE - 2}" font-size="2.6" fill="#5EC3C0">alas y=56</text><text x="25" y="52" font-size="2.4" fill="#D9A441">jarak mata 17</text><text x="33" y="14" font-size="2.4" fill="#5EC3C0">poros x=32</text>
+</svg>`;
+pages.push(`<div class="eyebrow">Ikon kucing · putaran 2</div><h1>Mengintip, dipertajam</h1>
+<div style="display:grid;grid-template-columns:290px 1fr;gap:14px">
+ <div class="card" style="padding:10px"><div class="lbl">Konstruksi di grid 64</div>${grid}
+  <ul style="margin-top:8px"><li><b>Alas</b> rata di y = 56; kepala dipotong di sana.</li><li><b>Kepala</b> x 7 sampai 57, puncak y = 24, sudut atas jari-jari 17.</li><li><b>Telinga</b> segitiga membulat: dasar x 9 sampai 27, ujung y = 10; tebal lengkung 5.</li><li><b>Mata</b> pada x 23,5 dan 40,5, y = 40; krem 7,6 × 10,8; pupil celah 3 × 8.</li></ul></div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+  ${['P1', 'P2', 'P3', 'P4'].map(k => `<div class="card ${k === 'P2' ? 'pick' : ''}" style="padding:9px 11px"><b style="font-size:12px">${KINDS[k].n}</b>${k === 'P2' ? '<span class="tag">Saran</span>' : ''}<p style="font-size:10px;margin:2px 0 6px">${KINDS[k].d}</p><div style="display:grid;grid-template-columns:96px 1fr;gap:8px;align-items:end"><div class="dk" style="height:88px;align-items:flex-end">${cat(k, 'idle', 76)}</div><div class="dk" style="padding:8px;height:88px;align-items:flex-end;justify-content:space-around">${sizes(k)}</div></div></div>`).join('')}
+ </div>
+</div>
+<div class="card" style="margin-top:12px;padding:9px 13px"><div class="lbl">Perbandingan D1 sampai D4</div>
+ <table style="border-collapse:collapse;width:100%;font-size:10.4px">
+  <tr style="color:var(--ink2);text-align:left;font-size:9px;letter-spacing:.08em;text-transform:uppercase"><th style="padding:4px 8px">Varian</th><th style="padding:4px 8px">Terbaca di 20 px</th><th style="padding:4px 8px">Kesan kucing</th><th style="padding:4px 8px">Kerumitan gambar</th><th style="padding:4px 8px">Catatan</th></tr>
+  ${[['D1 · dasar', 'Baik', 'Sedang', 'Paling rendah', 'Mata pil hanya dua bentuk.'], ['D2 · mata celah', 'Baik', 'Tinggi', 'Rendah', 'Pupil celah memberi kesan kucing tanpa tambahan lain.'], ['D3 · cakar', 'Cakar hilang', 'Tinggi di ≥ 32 px', 'Sedang', 'Butuh dua cabang gambar (kecil dan besar).'], ['D4 · menoleh', 'Pupil hilang', 'Tinggi', 'Sedang', 'Cocok untuk animasi melirik, bukan ikon tetap.']].map(r => `<tr>${r.map((c, i) => `<td style="padding:5px 8px;border-top:1px solid var(--rule);${i === 0 ? 'font-weight:600' : ''}">${c}</td>`).join('')}</tr>`).join('')}
+ </table></div>${folio('Mengintip')}`);
+
+// ---------------- page 4: mengintip dalam konteks + ekspresi + animasi ----------------
+const peekExpr = (k) => `<div class="dk" style="padding:8px 12px;gap:10px;justify-content:space-around;align-items:flex-end">${EX.map(([e, n]) => `<div style="text-align:center">${cat(k, e, 58)}<div style="color:var(--tx2);font-size:8.8px;margin-top:2px">${n}</div></div>`).join('')}</div>`;
+const frames = (k, list) => `<div class="dk" style="padding:8px 6px;gap:6px;justify-content:space-around;align-items:flex-end">${list.map(([e, n]) => `<div style="text-align:center">${cat(k, e, 44)}<div style="color:var(--tx2);font-size:8.8px;margin-top:2px">${n}</div></div>`).join('')}</div>`;
+pages.push(`<div class="eyebrow">Ikon kucing · putaran 2</div><h1>Mengintip di notch: ekspresi, animasi, dan intip dari samping</h1>
+<div class="grid" style="grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)">
+ <div class="card"><div class="lbl">D2 di notch (alas kucing = tepi bawah pill)</div>
+  <div class="desk" style="height:84px;gap:14px;padding:0 14px 12px;align-items:flex-start"><div class="island" style="height:46px">${cat('P2', 'idle', 40)}<span class="tx">14.32</span></div><div class="island" style="height:46px">${cat('P2', 'sing', 40)}<span class="tx" style="font-size:12px">di antara gedung dan cahaya</span></div><div class="island" style="height:46px">${cat('P2', 'alert', 40)}<span class="tx" style="font-size:12px">Kirim revisi denah…</span></div></div>
+  <div class="lbl" style="margin-top:9px">Enam ekspresi</div>${peekExpr('P2')}
+  <div class="lbl" style="margin-top:9px">Animasi: tiga bingkai saja</div>
+  <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">
+   <div><div style="font-size:10px;margin-bottom:3px"><b>Kedip</b> · 120 ms, tiap 4 sampai 7 dtk</div>${frames('P2', [['idle', ''], ['blink', ''], ['idle', '']])}</div>
+   <div><div style="font-size:10px;margin-bottom:3px"><b>Naik</b> · muncul 3 px saat ada notifikasi</div>${frames('P2', [['idle', ''], ['pop', ''], ['alert', '']])}</div>
+   <div><div style="font-size:10px;margin-bottom:3px"><b>Telinga kedut</b> · sesekali</div>${frames('P2', [['idle', ''], ['flick', ''], ['idle', '']])}</div>
+  </div></div>
+ <div class="card"><div class="lbl">Varian: intip dari samping</div>
+  <div style="display:flex;gap:12px;align-items:flex-end"><div class="dk" style="height:150px;width:110px;align-items:flex-end;justify-content:flex-start;padding-left:0">${catSide('idle', 96)}</div><div class="dk" style="height:150px;flex:1;align-items:flex-end;justify-content:space-around">${[['idle', 'diam'], ['alert', 'waspada'], ['happy', 'senang']].map(([e, n]) => `<div style="text-align:center">${catSide(e, 56)}<div style="color:var(--tx2);font-size:8.8px">${n}</div></div>`).join('')}</div></div>
+  <p style="margin-top:8px">Kucing bersembunyi di balik tepi vertikal dan hanya separuh wajah yang tampak. Cocok bila kucing diletakkan di tepi kiri atau kanan island, dan paling hemat lebar: kira-kira 20 px.</p>
+  <div class="lbl" style="margin-top:9px">Yang lu putuskan</div>
+  <ul><li><b>Mata:</b> pill sederhana (D1) atau celah (D2, saran).</li><li><b>Cakar:</b> dengan (D3, hanya ≥ 32 px) atau tanpa.</li><li><b>Posisi:</b> menghadap depan atau menoleh (D4).</li><li><b>Intip dari samping:</b> varian tambahan atau tidak dipakai.</li></ul>
+  <p style="margin-top:6px;font-size:10px">Perubahan kode nanti hanya di <code>src/ui/robot.rs</code> (bentuk, pose) dan tes ekspresi.</p></div>
+</div>${folio('Mengintip di notch')}`);
+</script>
+<div id="out"></div>
+<script>
+const only = new URLSearchParams(location.search).get('p');
+pages.forEach((h, i) => { if (only && +only !== i + 1) return; const s = document.createElement('section'); s.className = 'page'; s.innerHTML = h; document.getElementById('out').appendChild(s); });
+</script>
+</body>
+</html>

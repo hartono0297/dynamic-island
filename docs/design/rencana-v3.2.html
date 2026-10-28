@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rencana v3.2</title>
+<style>
+  @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('../../assets/fonts/DMSans-400.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('../../assets/fonts/DMSans-500.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('../../assets/fonts/DMSans-600.ttf'); }
+  @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('../../assets/fonts/DMMono-400.ttf'); }
+  @font-face { font-family: 'DM Mono'; font-weight: 500; src: url('../../assets/fonts/DMMono-500.ttf'); }
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --t: #332A23; --tx: #F4EDE4; --tx2: #A89A8B;
+    --a: #E2683C; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --clay: #C9826B; --red: #D9604F;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 28px 38px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 38px; right: 38px; bottom: 14px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-weight: 600; font-size: 28px; letter-spacing: -.025em; margin: 2px 0 12px; }
+  h2 { font-weight: 600; font-size: 16px; letter-spacing: -.02em; margin-bottom: 4px; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  p, li { font-size: 11.2px; line-height: 1.5; color: #3E3229; }
+  .dark p, .dark li { color: var(--tx2); }
+  code, .mono { font-family: var(--mono); font-size: 10px; }
+  code { background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  b { font-weight: 600; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: 1fr 1fr 1fr; } .g4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 13px 15px; }
+  .card.d { background: var(--r); border-color: var(--t); color: var(--tx); }
+  .card.d p, .card.d li { color: var(--tx2); }
+  .card ul, .bul { margin: 4px 0 0; }
+  .card li, .bul li { list-style: none; position: relative; padding-left: 13px; margin-bottom: 3px; }
+  .card li::before, .bul li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .tag { display: inline-block; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; color: #4A3D33; }
+  .tag.a { background: rgba(226,104,60,.18); color: #A8431F; } .tag.g { background: rgba(157,181,154,.3); color: #3F5A3C; } .tag.o { background: rgba(217,164,65,.25); color: #7A5A12; } .tag.r { background: rgba(217,96,79,.18); color: #9A3426; }
+  .files span { font-family: var(--mono); font-size: 9.5px; background: #EDE5DA; border-radius: 6px; padding: 2px 6px; color: #4A3D33; margin-right: 4px; display: inline-block; margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); font-weight: 600; padding: 5px 8px; border-bottom: 1.5px solid var(--rule); }
+  td { font-size: 10.6px; line-height: 1.4; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; color: #3E3229; }
+  .dark th { color: var(--tx2); border-color: var(--t); } .dark td { color: var(--tx2); border-color: var(--t); }
+  .note { font-size: 10.4px; background: rgba(157,181,154,.2); border-radius: 10px; padding: 7px 10px; color: #3F5A3C; line-height: 1.45; }
+  .warn { font-size: 10.4px; background: rgba(217,164,65,.2); border-radius: 10px; padding: 7px 10px; color: #6B4E10; line-height: 1.45; }
+  .card.d .warn, .dark .warn { background: rgba(217,164,65,.16); color: #E8C27A; }
+  .bad { font-size: 10.4px; background: rgba(217,96,79,.14); border-radius: 10px; padding: 7px 10px; color: #8A2F22; line-height: 1.45; }
+
+  /* mock stage: a desktop strip with the island */
+  .stage { position: relative; border-radius: 14px; overflow: hidden; background: linear-gradient(135deg, #3A3029, #5A4A3E 55%, #7C6552); display: flex; justify-content: center; align-items: flex-start; padding: 0 12px 14px; }
+  .stage.dk { background: linear-gradient(135deg, #1b1613, #2c241f 60%, #3a2f27); }
+  .island { background: var(--s); color: var(--tx); border-radius: 0 0 22px 22px; display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 12px; }
+  .island.sq { border-radius: 0 0 26px 26px; }
+  .t1 { font-size: 12px; font-weight: 600; color: var(--tx); line-height: 1.2; } .t2 { font-size: 10px; color: var(--tx2); }
+  .btn { font-size: 10.5px; font-weight: 600; padding: 5px 11px; border-radius: 9px; background: var(--t); color: var(--tx); display: inline-block; }
+  .btn.pri { background: var(--a); color: #17120F; } .btn.del { background: rgba(217,96,79,.22); color: #F2A397; }
+  .panelm { background: var(--s); border-radius: 0 0 30px 30px; color: var(--tx); padding: 14px 16px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; padding: 3px 9px; border-radius: 99px; background: var(--t); color: var(--tx2); }
+  .chip.on { background: rgba(226,104,60,.25); color: #F3A184; }
+  .step { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 7px; }
+  .step i { flex: none; width: 22px; height: 22px; border-radius: 8px; background: var(--a); color: #17120F; font-style: normal; font-weight: 600; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+  .step div { font-size: 10.8px; line-height: 1.45; color: #3E3229; }
+  .step div b { display: block; font-size: 11.4px; }
+  .hd { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+  .qs { font-size: 10.5px; padding: 3px 10px; border-radius: 99px; background: rgba(226,104,60,.14); color: #A8431F; font-weight: 600; }
+  .tl { position: relative; height: 62px; }
+</style>
+</head>
+<body>
+<script>
+const T = '#E2683C', D = '#17120F', C = '#F4EDE4', PLUM = '#B07A9A';
+const folio = (r) => `<div class="folio"><span>Vale · Rencana v3.2</span><span>${r}</span></div>`;
+const P = (d, w = 1.7, fill = 'none') => `<path d="${d}" fill="${fill}" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const ic = (name, s = 20, color = 'currentColor') => {
+  const m = {
+    clip: P('M9 4h6v3H9zM7 6H6a1 1 0 00-1 1v13a1 1 0 001 1h12a1 1 0 001-1V7a1 1 0 00-1-1h-1'),
+    cam: P('M4 8h3l1.6-2h6.8L17 8h3v11H4zM12 17a3.3 3.3 0 100-6.6 3.3 3.3 0 000 6.6z'),
+    folder: P('M3 7a1 1 0 011-1h5l2 2h9a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1z'),
+    calc: P('M6 3h12a1 1 0 011 1v16a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1zM8 7h8M8 12h2M12 12h2M8 16h2M12 16h2M16 12v4'),
+    gear: P('M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v2l-2 1 1 3 2-.5L7.5 19l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3-2-1z'),
+    lock: P('M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3'),
+    search: P('M10.5 17a6.5 6.5 0 100-13 6.5 6.5 0 000 13zM15.5 15.5L20 20'),
+    vol: P('M4 10v4h3.5L12 18V6L7.5 10zM15 9.5a4 4 0 010 5M17.5 7a7.5 7.5 0 010 10'),
+    file: P('M7 3h7l4 4v14H7zM14 3v4h4'),
+    swipe: P('M5 12h14M15 8l4 4-4 4'),
+    layers: P('M12 4l9 5-9 5-9-5zM3 14l9 5 9-5'),
+    play: P('M8 5l11 7-11 7z', 1.7, 'currentColor'),
+    bell: P('M6 16V11a6 6 0 0112 0v5l1.5 2h-15zM10 20a2 2 0 004 0'),
+    plus: P('M12 5v14M5 12h14'),
+    check: P('M5 12.5l4.5 4.5L19 7.5'),
+    mouse: P('M12 3a5.5 5.5 0 015.5 5.5v7a5.5 5.5 0 01-11 0v-7A5.5 5.5 0 0112 3zM12 3v6'),
+    star: P('M12 4l2.4 5 5.6.7-4.1 3.9 1 5.5L12 16.4 7.1 19l1-5.5L4 9.7 9.6 9z'),
+    globe: P('M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18'),
+    term: P('M4 5h16v14H4zM7 10l3 2-3 2M12 15h5'),
+    key: P('M14 10a4 4 0 11-3 6.6L4 17v-3l2-.5V12l2-.5 3.4-3.4A4 4 0 0114 10z'),
+  };
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" style="color:${color}">${m[name] || ''}</svg>`;
+};
+
+// ---- the cat: three primitives only (ears, eyes, one symbol). variants A-F ----
+const st = (d, w = 2.4, c = D) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const dot = (x, y, r, c = D) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}"/>`;
+const pill = (x, y, w, h, c = D) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${Math.min(w, h) / 2}" fill="${c}"/>`;
+const note = (x, y, c) => `<path d="M${x} ${y}v-8l5-1.5v8" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"/>` + dot(x - 1.7, y, 1.9, c) + dot(x + 3.3, y - 1.5, 1.9, c);
+const zzz = (c) => `<path d="M53 8h5l-5 5.5h5M60 1h3.6l-3.6 4h3.6" fill="none" stroke="${c}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`;
+function eyes(style, expr, Lx, Rx, Y, ink) {
+  const o = (h) => style === 'dot' ? dot(Lx, Y, 3.2, ink) + dot(Rx, Y, 3.2, ink) : pill(Lx, Y, 5.4, h, ink) + pill(Rx, Y, 5.4, h, ink);
+  switch (expr) {
+    case 'idle': return o(9);
+    case 'blink': return st(`M${Lx - 3.4} ${Y + .8}h6.8M${Rx - 3.4} ${Y + .8}h6.8`, 2.2, ink);
+    case 'happy': case 'sing': return st(`M${Lx - 3.6} ${Y + 1.6}q3.6-5 7.2 0M${Rx - 3.6} ${Y + 1.6}q3.6-5 7.2 0`, 2.3, ink);
+    case 'focus': return pill(Lx, Y + 1, 6, 4, ink) + pill(Rx, Y + 1, 6, 4, ink);
+    case 'alert': return dot(Lx, Y, 4.4, ink) + dot(Rx, Y, 4.4, ink);
+    case 'sleep': return st(`M${Lx - 3.4} ${Y}q3.4 3.2 6.8 0M${Rx - 3.4} ${Y}q3.4 3.2 6.8 0`, 2.1, ink);
+    case 'sad': return pill(Lx, Y + 2.5, 5.4, 5, ink) + pill(Rx, Y + 2.5, 5.4, 5, ink);
+  }
+}
+const earsMove = { idle: [0, 0], blink: [0, 0], happy: [0, 0], sing: [0, 0], focus: [0, 0], alert: [-4, 0], sleep: [0, 7], sad: [0, 9], flick: [0, -9] };
+const acc = (e, c) => e === 'sing' ? note(57, 13, c) : e === 'sleep' ? zzz(c) : '';
+const CATV = {
+  A: (e) => { const [l, dr] = earsMove[e];
+    return `<g transform="rotate(${-dr} 17 26)"><path d="M9 30L13 ${9 + l}L28 19Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><g transform="rotate(${dr} 47 26)"><path d="M55 30L51 ${9 + l}L36 19Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><rect x="7" y="17" width="50" height="40" rx="20" fill="${T}"/>` + eyes('dot', e, 23.5, 40.5, 37, D) + acc(e, C); },
+  B: (e) => { const [l] = earsMove[e];
+    return `<path d="M10 30L13 ${9 + l}L27 19.5Q32 18 37 19.5L51 ${9 + l}L54 30Q57 40 49 49Q41 56 32 56Q23 56 15 49Q7 40 10 30Z" fill="${T}" fill-opacity=".38" stroke="${C}" stroke-width="2.6" stroke-linejoin="round"/>` + eyes('dot', e, 23.5, 40.5, 36, C) + acc(e, C); },
+  C: (e) => { const [l, dr] = earsMove[e];
+    return `<g transform="rotate(${-dr} 17 30)"><path d="M9 36L13 ${14 + l}L28 24Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><g transform="rotate(${dr} 47 30)"><path d="M55 36L51 ${14 + l}L36 24Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><path d="M7 56V42Q7 22 32 22Q57 22 57 42V56Z" fill="${T}"/>` + eyes('pill', e, 23.5, 40.5, 40, D) + acc(e, C); },
+  D: (e) => { const [l, dr] = earsMove[e];
+    return `<g transform="rotate(${-dr * .6} 18 22)"><path d="M12 26L16 ${11 + l}L26 19Z" fill="${T}" stroke="${T}" stroke-width="4" stroke-linejoin="round"/></g><g transform="rotate(${dr * .6} 46 22)"><path d="M52 26L48 ${11 + l}L38 19Z" fill="${T}" stroke="${T}" stroke-width="4" stroke-linejoin="round"/></g>` + dot(32, 36, 22, T) + eyes('pill', e, 24, 40, 36, D) + acc(e, C); },
+  E: (e) => { const [l, dr] = earsMove[e];
+    return `<g transform="rotate(${-dr} 17 26)"><path d="M9 30L13 ${8 + l}L28 18Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><g transform="rotate(${dr} 47 26)"><path d="M55 30L51 ${8 + l}L36 18Z" fill="${T}" stroke="${T}" stroke-width="5" stroke-linejoin="round"/></g><rect x="6" y="17" width="52" height="40" rx="19" fill="${T}"/><rect x="12" y="29" width="40" height="19" rx="9.5" fill="${D}"/>` + eyes('dot', e, 24, 40, 38.5, C) + acc(e, C); },
+  F: (e) => { const tail = e === 'alert' ? 'M45 52Q60 50 58 34' : e === 'happy' || e === 'sing' ? 'M45 52Q62 48 56 30' : e === 'sleep' ? 'M45 54Q58 58 50 58' : 'M45 52Q60 52 55 38';
+    return st(tail, 5, T) + `<path d="M14 58Q12 36 26 34L26 22L22 12L32 17L40 17L46 12L44 24L44 34Q52 38 50 58Z" fill="${T}" stroke="${T}" stroke-width="2" stroke-linejoin="round"/>` +
+      (e === 'sleep' ? st('M29 25q2.6 2.4 5.2 0M38.5 25q2.6 2.4 5.2 0', 2, D) : e === 'happy' || e === 'sing' ? st('M28.6 26q3-4 6 0M38 26q3-4 6 0', 2, D) : e === 'alert' ? dot(31.5, 25, 3.2, D) + dot(40.5, 25, 3.2, D) : dot(31.5, 25, 2.4, D) + dot(40.5, 25, 2.4, D)) + (e === 'sing' ? note(56, 12, C) : e === 'sleep' ? zzz(C) : ''); },
+};
+const cat = (v, e = 'idle', s = 64) => `<svg width="${s}" height="${s}" viewBox="0 0 64 64" style="overflow:visible">${CATV[v](e)}</svg>`;
+const CATNAME = { A: ['A · Siluet dua titik', 'Kepala dan telinga satu warna, dua titik mata. Tanpa bulu mata dan pita.'], B: ['B · Garis tipis', 'Kontur krem + isi terakota 38%: seragam dengan gaya ikon Studio.'], C: ['C · Mengintip', 'Telinga dan wajah atas, alas rata: seperti mengintip dari tepi notch.'], D: ['D · Emoji', 'Kepala bulat, telinga kecil, mata pil. Paling jelas di 20 px.'], E: ['E · Bata bertelinga', 'Bentuk logo aplikasi: visor gelap + mata krem + telinga.'], F: ['F · Duduk dari samping', 'Siluet duduk; ekor jadi satu-satunya gerak.'] };
+
+const notch = (inner, w) => `<div class="island" style="${w ? `width:${w}px;` : ''}">${inner}</div>`;
+const stage = (inner, h, dk = true) => `<div class="stage ${dk ? 'dk' : ''}" style="${h ? `height:${h}px;` : ''}">${inner}</div>`;
+
+const pages = [];
+const add = (html, dark = false) => pages.push({ html, dark });
+
+// ============== 1 COVER ==============
+add(`<div style="display:flex;flex-direction:column;justify-content:space-between;height:calc(100% - 14px)">
+  <div><div class="eyebrow">Vale · Rencana</div>
+  <div style="font-weight:600;font-size:66px;line-height:1;letter-spacing:-.035em;margin-top:10px">Versi 3.2</div>
+  <p style="font-size:15px;max-width:600px;margin-top:16px;line-height:1.5">Perbaikan dari pemakaian nyata, ikon kucing yang lebih sederhana, login Google yang benar-benar satu klik, dan ide-ide dari V-Notch yang cocok untuk Windows.</p></div>
+  <div style="display:flex;flex-direction:column;gap:14px;align-items:center;margin:6px 0">
+    <div style="background:#0b0908;border:1px solid var(--t);border-radius:0 0 22px 22px;padding:8px 18px;display:flex;align-items:center;gap:12px;font-size:13px;font-weight:600">${cat('D', 'idle', 30)}14.32</div>
+    <div style="background:#0b0908;border:1px solid var(--t);border-radius:0 0 24px 24px;padding:8px 22px;display:flex;align-items:center;gap:12px;font-size:14px;font-weight:600">${cat('D', 'sing', 30)}di antara gedung dan cahaya sore</div>
+    <div style="background:#0b0908;border:1px solid var(--t);border-radius:0 0 26px 26px;padding:10px 18px;display:flex;align-items:center;gap:12px"><span>${cat('D', 'alert', 34)}</span><div><div class="t1">Kirim revisi denah ke klien</div><div class="t2">Pengingat · 16.30</div></div><span class="btn pri">Selesai</span></div>
+  </div>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between">
+    <div class="grid g4" style="gap:10px;width:640px;font-size:11px;color:var(--tx2)">
+      ${[['1', 'Perbaikan', 'Clipboard scroll, preview screenshot, tombol notice, lirik'], ['2', 'Perilaku notch', 'Tetap terbuka sampai klik di luar, pilihan Hover atau Klik'], ['3', 'Tampilan', 'Kucing minimalis, shortcut yang bisa diatur'], ['4', 'Fitur baru', 'Mixer, file shelf, gestur, pencarian, di belakang jendela']].map(([n, a, b]) => `<div style="border-top:2px solid var(--t);padding-top:9px"><span style="color:var(--a);font-size:9.5px;letter-spacing:.1em;font-weight:600">${n}</span><div style="color:var(--tx);font-weight:600;font-size:14px;margin:2px 0">${a}</div>${b}</div>`).join('')}
+    </div>
+    <div style="display:flex;gap:18px;align-items:flex-end">${cat('D', 'idle', 96)}${cat('D', 'happy', 64)}${cat('D', 'sleep', 64)}</div>
+  </div></div>`, true);
+
+// ============== PLACEHOLDER: summary page is built after the reports ==============
+// ============== 2 SUMMARY ==============
+const row = (n, ask, find, plan, size, kind = '') => `<tr><td style="width:22px"><b style="color:var(--a)">${n}</b></td><td style="width:150px"><b>${ask}</b></td><td>${find}</td><td>${plan}</td><td style="width:54px"><span class="tag ${kind}">${size}</span></td></tr>`;
+add(`<div class="hd"><div><div class="eyebrow">Ringkasan</div><h1>Sembilan permintaan, akar penyebab, dan rencananya</h1></div><span class="qs">Dibaca dari kode v3.1.0</span></div>
+ <table>
+  <tr><th></th><th>Permintaan</th><th>Temuan (dari kode, belum dijalankan langsung)</th><th>Rencana v3.2</th><th>Ukuran</th></tr>
+  ${row(1, 'Clipboard tidak bisa di-scroll', 'Jalur roda terpasang benar. Roda "tertelan" saat kartu ≤ 6 atau di ujung (tidak jatuh ke ganti halaman), klik kartu mereset scroll ke atas, dan tidak ada petunjuk scroll.', 'Roda jatuh ke ganti halaman bila tidak ada yang digulir; posisi scroll dipertahankan; scrollbar tipis; tes.', 'S–M')}
+  ${row(2, 'Preview screenshot tidak muncul', 'Preview hanya langsung muncul bila clipboard "hanya bitmap" secara ketat; selain itu menunggu file. Win+Shift+S sering tanpa file. Flag layar-penuh yang di-cache juga membuang preview tanpa mencoba lagi.', 'Preview selalu dari gambar clipboard, file menyusul. Simpan menulis PNG bila belum ada file.', 'M', 'a')}
+  ${row(3, 'Notch tetap terbuka; pilih hover atau klik', 'Sekarang menutup saat mouse keluar. Ada kunci khusus (editor, CLI) tapi tidak ada mode "tetap terbuka".', 'Setelan Mode buka: Hover, Hover lalu tetap, Klik. Tutup dengan klik di luar atau Esc.', 'M', 'a')}
+  ${row(4, 'Ikon kucing lebih sederhana', 'Kucing sekarang punya bulu mata, pita, dan banyak pose.', 'Enam arah minimalis, saran D (emoji). Hanya telinga, mata, satu simbol.', 'S–M')}
+  ${row(5, 'Login Google belum bisa', 'Client ID bawaan KOSONG di build (secret GitHub belum diisi), jadi tombol "Masuk dengan Google" tersembunyi dan aplikasi meminta Client ID sendiri.', 'Pemilik mendaftar sekali di Google Cloud, isi dua secret, rilis. Pesan dan error dirapikan.', 'Pemilik + S', 'o')}
+  ${row(6, 'Shortcut bisa diatur', 'Delapan tile tetap, belum ada di config.', 'Daftar tile di config, editor di Pengaturan, tile kustom (aplikasi, folder, URL, perintah).', 'L', 'r')}
+  ${row(7, 'Lirik tidak sinkron', 'Filter 750 ms membuang posisi yang lebih akurat, laju putar tidak dipakai, tidak ada offset, durasi YouTube Music berbeda dari lrclib.', 'Model posisi baru, offset ±2 dtk dengan tombol cepat, pencocokan durasi, log drift.', 'L', 'r')}
+  ${row(8, 'Tombol di notice kena hover', 'Panel dicek lebih dulu daripada notice yang menempel (reminder): hover 120 ms membuka panel, reminder mengecil jadi strip kecil yang bergeser saat animasi. Notice lain: kadaluarsa tetap jalan dan panel muncul di bawah kursor saat notice hilang.', 'Notice dengan tombol: hover tidak membuka panel dan tidak menutup notice.', 'S–M', 'a')}
+  ${row(9, 'Ide dari V-Notch', 'Apache-2.0, WPF + C++. Media, mixer, file shelf, gestur, clipboard peek, di belakang jendela, Spotlight.', 'Gestur dan clipboard peek (S), mixer (M), pencarian-lite (L), file shelf (L), di-belakang-jendela opsional.', 'S–L')}
+ </table>
+ <div class="note" style="margin-top:10px">Tidak ada kode yang diubah untuk dokumen ini. Beberapa penyebab (terutama 1 dan 2) bergantung pada perilaku Windows yang hanya terlihat saat dijalankan langsung; setiap halaman menyebut apa yang perlu dicek.</div>
+ ${folio('Ringkasan')}`);
+
+// ============== 3 CLIPBOARD + SHORTCUT ==============
+const clipCard = (a, b, w = 1) => `<div style="background:var(--t);border-radius:9px;padding:6px 8px;height:42px"><div style="height:5px;border-radius:3px;background:var(--tx2);opacity:.7;width:${60 + a}%"></div><div style="height:5px;border-radius:3px;background:var(--tx2);opacity:.4;width:${40 + b}%;margin-top:5px"></div></div>`;
+const tileM = (n, l, c) => `<div style="background:var(--t);border-radius:12px;padding:8px 4px;text-align:center;font-size:9px;color:var(--tx2);${c ? 'outline:1.5px dashed rgba(226,104,60,.7);' : ''}"><div style="display:flex;justify-content:center;color:${c ? 'var(--a)' : 'var(--tx)'}">${ic(n, 18)}</div>${l}</div>`;
+add(`<div class="hd"><div><div class="eyebrow">01 dan 06 · Panel</div><h1>Clipboard bisa digulir, shortcut bisa diatur</h1></div><span class="qs">S–M dan L</span></div>
+ <div class="grid g2" style="gap:16px">
+  <div>
+   <h2>Clipboard: kenapa terasa tidak bisa di-scroll</h2>
+   <div class="grid" style="grid-template-columns:200px 1fr;gap:12px;margin:6px 0 8px">
+    ${stage(`<div class="panelm" style="width:190px;padding:10px 10px 8px"><div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:6px"><b>Clipboard</b><span style="color:var(--tx2)">50</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;position:relative">${[0, 8, 4, 12, 6, 2].map((v, i) => clipCard(v, i * 3)).join('')}<div style="position:absolute;right:-6px;top:2px;width:3px;height:50px;border-radius:2px;background:var(--a)"></div></div></div>`, 210)}
+    <div><p><b>Temuan.</b> Jalur roda sudah terpasang dari jendela ke daftar. Tiga hal membuatnya terasa rusak:</p>
+    <ul class="bul"><li><b>Tertelan.</b> Roda di atas daftar tidak pernah jatuh ke "ganti halaman", walau tidak ada yang bisa digulir (≤ 6 kartu) atau sudah di ujung.</li><li><b>Reset.</b> Klik kartu mengembalikan scroll ke atas.</li><li><b>Tanpa petunjuk.</b> Tidak ada scrollbar; satu putaran melompat satu baris penuh (71 px).</li></ul></div>
+   </div>
+   <div class="note"><b>Perbaikan.</b> Roda jatuh ke ganti halaman bila tidak ada yang digulir · posisi dipertahankan saat klik kartu · scrollbar tipis (oranye) · helper murni + tes. Sebelum mengubah: coba roda dengan kolom cari fokus dan tidak fokus, dan dengan lebih dari 6 item.</div>
+   <div class="files" style="margin-top:7px"><span>app.rs on_wheel</span><span>app_clip.rs clip_wheel</span><span>panel_layout.rs</span><span>render_panel.rs</span></div>
+  </div>
+  <div>
+   <h2>Shortcut: pilih sendiri apa yang tampil</h2>
+   <p style="margin:2px 0 6px">Delapan tile tetap sekarang. Usulan: satu daftar berurutan di config, diedit di Pengaturan, bukan di panel (panel menutup saat hover dan fokus keyboardnya rapuh).</p>
+   <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
+    ${stage(`<div class="panelm" style="width:200px;padding:10px"><div style="font-size:10px;font-weight:600;margin-bottom:6px">Pintasan</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px">${tileM('cam', 'Tangkap')}${tileM('folder', 'Explorer')}${tileM('calc', 'Hitung')}${tileM('term', 'Dev', 1)}${tileM('globe', 'Gmail', 1)}${tileM('folder', 'Proyek', 1)}${tileM('gear', 'Setelan')}${tileM('lock', 'Kunci')}</div></div>`, 130)}
+    <div class="card" style="padding:9px 11px"><div class="lbl">Pengaturan → Tampilan → Pintasan</div>
+     ${[['Tangkap layar', 1], ['Explorer', 1], ['Dev (perintah)', 1], ['Gmail (URL)', 1], ['Kalkulator', 0]].map(([n, on]) => `<div style="display:flex;align-items:center;gap:6px;font-size:10px;padding:3px 0;border-bottom:1px solid var(--rule)"><span style="width:22px;height:12px;border-radius:99px;background:${on ? 'var(--a)' : '#CFC4B5'};position:relative;flex:none"><i style="position:absolute;top:2px;${on ? 'right:2px' : 'left:2px'};width:8px;height:8px;border-radius:50%;background:#fff"></i></span>${n}<span style="margin-left:auto;color:var(--ink2)">↑ ↓</span></div>`).join('')}
+     <div style="margin-top:6px"><span class="btn pri" style="font-size:9.5px;padding:3px 9px">+ Tambah</span></div></div>
+   </div>
+   <div class="grid g2" style="margin-top:8px">
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Jenis tile kustom</b><ul><li>Aplikasi atau berkas</li><li>Folder</li><li>URL (http, https, mailto, ms-*)</li><li>Perintah (tanpa admin)</li></ul></div>
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Aturan</b><ul><li>Maksimal 12 tile, 4 kolom</li><li>Ikon dari set Studio</li><li>Perintah pertama minta konfirmasi</li><li>Config lama tetap terbaca</li></ul></div>
+   </div>
+   <div class="warn" style="margin-top:7px">Perintah kustom adalah permukaan keamanan: tidak pernah dinaikkan ke admin, panjang dibatasi, karakter kontrol ditolak.</div>
+  </div>
+ </div><div class="grid g3" style="margin-top:14px">
+   <div class="card" style="padding:9px 12px"><div class="lbl">Tes yang ditambahkan · clipboard</div><ul><li>Helper roda: digulir atau jatuh ke ganti halaman, batas atas dan bawah, <code>max_scroll</code> 0.</li><li>Klik kartu tidak mereset posisi scroll.</li><li>50 item memberi <code>max_scroll</code> 22; daerah daftar menutupi area kartu.</li></ul></div>
+   <div class="card" style="padding:9px 12px"><div class="lbl">Tes yang ditambahkan · shortcut</div><ul><li>Config lama tanpa bidang baru tetap terbaca; entri rusak dibuang.</li><li>Tata letak 1, 8, 12, 16 tile: tidak tumpang tindih, di dalam panel, di atas titik halaman.</li><li>Validasi URL dan path; perintah kustom tidak pernah naik admin.</li></ul></div>
+   <div class="card" style="padding:9px 12px"><div class="lbl">Risiko</div><ul><li>Penyebab clipboard belum terkonfirmasi tanpa menjalankan app: tiga dugaan, cek dulu.</li><li>Shortcut kustom sekitar 700–1000 baris di 12 file lebih; menggantikan <code>Shortcut::ALL</code> menyentuh tes reducer.</li><li>Bidang baru harus masuk daftar yang dimiliki island saat menyimpan, kalau tidak hilang.</li></ul></div>
+  </div>${folio('Clipboard dan shortcut')}`);
+
+// ============== 4 SCREENSHOT ==============
+const thumb = (w, h) => `<div style="width:${w}px;height:${h}px;border-radius:8px;background:linear-gradient(135deg,#5E8FB0,#8EB7A0 55%,#E8C27A);position:relative;overflow:hidden;flex:none"><div style="position:absolute;left:8px;top:8px;width:${w * .38}px;height:${h * .22}px;border-radius:4px;background:rgba(255,255,255,.75)"></div><div style="position:absolute;left:8px;bottom:8px;width:${w * .6}px;height:${h * .18}px;border-radius:4px;background:rgba(23,18,15,.55)"></div></div>`;
+const shotNotice = (state) => notch(`${thumb(116, 66)}<div style="min-width:170px"><div class="t1">${state === 'saved' ? 'Disimpan' : 'Screenshot siap'}</div><div class="t2">1280 × 720 · 245 KB</div><div style="display:flex;gap:6px;margin-top:7px">${state === 'saved' ? '<span class="chip">Pictures\\Screenshots</span>' : '<span class="btn">Salin lagi</span><span class="btn pri">Simpan</span><span class="btn del">Hapus</span>'}</div></div>${cat('D', state === 'saved' ? 'happy' : 'alert', 34)}`, 0).replace('class="island"', 'class="island sq" style="padding:12px 16px"');
+add(`<div class="hd"><div><div class="eyebrow">02 · Screenshot</div><h1>Preview selalu muncul sesudah screenshot</h1></div><span class="qs">M</span></div>
+ <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px">
+  <div><div class="lbl">1 · Tangkap</div>${stage(`<div style="align-self:center;display:flex;gap:6px;margin-top:34px">${['Win', 'Shift', 'S'].map(k => `<span style="background:#F4EDE4;color:#17120F;border-radius:7px;padding:6px 10px;font-weight:600;font-size:12px;box-shadow:0 2px 0 #b9ad9d">${k}</span>`).join('')}</div>`, 112)}<p style="margin-top:6px">Win+Shift+S, PrtSc, Win+PrtSc, atau tombol Screenshot di Shortcuts.</p></div>
+  <div><div class="lbl">2 · Preview di notch (dari gambar clipboard)</div>${stage(shotNotice('new'), 112)}<p style="margin-top:6px">Thumbnail diambil dari gambar clipboard, jadi tidak menunggu file. Diabaikan 8 detik berarti Simpan.</p></div>
+  <div><div class="lbl">3 · Setelah Simpan</div>${stage(shotNotice('saved'), 112)}<p style="margin-top:6px">Bila belum ada file, Simpan menulis PNG ke Pictures\\Screenshots (nama tidak menimpa) dan melampirkannya.</p></div>
+ </div>
+ <div class="grid" style="grid-template-columns:1.35fr 1fr;gap:14px;margin-top:10px">
+  <div class="card" style="padding:9px 12px"><div class="lbl">Empat gerbang yang diam-diam membuang preview (kode 3.1.0)</div>
+   <table>
+    <tr><td style="width:18px"><b style="color:var(--a)">1</b></td><td><b>Daftar format terlalu ketat.</b> Langsung muncul hanya bila semua format adalah bitmap atau tepat "PNG". Format tambahan dari Snipping Tool membuatnya menunggu file.</td></tr>
+    <tr><td><b style="color:var(--a)">2</b></td><td><b>Flag layar-penuh di-cache.</b> Overlay potong dihitung layar penuh sampai 1 detik; preview dibuang tanpa mencoba lagi.</td></tr>
+    <tr><td><b style="color:var(--a)">3</b></td><td><b>Hanya pemicu clipboard.</b> Kalau Win+PrtSc hanya menyimpan file, tidak ada yang terjadi.</td></tr>
+    <tr><td><b style="color:var(--a)">4</b></td><td><b>Pencocokan file sempit.</b> Mencari sampai 2,8 dtk saja, jendela waktu dan ukuran harus persis.</td></tr>
+   </table></div>
+  <div class="card d" style="padding:9px 12px"><div class="lbl" style="color:var(--tx2)">Perbaikan</div>
+   <ul><li>Daftar tolak (HTML, teks kaya, file) menggantikan daftar izin; Snipping Tool selalu diterima.</li><li>Cek layar-penuh baru, tunda sekali 1,2 detik, bukan buang.</li><li>Pencarian file 0,6 / 0,9 / 1,5 / 2,5 detik; tidak pernah hapus tanpa klik Hapus.</li><li>Simpan tanpa file menulis PNG lewat WIC di thread latar.</li></ul>
+   <div class="warn" style="margin-top:6px">Perlu dicek langsung: format clipboard Snipping Tool, apakah Win+PrtSc menyentuh clipboard, dan apakah Pictures dialihkan ke OneDrive.</div></div>
+ </div><div class="card" style="padding:9px 13px;margin-top:10px"><div class="lbl">Alur status satu screenshot</div>
+   <div style="display:flex;gap:6px;align-items:stretch;font-size:10px">
+    ${[['Gambar tiba', 'dari clipboard'], ['Tampil tanpa file', 'thumbnail dari bitmap'], ['Mencari file', '0,6 · 0,9 · 1,5 · 2,5 dtk'], ['File terlampir', 'atau tetap tanpa file'], ['Simpan / Hapus / 8 dtk', 'Simpan menulis PNG bila perlu']].map(([a, b], i) => `${i ? '<span style="align-self:center;color:var(--ink2)">→</span>' : ''}<div style="flex:1;background:var(--paper);border:1px solid var(--rule);border-radius:10px;padding:6px 9px"><b style="display:block;font-size:10.6px">${a}</b>${b}</div>`).join('')}
+   </div>
+   <p style="font-size:10px;margin-top:6px"><b>Tes (tanpa menyentuh clipboard atau folder asli):</b> daftar tolak format (set mirip Snipping Tool = screenshot; HTML, file, teks = bukan), penomoran nama file tanpa menimpa, keputusan tunda layar-penuh, tabel percobaan menutupi jendela +5 dtk, Simpan tanpa file memicu efek simpan. Risiko: gambar dari program gambar ikut tampil; dikurangi daftar tolak dan setelan "Pratinjau semua gambar".</p></div>${folio('Screenshot')}`);
+// ============== 5 OPEN MODE + NOTICE BUTTONS ==============
+const lane = (label, segs) => `<div style="display:grid;grid-template-columns:104px 1fr;gap:8px;align-items:center;margin-bottom:7px"><div style="font-size:10.5px;font-weight:600">${label}</div><div style="display:flex;height:26px;border-radius:8px;overflow:hidden;font-size:9.5px">${segs.map(([w, t, c]) => `<div style="flex:${w};background:${c};display:flex;align-items:center;justify-content:center;color:#17120F;white-space:nowrap;padding:0 4px">${t}</div>`).join('')}</div></div>`;
+const G = '#E6DCCF', O = 'rgba(226,104,60,.55)', S = 'rgba(157,181,154,.7)';
+const reminderNotice = (extra = '') => notch(`${cat('D', 'alert', 34)}<div><div class="t1">Kirim revisi denah ke klien</div><div class="t2">Pengingat · 16.30</div></div><span class="btn pri">Selesai</span>${extra}`).replace('class="island"', 'class="island sq" style="padding:10px 16px"');
+add(`<div class="hd"><div><div class="eyebrow">03 dan 08 · Perilaku notch</div><h1>Panel tetap terbuka, tombol notice bisa ditekan</h1></div><span class="qs">M dan S–M</span></div>
+ <div class="grid" style="grid-template-columns:1.1fr 1fr;gap:16px">
+  <div>
+   <h2>Mode buka: Hover, Hover lalu tetap, Klik</h2>
+   <p style="margin:2px 0 8px">Setelan baru di Pengaturan → Umum (segmen tiga pilihan). Bawaan tetap Hover, jadi perilaku sekarang tidak berubah.</p>
+   <div class="card" style="padding:10px 12px">
+    <div style="display:grid;grid-template-columns:104px 1fr;gap:8px;font-size:9px;color:var(--ink2);margin-bottom:3px"><span></span><div style="display:flex;justify-content:space-between"><span>mouse masuk</span><span>mouse keluar</span><span>klik di luar</span></div></div>
+    ${lane('Hover (sekarang)', [[2, 'tertutup', G], [5, 'terbuka', S], [2, 'tertutup', G], [2, '', G]])}
+    ${lane('Hover lalu tetap', [[2, 'tertutup', G], [8, 'terbuka, tetap walau mouse keluar', S], [2, 'tertutup', G]])}
+    ${lane('Klik', [[3, 'tertutup (hover tidak membuka)', G], [7, 'terbuka sesudah klik di notch', S], [2, 'tertutup', G]])}
+   </div>
+   <div class="grid g2" style="margin-top:9px">
+    <div class="card" style="padding:9px 12px"><h2 style="font-size:13px">Deteksi klik di luar</h2><ul><li><b>Tanpa hook.</b> Pemeriksaan tombol mouse tiap 40 ms hanya selama panel terbuka dan terkunci; tertutup berarti nol biaya.</li><li>Tidak menelan klik, jadi pasangan tekan-lepas (Run 11) aman dan klik tetap sampai ke aplikasi lain.</li><li>Esc menutup dari dalam kolom CLI atau cari; Esc global tidak dipakai.</li></ul></div>
+    <div class="card" style="padding:9px 12px"><h2 style="font-size:13px">Yang ditolak</h2><ul><li><code>SetCapture</code>: menelan klik luar.</li><li>Hook mouse global: bisa hilang bila UI lambat dan panel macet.</li><li>Deaktivasi: jendela tidak pernah aktif.</li></ul><p style="font-size:10px;margin-top:3px">Catatan daya perlu diperbarui: poll 40 ms hanya saat terkunci terbuka.</p></div>
+   </div>
+  </div>
+  <div>
+   <h2>Notice bertombol: hover tidak boleh membuka panel</h2>
+   <div class="lbl" style="margin-top:6px">Sekarang</div>
+   ${stage(`<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${reminderNotice()}<span style="font-size:9.5px;color:#d9c9b8">kursor tiba, 120 ms kemudian:</span><div class="panelm" style="width:340px;padding:8px 12px 10px;font-size:10px"><div style="background:var(--t);border-radius:9px;padding:4px 10px;display:flex;justify-content:space-between;align-items:center"><span style="font-size:9.5px">Kirim revisi… · 16.30</span><span class="btn pri" style="padding:2px 8px;font-size:9px">Selesai</span></div><div style="margin-top:6px;color:var(--tx2)">…halaman panel…</div></div></div>`, 160)}
+   <div class="bad" style="margin:5px 0">Reminder mengecil menjadi strip kecil dan bergeser selama animasi; Selesai sulit ditekan.</div>
+   <div class="lbl">Sesudah</div>
+   ${stage(`<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${reminderNotice()}<span style="font-size:9.5px;color:#d9c9b8">kursor di atas notice: tidak ada yang berubah</span></div>`, 92)}
+   <ul class="bul" style="margin-top:6px"><li>Selama notice bertombol tampil, hover tidak membuka panel dan tidak menutup notice.</li><li>Waktu habis berhenti selama kursor di atasnya; sesudah pergi ada jeda 1,5 detik.</li><li>Klik yang menutup notice tidak memunculkan panel di bawah kursor.</li><li>Pintu keluar: memutar roda di atas notice membuka panel; ada juga menu tray.</li></ul>
+  </div>
+ </div><div class="grid g3" style="margin-top:12px">
+   <div class="card" style="padding:9px 12px"><div class="lbl">Tes reducer · mode buka</div><ul><li>Mode Hover: seluruh tes yang ada tetap tidak berubah.</li><li>Hover lalu tetap: mouse keluar tidak menutup; Dismiss menutup; editor atau CLI yang menahan panel bertahan.</li><li>Klik: hover tidak membuka; klik notch membuka; penjaga media tetap berlaku.</li></ul></div>
+   <div class="card" style="padding:9px 12px"><div class="lbl">Tes reducer · notice bertombol</div><ul><li>Hover pada reminder menempel: notice tetap.</li><li>Klik Selesai tidak berubah menjadi panel; roda membuka panel.</li><li>Notice sementara tanpa batas waktu selama hover, jeda 1,5 detik setelahnya.</li><li>SystemLow tetap membuka halaman Sistem.</li></ul></div>
+   <div class="card" style="padding:9px 12px"><div class="lbl">Risiko</div><ul><li>Reminder menempel bisa mengunci panel: ditutup oleh roda dan menu tray.</li><li><code>GetAsyncKeyState</code> bisa melewatkan ketukan sangat singkat atau layar sentuh.</li><li>Pomodoro Siap berbeda di mode Klik: klik membuka, mulai tetap di panel.</li></ul></div>
+  </div>${folio('Perilaku notch')}`);
+
+// ============== CAT 1: variants ==============
+add(`<div class="hd"><div><div class="eyebrow">04 · Ikon kucing</div><h1>Enam arah yang lebih sederhana</h1></div><span class="qs">Pilih satu</span></div>
+  <p style="max-width:760px;margin-bottom:10px">Aturan: kucing hanya boleh punya <b>tiga bagian</b>, yaitu telinga, mata, dan satu simbol kecil (not, zzz). Bulu mata dan pita dihapus. Setiap varian diuji di 48, 32, 26, dan 20 px, ukuran sebenarnya di notch.</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+  ${['A', 'B', 'C', 'D', 'E', 'F'].map(v => `<div class="card" style="padding:8px 12px;display:grid;grid-template-columns:100px 1fr 184px;gap:12px;align-items:center;${v === 'D' ? 'border-color:var(--a);border-width:1.5px;' : ''}">
+    <div style="background:var(--s);border-radius:12px;height:96px;display:flex;align-items:center;justify-content:center">${cat(v, 'idle', 72)}</div>
+    <div><b style="font-size:12.5px">${CATNAME[v][0]}</b> ${v === 'D' ? '<span class="tag a">Saran</span>' : ''}<p style="font-size:10.2px;margin-top:2px">${CATNAME[v][1]}</p></div>
+    <div style="background:var(--s);border-radius:12px;padding:8px 10px;display:flex;gap:10px;align-items:flex-end;justify-content:center;color:var(--tx2);font-size:8.5px;text-align:center">${[48, 32, 26, 20].map(s => `<div>${cat(v, 'idle', s)}${s}</div>`).join('')}</div>
+  </div>`).join('')}
+  </div>${folio('Ikon kucing')}`);
+
+// ============== CAT 2: expressions + animation ==============
+add(`<div class="hd"><div><div class="eyebrow">04 · Ikon kucing</div><h1>Ekspresi dan gerak, hanya yang perlu</h1></div><span class="qs">Saran: D · Emoji</span></div>
+  <div class="grid" style="grid-template-columns:1.25fr 1fr;gap:14px">
+   <div class="card d" style="padding:12px 14px">
+    <div class="lbl" style="color:var(--tx2)">Delapan ekspresi (satu set, tiga bagian)</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+    ${[['idle', 'Diam', 'Mata pil'], ['happy', 'Senang', 'Mata ^ ^'], ['focus', 'Fokus', 'Mata menyipit'], ['alert', 'Waspada', 'Mata bulat, telinga tegak'], ['sing', 'Bernyanyi', '^ ^ + not'], ['sleep', 'Tidur', 'Telinga turun + zzz'], ['sad', 'Lesu', 'Telinga layu'], ['blink', 'Kedip', '120 ms']].map(([e, n, d]) => `<div style="text-align:center;background:var(--s);border-radius:12px;padding:8px 4px"><div style="display:flex;justify-content:center">${cat('D', e, 54)}</div><div style="color:var(--tx);font-weight:600;font-size:11px;margin-top:3px">${n}</div><div style="font-size:9px;color:var(--tx2)">${d}</div></div>`).join('')}
+    </div>
+   </div>
+   <div class="card">
+    <div class="lbl">Animasi: tiga gerakan saja</div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+     ${[['Kedip', 'Setiap 4 sampai 7 detik, 3 bingkai: buka, garis, buka. Hanya redraw singkat; idle tetap hemat.', ['idle', 'blink', 'idle']], ['Telinga kedut', 'Satu telinga bergerak 9° saat ada notifikasi biasa atau tiap 20 detik saat idle (opsional).', ['idle', 'flick', 'idle']], ['Naik 2 px', 'Hover: senang dan naik 2 px. Waspada memantul 2 kali, lalu diam.', ['idle', 'happy', 'happy']]].map(([n, d, fr]) => `<div style="display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center"><div style="background:var(--s);border-radius:10px;padding:6px;display:flex;justify-content:space-around">${fr.map(f => cat('D', f, 38)).join('')}</div><div><b style="font-size:11.4px">${n}</b><p style="font-size:10px;line-height:1.35">${d}</p></div></div>`).join('')}
+    </div>
+   </div>
+  </div>
+  <div class="grid g3" style="margin-top:12px">
+   <div class="card"><h2>Mengapa D</h2><ul><li>Bentuk paling sederhana: lingkaran + dua segitiga kecil.</li><li>Mata pil terbaca jelas di 20 px, titik terlalu kecil.</li><li>Ekspresi berubah hanya lewat mata dan telinga, tanpa aksesori permanen.</li></ul></div>
+   <div class="card"><h2>Pilihan lain bila ingin beda</h2><ul><li><b>C Mengintip</b> cocok kalau ingin menyatu dengan tepi notch.</li><li><b>B Garis tipis</b> cocok kalau ingin kucing terasa sebagai ikon, bukan karakter.</li><li><b>E</b> menjaga hubungan dengan logo aplikasi.</li></ul></div>
+   <div class="card"><h2>Yang berubah di kode</h2><p>Hanya <code>src/ui/robot.rs</code> (gambar dan pose), <code>assets/logo.svg</code> bila logo ikut, dan tes ekspresi. Aturan kapan muncul dan anggaran daya tidak berubah.</p><div class="note" style="margin-top:6px">Ukuran: S sampai M. Pita plum dan bulu mata dihapus dari semua ukuran.</div></div>
+  </div>${folio('Ikon kucing')}`);
+
+// ============== GOOGLE ==============
+const node = (t, s, c = 'var(--card)', bd = 'var(--rule)') => `<div style="background:${c};border:1px solid ${bd};border-radius:12px;padding:8px 10px;font-size:10.4px;line-height:1.35;flex:1"><b style="display:block;font-size:11px">${t}</b>${s}</div>`;
+const arrow = '<div style="align-self:center;color:var(--ink2);font-size:14px">→</div>';
+add(`<div class="hd"><div><div class="eyebrow">05 · Login Google</div><h1>Kenapa masih ke Google Cloud, dan cara membuatnya satu klik</h1></div><span class="qs">Pemilik + S</span></div>
+ <div class="grid" style="grid-template-columns:1.12fr 1fr;gap:16px">
+  <div>
+   <h2>Cara kerja login Google di aplikasi mana pun</h2>
+   <p style="margin:2px 0 7px">Google tidak mengizinkan aplikasi login tanpa identitas. Setiap aplikasi punya <b>Client ID</b> yang didaftarkan <b>pengembangnya satu kali</b>; layar login menampilkan identitas itu ("Vale ingin mengakses kalender Anda"). Pengguna biasa tidak pernah melihat Cloud Console.</p>
+   <div style="display:flex;gap:6px;margin-bottom:6px">${node('Pengembang, sekali', 'Daftar app di Google Cloud, dapat Client ID', 'rgba(157,181,154,.25)', 'rgba(157,181,154,.6)')}${arrow}${node('Dipasang di Vale', 'ID ikut dalam exe (aman untuk app desktop)')}${arrow}${node('Pengguna', 'Klik "Masuk dengan Google", pilih akun, selesai')}</div>
+   <div class="bad" style="margin-bottom:7px"><b>Keadaan sekarang.</b> Langkah pertama belum pernah dilakukan: Client ID bawaan <b>kosong</b> di build (secret GitHub <code>VALE_GOOGLE_CLIENT_ID</code> dan <code>…_SECRET</code> belum diisi). Karena kosong, tombol "Masuk dengan Google" disembunyikan dan Vale meminta Client ID milik lu sendiri. Itu sebabnya lu diarahkan ke Cloud Console. Kodenya sendiri sudah benar (PKCE + 127.0.0.1); tidak ada bug yang menghalangi login begitu ID ada.</div>
+   <h2>Status publikasi menentukan siapa yang bisa masuk</h2>
+   <table>
+    <tr><th>Status</th><th>Siapa bisa masuk</th><th>Dampak</th></tr>
+    <tr><td><b>Testing</b></td><td>Maks. 100 test user yang didaftarkan</td><td>Token habis tiap 7 hari, peringatan "belum diverifikasi"</td></tr>
+    <tr><td><b>Production, belum verifikasi</b></td><td>Siapa saja (batas 100 pengguna baru)</td><td>Layar "Google belum memverifikasi", klik Lanjutan, lalu Buka Vale</td></tr>
+    <tr><td><b>Terverifikasi</b></td><td>Tanpa batas</td><td>Tanpa peringatan. Butuh video demo, kebijakan privasi, domain; hari sampai minggu. <code>calendar.events</code> sensitif, bukan terbatas, jadi tanpa audit berbayar.</td></tr>
+   </table>
+  </div>
+  <div>
+   <h2>Yang harus dilakukan pemilik (sekali)</h2>
+   ${[['Buat project Cloud', 'console.cloud.google.com, project baru bernama Vale.'], ['Aktifkan Google Calendar API', ''], ['Layar persetujuan OAuth', 'Eksternal. Nama Vale, email dukungan, halaman privasi dan ketentuan dari <code>site/</code> (situs harus terbit dan placeholder tanggal, email, lisensi diisi). Scope: <code>calendar.calendarlist.readonly</code>, <code>calendar.events</code>.'], ['Buat klien tipe Desktop app', 'Salin Client ID dan secret (untuk app desktop, secret bukan rahasia).'], ['Publikasikan ke Production', ''], ['Isi dua secret di GitHub', '<code>VALE_GOOGLE_CLIENT_ID</code>, <code>VALE_GOOGLE_CLIENT_SECRET</code>, lalu tag rilis baru (3.2.0).'], ['Ajukan verifikasi', 'Setelah situs dan video demo siap; bisa berjalan paralel.']].map(([a, b], i) => `<div class="step"><i>${i + 1}</i><div><b>${a}</b>${b}</div></div>`).join('')}
+   <div class="grid g2" style="margin-top:4px">
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Pekerjaan kode (S)</b><ul><li>Bila ID kosong: "Login Google belum tersedia di versi ini", Client ID sendiri di Lanjutan.</li><li>Notice untuk error login (waktu habis, state salah, browser gagal); sekarang diam.</li><li>Tombol Batal dan halaman callback yang rapi.</li><li>Perbaiki klaim README yang keliru.</li></ul></div>
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Alternatif tanpa Cloud</b><ul><li><b>Alamat rahasia ICS</b>: tempel URL, hanya baca, M.</li><li>CalDAV atau Outlook: tetap butuh pendaftaran app.</li><li>Server perantara: tidak perlu untuk PKCE.</li></ul><div class="note" style="margin-top:4px">Saran: daftar sekali + ICS opsional.</div></div>
+   </div>
+  </div>
+ </div>${folio('Login Google')}`);
+
+// ============== LYRICS ==============
+add(`<div class="hd"><div><div class="eyebrow">07 · Lirik</div><h1>Kenapa lirik terlambat, dan cara menyetelnya</h1></div><span class="qs">L (3 tugas)</span></div>
+ <div class="grid" style="grid-template-columns:1.15fr 1fr;gap:16px">
+  <div>
+   <h2>Posisi lagu yang dipakai Vale vs posisi sebenarnya</h2>
+   <div class="card" style="padding:10px 12px;margin:6px 0 8px">
+    <div class="tl">
+     <div style="position:absolute;left:0;right:0;top:10px;height:3px;background:var(--rule)"></div>
+     <div style="position:absolute;left:0;top:0;font-size:9.5px;color:var(--ink2)">posisi sebenarnya</div>
+     <div style="position:absolute;left:20%;top:3px;width:10px;height:10px;border-radius:50%;background:var(--ink)"></div>
+     <div style="position:absolute;left:58%;top:3px;width:10px;height:10px;border-radius:50%;background:var(--ink)"></div>
+     <div style="position:absolute;left:0;right:0;top:46px;height:3px;background:var(--rule)"></div>
+     <div style="position:absolute;left:0;top:30px;font-size:9.5px;color:var(--a)">posisi di Vale</div>
+     <div style="position:absolute;left:24%;top:39px;width:10px;height:10px;border-radius:50%;background:var(--a)"></div>
+     <div style="position:absolute;left:62%;top:39px;width:10px;height:10px;border-radius:50%;background:var(--a)"></div>
+     <div style="position:absolute;left:21%;top:20px;width:3.2%;height:2px;background:var(--a)"></div>
+     <div style="position:absolute;left:25%;top:22px;font-size:9px;color:var(--a)">≈ 0,3 sampai 0,75 dtk terlambat (konstan)</div>
+    </div>
+    <p style="font-size:10px;margin-top:2px">Pembacaan posisi baru yang berbeda kurang dari 750 ms dari perkiraan dibuang, jadi bias kecil tidak pernah dikoreksi.</p>
+   </div>
+   <table>
+    <tr><th></th><th>Penyebab (berurutan)</th><th>Perbaikan</th></tr>
+    <tr><td><b style="color:var(--a)">1</b></td><td><b>Filter 750 ms</b> membuang posisi yang lebih akurat dari pemutar.</td><td>Selalu pakai anchor baru; toleransi 100 ms hanya untuk redraw.</td></tr>
+    <tr><td><b style="color:var(--a)">2</b></td><td><b>Anchor dipercaya apa adanya.</b> Chrome/Edge melaporkan posisi hanya saat status berubah; Spotify tertinggal; laju putar tidak dibaca.</td><td>Baca <code>PlaybackRate</code>; deteksi seek (selisih &gt; 1 dtk); poll 1 dtk hanya saat lirik terlihat.</td></tr>
+    <tr><td><b style="color:var(--a)">3</b></td><td><b>Jeda dan lanjut</b> di-rebase pada waktu reducer; "Changing" dianggap jeda.</td><td>Rebase pada waktu kejadian; ganti lagu membersihkan timeline lama.</td></tr>
+    <tr><td><b style="color:var(--a)">4</b></td><td><b>Versi berbeda.</b> Durasi video YouTube Music beda dari rekaman album, <code>/api/get</code> hanya toleran ± 2 dtk.</td><td>Cadangan <code>/api/search</code>, pilih durasi terdekat ≤ 3 dtk; normalkan judul.</td></tr>
+    <tr><td><b style="color:var(--a)">5</b></td><td><b>Tanpa offset, tanpa lookahead;</b> crossfade 150 ms mulai tepat di waktu baris.</td><td>Offset pengguna, lookahead bawaan ≈ 150 ms.</td></tr>
+   </table>
+  </div>
+  <div>
+   <h2>Kontrol offset di halaman Musik</h2>
+   ${stage(`<div class="panelm" style="width:330px;padding:12px 14px"><div style="display:flex;gap:10px;align-items:center"><div style="width:54px;height:54px;border-radius:10px;background:linear-gradient(135deg,#C9826B,#6F4E7C)"></div><div><div class="t1" style="font-size:13px">Di antara gedung dan cahaya sore</div><div class="t2">Judul lagu · Artis</div></div></div><div style="margin:10px 0 6px;height:4px;border-radius:3px;background:var(--t)"><div style="width:42%;height:4px;border-radius:3px;background:var(--a)"></div></div><div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--tx2)">Lirik<span class="chip">−0,3 dtk</span><span class="btn" style="padding:2px 9px">−</span><span class="btn" style="padding:2px 9px">+</span><span style="margin-left:auto" class="chip on">Setel ulang</span></div></div>`, 128)}
+   <ul class="bul" style="margin-top:7px"><li>Setelan <code>lyrics_offset_ms</code>, −2,0 sampai +2,0 dtk, langkah 0,1; tombol cepat di halaman Musik. Per-lagu opsional.</li><li>Log diagnosis <code>media.log</code> diperluas: posisi, umur anchor, laju, drift (tanpa judul lagu).</li><li>Cache lirik diberi versi supaya jawaban buruk bisa dicoba ulang.</li></ul>
+   <div class="grid g2" style="margin-top:7px">
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Tiga tugas</b><ul><li>Model posisi + hapus filter (M)</li><li>Offset + tombol cepat (M)</li><li>Cadangan pencarian + normalisasi (M)</li></ul></div>
+    <div class="card" style="padding:8px 11px"><b style="font-size:11px">Sudah benar</b><ul><li>Pemilihan baris tanpa selisih satu</li><li>Tag [offset:] di LRC</li><li>Beberapa cap waktu per baris</li></ul></div>
+   </div>
+   <div class="warn" style="margin-top:7px">Perlu diukur langsung: posisi dan LastUpdatedTime yang dilaporkan YouTube Music dan Spotify saat putar, jeda, seek, ganti lagu; drift dari <code>media.log</code> untuk memilih lookahead bawaan.</div>
+  </div>
+ </div>${folio('Lirik')}`);
+
+// ============== V-NOTCH ==============
+const vrow = (f, v, w, e, k = '') => `<tr><td style="width:96px"><b>${f}</b></td><td>${v}</td><td>${w}</td><td style="width:44px"><span class="tag ${k}">${e}</span></td></tr>`;
+add(`<div class="hd"><div><div class="eyebrow">09 · V-Notch</div><h1>Apa yang dilakukan V-Notch, dan apa yang cocok untuk Windows</h1></div><span class="qs">Referensi, bukan salinan</span></div>
+ <div class="grid" style="grid-template-columns:200px 1fr;gap:14px">
+  <div>
+   <div class="card d" style="padding:11px 13px"><div class="lbl" style="color:var(--tx2)">V-Notch</div><p style="font-size:10.4px;line-height:1.5">Overlay "notch macOS" untuk Windows 10/11. WPF (C#, .NET 8) + DLL native C++. <b style="color:var(--tx)">Apache-2.0</b>. 67 bintang, 2 kontributor, nightly beta, sangat aktif (komit terakhir hari ini).</p></div>
+   <div class="card" style="padding:9px 12px;margin-top:9px"><b style="font-size:11px">Layak ditiru (ide)</b><ul><li>Gestur roda, klik tengah, geser</li><li>Peek clipboard singkat</li><li>Mixer per aplikasi</li><li>Hotkey pencarian cepat</li></ul></div>
+   <div class="card" style="padding:9px 12px;margin-top:9px"><b style="font-size:11px">Jangan ditiru</b><ul><li>Font SF Pro (lisensi Apple)</li><li>Spotify Canvas dan lirik tak resmi (risiko ketentuan)</li><li>Liquid Glass (GPU terus-menerus)</li><li>Salin kode: C#/C++, dan butuh teks Apache</li></ul></div>
+  </div>
+  <div>
+   <table>
+    <tr><th>Fitur</th><th>Cara V-Notch</th><th>Pendekatan di Vale (Windows, Rust)</th><th>Ukuran</th></tr>
+    ${vrow('Media', 'GSMTC + heuristik judul jendela + klik tengah jeda', 'Sudah ada (GSMTC). Tambah klik tengah.', 'S', 'g')}
+    ${vrow('Mixer volume', 'Sesi audio per PID, slider per aplikasi, master', 'Core Audio: <code>IAudioSessionManager2</code>, <code>ISimpleAudioVolume</code>, <code>IAudioEndpointVolume</code>; meter puncak hanya saat halaman terbuka.', 'M', 'o')}
+    ${vrow('File shelf', 'Target drop OLE, kartu dengan ikon, seret keluar lagi', '<code>RegisterDragDrop</code> di jendela island, simpan path (bukan salinan), thumbnail <code>IShellItemImageFactory</code>, seret keluar <code>DoDragDrop</code>.', 'L', 'r')}
+    ${vrow('Gestur', 'Hook mouse global + evaluator geser (swipe)', 'Cukup <code>WM_MOUSEWHEEL</code>, <code>WM_MOUSEHWHEEL</code>, <code>WM_MBUTTONUP</code> dan ambang geser di WndProc; tanpa hook global.', 'S', 'g')}
+    ${vrow('Notif clipboard', 'Listener + animasi pantul + pratinjau singkat', 'Listener sudah ada; tambah peek 2 detik (pantul + satu baris atau thumbnail).', 'S', 'g')}
+    ${vrow('Di belakang jendela', '<code>HWND_BOTTOM</code>/lapisan desktop; naik saat kursor di strip 3 px di atas', 'Setelan opsional (mati bawaan): z-order bawah + strip tepi atas + <code>SetWinEventHook</code>; hormati deteksi layar-penuh.', 'M', 'o')}
+    ${vrow('Pencarian', 'Alt+Space: aplikasi (Start Menu), file (Windows Search / Everything), kalkulator, perintah sistem', '<code>RegisterHotKey</code> (bukan Alt+Space: bentrok menu sistem), indeks <code>.lnk</code> di memori, Windows Search via OLE DB di thread latar, kalkulator, <code>ms-settings:</code>; input EDIT tersembunyi seperti CLI.', 'L', 'r')}
+   </table>
+   <div class="note" style="margin-top:8px">Rekomendasi cakupan: gestur dan peek clipboard (S) → mixer (M) → pencarian-lite: aplikasi, kalkulator, pengaturan, web (L) → file shelf (L) bila masih ada waktu. "Di belakang jendela" sebagai eksperimen opsional. Hotkey bisa diatur, tanpa bawaan global yang bentrok.</div>
+  </div>
+ </div>${folio('V-Notch')}`);
+
+// ============== MOCKS ==============
+const slider = (name, pct, ico) => `<div style="display:grid;grid-template-columns:22px 70px 1fr 28px;gap:7px;align-items:center;font-size:10px;margin-bottom:6px"><span style="color:var(--tx2)">${ic(ico, 16)}</span><span>${name}</span><div style="height:5px;border-radius:3px;background:var(--t);position:relative"><div style="width:${pct}%;height:5px;border-radius:3px;background:var(--a)"></div><i style="position:absolute;left:calc(${pct}% - 5px);top:-3px;width:11px;height:11px;border-radius:50%;background:var(--tx)"></i></div><span style="color:var(--tx2);text-align:right">${pct}</span></div>`;
+const fileCard = (n, c) => `<div style="background:var(--t);border-radius:10px;padding:7px 6px;text-align:center;font-size:8.5px;color:var(--tx2)"><div style="width:32px;height:38px;border-radius:5px;background:${c};margin:0 auto 4px;display:flex;align-items:flex-end;justify-content:center;font-size:7px;color:#17120F;font-weight:600;padding-bottom:3px">${n.split('.').pop().toUpperCase()}</div>${n}</div>`;
+const res = (i, a, b, on) => `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:9px;${on ? 'background:var(--t)' : ''}"><span style="color:var(--tx2)">${ic(i, 16)}</span><div style="flex:1"><div style="font-size:10.4px;color:var(--tx)">${a}</div><div style="font-size:8.8px;color:var(--tx2)">${b}</div></div>${on ? '<span class="chip">Enter</span>' : ''}</div>`;
+add(`<div class="hd"><div><div class="eyebrow">09 · Visual fitur baru</div><h1>Empat halaman dan dua perilaku dari ide V-Notch</h1></div><span class="qs">Mockup, belum final</span></div>
+ <div class="grid g3" style="gap:12px">
+  <div><div class="lbl">Mixer volume · M</div>${stage(`<div class="panelm" style="width:268px;padding:11px 13px"><div style="font-size:11px;font-weight:600;margin-bottom:8px">Mixer</div>${slider('Master', 62, 'vol')}${slider('Spotify', 80, 'play')}${slider('Chrome', 45, 'globe')}${slider('Teams', 20, 'bell')}<div style="font-size:9px;color:var(--tx2);margin-top:4px">Geser untuk volume · klik ikon untuk bisu</div></div>`, 210)}<p style="font-size:10px;margin-top:6px"><b>Core Audio.</b> Sesi per aplikasi dari <code>IAudioSessionManager2</code>, volume lewat <code>ISimpleAudioVolume</code>, master lewat <code>IAudioEndpointVolume</code>. Pembaruan hanya saat halaman terlihat.</p></div>
+  <div><div class="lbl">File shelf · L</div>${stage(`<div class="panelm" style="width:268px;padding:11px 13px"><div style="display:flex;justify-content:space-between;font-size:11px;font-weight:600;margin-bottom:8px"><span>Shelf</span><span class="chip">Kosongkan</span></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${fileCard('denah.pdf', '#C9826B')}${fileCard('foto.png', '#9DB59A')}${fileCard('rab.xlsx', '#D9A441')}<div style="border:1.5px dashed var(--t);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--tx2)">${ic('plus', 18)}</div></div><div style="font-size:9px;color:var(--tx2);margin-top:8px">Jatuhkan berkas ke notch · seret keluar untuk memakai</div></div>`, 210)}<p style="font-size:10px;margin-top:6px"><b>OLE.</b> Target <code>RegisterDragDrop</code> di jendela island, simpan path saja, ikon dari <code>IShellItemImageFactory</code>, seret keluar dengan <code>DoDragDrop</code>. Path basi ditandai.</p></div>
+  <div><div class="lbl">Pencarian · L</div>${stage(`<div class="panelm" style="width:268px;padding:10px 11px 6px"><div style="display:flex;align-items:center;gap:7px;background:var(--t);border-radius:10px;padding:7px 9px;font-size:11px;color:var(--tx)">${ic('search', 15, 'var(--tx2)')}kal<span style="color:var(--a)">_</span></div><div style="margin-top:6px">${res('calc', 'Kalkulator', 'Aplikasi', 1)}${res('folder', 'Kalender', 'ms-settings:dateandtime', 0)}${res('file', 'kalkulasi-rab.xlsx', 'Dokumen · 12 Okt', 0)}${res('globe', 'Cari "kal" di web', 'Enter dengan awalan ?', 0)}</div></div>`, 210)}<p style="font-size:10px;margin-top:6px"><b>Tanpa indeks latar.</b> Hotkey yang bisa diatur, indeks <code>.lnk</code> di memori, file lewat Windows Search di thread dengan batas waktu, input EDIT tersembunyi seperti CLI.</p></div>
+ </div>
+ <div class="grid" style="grid-template-columns:1.2fr 1fr;gap:12px;margin-top:11px">
+  <div class="card" style="padding:10px 13px"><div class="lbl">Gestur di atas notch · S</div>
+   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;font-size:10px">
+    ${[['mouse', 'Roda', 'Ganti halaman'], ['mouse', 'Klik tengah', 'Putar atau jeda'], ['swipe', 'Geser kiri/kanan', 'Lagu sebelumnya/berikutnya'], ['layers', 'Roda mendatar', 'Touchpad dua jari: lagu']].map(([i, a, b]) => `<div style="background:var(--s);border-radius:12px;padding:9px 5px;color:var(--tx2)"><div style="display:flex;justify-content:center;color:var(--a)">${ic(i, 20)}</div><div style="color:var(--tx);font-weight:600;margin-top:3px">${a}</div>${b}</div>`).join('')}
+   </div></div>
+  <div class="card" style="padding:10px 13px"><div class="lbl">Di belakang jendela · M (opsional)</div>
+   <div style="display:flex;gap:8px;align-items:center;font-size:10px"><div style="flex:1;background:var(--s);border-radius:10px;padding:8px;color:var(--tx2);text-align:center">Island di lapisan desktop<br><span style="font-size:8.8px">tertutup jendela biasa</span></div><span style="color:var(--a)">→</span><div style="flex:1;background:var(--s);border-radius:10px;padding:8px;color:var(--tx2);text-align:center">Kursor di strip 3 px atas<br><span style="font-size:8.8px">naik ke depan, turun 220 ms</span></div></div>
+   <div class="warn" style="margin-top:6px">Mati bawaan: berisiko berebut z-order dengan game dan layar penuh.</div></div>
+ </div>${folio('Visual fitur baru')}`);
+
+// ============== ROADMAP ==============
+const rr = (n, nm, d, sz, k = '', ph = '') => `<div style="display:grid;grid-template-columns:78px 30px 1fr 58px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--rule)"><span style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--ink2)">${ph}</span><i style="width:26px;height:26px;border-radius:9px;background:var(--a);color:#17120F;font-style:normal;font-weight:600;font-size:10.5px;display:flex;align-items:center;justify-content:center">${n}</i><div style="font-size:11.4px"><b>${nm}</b><div style="font-size:10px;color:var(--ink2);line-height:1.35">${d}</div></div><span class="tag ${k}" style="justify-self:start">${sz}</span></div>`;
+add(`<div class="hd"><div><div class="eyebrow">Peta jalan</div><h1>Urutan pengerjaan 3.2 dan keputusan yang dibutuhkan</h1></div><span class="qs">Usulan</span></div>
+ <div class="grid" style="grid-template-columns:1.5fr 1fr;gap:18px">
+  <div>
+   ${rr(1, 'Perilaku notch', 'Mode buka (Hover, Hover lalu tetap, Klik) + notice bertombol tidak terkena hover', 'M', 'a', 'A · Perbaikan')}
+   ${rr(2, 'Clipboard scroll', 'Roda jatuh ke ganti halaman, scroll dipertahankan, scrollbar', 'S–M', '', '')}
+   ${rr(3, 'Preview screenshot', 'Selalu muncul dari gambar clipboard; Simpan menulis PNG', 'M', 'a', '')}
+   ${rr(4, 'Lirik sinkron', 'Model posisi, offset + tombol cepat, pencarian cadangan (3 tugas)', 'L', 'r', '')}
+   ${rr(5, 'Login Google', 'Pesan dan error dirapikan; pemilik mendaftar di Google Cloud paralel', 'S', 'o', '')}
+   ${rr(6, 'Kucing minimalis', 'Pilih varian, ganti pose dan logo', 'S–M', '', 'B · Tampilan')}
+   ${rr(7, 'Shortcut kustom', 'Daftar tile di config, editor, tile aplikasi/folder/URL/perintah', 'L', 'r', '')}
+   ${rr(8, 'Gestur + peek clipboard', 'Klik tengah, geser, roda mendatar, pratinjau singkat', 'S', '', 'C · V-Notch')}
+   ${rr(9, 'Mixer volume', 'Halaman Mixer dengan Core Audio', 'M', 'o', '')}
+   ${rr(10, 'Pencarian-lite', 'Hotkey, aplikasi, kalkulator, pengaturan, web; file belakangan', 'L', 'r', '')}
+   ${rr(11, 'File shelf', 'Target drop, kartu, seret keluar (bila waktu cukup)', 'L', 'r', '')}
+   ${rr(12, 'Di belakang jendela', 'Setelan eksperimen, mati bawaan', 'M', 'o', '')}
+   ${rr(13, 'Teks, screenshot, versi 3.2.0', 'i18n ID/EN, README, screenshot demo, catatan memori', 'S', '', 'D · Penutup')}
+  </div>
+  <div>
+   <div class="card d" style="padding:12px 14px"><h2>Keputusan dari lu</h2>
+    <ul><li><b>Kucing:</b> pilih satu varian (saran D).</li><li><b>Mode buka bawaan:</b> tetap Hover atau Hover lalu tetap?</li><li><b>Hotkey pencarian:</b> bukan Alt+Space; pilih Ctrl+Alt+Space, Win+Alt+S, atau tanpa bawaan.</li><li><b>Lingkup:</b> pencarian dan file shelf masuk 3.2, atau digeser ke 3.3?</li><li><b>Google:</b> kapan membuat project Cloud; email kontak dan domain situs; lisensi repo.</li><li><b>Nama maskot:</b> masih terbuka.</li></ul></div>
+   <div class="card" style="padding:11px 13px;margin-top:10px"><h2>Cara mengerjakan</h2><ul><li>Workflow multi-agen sedang dinonaktifkan di proyek ini; perubahan dikerjakan langsung di sesi utama, memakai superpowers.</li><li>Satu fase selesai, lalu tes hijau dan commit; push di akhir.</li><li>Cek manual yang tidak bisa diuji agen tetap dicatat untuk lu.</li></ul></div>
+   <div class="note" style="margin-top:10px">Tidak ada kode yang diubah untuk dokumen ini. Semua temuan berasal dari membaca kode v3.1.0 dan repo V-Notch; beberapa butuh pengecekan langsung (ditandai di tiap halaman).</div>
+  </div>
+ </div>${folio('Peta jalan')}`);
+</script>
+<div id="out"></div>
+<script>
+const only = new URLSearchParams(location.search).get('p');
+pages.forEach((p, i) => {
+  if (only && +only !== i + 1) return;
+  const s = document.createElement('section');
+  s.className = 'page' + (p.dark ? ' dark' : '');
+  s.innerHTML = p.html;
+  document.getElementById('out').appendChild(s);
+});
+</script>
+</body>
+</html>

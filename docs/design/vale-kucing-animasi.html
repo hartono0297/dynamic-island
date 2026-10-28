@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vale · kucing beranimasi</title>
+<style>
+  @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('../../assets/fonts/DMSans-400.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('../../assets/fonts/DMSans-500.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('../../assets/fonts/DMSans-600.ttf'); }
+  :root { --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1; --s: #17120F; --t: #332A23; --tx: #F4EDE4; --tx2: #A89A8B; --a: #E2683C; --body: 'DM Sans', sans-serif; }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--paper); }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  h1 { font-weight: 600; font-size: 24px; letter-spacing: -.025em; margin: 2px 0 6px; }
+  h2 { font-weight: 600; font-size: 13.5px; letter-spacing: -.015em; }
+  p, li { font-size: 10.6px; line-height: 1.45; color: #3E3229; }
+  .eyebrow { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .tag { display: inline-block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: rgba(226,104,60,.18); color: #A8431F; margin-left: 6px; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 10px 13px; }
+  .dk { background: var(--s); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+  .lbl { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  svg { display: block; }
+  /* live view */
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 26px 40px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; margin-top: 12px; }
+  .stagebox { height: 170px; position: relative; }
+  .stagebox .name { position: absolute; left: 10px; top: 8px; font-size: 10px; color: var(--tx2); }
+  .btns { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .btns button { font: inherit; font-size: 10.5px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--rule); background: #fff; color: var(--ink); cursor: pointer; }
+  .btns button.on { background: var(--a); border-color: var(--a); color: #17120F; font-weight: 600; }
+  .tour { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  .tour button { font: inherit; font-size: 11px; padding: 6px 14px; border-radius: 99px; border: 0; background: var(--ink); color: var(--paper); cursor: pointer; }
+  .desk { background: linear-gradient(135deg, #3A3029, #5A4A3E 55%, #7C6552); border-radius: 12px; display: flex; justify-content: center; gap: 12px; padding: 0 12px 12px; flex-wrap: wrap; }
+  .island { background: var(--s); color: var(--tx); border-radius: 0 0 22px 22px; display: inline-flex; align-items: center; gap: 10px; padding: 0 16px 0 12px; height: 46px; font-size: 13px; font-weight: 600; overflow: hidden; }
+  /* film (print) */
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 24px 34px; background: var(--paper); break-after: page; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  .folio { position: absolute; left: 34px; right: 34px; bottom: 12px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .film { display: grid; grid-template-columns: 78px repeat(6, 1fr); gap: 4px; align-items: center; }
+  .film .rl { font-size: 9.5px; color: var(--ink2); font-weight: 600; }
+  .film .fr { background: var(--s); border-radius: 9px; height: 52px; display: flex; align-items: center; justify-content: center; position: relative; }
+  .film .fr i { position: absolute; right: 4px; bottom: 2px; font-style: normal; font-size: 7.5px; color: var(--tx2); }
+</style>
+</head>
+<body>
+<script>
+const T = '#E2683C', T2 = '#F08A62', C = '#F4EDE4', D = '#17120F', SF = '#332A23';
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = (x) => { x = clamp(x); return x < .5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; };
+const lerp = (a, b, k) => a + (b - a) * k;
+
+// ============== pose(state, t): pure; everything the drawing needs ==============
+function pose(state, t) {
+  const p = { open: 1, gx: 0, gy: 0, mode: 'pill', earL: 0, earR: 0, lift: 0, bob: 0, tilt: 0, pop: 1, sym: null, symT: 0 };
+  const blinkAt = (period, at) => { const u = (t % period) - at; return u > 0 && u < .12 ? 1 - Math.sin(Math.PI * u / .12) : 1; };
+  const flick = (period, at) => { const u = (t % period) - at; return u > 0 && u < .3 ? Math.sin(Math.PI * u / .3) : 0; };
+  switch (state) {
+    case 'idle':
+      p.open = blinkAt(4.6, 4.4); p.gx = Math.sin(t * .5) * .35; p.earR = -10 * flick(7, 6.5); break;
+    case 'blink':
+      p.open = blinkAt(1.4, 1.1); break;
+    case 'look':
+      p.open = blinkAt(4.6, 4.4); p.gx = Math.sin(t * 1.6); p.gy = Math.sin(t * .8) * .3; p.earL = 4 * Math.max(0, Math.sin(t * 1.6 + 1.4)); break;
+    case 'happy':
+      p.mode = 'arc'; p.bob = -Math.abs(Math.sin(t * 5)) * 2; p.earL = Math.sin(t * 5) * 3; p.earR = -Math.sin(t * 5) * 3; break;
+    case 'alert': {
+      p.mode = 'wide'; p.lift = -4; const u = t % 3;
+      p.bob = u < .7 ? -Math.abs(Math.sin(u * 9)) * 3 * (1 - u / .7) : 0; p.gx = Math.sin(t * 2.2) * .5; break; }
+    case 'sleep':
+      p.mode = 'arcdown'; p.bob = 1.6 + Math.sin(t * 1.4) * .6; p.earL = 7; p.earR = -7; p.sym = 'zzz'; p.symT = (t % 3) / 3; break;
+    case 'sing':
+      p.mode = 'arc'; p.tilt = Math.sin(t * 3) * 4; p.bob = Math.sin(t * 6) * .6; p.sym = 'note'; p.symT = (t % 1.6) / 1.6; break;
+    case 'sad':
+      p.mode = 'sad'; p.bob = 1.6; p.earL = 9; p.earR = -9; p.gy = .4; break;
+    case 'pop': {
+      const u = t % 4;
+      p.pop = u < .5 ? 0 : u < .9 ? ease((u - .5) / .4) : u < 3.2 ? 1 : u < 3.6 ? 1 - ease((u - 3.2) / .4) : 0;
+      p.open = blinkAt(4, 2.4); p.gx = p.pop > .9 ? Math.sin(t * 2.2) * .8 : 0; p.earL = p.pop > .9 ? 5 * flick(4, 1.6) : 0; break; }
+  }
+  return p;
+}
+
+// ============== drawing helpers ==============
+const st = (d, w = 2.4, c = D, o = 1) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" opacity="${o}"/>`;
+const dot = (x, y, r, c) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}"/>`;
+const pill = (x, y, w, h, c) => `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${Math.min(w, h) / 2}" fill="${c}"/>`;
+const noteSym = (c, k) => { const y = 14 - k * 10, o = k < .15 ? k / .15 : k > .8 ? (1 - k) / .2 : 1;
+  return `<g opacity="${o}" transform="translate(0 ${y - 14})"><path d="M56 16v-8l5-1.5v8" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round"/><circle cx="54.3" cy="16" r="1.9" fill="${c}"/><circle cx="59.3" cy="14.5" r="1.9" fill="${c}"/></g>`; };
+const zzzSym = (c, k) => { const o = k < .15 ? k / .15 : k > .75 ? (1 - k) / .25 : 1;
+  return `<g opacity="${o * .9}" transform="translate(${k * 3} ${-k * 8})"><path d="M52 14h5l-5 5.5h5M59 6h3.6l-3.6 4h3.6" fill="none" stroke="${c}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g>`; };
+const symbol = (p, c) => p.sym === 'note' ? noteSym(c, p.symT) : p.sym === 'zzz' ? zzzSym(c, p.symT) : '';
+
+// plain eyes (no sclera). centre y, gaze shifts
+function plainEyes(p, Lx, Rx, Y, ink) {
+  const gx = p.gx * 3, gy = p.gy * 2;
+  const L = Lx + gx, R = Rx + gx, y = Y + gy;
+  switch (p.mode) {
+    case 'arc': return st(`M${L - 3.8} ${y + 2}q3.8-5.6 7.6 0M${R - 3.8} ${y + 2}q3.8-5.6 7.6 0`, 2.5, ink);
+    case 'arcdown': return st(`M${L - 3.8} ${y}q3.8 3.8 7.6 0M${R - 3.8} ${y}q3.8 3.8 7.6 0`, 2.3, ink);
+    case 'wide': return dot(L, y, 5.2, ink) + dot(R, y, 5.2, ink);
+    case 'sad': return pill(L, y + 2.5, 6.4, 6, ink) + pill(R, y + 2.5, 6.4, 6, ink);
+    default: { const h = Math.max(2.2, 12.5 * p.open); return pill(L, y, 6.4, h, ink) + pill(R, y, 6.4, h, ink); }
+  }
+}
+// cat eyes: cream sclera + slit pupil
+function slitEyes(p, Lx, Rx, Y) {
+  const gx = p.gx * 1.9, gy = p.gy * 1.4;
+  const eye = (x) => { const h = Math.max(2.2, 10.8 * p.open);
+    if (p.open < .2) return st(`M${x - 3.8} ${Y + 1}h7.6`, 2.3, D);
+    return pill(x, Y, 7.6, h, C) + pill(x + gx, Y + gy, 3, Math.min(8, h - 2.2), D); };
+  switch (p.mode) {
+    case 'arc': return st(`M${Lx - 4} ${Y + 2}q4-6 8 0M${Rx - 4} ${Y + 2}q4-6 8 0`, 2.5, D);
+    case 'arcdown': return st(`M${Lx - 4} ${Y}q4 3.6 8 0M${Rx - 4} ${Y}q4 3.6 8 0`, 2.3, D);
+    case 'wide': return dot(Lx, Y, 5.6, C) + dot(Rx, Y, 5.6, C) + dot(Lx + gx, Y + gy, 2.6, D) + dot(Rx + gx, Y + gy, 2.6, D);
+    case 'sad': return pill(Lx, Y + 2.5, 7.6, 6.4, C) + pill(Lx, Y + 3.5, 3, 4.6, D) + pill(Rx, Y + 2.5, 7.6, 6.4, C) + pill(Rx, Y + 3.5, 3, 4.6, D);
+    default: return eye(Lx) + eye(Rx);
+  }
+}
+const earTri = (side, p, base, tipY, fill = T) => {
+  const deg = side === 'L' ? -p.earL : -p.earR;
+  const d = side === 'L' ? `M${base.x0} ${base.y0}L${base.xt} ${tipY + p.lift}L${base.x1} ${base.y1}Z` : `M${64 - base.x0} ${base.y0}L${64 - base.xt} ${tipY + p.lift}L${64 - base.x1} ${base.y1}Z`;
+  const cx = side === 'L' ? 17 : 47;
+  return `<g transform="rotate(${deg} ${cx} ${base.y1 + 4})"><path d="${d}" fill="${fill}" stroke="${fill}" stroke-width="5" stroke-linejoin="round"/></g>`;
+};
+let UID = 0;
+const wrap = (p, size, vb, inner, opts = {}) => `<svg width="${size}" height="${size}" viewBox="${vb}" style="overflow:visible">${inner}</svg>`;
+
+// ============== variants ==============
+const VARIANTS = {
+  E1: { name: 'E1 · Mata doang (krem)', desc: 'Hanya dua mata krem. Semua karakter lewat gerak mata: kedip, melirik, melebar, melengkung.', pop: 'fade',
+    draw: (p) => `<g opacity="${p.pop}" transform="translate(0 ${p.bob + (1 - p.pop) * 4}) rotate(${p.tilt} 32 32)">${plainEyes(p, 23.5, 40.5, 32, C)}</g>${symbol(p, C)}` },
+  E2: { name: 'E2 · Mata doang (terakota)', desc: 'Sama, tetapi warna merek: lebih menyatu dengan ikon aplikasi, kurang kontras di notch gelap.', pop: 'fade',
+    draw: (p) => `<g opacity="${p.pop}" transform="translate(0 ${p.bob + (1 - p.pop) * 4}) rotate(${p.tilt} 32 32)">${plainEyes(p, 23.5, 40.5, 32, T)}</g>${symbol(p, T)}` },
+  F1: { name: 'F1 · Memudar dari gelap', desc: 'Telinga dan wajah atas, bagian bawah memudar ke transparan: tidak ada tepi yang menempel di dasar.', pop: 'rise',
+    draw: (p, id) => { const ty = (1 - p.pop) * 14;
+      const b = { x0: 9, y0: 37, xt: 12, yt: 10, x1: 27, y1: 26 };
+      return `<defs><linearGradient id="fd${id}" gradientUnits="userSpaceOnUse" x1="0" y1="38" x2="0" y2="58"><stop offset="0" stop-color="${T}"/><stop offset="1" stop-color="${T}" stop-opacity="0"/></linearGradient></defs>
+      <g opacity="${clamp(p.pop * 1.4)}" transform="translate(0 ${ty + p.bob}) rotate(${p.tilt} 32 40)">${earTri('L', p, b, 10)}${earTri('R', p, b, 10)}<path d="M7 58V41Q7 24 32 24Q57 24 57 41V58Z" fill="url(#fd${id})"/>${slitEyes(p, 23.5, 40.5, 40)}</g>${symbol(p, C)}`; } },
+  F2: { name: 'F2 · Intip dari samping, melayang', desc: 'Separuh wajah di balik tepi vertikal pendek yang berada di tengah, tidak menyentuh dasar.', pop: 'slide',
+    draw: (p, id) => { const dx = (p.pop - 1) * 26;
+      const b = { x0: 9, y0: 37, xt: 12, yt: 10, x1: 27, y1: 26 };
+      return `<defs><clipPath id="cp${id}"><rect x="30" y="0" width="40" height="64"/></clipPath></defs>
+      <g clip-path="url(#cp${id})"><g transform="translate(${dx} ${p.bob - 2}) rotate(${p.tilt} 32 40)">${earTri('L', p, b, 10)}${earTri('R', p, b, 10)}<path d="M7 56V41Q7 24 32 24Q57 24 57 41V56Z" fill="${T}"/>${slitEyes(p, 23.5, 40.5, 40)}</g></g>
+      <rect x="29" y="12" width="2.4" height="40" rx="1.2" fill="${C}" opacity=".3"/>${symbol(p, C)}`; } },
+  F3: { name: 'F3 · Mengintip dari balik kapsul jam', desc: 'Kucing muncul dari balik kapsul jam yang melayang. Tepinya adalah kapsul, bukan tepi island.', pop: 'rise',
+    draw: (p, id) => { const ty = (1 - p.pop) * 18;
+      const b = { x0: 9, y0: 33, xt: 12, yt: 7, x1: 27, y1: 24 };
+      return `<defs><clipPath id="c3${id}"><rect x="-4" y="-6" width="72" height="67"/></clipPath></defs><g clip-path="url(#c3${id})"><g transform="translate(0 ${ty + p.bob * .5}) rotate(${p.tilt} 32 40)">${earTri('L', p, b, 7)}${earTri('R', p, b, 7)}<rect x="7" y="21" width="50" height="38" rx="17" fill="${T}"/>${slitEyes(p, 23.5, 40.5, 35)}</g></g>
+      <rect x="5" y="46" width="54" height="15" rx="7.5" fill="${SF}"/><text x="32" y="56.6" text-anchor="middle" font-family="DM Sans" font-weight="600" font-size="9.5" fill="${C}">14.32</text>${symbol(p, C)}`; } },
+};
+const render = (key, state, t, size = 120) => { const id = ++UID; const p = pose(state, t); return wrap(p, size, '0 0 64 64', VARIANTS[key].draw(p, id)); };
+
+const STATES = [['idle', 'Diam'], ['blink', 'Kedip'], ['look', 'Melirik'], ['happy', 'Senang'], ['alert', 'Waspada'], ['sleep', 'Tidur'], ['sing', 'Bernyanyi'], ['sad', 'Lesu'], ['pop', 'Muncul']];
+const KEYS = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+const film = params.has('film');
+</script>
+<div id="root"></div>
+<script>
+const root = document.getElementById('root');
+if (!film) {
+  // ================= LIVE =================
+  const S = {}; KEYS.forEach(k => S[k] = 'idle');
+  let tour = false, tourI = 0, tourAt = 0;
+  root.innerHTML = `<div class="wrap">
+    <div class="eyebrow">Vale · kucing beranimasi</div><h1>Mata doang dan tiga cara mengintip yang melayang</h1>
+    <p style="max-width:820px">Klik tombol di tiap kartu untuk melihat animasinya, atau tekan Tur untuk memutar semua keadaan berurutan. Semua animasi hanya mengubah mata, telinga, dan satu simbol; kedip dan telinga kedut tetap singkat supaya idle hemat daya.</p>
+    <div class="tour"><button id="tourbtn">▶ Tur semua keadaan</button><span id="tourlbl" style="font-size:11px;color:var(--ink2)"></span></div>
+    <div class="cards" id="cards"></div>
+    <div class="lbl" style="margin-top:18px;margin-bottom:6px">Ukuran asli di notch (semua mengikuti keadaan yang sama)</div>
+    <div class="desk" id="ctx"></div></div>`;
+  const cards = document.getElementById('cards');
+  KEYS.forEach(k => {
+    const el = document.createElement('div'); el.className = 'card';
+    el.innerHTML = `<div class="dk stagebox"><span class="name">${VARIANTS[k].name.split(' · ')[0]}</span><div id="big-${k}"></div></div><div style="margin-top:8px"><h2>${VARIANTS[k].name}</h2><p style="margin-top:2px">${VARIANTS[k].desc}</p></div><div class="btns" id="btns-${k}"></div>`;
+    cards.appendChild(el);
+    const bt = el.querySelector('.btns');
+    STATES.forEach(([s, n]) => { const b = document.createElement('button'); b.textContent = n; b.dataset.s = s; b.onclick = () => { tour = false; S[k] = s; mark(); }; bt.appendChild(b); });
+  });
+  const ctx = document.getElementById('ctx');
+  ctx.innerHTML = KEYS.map(k => `<div class="island"><span id="sm-${k}"></span><span id="tx-${k}">14.32</span></div>`).join('');
+  function mark() { KEYS.forEach(k => document.querySelectorAll(`#btns-${k} button`).forEach(b => b.classList.toggle('on', b.dataset.s === S[k]))); }
+  mark();
+  document.getElementById('tourbtn').onclick = (e) => { tour = !tour; e.target.textContent = tour ? '■ Hentikan tur' : '▶ Tur semua keadaan'; tourAt = performance.now(); };
+  const t0 = performance.now();
+  function frame(now) {
+    const t = (now - t0) / 1000;
+    if (tour) { const i = Math.floor((now - tourAt) / 2600) % STATES.length; if (i !== tourI || !S._t) { tourI = i; KEYS.forEach(k => S[k] = STATES[i][0]); S._t = 1; mark(); document.getElementById('tourlbl').textContent = 'Keadaan: ' + STATES[i][1]; } } else { S._t = 0; document.getElementById('tourlbl').textContent = ''; }
+    KEYS.forEach(k => {
+      document.getElementById('big-' + k).innerHTML = render(k, S[k], t, 150);
+      document.getElementById('sm-' + k).innerHTML = render(k, S[k], t, 36);
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+} else {
+  // ================= FILM (print) =================
+  const KEYT = { idle: [0, 2, 4.4, 4.46, 4.58, 6.7], look: [0, .98, 1.96, 2.94, 3.6, 4.2], happy: [0, .15, .3, .45, .6, .75], alert: [0, .15, .3, .45, .6, 1.5], sleep: [0, .5, 1, 1.5, 2, 2.5], sing: [0, .4, .8, 1.2, 1.6, 2], sad: [0, 0, 0, 0, 0, 0], pop: [0, .55, .7, .9, 3.3, 3.5] };
+  const ROWS = [['idle', 'Diam: kedip + kedut'], ['look', 'Melirik'], ['happy', 'Senang'], ['alert', 'Waspada'], ['sleep', 'Tidur'], ['sing', 'Bernyanyi'], ['pop', 'Muncul'], ['sad', 'Lesu']];
+  const filmCard = (k) => `<div class="card" style="padding:9px 11px"><h2>${VARIANTS[k].name}</h2><p style="font-size:10px;margin:2px 0 6px">${VARIANTS[k].desc}</p>
+    <div class="film">${ROWS.map(([s, n]) => `<div class="rl">${n}</div>${KEYT[s].map((t, i) => `<div class="fr">${render(k, s, t, 44)}<i>${s === 'sad' && i > 0 ? '' : t + 's'}</i></div>`).join('')}`).join('')}</div></div>`;
+  const pg = (inner, r) => `<div class="page">${inner}<div class="folio"><span>Vale · Kucing beranimasi</span><span>${r}</span></div></div>`;
+  const ctxRow = (keys) => `<div class="desk" style="gap:14px">${keys.map(k => `<div class="island" style="height:44px"><span>${render(k, 'idle', 0, 34)}</span><span>14.32</span></div>`).join('')}</div>`;
+  root.innerHTML =
+    pg(`<div class="eyebrow">Ikon kucing · animasi</div><h1>Mata doang: dua warna, delapan keadaan</h1><p style="max-width:780px;margin-bottom:8px">Bingkai diambil pada detik yang tertulis di pojok. Semua gerak dibuat dari tiga hal: bukaan mata, arah lirik, dan satu simbol kecil.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${filmCard('E1')}${filmCard('E2')}</div>`, 'Mata doang') +
+    pg(`<div class="eyebrow">Ikon kucing · animasi</div><h1>Mengintip yang melayang: memudar dan dari samping</h1><p style="max-width:780px;margin-bottom:8px">Tanpa tepi yang menempel di dasar. Baris "Muncul" menunjukkan kucing naik, bertahan, lalu turun lagi.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${filmCard('F1')}${filmCard('F2')}</div>`, 'Memudar dan dari samping') +
+    pg(`<div class="eyebrow">Ikon kucing · animasi</div><h1>Mengintip dari balik kapsul jam, dan semuanya di notch</h1>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div>${filmCard('F3')}</div><div>
+        <div class="card"><div class="lbl" style="margin-bottom:6px">Ukuran asli di notch (diam)</div>${ctxRow(['E1', 'E2'])}<div style="height:8px"></div>${ctxRow(['F1', 'F2', 'F3'])}</div>
+        <div class="card" style="margin-top:10px"><h2>Perbandingan</h2><ul style="margin:4px 0 0 0;list-style:none">
+          ${[['E1/E2 · Mata doang', 'Paling minimal dan paling hemat daya. Karakter datang dari gerak mata; tanpa telinga, ia tidak langsung terbaca "kucing".'], ['F1 · Memudar', 'Terbaca kucing, tanpa tepi keras. Muncul dengan naik sambil menebal; paling lembut.'], ['F2 · Dari samping', 'Paling hemat lebar (sekitar 20 px) dan paling "mengintip". Hanya separuh wajah.'], ['F3 · Balik kapsul', 'Menyatu dengan jam, tetapi butuh tinggi island lebih besar dan menambah elemen.']].map(([a, b]) => `<li style="margin-bottom:5px"><b style="font-size:10.6px">${a}</b><br><span style="font-size:10px">${b}</span></li>`).join('')}</ul></div>
+        <div class="card" style="margin-top:10px"><h2>Anggaran daya</h2><p>Idle hanya kedip 120 ms tiap sekitar 4 sampai 7 detik dan kedut telinga sesekali. Melirik, bernyanyi, dan tidur hanya berjalan saat keadaan itu tampil. Mode Hemat baterai: tanpa gerak.</p></div>
+      </div></div>`, 'Balik kapsul dan di notch');
+  const pn = params.get('p'); if (pn) [...root.querySelectorAll('.page')].forEach((e, i) => { if (i + 1 !== +pn) e.remove(); });
+}
+</script>
+</body>
+</html>

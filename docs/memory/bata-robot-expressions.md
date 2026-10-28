@@ -6,11 +6,14 @@ date: 2026-10-28
 # The notch assistant: which face, and where it shows
 
 Since v3.1 (Run 13) the assistant is Vale's cat, not the robot Bata.
-`src/ui/robot.rs` draws it from `cat()` variant B in
-`docs/design/vale-kucing-simpel.html` (64-unit grid, fixed brand colours
-#E2683C head / #17120F eyes / #F4EDE4 shine and extras / #B07A9A bow, never
-the accent): head, two ears, eyes with two lashes each, a plum bow at the
-base of the right ear. No mouth, nose or whiskers. The cat has no name yet
+`src/ui/robot.rs` draws it from variant D1 in
+`docs/design/vale-kucing-minimal.html` (64-unit grid, fixed brand colours
+#E2683C head / #17120F eyes / #F4EDE4 extras, never the accent): a head
+with a flat base (a dome on top) and two ears, and plain espresso pill eyes
+(no shine, no lashes, no bow, no mouth, nose or whiskers). The cat floats in
+the island and is not cut by its lower edge; the grid has room under the
+base. (v3.1 had a round head with lashes and a plum bow; the owner asked for
+this simpler one on 2026-10-28.) The cat has no name yet
 (the owner picks one); the UI says "kucing Vale" and notices come from
 "Vale". Code and demo steps still say `robot` / `bata` (no rename churn).
 `choose_expr` picks the face (unchanged from Bata); its priority, highest
@@ -44,10 +47,9 @@ unchanged: the 40 px robot sits exactly in the badge's square. With the
 robot off every width is as before (`shape_with_robot(.., false)`).
 
 Blink only shows on open eyes (Idle, Focus, Alert, Think, Sad); the
-design's `blink` eyes (two level lines with the lashes 1.5 lower) replace
-the open eyes with their shine and lashes. The ears carry the mood
-(`Face::ears`): up 3 for Alert, turned outward 12 degrees asleep and 24
-degrees when low; the bow turns with the right ear. The ear tips stay
+design's `blink` eyes (two level lines) replace the open eyes. The ears
+carry the mood (`Face::ears`): up 4 for Alert, turned outward 12 degrees
+asleep and 24 degrees when low. The ear tips stay
 inside every compact island shape (`robot_and_content_share_every_compact_shape`).
 The painter builds each path once, on first use.
 
