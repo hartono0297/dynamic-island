@@ -2928,6 +2928,10 @@ impl App {
     /// expands only once `WM_MOUSEHOVER` reports a dwell.
     fn on_mouse_move(&mut self, lparam: LPARAM) {
         self.mixer_follow(lparam);
+        if self.state.view() == View::Panel(Page::Clipboard) {
+            let hit = self.hit_at(lparam);
+            self.clip_hover(hit.as_ref());
+        }
         if !self.hover.needs_arming() {
             return;
         }

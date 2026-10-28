@@ -65,6 +65,12 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
   scrolled a row per wheel notch over the cards; the selected card gets the
   accent ring and its buttons (pin, copy as plain text, delete), drawn in
   the panel; a right-click selects a card. Clicking a card copies it.
+  **Hover selects (3.2.1).** The buttons belong to the *selected* card only,
+  and until 3.2.1 only a right-click or the keyboard moved the selection, while
+  a left click copies the card and bumps it to the front: so in practice only
+  the first card ever showed them. Now `WM_MOUSEMOVE` over a card, or over one
+  of its buttons, selects that card (`app_clip::hover_target`, pure and tested;
+  `App::clip_hover` redraws only when the selection changes).
   Keyboard: [[cli-panel-keyboard-focus]].
 - **"Disalin".** `NoticeKind::Copied`, 1.5 s on the notice deadline, a newer
   one replaces it, never over a fullscreen app; Bata Happy

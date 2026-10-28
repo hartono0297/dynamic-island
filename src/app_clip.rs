@@ -85,6 +85,18 @@ pub(super) fn effective(items: &[&Clip], chosen: Option<u64>) -> Option<u64> {
         .or_else(|| items.first().map(|c| c.id))
 }
 
+/// The card the pointer moved onto, when it is not the selected one: the
+/// card under it or one of its buttons, listed in `ids`. `None` keeps the
+/// selection (the pointer is elsewhere, or already on the selected card).
+pub(super) fn hover_target(ids: &[u64], chosen: Option<u64>, hit: Option<&Hit>) -> Option<u64> {
+    let id = match hit? {
+        Hit::ClipCard(id) | Hit::ClipPin(id) | Hit::ClipPlain(id) | Hit::ClipDelete(id) => *id,
+        _ => return None,
+    };
+    let current = chosen.filter(|c| ids.contains(c)).or(ids.first().copied());
+    (ids.contains(&id) && current != Some(id)).then_some(id)
+}
+
 /// What the Clipboard page draws, from the parts of `App` it needs (the
 /// renderer is borrowed mutably meanwhile).
 pub(super) fn clip_view<'a>(
@@ -443,6 +455,22 @@ impl App {
         true
     }
 
+    /// The pointer over a card selects it, so its buttons (pin, plain text,
+    /// delete) show on the card under the pointer, not only on the first.
+    pub(super) fn clip_hover(&mut self, hit: Option<&Hit>) {
+        if self.state.view() != View::Panel(Page::Clipboard) {
+            return;
+        }
+        let ids: Vec<u64> = shown(&self.clip.history, &self.clip.query)
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        if let Some(id) = hover_target(&ids, self.clip.selected, hit) {
+            self.clip.selected = Some(id);
+            self.redraw_clip();
+        }
+    }
+
     /// A right-click on a card selects it (its buttons show); true when it
     /// was one, so the tray menu stays shut.
     pub(super) fn clip_right_click(&mut self, hit: Option<&Hit>) -> bool {
@@ -647,6 +675,26 @@ pub enum ClipSetting {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_pointer_selects_the_card_it_is_over_or_a_button_of_it() {
+        use super::{Hit, hover_target};
+        let ids = [10, 20, 30, 40];
+        // Nothing chosen: the first is selected, so it is not a change.
+        assert_eq!(hover_target(&ids, None, Some(&Hit::ClipCard(10))), None);
+        assert_eq!(hover_target(&ids, None, Some(&Hit::ClipCard(30))), Some(30));
+        // On a button of another card, the same.
+        assert_eq!(hover_target(&ids, Some(10), Some(&Hit::ClipDelete(20))), Some(20));
+        assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipPin(20))), None);
+        // A chosen card that is no longer listed counts as the first.
+        assert_eq!(hover_target(&ids, Some(99), Some(&Hit::ClipCard(10))), None);
+        assert_eq!(hover_target(&ids, Some(99), Some(&Hit::ClipCard(40))), Some(40));
+        // Other targets, a card not listed, and no target keep the selection.
+        assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipSearch)), None);
+        assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipCard(77))), None);
+        assert_eq!(hover_target(&ids, Some(20), None), None);
+        assert_eq!(hover_target(&[], None, Some(&Hit::ClipCard(1))), None);
+    }
+
     use super::*;
     use crate::clipboard::store::tests::{image, text};
 
