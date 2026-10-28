@@ -378,9 +378,6 @@ fn try_send_command(cmd: &MediaCommand, target: &str, click: Option<&Click>) -> 
 
 /// The session with AppUserModelId `target`; `None` when there is none.
 fn find_session(target: &str) -> Result<Option<Session>> {
-    if target.is_empty() {
-        return Ok(None);
-    }
     let manager = Manager::RequestAsync()?.join()?;
     let sessions = manager.GetSessions()?;
     let list: Vec<Session> = (0..sessions.Size()?)
@@ -408,10 +405,11 @@ fn find_session(target: &str) -> Result<Option<Session>> {
 
 /// Which of the sessions (by AppUserModelId) gets a command meant for
 /// `target`. Browser tabs share one id, so the current session wins when it
-/// matches, else the first match. No match, or no target: none.
+/// matches, else the first match. An empty target (a player without an id)
+/// is the current session when it has none either. No match: none.
 fn pick_session(ids: &[String], current: Option<usize>, target: &str) -> Option<usize> {
     if target.is_empty() {
-        return None;
+        return current.filter(|&i| ids.get(i).is_some_and(String::is_empty));
     }
     if let Some(i) = current
         && ids.get(i).is_some_and(|id| id == target)
@@ -562,8 +560,17 @@ mod tests {
         let sessions = ids(&["Spotify.exe", "Chrome"]);
         assert_eq!(pick_session(&sessions, Some(0), "MSEdge"), None);
         assert_eq!(pick_session(&sessions, Some(0), ""), None);
-        assert_eq!(pick_session(&ids(&["", "Chrome"]), Some(0), ""), None);
         assert_eq!(pick_session(&[], None, "Chrome"), None);
+    }
+
+    #[test]
+    fn a_player_without_an_id_is_still_controlled() {
+        // The watcher shows the current session; when it has no
+        // AppUserModelId, that session is the one the buttons mean.
+        assert_eq!(pick_session(&ids(&["", "Chrome"]), Some(0), ""), Some(0));
+        // Not when the current session is another app, or there is none.
+        assert_eq!(pick_session(&ids(&["Chrome", ""]), Some(0), ""), None);
+        assert_eq!(pick_session(&ids(&["", "Chrome"]), None, ""), None);
     }
 
     #[test]
