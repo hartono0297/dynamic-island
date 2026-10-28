@@ -1,0 +1,776 @@
+//! The quick search: what a typed line finds. Apps (the Start Menu's
+//! shortcuts, indexed once in memory), a calculator, a few Windows settings
+//! pages and a web search. Everything here is pure except `index_start_menu`,
+//! which reads the Start Menu folders; `App` runs the chosen result.
+//!
+//! No file search yet (a later run): it would need Windows Search on a
+//! background thread with a time limit.
+
+use std::path::{Path, PathBuf};
+
+use crate::i18n::Lang;
+
+/// Results the list shows at most.
+pub const MAX_RESULTS: usize = 6;
+/// The query's longest length, in characters.
+pub const QUERY_MAX: usize = 120;
+/// The Start Menu folders are read this many levels down.
+const INDEX_DEPTH: usize = 4;
+/// Shortcuts the index keeps at most (a safety net for a huge menu).
+const INDEX_MAX: usize = 4000;
+/// How deep a calculator expression may nest parentheses.
+const CALC_DEPTH: usize = 48;
+
+/// An app the Start Menu offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppEntry {
+    pub name: String,
+    /// The `.lnk` file, run as the shell would.
+    pub path: String,
+}
+
+/// What a result looks like (its icon) and means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    App,
+    Setting,
+    Calc,
+    Web,
+}
+
+/// What Enter does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// `ShellExecute` "open" on a shortcut file.
+    Launch(String),
+    /// `ShellExecute` "open" on an `ms-settings:` page.
+    OpenSetting(&'static str),
+    /// Put this text on the clipboard.
+    Copy(String),
+    /// `ShellExecute` "open" on an https address built here.
+    OpenWeb(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchResult {
+    pub kind: Kind,
+    pub title: String,
+    pub subtitle: String,
+    pub action: Action,
+}
+
+// ---------------------------------------------------------------------
+// Windows settings pages
+
+/// A settings page: its names and its `ms-settings:` address.
+pub struct SettingsPage {
+    pub id: &'static str,
+    pub en: &'static str,
+    pub uri: &'static str,
+}
+
+impl SettingsPage {
+    pub fn name(&self, lang: Lang) -> &'static str {
+        match lang {
+            Lang::Id => self.id,
+            Lang::En => self.en,
+        }
+    }
+}
+
+pub const SETTINGS_PAGES: [SettingsPage; 16] = [
+    SettingsPage { id: "Layar", en: "Display", uri: "ms-settings:display" },
+    SettingsPage { id: "Suara", en: "Sound", uri: "ms-settings:sound" },
+    SettingsPage { id: "Notifikasi", en: "Notifications", uri: "ms-settings:notifications" },
+    SettingsPage { id: "Baterai", en: "Battery", uri: "ms-settings:batterysaver" },
+    SettingsPage { id: "Penyimpanan", en: "Storage", uri: "ms-settings:storagesense" },
+    SettingsPage { id: "Wi-Fi", en: "Wi-Fi", uri: "ms-settings:network-wifi" },
+    SettingsPage { id: "Bluetooth", en: "Bluetooth", uri: "ms-settings:bluetooth" },
+    SettingsPage { id: "Printer dan pemindai", en: "Printers & scanners", uri: "ms-settings:printers" },
+    SettingsPage { id: "Aplikasi terpasang", en: "Installed apps", uri: "ms-settings:appsfeatures" },
+    SettingsPage { id: "Aplikasi bawaan", en: "Default apps", uri: "ms-settings:defaultapps" },
+    SettingsPage { id: "Personalisasi", en: "Personalization", uri: "ms-settings:personalization" },
+    SettingsPage { id: "Tanggal dan waktu", en: "Date & time", uri: "ms-settings:dateandtime" },
+    SettingsPage { id: "Bahasa dan wilayah", en: "Language & region", uri: "ms-settings:regionlanguage" },
+    SettingsPage { id: "Privasi dan keamanan", en: "Privacy & security", uri: "ms-settings:privacy" },
+    SettingsPage { id: "Pembaruan Windows", en: "Windows Update", uri: "ms-settings:windowsupdate" },
+    SettingsPage { id: "Tentang perangkat", en: "About", uri: "ms-settings:about" },
+];
+
+// ---------------------------------------------------------------------
+// The calculator
+
+/// What a line is worth as a calculation: its value and whether it used an
+/// operator or parentheses (a lone number is not worth a result row).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Calc {
+    pub value: f64,
+    pub compound: bool,
+}
+
+/// `+ - * / % ^` (also `×` and `÷`), parentheses, decimals (`.` or `,`) and
+/// spaces. `%` is the remainder. Anything else, a division by zero or a
+/// result that is not a finite number gives `None`; it never panics.
+pub fn calculate(line: &str) -> Option<Calc> {
+    if line.chars().count() > QUERY_MAX {
+        return None;
+    }
+    if line.trim().is_empty() {
+        return None;
+    }
+    let mut p = Parser {
+        chars: line.chars().collect(),
+        at: 0,
+        depth: 0,
+        compound: false,
+    };
+    let value = p.expr()?;
+    if p.peek().is_some() || !value.is_finite() {
+        return None;
+    }
+    Some(Calc {
+        value,
+        compound: p.compound,
+    })
+}
+
+struct Parser {
+    chars: Vec<char>,
+    at: usize,
+    depth: usize,
+    compound: bool,
+}
+
+impl Parser {
+    /// The next character, spaces skipped (never inside a number).
+    fn peek(&mut self) -> Option<char> {
+        while self.chars.get(self.at).is_some_and(|c| c.is_whitespace()) {
+            self.at += 1;
+        }
+        self.chars.get(self.at).copied()
+    }
+
+    fn eat(&mut self, c: char) -> bool {
+        if self.peek() == Some(c) {
+            self.at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// expr := term (('+' | '-') term)*
+    fn expr(&mut self) -> Option<f64> {
+        let mut v = self.term()?;
+        loop {
+            if self.eat('+') {
+                self.compound = true;
+                v += self.term()?;
+            } else if self.eat('-') {
+                self.compound = true;
+                v -= self.term()?;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+
+    /// term := unary (('*' | '×' | '/' | '÷' | '%') unary)*
+    fn term(&mut self) -> Option<f64> {
+        let mut v = self.unary()?;
+        loop {
+            if self.eat('*') || self.eat('×') {
+                self.compound = true;
+                v *= self.unary()?;
+            } else if self.eat('/') || self.eat('÷') {
+                self.compound = true;
+                let d = self.unary()?;
+                if d == 0.0 {
+                    return None;
+                }
+                v /= d;
+            } else if self.eat('%') {
+                self.compound = true;
+                let d = self.unary()?;
+                if d == 0.0 {
+                    return None;
+                }
+                v %= d;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+
+    /// unary := ('-' | '+') unary | power
+    fn unary(&mut self) -> Option<f64> {
+        self.depth += 1;
+        if self.depth > CALC_DEPTH {
+            return None;
+        }
+        let v = if self.eat('-') {
+            self.unary().map(|v| -v)
+        } else if self.eat('+') {
+            self.unary()
+        } else {
+            self.power()
+        };
+        self.depth -= 1;
+        v
+    }
+
+    /// power := atom ('^' unary)?   (right to left: 2^3^2 = 2^9)
+    fn power(&mut self) -> Option<f64> {
+        let base = self.atom()?;
+        if self.eat('^') {
+            self.compound = true;
+            let exp = self.unary()?;
+            let v = base.powf(exp);
+            return v.is_finite().then_some(v);
+        }
+        Some(base)
+    }
+
+    /// atom := number | '(' expr ')'
+    fn atom(&mut self) -> Option<f64> {
+        if self.eat('(') {
+            self.compound = true;
+            let v = self.expr()?;
+            return self.eat(')').then_some(v);
+        }
+        self.number()
+    }
+
+    fn number(&mut self) -> Option<f64> {
+        self.peek();
+        let start = self.at;
+        let mut dot = false;
+        while let Some(&c) = self.chars.get(self.at) {
+            match c {
+                '0'..='9' => self.at += 1,
+                '.' | ',' if !dot => {
+                    dot = true;
+                    self.at += 1;
+                }
+                _ => break,
+            }
+        }
+        let text: String = self.chars[start..self.at]
+            .iter()
+            .map(|c| if *c == ',' { '.' } else { *c })
+            .collect();
+        if text.is_empty() || text == "." {
+            return None;
+        }
+        text.parse::<f64>().ok().filter(|v| v.is_finite())
+    }
+}
+
+/// A calculation's value as text: whole numbers without a point, others to
+/// ten decimals with the zeros trimmed, huge or tiny ones in `e` notation.
+/// `lang` picks the decimal mark ("," or ".").
+pub fn format_number(value: f64, lang: Lang) -> String {
+    let abs = value.abs();
+    let text = if abs >= 1e15 || (abs != 0.0 && abs < 1e-9) {
+        format!("{value:e}")
+    } else if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        let s = format!("{value:.10}");
+        s.trim_end_matches('0').trim_end_matches('.').to_owned()
+    };
+    let text = if text == "-0" { "0".to_owned() } else { text };
+    match lang {
+        Lang::Id => text.replace('.', ","),
+        Lang::En => text,
+    }
+}
+
+// ---------------------------------------------------------------------
+// The web
+
+/// Google's search address for `query`, or `None` for an empty query or one
+/// with control characters. The query is percent-encoded (a space is `+`),
+/// so whatever is typed stays inside the `q=` value; the scheme and host are
+/// ours, never the user's.
+pub fn web_url(query: &str) -> Option<String> {
+    let q = query.trim();
+    if q.is_empty() || q.chars().count() > QUERY_MAX || q.chars().any(char::is_control) {
+        return None;
+    }
+    let mut url = String::from("https://www.google.com/search?q=");
+    for b in q.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                url.push(b as char)
+            }
+            b' ' => url.push('+'),
+            _ => url.push_str(&format!("%{b:02X}")),
+        }
+    }
+    Some(url)
+}
+
+/// An address the island may open on its own: https only.
+pub fn is_web_url(url: &str) -> bool {
+    url.starts_with("https://www.google.com/search?q=")
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+// ---------------------------------------------------------------------
+// Ranking
+
+/// How well `name` matches `query` (both compared case-insensitively):
+/// 3 starts with it, 2 a word starts with it, 1 contains it, 0 no match.
+pub fn match_score(name: &str, query: &str) -> u8 {
+    let (name, query) = (name.to_lowercase(), query.trim().to_lowercase());
+    if query.is_empty() {
+        return 0;
+    }
+    if name.starts_with(&query) {
+        return 3;
+    }
+    let word_start = name
+        .match_indices(&query)
+        .any(|(i, _)| name[..i].chars().next_back().is_some_and(|c| !c.is_alphanumeric()));
+    if word_start {
+        2
+    } else if name.contains(&query) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Indices into `names` that match `query`, best first; equal scores keep
+/// their order in `names`.
+pub fn rank<'a>(names: impl IntoIterator<Item = &'a str>, query: &str) -> Vec<usize> {
+    let mut hits: Vec<(u8, usize)> = names
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, n)| match match_score(n, query) {
+            0 => None,
+            s => Some((s, i)),
+        })
+        .collect();
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    hits.into_iter().map(|(_, i)| i).collect()
+}
+
+/// The text a result row says about its kind, in `lang`.
+pub struct Labels<'a> {
+    pub app: &'a str,
+    pub setting: &'a str,
+    pub copy: &'a str,
+    pub web: &'a str,
+    /// `Cari "…" di web`, already filled in for the query.
+    pub web_title: &'a dyn Fn(&str) -> String,
+}
+
+/// What `line` finds, at most `MAX_RESULTS` rows. A line starting with `?`
+/// is a web search and nothing else. Otherwise: the calculation (when it is
+/// one), then apps and settings pages by match quality, and the web search
+/// last (always, so Enter always does something). An empty line finds
+/// nothing.
+pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec<SearchResult> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Vec::new();
+    }
+    if let Some(rest) = line.strip_prefix('?') {
+        return web_url(rest)
+            .map(|url| vec![web_result(rest.trim(), url, labels)])
+            .unwrap_or_default();
+    }
+    let mut out = Vec::new();
+    if let Some(calc) = calculate(line).filter(|c| c.compound) {
+        let shown = format_number(calc.value, lang);
+        out.push(SearchResult {
+            kind: Kind::Calc,
+            title: format!("= {shown}"),
+            subtitle: labels.copy.to_owned(),
+            action: Action::Copy(shown),
+        });
+    }
+    let web = web_url(line).map(|url| web_result(line, url, labels));
+    let room = MAX_RESULTS - out.len() - usize::from(web.is_some());
+
+    // Apps and settings pages compete by score; an app wins a tie.
+    let mut found: Vec<(u8, usize, SearchResult)> = Vec::new();
+    for i in rank(apps.iter().map(|a| a.name.as_str()), line) {
+        let a = &apps[i];
+        found.push((
+            match_score(&a.name, line),
+            found.len(),
+            SearchResult {
+                kind: Kind::App,
+                title: a.name.clone(),
+                subtitle: labels.app.to_owned(),
+                action: Action::Launch(a.path.clone()),
+            },
+        ));
+    }
+    for i in rank(SETTINGS_PAGES.iter().map(|p| p.name(lang)), line) {
+        let p = &SETTINGS_PAGES[i];
+        found.push((
+            match_score(p.name(lang), line),
+            found.len(),
+            SearchResult {
+                kind: Kind::Setting,
+                title: p.name(lang).to_owned(),
+                subtitle: labels.setting.to_owned(),
+                action: Action::OpenSetting(p.uri),
+            },
+        ));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    out.extend(found.into_iter().take(room).map(|(_, _, r)| r));
+    out.extend(web);
+    out
+}
+
+fn web_result(shown: &str, url: String, labels: &Labels) -> SearchResult {
+    SearchResult {
+        kind: Kind::Web,
+        title: (labels.web_title)(shown),
+        subtitle: labels.web.to_owned(),
+        action: Action::OpenWeb(url),
+    }
+}
+
+// ---------------------------------------------------------------------
+// The Start Menu index
+
+/// The shortcuts of the Start Menu folders (all users, then this user),
+/// one per name (the first wins), uninstallers left out, by name.
+pub fn index_start_menu() -> Vec<AppEntry> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramData", "APPDATA"] {
+        if let Some(base) = std::env::var_os(var) {
+            roots.push(Path::new(&base).join(r"Microsoft\Windows\Start Menu\Programs"));
+        }
+    }
+    let mut out = Vec::new();
+    for root in roots {
+        collect(&root, INDEX_DEPTH, &mut out);
+    }
+    dedupe(out)
+}
+
+fn collect(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        if out.len() >= INDEX_MAX {
+            return;
+        }
+        let path = entry.path();
+        // A link to a folder is not followed: no loops.
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if depth > 0 {
+                collect(&path, depth - 1, out);
+            }
+        } else if let Some(app) = app_entry(&path) {
+            out.push(app);
+        }
+    }
+}
+
+/// The entry for a `.lnk` file, unless it is an uninstaller or a help link.
+fn app_entry(path: &Path) -> Option<AppEntry> {
+    let ext = path.extension()?.to_str()?;
+    if !ext.eq_ignore_ascii_case("lnk") {
+        return None;
+    }
+    let name = path.file_stem()?.to_str()?.trim().to_owned();
+    let lower = name.to_lowercase();
+    let skip = ["uninstall", "copot", "hapus ", "readme", "help", "bantuan", "release notes"];
+    if name.is_empty() || skip.iter().any(|s| lower.contains(s)) {
+        return None;
+    }
+    Some(AppEntry {
+        name,
+        path: path.to_str()?.to_owned(),
+    })
+}
+
+/// One entry per name (case-insensitive, the first kept), sorted by name.
+pub fn dedupe(mut apps: Vec<AppEntry>) -> Vec<AppEntry> {
+    let mut seen = std::collections::HashSet::new();
+    apps.retain(|a| seen.insert(a.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels() -> Labels<'static> {
+        Labels {
+            app: "Aplikasi",
+            setting: "Pengaturan Windows",
+            copy: "Enter untuk menyalin",
+            web: "Cari di web",
+            web_title: &|q| format!("Cari \"{q}\" di web"),
+        }
+    }
+
+    fn app(name: &str) -> AppEntry {
+        AppEntry {
+            name: name.into(),
+            path: format!(r"C:\Menu\{name}.lnk"),
+        }
+    }
+
+    fn calc(line: &str) -> Option<f64> {
+        calculate(line).map(|c| c.value)
+    }
+
+    #[test]
+    fn the_calculator_follows_precedence_and_parentheses() {
+        assert_eq!(calc("1+2*3"), Some(7.0));
+        assert_eq!(calc("(1+2)*3"), Some(9.0));
+        assert_eq!(calc("10-4-3"), Some(3.0), "left to right");
+        assert_eq!(calc("2^3^2"), Some(512.0), "right to left");
+        assert_eq!(calc("-2^2"), Some(-4.0));
+        assert_eq!(calc("2*-3"), Some(-6.0));
+        assert_eq!(calc("--4"), Some(4.0));
+        assert_eq!(calc("7%3"), Some(1.0));
+        assert_eq!(calc("8÷2×3"), Some(12.0));
+        assert_eq!(calc(" 12 / 4 + 1 "), Some(4.0));
+        assert_eq!(calc("1,5+1.25"), Some(2.75), "either decimal mark");
+        assert_eq!(calc(".5*4"), Some(2.0));
+        assert_eq!(calc("((((2))))+1"), Some(3.0));
+    }
+
+    #[test]
+    fn the_calculator_refuses_what_is_not_arithmetic() {
+        for bad in [
+            "", "   ", "abc", "1+", "+", "(", ")", "()", "(1+2", "1+2)", "1..2", "1.2.3", "2 3",
+            "sqrt(4)", "1+a", "0x10", "1e3", "5!", "1/0", "1%0", "-", "^2", "2^", "1;2",
+            "javascript:alert(1)", "C:\\Windows",
+        ] {
+            assert_eq!(calc(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_calculator_survives_huge_and_deep_input() {
+        // Not finite: refused, not a panic or "inf".
+        assert_eq!(calc("10^1000"), None);
+        assert_eq!(calc("9^9^9"), None);
+        assert_eq!(calc(&format!("1{}", "0".repeat(400))), None);
+        // A very long or very deep line is refused.
+        assert_eq!(calc(&"1+".repeat(200)), None, "too long");
+        let deep = format!("{}1{}", "(".repeat(55), ")".repeat(55));
+        assert_eq!(calc(&deep), None, "too deep");
+        let signs = format!("{}1", "-".repeat(100));
+        assert_eq!(calc(&signs), None, "too many signs");
+        assert_eq!(calc("999999999999*999999999999").map(|v| v > 9e23), Some(true));
+    }
+
+    #[test]
+    fn a_lone_number_is_not_compound() {
+        assert_eq!(calculate("42").map(|c| c.compound), Some(false));
+        assert_eq!(calculate("(42)").map(|c| c.compound), Some(true));
+        assert_eq!(calculate("1+1").map(|c| c.compound), Some(true));
+    }
+
+    #[test]
+    fn numbers_print_plainly_in_both_languages() {
+        assert_eq!(format_number(7.0, Lang::En), "7");
+        assert_eq!(format_number(-0.0, Lang::En), "0");
+        assert_eq!(format_number(2.75, Lang::En), "2.75");
+        assert_eq!(format_number(2.75, Lang::Id), "2,75");
+        assert_eq!(format_number(1.0 / 3.0, Lang::En), "0.3333333333");
+        assert_eq!(format_number(1e20, Lang::En), "1e20");
+        assert_eq!(format_number(1e-12, Lang::En), "1e-12");
+        assert_eq!(format_number(123456789012.0, Lang::Id), "123456789012");
+        assert_eq!(format_number(-12.5, Lang::Id), "-12,5");
+    }
+
+    #[test]
+    fn scores_rank_prefix_over_word_start_over_substring() {
+        assert_eq!(match_score("Kalkulator", "kal"), 3);
+        assert_eq!(match_score("Windows Kalender", "kal"), 2);
+        assert_eq!(match_score("Pengkalkulasi", "kal"), 1);
+        assert_eq!(match_score("Notepad", "kal"), 0);
+        assert_eq!(match_score("Kalkulator", ""), 0);
+        assert_eq!(match_score("Kalkulator", "  "), 0);
+        assert_eq!(match_score("Visual Studio Code", "STUDIO"), 2);
+        assert_eq!(match_score("Wi-Fi", "fi"), 2, "after a hyphen");
+    }
+
+    #[test]
+    fn ranking_is_stable_for_equal_scores() {
+        let names = ["Zeta kal", "Alfa kal", "Kal one", "Kal two", "Nope", "xkal"];
+        // Prefix: 2, 3 in order; word start: 0, 1 in order; substring: 5.
+        assert_eq!(rank(names, "kal"), [2, 3, 0, 1, 5]);
+        assert_eq!(rank(names, "zzz"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn web_urls_stay_inside_the_query_value() {
+        let url = web_url("kopi susu & roti").unwrap();
+        assert_eq!(url, "https://www.google.com/search?q=kopi+susu+%26+roti");
+        assert!(is_web_url(&url));
+        // Non-ASCII goes out as UTF-8 bytes.
+        assert_eq!(
+            web_url("café").unwrap(),
+            "https://www.google.com/search?q=caf%C3%A9"
+        );
+        // A hostile line is only data in q=.
+        for evil in [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "https://evil.example/ x",
+            "ms-settings:",
+            "a#b?c=d&e",
+            "\"><script>",
+        ] {
+            let url = web_url(evil).unwrap();
+            assert!(url.starts_with("https://www.google.com/search?q="), "{url}");
+            assert!(is_web_url(&url), "{url}");
+            let q = &url["https://www.google.com/search?q=".len()..];
+            assert!(
+                q.bytes().all(|b| b.is_ascii_alphanumeric()
+                    || matches!(b, b'-' | b'.' | b'_' | b'~' | b'+' | b'%')),
+                "{url}"
+            );
+        }
+        assert_eq!(web_url(""), None);
+        assert_eq!(web_url("   "), None);
+        assert_eq!(web_url("a\nb"), None);
+        assert_eq!(web_url(&"a".repeat(QUERY_MAX + 1)), None);
+        assert!(!is_web_url("http://www.google.com/search?q=a"));
+        assert!(!is_web_url("https://evil.example/?q=a"));
+        assert!(!is_web_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn a_question_mark_line_is_only_a_web_search() {
+        let apps = [app("Kalkulator")];
+        let r = search("? kopi susu", &apps, Lang::Id, &labels());
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].kind, Kind::Web);
+        assert_eq!(r[0].title, "Cari \"kopi susu\" di web");
+        assert_eq!(
+            r[0].action,
+            Action::OpenWeb("https://www.google.com/search?q=kopi+susu".into())
+        );
+        assert!(search("?", &apps, Lang::Id, &labels()).is_empty());
+        assert!(search("?   ", &apps, Lang::Id, &labels()).is_empty());
+    }
+
+    #[test]
+    fn a_line_finds_the_calculation_apps_settings_and_the_web_in_order() {
+        let apps = [app("Kalender"), app("Kalkulator"), app("Notepad")];
+        let r = search("kal", &apps, Lang::Id, &labels());
+        let kinds: Vec<Kind> = r.iter().map(|r| r.kind).collect();
+        // Two apps, then the web; "kal" matches no settings page.
+        assert_eq!(kinds, [Kind::App, Kind::App, Kind::Web]);
+        assert_eq!(r[0].title, "Kalender");
+        assert_eq!(r[1].action, Action::Launch(r"C:\Menu\Kalkulator.lnk".into()));
+
+        // A calculation comes first, and is what Enter copies.
+        let r = search("2+2*3", &apps, Lang::Id, &labels());
+        assert_eq!(r[0].kind, Kind::Calc);
+        assert_eq!(r[0].title, "= 8");
+        assert_eq!(r[0].action, Action::Copy("8".into()));
+        assert_eq!(r.last().unwrap().kind, Kind::Web);
+        // A lone number is not one.
+        assert!(search("42", &apps, Lang::Id, &labels()).iter().all(|r| r.kind != Kind::Calc));
+        // The decimal mark follows the language.
+        let r = search("1/4", &apps, Lang::Id, &labels());
+        assert_eq!(r[0].title, "= 0,25");
+        // A settings page, in the language.
+        let r = search("layar", &apps, Lang::Id, &labels());
+        assert_eq!(r[0].kind, Kind::Setting);
+        assert_eq!(r[0].action, Action::OpenSetting("ms-settings:display"));
+        let r = search("display", &apps, Lang::En, &labels());
+        assert_eq!(r[0].title, "Display");
+        // Nothing typed, nothing found.
+        assert!(search("  ", &apps, Lang::Id, &labels()).is_empty());
+    }
+
+    #[test]
+    fn the_list_is_capped_and_always_ends_with_the_web() {
+        let apps: Vec<AppEntry> = (0..30).map(|i| app(&format!("App {i:02}"))).collect();
+        let r = search("app", &apps, Lang::En, &labels());
+        assert_eq!(r.len(), MAX_RESULTS);
+        assert_eq!(r.last().unwrap().kind, Kind::Web);
+        assert_eq!(r[0].title, "App 00");
+        // With a calculation too: still six.
+        let r = search("1+1", &apps, Lang::En, &labels());
+        assert!(r.len() <= MAX_RESULTS);
+        let many: Vec<AppEntry> = (0..30).map(|i| app(&format!("1+1 App {i}"))).collect();
+        let r = search("1+1", &many, Lang::En, &labels());
+        assert_eq!(r.len(), MAX_RESULTS);
+        assert_eq!(r[0].kind, Kind::Calc);
+        assert_eq!(r.last().unwrap().kind, Kind::Web);
+        // A line the web cannot take (control character) loses only that row.
+        let r = search("app\u{7}", &apps, Lang::En, &labels());
+        assert!(r.iter().all(|r| r.kind != Kind::Web));
+    }
+
+    #[test]
+    fn an_app_wins_a_tie_with_a_settings_page() {
+        let apps = [app("Display Fusion")];
+        let r = search("display", &apps, Lang::En, &labels());
+        assert_eq!((r[0].kind, r[1].kind), (Kind::App, Kind::Setting));
+    }
+
+    #[test]
+    fn every_settings_page_has_both_names_and_a_settings_address() {
+        for p in &SETTINGS_PAGES {
+            assert!(!p.id.is_empty() && !p.en.is_empty(), "{}", p.uri);
+            assert!(p.uri.starts_with("ms-settings:"), "{}", p.uri);
+        }
+        let mut uris: Vec<&str> = SETTINGS_PAGES.iter().map(|p| p.uri).collect();
+        uris.sort_unstable();
+        uris.dedup();
+        assert_eq!(uris.len(), SETTINGS_PAGES.len());
+    }
+
+    #[test]
+    fn the_index_keeps_apps_once_by_name_and_drops_uninstallers() {
+        assert!(app_entry(Path::new(r"C:\M\Notepad.lnk")).is_some());
+        assert!(app_entry(Path::new(r"C:\M\NOTEPAD.LNK")).is_some());
+        assert!(app_entry(Path::new(r"C:\M\Uninstall Foo.lnk")).is_none());
+        assert!(app_entry(Path::new(r"C:\M\Foo Help.lnk")).is_none());
+        assert!(app_entry(Path::new(r"C:\M\notes.txt")).is_none());
+        assert!(app_entry(Path::new(r"C:\M\.lnk")).is_none());
+        let apps = dedupe(vec![
+            AppEntry { name: "b app".into(), path: "1".into() },
+            AppEntry { name: "A App".into(), path: "2".into() },
+            AppEntry { name: "B App".into(), path: "3".into() },
+        ]);
+        let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["A App", "b app"], "first kept, by name");
+    }
+
+    #[test]
+    fn the_index_walks_folders_to_a_depth_and_reads_only_shortcuts() {
+        let dir = std::env::temp_dir().join(format!("vale-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let deep = dir.join("A").join("B");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(dir.join("Top.lnk"), b"").unwrap();
+        std::fs::write(dir.join("readme.txt"), b"").unwrap();
+        std::fs::write(deep.join("Deep.lnk"), b"").unwrap();
+        let mut out = Vec::new();
+        collect(&dir, INDEX_DEPTH, &mut out);
+        let mut names: Vec<String> = out.into_iter().map(|a| a.name).collect();
+        names.sort();
+        assert_eq!(names, ["Deep", "Top"]);
+        let mut shallow = Vec::new();
+        collect(&dir, 0, &mut shallow);
+        assert_eq!(shallow.len(), 1, "no deeper than asked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

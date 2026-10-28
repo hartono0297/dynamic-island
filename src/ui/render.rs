@@ -70,6 +70,7 @@ use crate::mole::{GroupSize, MoleGroup, MoleOpts, MoleReport, PreviewSummary};
 use crate::notes::Note;
 use crate::pomodoro::{PomoStatus, Pomodoro};
 use crate::reminders::Reminder;
+use crate::search::SearchResult;
 use crate::state::MolePhase;
 use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
@@ -147,6 +148,8 @@ pub struct Frame<'a> {
     pub cli: CliView<'a>,
     /// The Clipboard page.
     pub clip: ClipView<'a>,
+    /// The quick search (only drawn on `Page::Search`).
+    pub search: SearchView<'a>,
     /// Where the playing track is: the notch's progress line and the Music
     /// page's bar. `None` without a timeline or a known length.
     pub progress: Option<Progress>,
@@ -429,6 +432,18 @@ pub struct CliView<'a> {
     pub menu: Option<&'a FolderMenuView>,
 }
 
+/// What the quick search shows.
+pub struct SearchView<'a> {
+    /// The field's text and selection (UTF-16 offsets).
+    pub query: &'a str,
+    pub selection: (usize, usize),
+    /// The field has the keyboard: caret and focus ring.
+    pub focused: bool,
+    pub results: &'a [SearchResult],
+    /// The highlighted row (Enter runs it).
+    pub selected: usize,
+}
+
 /// What the Clipboard page shows.
 pub struct ClipView<'a> {
     /// "Riwayat clipboard" is on.
@@ -506,6 +521,8 @@ pub struct Renderer {
     cli_caret: std::cell::Cell<Option<Rect>>,
     /// The same for the Clipboard search field.
     clip_caret: std::cell::Cell<Option<Rect>>,
+    /// And for the quick search's field.
+    search_caret: std::cell::Cell<Option<Rect>>,
     /// Clipboard thumbnails as bitmaps of the current target, by entry id;
     /// entries no longer drawn are dropped each frame.
     clip_thumbs: std::cell::RefCell<Vec<(u64, ID2D1Bitmap)>>,
@@ -715,6 +732,7 @@ impl Renderer {
                 palette: theme::island(Accent::default(), theme::Surface::default()),
                 cli_caret: std::cell::Cell::new(None),
                 clip_caret: std::cell::Cell::new(None),
+                search_caret: std::cell::Cell::new(None),
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
             })
@@ -737,6 +755,7 @@ impl Renderer {
         self.regions = HitRegions::default();
         self.cli_caret.set(None);
         self.clip_caret.set(None);
+        self.search_caret.set(None);
         self.ensure_surface(win.size())?;
         // A lost target is rebuilt once; a second failure is reported.
         if let Err(error) = self.paint(style, shape, frame, opacity) {
@@ -934,6 +953,11 @@ impl Renderer {
     /// The Clipboard search caret the last frame drew, in client physical pixels.
     pub fn clip_caret(&self) -> Option<RECT> {
         self.caret_px(self.clip_caret.get()?)
+    }
+
+    /// The quick search caret the last frame drew, in client physical pixels.
+    pub fn search_caret(&self) -> Option<RECT> {
+        self.caret_px(self.search_caret.get()?)
     }
 
     /// The CLI caret the last frame drew, in client physical pixels.

@@ -212,6 +212,22 @@ const MIXER_NAME_W: f32 = 112.0;
 const MIXER_VALUE_W: f32 = 40.0;
 const MIXER_GAP: f32 = 10.0;
 
+/// The quick search: the field on top, the result rows under it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchLayout {
+    pub field: Rect,
+    /// One per result, top to bottom.
+    pub rows: Vec<Rect>,
+    /// Nothing to list: the message's area under the field.
+    pub empty: Option<Rect>,
+}
+
+/// The search field's height, the rows' height and gap.
+pub const SEARCH_FIELD_H: f32 = 32.0;
+pub const SEARCH_ROW_H: f32 = 28.0;
+const SEARCH_ROW_GAP: f32 = 4.0;
+const SEARCH_FIELD_GAP: f32 = 8.0;
+
 /// A button on the selected Clipboard card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipButton {
@@ -279,6 +295,7 @@ pub enum PageLayout {
     Cli(CliLayout),
     Shortcuts(ShortcutsLayout),
     Mixer(MixerLayout),
+    Search(SearchLayout),
 }
 
 /// The cleaner behind "Bersihkan" exists (Run 5): the button is the accent
@@ -1942,6 +1959,27 @@ pub fn clipboard_layout(
     }
 }
 
+/// The quick search with `n` results (at most `search::MAX_RESULTS` rows
+/// fit under the field, strip or not).
+pub fn search_layout(s: ShapeRect, strip: bool, n: usize) -> SearchLayout {
+    let top = content_top(s, strip);
+    let (l, r) = (left(s), right(s));
+    let field = rect(l, top, r - l, SEARCH_FIELD_H);
+    let first = field.bottom() + SEARCH_FIELD_GAP;
+    let rows = (0..n.min(crate::search::MAX_RESULTS))
+        .map(|i| {
+            rect(
+                l,
+                first + i as f32 * (SEARCH_ROW_H + SEARCH_ROW_GAP),
+                r - l,
+                SEARCH_ROW_H,
+            )
+        })
+        .collect();
+    let empty = (n == 0).then(|| rect(l, first, r - l, (content_bottom(s) - first).max(0.0)));
+    SearchLayout { field, rows, empty }
+}
+
 pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsLayout {
     let top = content_top(s, strip);
     let bottom = content_bottom(s);
@@ -2520,6 +2558,11 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 add(*r, builtin.map_or(Hit::CustomTile(i), Hit::Shortcut));
             }
         }
+        PageLayout::Search(l) => {
+            for (i, r) in l.rows.iter().enumerate() {
+                add(*r, Hit::SearchResult(i));
+            }
+        }
         PageLayout::Mixer(l) => {
             for (i, row) in l.rows.iter().enumerate() {
                 add(row.icon, Hit::MixerMute(i));
@@ -2780,6 +2823,9 @@ mod tests {
         }
         for n in [1, 2, 5, 6] {
             out.push((format!("mixer {n}"), PageLayout::Mixer(mixer_layout(s, strip, n))));
+        }
+        for n in [0, 1, 3, crate::search::MAX_RESULTS] {
+            out.push((format!("search {n}"), PageLayout::Search(search_layout(s, strip, n))));
         }
         for n in [1, 5, 8, 12] {
             out.push((
@@ -4503,6 +4549,11 @@ mod tests {
                             drawn.extend([l.header, l.search, l.list]);
                             drawn.extend(l.cards.iter().map(|c| c.2));
                             drawn.extend(l.buttons.iter().map(|b| b.2));
+                        }
+                        PageLayout::Search(l) => {
+                            drawn.push(l.field);
+                            drawn.extend(l.rows.iter().copied());
+                            drawn.extend(l.empty);
                         }
                         PageLayout::Mixer(l) => {
                             drawn.push(l.header);

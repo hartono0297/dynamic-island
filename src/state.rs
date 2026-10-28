@@ -198,6 +198,10 @@ pub struct IslandState {
     /// until the pointer comes (then hover holds it), the hotkey again, a
     /// copy, or `ClipHoldEnd`.
     clip_held: bool,
+    /// The quick search is open (over `search_prev`'s page); it holds the
+    /// panel open like the CLI input does.
+    search_open: bool,
+    search_prev: Page,
     /// A shortcut tile was clicked: the panel stays shut, whatever keeps it
     /// open (an editor; the CLI input lets go), until the pointer leaves the island
     /// and comes back. Leaving alone is not enough: once the panel shrinks
@@ -262,6 +266,8 @@ impl IslandState {
             cli_menu: false,
             clip_focused: false,
             clip_held: false,
+            search_open: false,
+            search_prev: Page::Calendar,
             collapsed: Collapse::No,
             pomodoro: Pomodoro::new(pomo),
             page: Page::Calendar,
@@ -434,6 +440,13 @@ impl IslandState {
             Event::ClipFocus(on) => self.clip_focused = on,
             Event::ClipHotkey => self.clip_hotkey(),
             Event::ClipHoldEnd => self.clip_held = false,
+            Event::SearchHotkey => self.search_hotkey(&mut effects),
+            Event::SearchClose => {
+                if self.search_open {
+                    self.search_open = false;
+                    self.collapse();
+                }
+            }
             Event::ClipCommit => {
                 if self.view() == View::Panel(Page::Clipboard) {
                     self.collapse();
@@ -470,6 +483,7 @@ impl IslandState {
             | Event::ExplorerFolders { .. }
             | Event::SystemSample(_)
             | Event::Audio(_)
+            | Event::SearchIndex(_)
             | Event::Clean(_)
             | Event::Mole(_)
             | Event::ShotFolder { .. }
@@ -530,6 +544,13 @@ impl IslandState {
         }
         if self.clip_held && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
             self.clip_held = false;
+        }
+        // The search closed (or the panel went away some other way): the
+        // page it came over returns, and the keyboard with it.
+        if self.page == Page::Search && !self.panel_open() {
+            self.search_open = false;
+            self.page = self.search_prev;
+            effects.push(Effect::ReleaseSearchFocus);
         }
         // The menu belongs to the CLI page of an open panel.
         if self.cli_menu && (self.page != Page::Cli || !self.panel_open()) {
@@ -867,7 +888,8 @@ impl IslandState {
                 || self.editor_open
                 || self.cli_focused
                 || self.clip_focused
-                || self.clip_held)
+                || self.clip_held
+                || self.search_open)
     }
 
     /// The panel gets out of the way (a shortcut, a copy with Enter): shut
@@ -900,6 +922,27 @@ impl IslandState {
         self.collapsed = Collapse::No;
         // Under the pointer already: hover holds it, as for any visit.
         self.clip_held = !self.hover;
+    }
+
+    /// The quick search's hotkey: it opens over whatever page shows (a new
+    /// visit, whatever closed the panel before) and asks for the keyboard;
+    /// pressed again, it closes.
+    fn search_hotkey(&mut self, effects: &mut Vec<Effect>) {
+        if self.fullscreen {
+            return;
+        }
+        if self.search_open {
+            self.search_open = false;
+            self.collapse();
+            return;
+        }
+        if self.page != Page::Search {
+            self.search_prev = self.page;
+        }
+        self.page = Page::Search;
+        self.collapsed = Collapse::No;
+        self.search_open = true;
+        effects.push(Effect::FocusSearch);
     }
 
     /// What a hover would land on is a notice with a button: the panel stays
@@ -935,6 +978,11 @@ impl IslandState {
     /// The Clipboard search field has the keyboard.
     pub fn clip_focused(&self) -> bool {
         self.clip_focused
+    }
+
+    /// The quick search is open.
+    pub fn search_open(&self) -> bool {
+        self.search_open
     }
 
     /// The hotkey holds the panel open.
@@ -1099,6 +1147,14 @@ impl IslandState {
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
+            // Runs it and closes the search (Enter is this click too).
+            Hit::SearchResult(i) => {
+                if self.search_open {
+                    self.search_open = false;
+                    self.collapse();
+                    effects.push(Effect::SearchRun(i));
+                }
+            }
             Hit::CustomTile(i) => {
                 if let Some(Tile::Custom(c)) = self.tiles.visible().get(i) {
                     self.collapse_for(Effect::RunCustom(c.clone()), effects);
@@ -1250,7 +1306,8 @@ impl IslandState {
     /// Scrolling down (negative delta) moves right through the pages. Steps
     /// past either end are spent, so one notch back always moves a page.
     fn wheel(&mut self, delta: i32) {
-        if !matches!(self.view(), View::Panel(_)) {
+        // The search is not in the order of pages: the wheel stays out.
+        if !matches!(self.view(), View::Panel(_)) || self.page == Page::Search {
             return;
         }
         self.wheel = self.wheel.saturating_add(delta);
@@ -4373,6 +4430,79 @@ mod tests {
         );
         assert!(!s.lyrics_on());
         assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn the_search_hotkey_opens_it_over_the_page_and_asks_for_the_keyboard() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::SearchClose, t0);
+        let effects = s.apply(Event::SearchHotkey, t0);
+        assert_eq!(effects, vec![Effect::FocusSearch]);
+        assert!(s.search_open());
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        // Pressed again: it closes, the page it came over is back, and the
+        // keyboard goes.
+        let effects = s.apply(Event::SearchHotkey, t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert!(!s.search_open());
+        assert_ne!(s.view(), View::Panel(Page::Search));
+        assert_eq!(s.page(), Page::Notes);
+    }
+
+    #[test]
+    fn the_search_stays_while_open_and_closes_on_close() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::SearchHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        // The pointer coming and going does not close it.
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        // The wheel stays out of it (it is not one of the pages).
+        s.apply(Event::Wheel(-120), t0);
+        s.apply(Event::Wheel(120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        let effects = s.apply(Event::SearchClose, t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert_ne!(s.view(), View::Panel(Page::Search));
+        assert_eq!(s.page(), Page::Calendar);
+        // Closing what is closed does nothing.
+        assert!(s.apply(Event::SearchClose, t0).is_empty());
+    }
+
+    #[test]
+    fn a_result_click_runs_it_and_closes_the_search() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // Closed: a stray click on a row does nothing.
+        assert!(s.apply(Event::Click(Hit::SearchResult(0)), t0).is_empty());
+        s.apply(Event::SearchHotkey, t0);
+        let effects = s.apply(Event::Click(Hit::SearchResult(2)), t0);
+        assert_eq!(effects, vec![Effect::SearchRun(2), Effect::ReleaseSearchFocus]);
+        assert!(!s.search_open());
+        assert_ne!(s.view(), View::Panel(Page::Search));
+    }
+
+    #[test]
+    fn the_search_hotkey_does_nothing_in_fullscreen_and_never_changes_the_page_order() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        assert!(s.apply(Event::SearchHotkey, t0).is_empty());
+        assert!(!s.search_open());
+        s.apply(Event::Fullscreen(false), t0);
+        // Opened twice over itself, the page to return to is still the real one.
+        open_on(&mut s, Page::Media, t0);
+        s.apply(Event::SearchHotkey, t0);
+        s.apply(Event::SearchClose, t0);
+        s.apply(Event::SearchHotkey, t0);
+        s.apply(Event::SearchClose, t0);
+        assert_eq!(s.page(), Page::Media);
+        assert!(!s.pages().visible().contains(&Page::Search));
     }
 
     #[test]

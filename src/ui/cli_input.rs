@@ -8,8 +8,9 @@
 //! `create` (`Key`); every other change posts `WM_APP_CLI_REDRAW` to the
 //! island, once until it is handled, so the panel redraws.
 //!
-//! The Clipboard page's search field is a second instance (`create_with`):
-//! each EDIT carries its own callback, so the two never share keys.
+//! The Clipboard page's search field is a second instance (`create_with`),
+//! the quick search's a third: each EDIT carries its own callback, so they
+//! never share keys.
 
 use std::cell::{Cell, RefCell};
 
@@ -59,6 +60,8 @@ const SUBCLASS_ID: usize = 1;
 const ID_INPUT: isize = 201;
 /// The Clipboard search field's control id.
 pub const ID_CLIP_SEARCH: isize = 202;
+/// The quick search field's control id.
+pub const ID_SEARCH: isize = 203;
 
 thread_local! {
     /// The island (where redraws are posted) and whether one is pending.

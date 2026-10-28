@@ -22,7 +22,7 @@ use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, ClipView, FolderMenuView, Frame, GroupShown, Progress, Renderer,
+    CleanerView, CliView, ClipView, FolderMenuView, SearchView, Frame, GroupShown, Progress, Renderer,
     RobotFrame, RowSize, SystemView, color, d2d_rect, mix,
 };
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -53,7 +53,7 @@ use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
     CLIP_THUMB_W,
     CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
-    ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
+    ClipLayout, SearchLayout, search_layout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
     MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout,
     RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, MIXER_TRACK_H, MixerLayout, mixer_layout,
     calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
@@ -61,6 +61,7 @@ use crate::ui::panel_layout::{
     page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
     reminders_layout, shortcuts_layout, system_layout, tile_parts, waiting_strip,
 };
+use crate::search::Kind as SearchKind;
 use crate::ui::robot::{Expr, Pose};
 
 /// Height of the compact shapes the panel grows from.
@@ -397,8 +398,12 @@ impl Renderer {
         if let Some(notice) = frame.strip {
             self.paint_strip(s, notice);
         }
-        // The cleaner is not a page: its footer takes the dots' place.
-        if !matches!(layout, PageLayout::Cleaner(_) | PageLayout::Mole(_)) {
+        // The cleaner is not a page: its footer takes the dots' place. The
+        // search is not one of the pages the dots count.
+        if !matches!(
+            layout,
+            PageLayout::Cleaner(_) | PageLayout::Mole(_) | PageLayout::Search(_)
+        ) {
             let (dots, active) = page_dots(s, &frame.pages, page);
             for (i, dot) in dots.into_iter().enumerate() {
                 let p = &self.palette;
@@ -540,6 +545,7 @@ impl Renderer {
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip, &frame.tiles)),
             // Room for the master row and, under it, a line saying no app
             // plays (or that there is no device).
+            Page::Search => PageLayout::Search(search_layout(s, strip, frame.search.results.len())),
             Page::Mixer => PageLayout::Mixer(mixer_layout(
                 s,
                 strip,
@@ -593,6 +599,10 @@ impl Renderer {
             }
             PageLayout::Mixer(l) => {
                 self.paint_mixer(l, frame.mixer);
+                Ok(())
+            }
+            PageLayout::Search(l) => {
+                self.paint_search(l, &frame.search);
                 Ok(())
             }
         }
@@ -1850,11 +1860,96 @@ impl Renderer {
     /// `.search`: the raised field, the glyph, the placeholder or the typed
     /// text with its selection and caret, and the accent ring while focused.
     fn paint_clip_search(&self, r: Rect, clip: &ClipView) {
+        let hint = i18n::clip_search_in(i18n::lang(), clip.total);
+        let caret =
+            self.paint_text_field(r, clip.query, clip.selection, clip.focused, &hint);
+        if caret.is_some() {
+            self.clip_caret.set(caret);
+        }
+    }
+
+    /// The quick search: its field, then a row per result (icon, name, what
+    /// it is), the highlighted one ringed in the accent. With nothing
+    /// typed, a line of what to try.
+    fn paint_search(&self, l: &SearchLayout, view: &SearchView) {
         let lang = i18n::lang();
+        let p = self.palette;
+        let hint = text(lang, Key::SearchHint);
+        let caret = self.paint_text_field(l.field, view.query, view.selection, view.focused, hint);
+        if caret.is_some() {
+            self.search_caret.set(caret);
+        }
+        if let Some(area) = l.empty {
+            let mid = area.y + area.h / 2.0 - 12.0;
+            let line = |y: f32| Rect { y, h: 18.0, ..area };
+            let (title, sub) = if view.query.trim().is_empty() {
+                (Key::SearchEmpty, Key::SearchEmptyHint)
+            } else {
+                (Key::SearchNone, Key::SearchNoneHint)
+            };
+            self.text(text(lang, title), &self.fonts.body_center, line(mid), 1.0);
+            self.text_colored(
+                text(lang, sub),
+                &self.fonts.small_center,
+                line(mid + 20.0),
+                p.secondary,
+                1.0,
+            );
+        }
+        for (i, (row, res)) in l.rows.iter().zip(view.results).enumerate() {
+            let on = i == view.selected;
+            if on {
+                self.set_color(p.raised, 1.0);
+                self.fill_round(*row, 10.0);
+                self.stroke_round_width(inset(*row, 0.75, 0.75), 9.25, p.accent, 1.5);
+            }
+            let icon = Rect {
+                x: row.x + 10.0,
+                w: 16.0,
+                ..*row
+            };
+            let glyph = match res.kind {
+                SearchKind::App => Icon::Grid,
+                SearchKind::Setting => Icon::Gear,
+                SearchKind::Calc => Icon::Calc,
+                SearchKind::Web => Icon::Globe,
+            };
+            let ink = if on { p.accent } else { p.secondary };
+            self.icon_colored(glyph, icon, 16.0, ink, 1.0, None);
+            // What it is, small and quiet at the right; the name takes the
+            // rest.
+            let sub_w = self.text_width(&res.subtitle, &self.fonts.small).ceil() + 2.0;
+            let sub_w = sub_w.min(row.w * 0.4);
+            let sub = Rect {
+                x: row.right() - 10.0 - sub_w,
+                w: sub_w,
+                ..*row
+            };
+            self.text_colored(&res.subtitle, &self.fonts.small, sub, p.secondary, 1.0);
+            let name = Rect {
+                x: icon.right() + 10.0,
+                w: (sub.x - 10.0 - icon.right() - 10.0).max(0.0),
+                ..*row
+            };
+            self.text(&res.title, &self.fonts.body_medium, name, 1.0);
+        }
+    }
+
+    /// A rounded text field drawn like the Clipboard's: the hint while it is
+    /// empty and unfocused, the text, a selection and a caret while it has
+    /// the keyboard. Returns the caret it drew (for the IME), if any.
+    fn paint_text_field(
+        &self,
+        r: Rect,
+        query: &str,
+        selection: (usize, usize),
+        focused: bool,
+        hint: &str,
+    ) -> Option<Rect> {
         let p = self.palette;
         self.set_color(p.raised, 1.0);
         self.fill_round(r, 12.0);
-        if clip.focused {
+        if focused {
             self.stroke_round_width(inset(r, 0.75, 0.75), 11.25, p.accent, FOCUS_W);
         }
         let glyph = Rect {
@@ -1870,28 +1965,27 @@ impl Renderer {
         };
         let format = &self.fonts.clip_search;
         let mid = field.y + field.h / 2.0;
-        if clip.query.is_empty() && !clip.focused {
-            let hint = i18n::clip_search_in(lang, clip.total);
-            self.text_colored(&hint, format, field, p.secondary, 1.0);
-            return;
+        if query.is_empty() && !focused {
+            self.text_colored(hint, format, field, p.secondary, 1.0);
+            return None;
         }
-        let len = clip.query.encode_utf16().count();
-        let (a, b) = (clip.selection.0.min(len), clip.selection.1.min(len));
-        let x_of = |n: usize| self.text_width(utf16_prefix(clip.query, n), format);
+        let len = query.encode_utf16().count();
+        let (a, b) = (selection.0.min(len), selection.1.min(len));
+        let x_of = |n: usize| self.text_width(utf16_prefix(query, n), format);
         let caret_x = x_of(b);
         let shift = (caret_x + 2.0 - field.w).max(0.0);
         let origin = field.x - shift;
+        let mut drawn = None;
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe {
             target
                 .rt
                 .PushAxisAlignedClip(&d2d_rect(field), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         }
-        if clip.query.is_empty() {
-            let hint = i18n::clip_search_in(lang, clip.total);
-            self.text_colored(&hint, format, field, p.secondary, 0.6);
+        if query.is_empty() {
+            self.text_colored(hint, format, field, p.secondary, 0.6);
         }
-        if a != b && clip.focused {
+        if a != b && focused {
             let xa = x_of(a);
             self.set_color(p.accent, 0.32);
             let sel = Rect {
@@ -1907,8 +2001,8 @@ impl Renderer {
             w: 4096.0,
             ..field
         };
-        self.text(clip.query, format, typed, 1.0);
-        if clip.focused {
+        self.text(query, format, typed, 1.0);
+        if focused {
             let caret = Rect {
                 x: origin + caret_x - 0.75,
                 y: mid - CARET_H / 2.0,
@@ -1917,9 +2011,10 @@ impl Renderer {
             };
             self.set_color(p.accent, 1.0);
             self.fill_round(caret, 0.0);
-            self.clip_caret.set(Some(caret));
+            drawn = Some(caret);
         }
         unsafe { target.rt.PopAxisAlignedClip() };
+        drawn
     }
 
     /// The kind label (`.k`: icon and uppercase name) at `at`.

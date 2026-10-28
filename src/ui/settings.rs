@@ -73,7 +73,8 @@ use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
-    ClipHotkey, ClipboardSettings, Config, OpenMode, ScreenshotSettings, ShotIgnore, Style,
+    ClipHotkey, ClipboardSettings, Config, OpenMode, ScreenshotSettings, SearchHotkey, ShotIgnore,
+    Style,
 };
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};
@@ -115,6 +116,8 @@ pub enum Action {
     ClipPersist(bool),
     ClipClearOnLock(bool),
     ClipHotkey(ClipHotkey),
+    /// Settings → Umum → Pencarian cepat.
+    SearchHotkey(SearchHotkey),
     ClipFeedbackAll(bool),
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
@@ -193,6 +196,9 @@ pub struct Model {
     pub shell: Shell,
     pub cli_start: CliStart,
     pub open_mode: OpenMode,
+    pub search_hotkey: SearchHotkey,
+    /// The chosen search hotkey could not be registered.
+    pub search_hotkey_failed: bool,
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -231,6 +237,8 @@ impl Model {
             shell: cfg.cli_shell,
             cli_start: cfg.cli_start,
             open_mode: cfg.open_mode,
+            search_hotkey: cfg.search_hotkey,
+            search_hotkey_failed: false,
             robot: cfg.robot,
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
@@ -968,6 +976,8 @@ impl Settings {
             shell: m.shell,
             cli_start: m.cli_start,
             open_mode: m.open_mode,
+            search_hotkey: m.search_hotkey,
+            search_hotkey_failed: m.search_hotkey_failed,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
@@ -1085,6 +1095,10 @@ impl Settings {
                     .iter()
                     .position(|v| *v == m.clip.hotkey)
                     .unwrap_or(0) as f32,
+                Group::SearchHotkey => SearchHotkey::ALL
+                    .iter()
+                    .position(|v| *v == m.search_hotkey)
+                    .unwrap_or(0) as f32,
                 Group::ShotIgnore => usize::from(m.shot.on_ignore == ShotIgnore::Delete) as f32,
             }
         };
@@ -1098,6 +1112,7 @@ impl Settings {
             Group::Shell,
             Group::Motion,
             Group::ClipHotkey,
+            Group::SearchHotkey,
             Group::ShotIgnore,
         ] {
             let (from, to) = (index(group, &old), index(group, new));
@@ -1318,6 +1333,7 @@ impl Settings {
             Hit::ClipPersist => post(Action::ClipPersist(!m.clip.persist)),
             Hit::ClipClearOnLock => post(Action::ClipClearOnLock(!m.clip.clear_on_lock)),
             Hit::ClipHotkey(h) if h != m.clip.hotkey => post(Action::ClipHotkey(h)),
+            Hit::SearchHotkey(h) if h != m.search_hotkey => post(Action::SearchHotkey(h)),
             Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
             Hit::ClipClear if self.clip_confirm => {
                 self.clip_confirm = false;
@@ -1453,6 +1469,7 @@ impl Settings {
             | Hit::OpenMode(_)
             | Hit::Motion(_)
             | Hit::ClipHotkey(_)
+            | Hit::SearchHotkey(_)
             | Hit::ShotIgnore(_) => Vec::new(),
         };
         self.relayout();
@@ -1986,6 +2003,7 @@ pub fn run_demo(args: &[String]) {
             Action::ClipPersist(v) => m.clip.persist = v,
             Action::ClipClearOnLock(v) => m.clip.clear_on_lock = v,
             Action::ClipHotkey(v) => m.clip.hotkey = v,
+            Action::SearchHotkey(v) => m.search_hotkey = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
             Action::ShotPreview(v) => m.shot.preview = v,

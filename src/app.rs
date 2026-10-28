@@ -86,7 +86,7 @@ use crate::ui::geometry::{
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
-    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
+    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame, SearchView,
     SystemView,
 };
 use crate::ui::robot::{
@@ -99,6 +99,10 @@ use crate::ui::window::IslandWindow;
 #[path = "app_clip.rs"]
 mod clip;
 use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
+
+#[path = "app_search.rs"]
+mod quick;
+use quick::{HOTKEY_SEARCH, QUERY_LIMIT, SearchState};
 
 #[path = "app_shot.rs"]
 mod shot;
@@ -208,6 +212,7 @@ thread_local! {
     static DEFERRED_CLI: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_CLI_REDRAW: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_CLIP: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_SEARCH: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -243,6 +248,14 @@ pub fn run(media_log_flag: bool) {
         deliver_clip_key,
     )
     .inspect_err(|e| eprintln!("vale: no Clipboard search: {e}"))
+    .ok();
+    let search_input = CliInput::create_with(
+        hwnd,
+        cli_input::ID_SEARCH,
+        QUERY_LIMIT,
+        deliver_search_key,
+    )
+    .inspect_err(|e| eprintln!("vale: no quick search: {e}"))
     .ok();
     let (tx, rx) = mpsc::channel();
 
@@ -320,6 +333,8 @@ pub fn run(media_log_flag: bool) {
             clip: ClipState::default(),
             shots: Shots::default(),
             clip_input,
+            search: SearchState::default(),
+            search_input,
             cli_cursor: HistoryCursor::default(),
             cli_browsing: false,
             cli_pick: 0,
@@ -356,6 +371,7 @@ pub fn run(media_log_flag: bool) {
         app.check_fullscreen();
         app.check_battery();
         app.clip_start();
+        app.sync_search_hotkey();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
         // An empty notes list would otherwise look like the notes were deleted.
@@ -533,6 +549,9 @@ struct App {
     shots: Shots,
     /// The hidden EDIT behind the Clipboard page's search field.
     clip_input: Option<CliInput>,
+    /// The quick search's own state, and the hidden EDIT behind its field.
+    search: SearchState,
+    search_input: Option<CliInput>,
     /// Up / Down through the history while no suggestions show.
     cli_cursor: HistoryCursor,
     /// The input holds a history entry put there by Up / Down: no
@@ -774,6 +793,10 @@ impl App {
                 }
                 Event::Audio(rows) => {
                     self.on_audio(rows);
+                    continue;
+                }
+                Event::SearchIndex(apps) => {
+                    self.on_search_index(apps);
                     continue;
                 }
                 Event::Clean(event) => {
@@ -1275,6 +1298,9 @@ impl App {
             Effect::CliFavorite { path, on } => self.set_cli_favorite(&path, on),
             Effect::FocusClipSearch => return self.focus_clip_search(),
             Effect::ReleaseClipFocus => self.return_keyboard(),
+            Effect::FocusSearch => return self.focus_search(),
+            Effect::ReleaseSearchFocus => self.release_search(),
+            Effect::SearchRun(i) => return self.run_search(i),
             Effect::Clip(action) => return self.perform_clip(action),
             Effect::Shot(action) => return self.perform_shot(action),
             Effect::ReminderDone(id) => {
@@ -1368,7 +1394,12 @@ impl App {
     /// Slides in the page the wheel just switched to.
     fn follow_page(&mut self, before: Page, now: Instant) {
         let after = self.state.page();
-        if after == before || !matches!(self.state.view(), View::Panel(_)) {
+        // The search comes and goes over a page: no sliding to or from it.
+        if after == before
+            || Page::Search == before
+            || Page::Search == after
+            || !matches!(self.state.view(), View::Panel(_))
+        {
             return;
         }
         // A later page in the owner's order comes in from the right.
@@ -1677,7 +1708,10 @@ impl App {
                 return;
             }
             let input_has = |i: &Option<CliInput>| i.as_ref().is_some_and(CliInput::has_focus);
-            if input_has(&self.cli_input) || input_has(&self.clip_input) {
+            if input_has(&self.cli_input)
+                || input_has(&self.clip_input)
+                || input_has(&self.search_input)
+            {
                 let _ = SetFocus(None);
             }
         }
@@ -1818,6 +1852,9 @@ impl App {
     fn on_input_changed(&mut self) {
         self.on_cli_changed();
         self.on_clip_changed();
+        if self.state.search_open() {
+            self.on_search_changed();
+        }
     }
 
     fn redraw_cli(&mut self) {
@@ -3086,6 +3123,10 @@ impl App {
             .monitor
             .set_limits(self.config.disk_warn_gb, self.config.ram_warn_percent);
         self.clip_follow_config();
+        // A hand edit of the hotkey is picked up too (once started).
+        if self.search.hotkey.is_some() {
+            self.sync_search_hotkey();
+        }
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -3136,6 +3177,7 @@ impl App {
             pomodoro_locked: !matches!(status, PomoStatus::Idle | PomoStatus::Ready),
             calendar: self.calendar.status,
             clip_hotkey_failed: self.clip_hotkey_failed(),
+            search_hotkey_failed: self.search.hotkey_failed,
             ..settings::Model::from_config(&self.config)
         }
     }
@@ -3203,6 +3245,11 @@ impl App {
             SettingsAction::Greeting(on) => {
                 self.config.morning_greeting = on;
                 self.save_config();
+            }
+            SettingsAction::SearchHotkey(h) => {
+                self.config.search_hotkey = h;
+                self.save_config();
+                self.sync_search_hotkey();
             }
             SettingsAction::OpenMode(mode) => {
                 self.config.open_mode = mode;
@@ -3363,6 +3410,10 @@ impl App {
         let query = search.map(CliInput::text).unwrap_or_default();
         let search_sel = search.map_or((0, 0), CliInput::selection);
         let clip_focused = state.clip_focused();
+        let search_field = self.search_input.as_ref();
+        let search_text = search_field.map(CliInput::text).unwrap_or_default();
+        let search_selection = search_field.map_or((0, 0), CliInput::selection);
+        let search_open = state.search_open();
         let clip = clip::clip_view(
             &self.clip,
             self.config.clipboard.enabled,
@@ -3421,6 +3472,13 @@ impl App {
                 menu: state.cli_menu().then_some(&self.cli_menu_view),
             },
             clip,
+            search: SearchView {
+                query: &search_text,
+                selection: search_selection,
+                focused: search_open,
+                results: &self.search.results,
+                selected: self.search.selected,
+            },
             progress: track_progress(state, now),
             robot,
             system: Some(&system),
@@ -3438,6 +3496,11 @@ impl App {
             input.set_ime_caret(caret);
         }
         if clip_focused && let (Some(input), Some(caret)) = (search, self.renderer.clip_caret()) {
+            input.set_ime_caret(caret);
+        }
+        if search_open
+            && let (Some(input), Some(caret)) = (search_field, self.renderer.search_caret())
+        {
             input.set_ime_caret(caret);
         }
     }
@@ -4417,8 +4480,24 @@ fn run_deferred() {
     for key in DEFERRED_CLIP.take() {
         deliver_clip_key(key);
     }
+    for key in DEFERRED_SEARCH.take() {
+        deliver_search_key(key);
+    }
     if DEFERRED_CLI_REDRAW.take() {
         with_app(App::on_input_changed);
+    }
+}
+
+/// `deliver_cli_key` for the quick search's field.
+fn deliver_search_key(key: InputKey) {
+    let mut pending = Some(key);
+    with_app(|app| {
+        if let Some(key) = pending.take() {
+            app.on_search_key(key);
+        }
+    });
+    if let Some(key) = pending {
+        DEFERRED_SEARCH.with_borrow_mut(|queue| queue.push(key));
     }
 }
 
@@ -4589,6 +4668,8 @@ unsafe extern "system" fn wnd_proc(
         WM_HOTKEY => {
             if wparam.0 as i32 == clip::HOTKEY_CLIP {
                 with_app(App::on_clip_hotkey);
+            } else if wparam.0 as i32 == HOTKEY_SEARCH {
+                with_app(App::on_search_hotkey);
             }
             LRESULT(0)
         }
@@ -4598,6 +4679,7 @@ unsafe extern "system" fn wnd_proc(
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 deliver_cli_key(InputKey::Blur);
                 deliver_clip_key(InputKey::Blur);
+                deliver_search_key(InputKey::Blur);
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
@@ -4651,6 +4733,7 @@ unsafe extern "system" fn wnd_proc(
                 flush_editor();
                 // A history change still waiting for its save is written now.
                 with_app(App::clip_shutdown);
+                with_app(App::search_shutdown);
             }
             LRESULT(0)
         }
@@ -4669,6 +4752,7 @@ unsafe extern "system" fn wnd_proc(
             drain_editor_results(hwnd);
             with_app(App::stop_sync);
             with_app(App::clip_shutdown);
+            with_app(App::search_shutdown);
             unsafe {
                 let _ = WTSUnRegisterSessionNotification(hwnd);
             }

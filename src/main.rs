@@ -24,6 +24,7 @@ mod pages;
 mod pomodoro;
 mod reminders;
 mod screenshot;
+mod search;
 mod shortcuts;
 mod sources;
 mod state;

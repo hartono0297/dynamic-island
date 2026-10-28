@@ -34,6 +34,9 @@ pub enum Action {
     Drive(char),
     /// The owner's own tile: `ShellExecute` "open" on its path or address.
     Custom(CustomTile),
+    /// The quick search's result: `ShellExecute` "open" on a shortcut file,
+    /// an `ms-settings:` page or an address the island built itself.
+    Shell(String),
 }
 
 /// A drive's root as Explorer takes it: "C:\".
@@ -144,6 +147,16 @@ pub fn run(action: Action) {
                 SW_SHOWNORMAL,
             );
         },
+        Action::Shell(target) => unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(target.as_str()),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            );
+        },
         Action::Drive(letter) => unsafe {
             ShellExecuteW(
                 None,
@@ -230,6 +243,12 @@ mod tests {
                 assert_ne!(icon(*a), icon(*b));
             }
         }
+    }
+
+    #[test]
+    fn a_search_result_waits_for_the_collapse_like_a_tile() {
+        let a = Action::Shell("ms-settings:display".into());
+        assert_eq!(delay_ms(&a), 120);
     }
 
     #[test]

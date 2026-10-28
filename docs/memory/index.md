@@ -40,6 +40,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
 - [[gestures]]: middle click, swipe and sideways wheel on the music views
+- [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 
 ## Gotchas

@@ -14,6 +14,7 @@ use crate::audio::MixerRow;
 use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
+use crate::search::AppEntry;
 use crate::system::SystemSample;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -149,6 +150,14 @@ pub enum Event {
     ClipHotkey,
     /// The hotkey's panel was not visited in time: it closes.
     ClipHoldEnd,
+    /// The quick search's hotkey: opens it over the page shown (and takes the
+    /// keyboard for its field), or closes it when it is open.
+    SearchHotkey,
+    /// The quick search closes: Esc, Enter on a result, the keyboard leaving.
+    SearchClose,
+    /// The Start Menu's apps, indexed on a background thread. `App` keeps
+    /// them; the reducer has no use for them.
+    SearchIndex(Vec<AppEntry>),
     /// Enter in the search field copied an entry: the panel closes like
     /// after a shortcut, and the keyboard goes back.
     ClipCommit,
@@ -272,6 +281,8 @@ pub enum Hit {
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
+    /// A result row of the quick search (its place in the list).
+    SearchResult(usize),
     /// A built-in tile on the Pintasan page.
     Shortcut(Shortcut),
     /// A custom tile: its place in the tiles the page shows.
@@ -432,6 +443,12 @@ pub enum Effect {
     /// The search field lets go; the window that had the keyboard gets it
     /// back.
     ReleaseClipFocus,
+    /// Give the quick search's field the keyboard (the island activates).
+    FocusSearch,
+    /// The quick search is gone: the keyboard goes back.
+    ReleaseSearchFocus,
+    /// Run result `n` of the quick search's list, then close it.
+    SearchRun(usize),
     /// Something to do with a history entry.
     Clip(ClipAction),
     /// Something to do with the screenshot on preview.
@@ -495,6 +512,10 @@ pub enum Page {
     Cli,
     /// Pintasan, the right-most page.
     Shortcuts,
+    /// The quick search. Not one of `ALL`: only its hotkey opens it, the
+    /// wheel never reaches it, and the page it came over comes back when it
+    /// closes.
+    Search,
 }
 
 impl Page {

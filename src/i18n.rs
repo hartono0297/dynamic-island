@@ -587,6 +587,24 @@ keys! {
     ClipHotkeyDesc => "Buka halaman Clipboard", "Open the Clipboard page";
     ClipHotkeyTaken => "Dipakai aplikasi lain", "Taken by another app";
     ClipHotkeyNone => "Tidak ada", "None";
+
+    // Quick search.
+    SearchTitle => "Pencarian", "Search";
+    SearchHint => "Cari aplikasi, hitung, atau ketik ? untuk web",
+        "Search apps, calculate, or type ? for the web";
+    SearchEmpty => "Ketik untuk mencari", "Type to search";
+    SearchEmptyHint => "Contoh: kalkulator · 2*(3+4) · ? kopi susu",
+        "Try: calculator · 2*(3+4) · ? coffee";
+    SearchNone => "Tidak ada hasil", "No results";
+    SearchNoneHint => "Setelah ? tulis yang dicari di web", "After ? type what to look up on the web";
+    SearchKindApp => "Aplikasi", "App";
+    SearchKindSetting => "Pengaturan Windows", "Windows Settings";
+    SearchCopy => "Enter untuk menyalin", "Enter to copy";
+    SearchKindWeb => "Cari di web", "Search the web";
+    // Settings → Umum → Pencarian cepat.
+    SearchHotkeySetting => "Pencarian", "Search";
+    SearchHotkeyDesc => "Cari dan hitung", "Find and calculate";
+    SearchHotkeyTaken => "Sudah dipakai", "In use";
     ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
     ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";
     ClipClear => "Hapus riwayat", "Clear history";
@@ -1227,6 +1245,14 @@ pub fn clip_search_in(lang: Lang, n: usize) -> String {
         Lang::Id => format!("Cari di {n} item…"),
         Lang::En if n == 1 => "Search 1 item…".to_owned(),
         Lang::En => format!("Search {n} items…"),
+    }
+}
+
+/// The quick search's web row: `Cari "kopi susu" di web`.
+pub fn search_web_title(lang: Lang, query: &str) -> String {
+    match lang {
+        Lang::Id => format!("Cari \"{query}\" di web"),
+        Lang::En => format!("Search the web for \"{query}\""),
     }
 }
 

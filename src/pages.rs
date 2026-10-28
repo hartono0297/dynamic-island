@@ -158,6 +158,8 @@ pub fn page_name(page: Page) -> &'static str {
         Page::System => "System",
         Page::Cli => "Cli",
         Page::Shortcuts => "Shortcuts",
+        // Not in the order; never saved.
+        Page::Search => "Search",
     }
 }
 

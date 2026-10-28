@@ -55,6 +55,8 @@ pub struct Config {
     /// "Mode buka": how the pointer opens the panel (by name; a typo is
     /// Hover).
     pub open_mode: OpenMode,
+    /// "Pencarian cepat": the hotkey that opens the quick search.
+    pub search_hotkey: SearchHotkey,
     /// Swipe, sideways wheel and middle button on the island while music
     /// plays (`gestures`): on unless switched off here.
     pub gestures: bool,
@@ -166,6 +168,13 @@ crate::theme::named_enum! {
     ClipHotkey { Off, CtrlAltV, WinAltV }
 }
 
+crate::theme::named_enum! {
+    /// "Pencarian cepat": the hotkey that opens the quick search; none by
+    /// default. Alt+Space is never offered (it is the window menu); any other
+    /// name, that one included, reads as `Off`.
+    SearchHotkey { Off, CtrlAltSpace, WinAltS }
+}
+
 /// Settings → Clipboard.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -269,6 +278,7 @@ impl Default for Config {
             lyrics: false,
             lyrics_offset_ms: 0,
             gestures: true,
+            search_hotkey: SearchHotkey::Off,
             cli_shell: Shell::PowerShell,
             cli_start: CliStart::Explorer,
             open_mode: OpenMode::Hover,
@@ -684,6 +694,7 @@ mod tests {
     fn round_trips_through_json() {
         let c = Config {
             gestures: false,
+            search_hotkey: SearchHotkey::WinAltS,
             shortcut_tiles: vec![TileEntry {
                 tile: "Lock".into(),
                 on: false,
@@ -1031,6 +1042,21 @@ mod tests {
         // A typo keeps the rest of the file: only the language falls back.
         let typo = parse(r#"{"style":"Notch","language":"inggris"}"#);
         assert_eq!((typo.style, typo.language), (Style::Notch, Lang::Id));
+    }
+
+    #[test]
+    fn the_search_hotkey_is_off_by_default_and_a_typo_or_alt_space_reads_as_off() {
+        assert_eq!(Config::default().search_hotkey, SearchHotkey::Off);
+        assert_eq!(parse(r#"{"style":"Notch"}"#).search_hotkey, SearchHotkey::Off);
+        let named = |name: &str| parse(&format!(r#"{{"search_hotkey":"{name}"}}"#)).search_hotkey;
+        assert_eq!(named("CtrlAltSpace"), SearchHotkey::CtrlAltSpace);
+        assert_eq!(named("WinAltS"), SearchHotkey::WinAltS);
+        // Alt+Space is the window menu: never a choice.
+        assert_eq!(named("AltSpace"), SearchHotkey::Off);
+        assert_eq!(named("ctrlaltspaces"), SearchHotkey::Off);
+        assert_eq!(named(""), SearchHotkey::Off);
+        let odd = parse(r#"{"search_hotkey":"Nope","style":"Notch"}"#);
+        assert_eq!((odd.search_hotkey, odd.style), (SearchHotkey::Off, Style::Notch));
     }
 
     #[test]

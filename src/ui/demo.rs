@@ -55,7 +55,7 @@ use super::geometry::{
 };
 use super::render::{
     CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
-    RobotFrame, ShotView, SystemView,
+    RobotFrame, SearchView, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -116,6 +116,8 @@ struct Scene {
     lyrics_on: bool,
     /// The Pintasan page with custom tiles among the built-in ones.
     custom_tiles: bool,
+    /// The quick search is open with the demo's made-up apps.
+    search: bool,
     /// What the CLI page's card shows.
     cli: CliDemo,
     /// The track with very long names instead of the design's.
@@ -290,6 +292,7 @@ const BASE: Scene = Scene {
     lyric_at: 2_000,
     lyrics_on: false,
     custom_tiles: false,
+    search: false,
     cli: CliDemo::Empty,
     long_media: false,
     robot: None,
@@ -383,7 +386,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 82] = [
+const SCENES: [Scene; 83] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -492,6 +495,10 @@ const SCENES: [Scene; 82] = [
         ..panel("shortcuts-custom", Page::Shortcuts)
     },
     panel("mixer", Page::Mixer),
+    Scene {
+        search: true,
+        ..panel("search", Page::Search)
+    },
     panel("system", Page::System),
     Scene {
         system_low: true,
@@ -1027,6 +1034,11 @@ fn run_scenes(scenes: &[Scene]) {
                 }
             });
             let mixer_rows = demo_mixer();
+            let search_results = if scene.search {
+                demo_search_results()
+            } else {
+                Vec::new()
+            };
             let frame = Frame {
                 view: &view,
                 media: Some(if scene.long_media {
@@ -1080,6 +1092,13 @@ fn run_scenes(scenes: &[Scene]) {
                 lyric_offset_ms: if scene.lyrics_on { -300 } else { 0 },
                 cli: cli.view(),
                 clip: clip_view(&clips, scene.clip),
+                search: SearchView {
+                    query: DEMO_SEARCH_QUERY,
+                    selection: (DEMO_SEARCH_QUERY.len(), DEMO_SEARCH_QUERY.len()),
+                    focused: scene.search,
+                    results: &search_results,
+                    selected: 0,
+                },
                 progress: Some(DEMO_PROGRESS),
                 robot: scene.robot.map(|expr| RobotFrame {
                     expr,
@@ -2057,4 +2076,34 @@ fn demo_mixer() -> Vec<crate::audio::MixerRow> {
         app("Chrome", 0.45, false),
         app("Teams", 0.2, true),
     ]
+}
+
+/// What the quick search's demo scene has typed.
+const DEMO_SEARCH_QUERY: &str = "kal";
+
+/// The demo's results, from a made-up list of apps (never the real Start
+/// Menu): what `search::search` makes of "kal".
+fn demo_search_results() -> Vec<crate::search::SearchResult> {
+    use crate::search::{AppEntry, Labels};
+    let apps: Vec<AppEntry> = ["Kalender", "Kalkulator", "Kamera", "Notepad", "Visual Studio Code"]
+        .iter()
+        .map(|name| AppEntry {
+            name: (*name).into(),
+            path: format!(r"C:\Demo\{name}.lnk"),
+        })
+        .collect();
+    let lang = crate::i18n::lang();
+    let web_title = move |q: &str| crate::i18n::search_web_title(lang, q);
+    crate::search::search(
+        DEMO_SEARCH_QUERY,
+        &apps,
+        lang,
+        &Labels {
+            app: tr(Key::SearchKindApp),
+            setting: tr(Key::SearchKindSetting),
+            copy: tr(Key::SearchCopy),
+            web: tr(Key::SearchKindWeb),
+            web_title: &web_title,
+        },
+    )
 }

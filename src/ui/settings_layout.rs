@@ -14,6 +14,7 @@ use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
     ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
+    SearchHotkey,
     ScreenshotSettings, ShotIgnore, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
@@ -283,6 +284,7 @@ pub enum Hit {
     Lyrics,
     /// "Mode buka": Hover, Hover & tetap or Klik.
     OpenMode(OpenMode),
+    SearchHotkey(SearchHotkey),
     /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
     CliStart(CliStart),
     Shell(Shell),
@@ -372,6 +374,7 @@ pub enum Group {
     Window,
     Lang,
     OpenMode,
+    SearchHotkey,
     CliStart,
     Shell,
     Motion,
@@ -656,6 +659,9 @@ pub struct State<'a> {
     pub cli_start: CliStart,
     /// How the pointer opens the panel.
     pub open_mode: OpenMode,
+    pub search_hotkey: SearchHotkey,
+    /// The chosen search hotkey could not be registered.
+    pub search_hotkey_failed: bool,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -1466,6 +1472,7 @@ fn page_key(p: Page) -> Key {
         Page::Notes => Key::PageNotes,
         Page::Media => Key::PageMedia,
         Page::Mixer => Key::PageMixer,
+        Page::Search => Key::SearchTitle,
         Page::Clipboard => Key::PageClipboard,
         Page::System => Key::PageSystem,
         Page::Cli => Key::PageCli,
@@ -1664,8 +1671,8 @@ pub fn sleep_value(lang: Lang, minutes: u32) -> String {
 }
 
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(8.0 * ROW_H);
-    let rows: [f32; 8] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(9.0 * ROW_H);
+    let rows: [f32; 9] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -1749,6 +1756,24 @@ fn general(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
     b.row_text(card, rows[7], b.t(Key::ShellCli), desc, false, x);
     b.divider(card, rows[7]);
+
+    let items = vec![
+        (Hit::SearchHotkey(SearchHotkey::Off), b.t(Key::ClipHotkeyNone)),
+        (
+            Hit::SearchHotkey(SearchHotkey::CtrlAltSpace),
+            "Ctrl+Alt+Space".to_owned(),
+        ),
+        (Hit::SearchHotkey(SearchHotkey::WinAltS), "Win+Alt+S".to_owned()),
+    ];
+    let selected = index_of(SearchHotkey::ALL, &s.search_hotkey);
+    let x = b.segmented(Group::SearchHotkey, RIGHT, cy(rows[8]), items, selected);
+    let desc = if s.search_hotkey_failed && s.search_hotkey != SearchHotkey::Off {
+        (b.t(Key::SearchHotkeyTaken), Tone::Bad)
+    } else {
+        (b.t(Key::SearchHotkeyDesc), Tone::Secondary)
+    };
+    b.row_text(card, rows[8], b.t(Key::SearchHotkeySetting), Some(desc), false, x);
+    b.divider(card, rows[8]);
 
     warnings_card(b, s);
 }
@@ -2316,6 +2341,12 @@ mod tests {
                         } else {
                             OpenMode::Hover
                         },
+                        search_hotkey: if locked {
+                            SearchHotkey::WinAltS
+                        } else {
+                            SearchHotkey::Off
+                        },
+                        search_hotkey_failed: locked,
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -3469,14 +3500,15 @@ mod tests {
                         "{lang:?} {key:?}"
                     );
                 }
-                // The card still ends above the window's bottom margin.
-                assert!(l.cards[0].bottom() <= CLIENT_H - PAD);
+                // The card ends above the window's bottom margin once the
+                // section is scrolled to its end (it has nine rows).
+                assert!(l.cards[0].bottom() - l.scroll_max <= CLIENT_H - PAD);
             }
         }
     }
 
     #[test]
-    fn shell_choice_is_the_last_row_of_general() {
+    fn shell_choice_is_the_row_above_the_search_hotkey() {
         for lang in [Lang::Id, Lang::En] {
             for shell in Shell::ALL {
                 let s = State {
@@ -3497,8 +3529,9 @@ mod tests {
                     l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
                     Some(Hit::Shell(Shell::Cmd))
                 );
-                // Below every other control of the first card (the
-                // warnings have a card of their own under it).
+                // Below every other control of the first card but the search
+                // hotkey, which is the last row (the warnings have a card
+                // of their own under it).
                 let first = l.cards[0];
                 for c in &l.controls {
                     let in_first = c.bounds().bottom() <= first.bottom();
@@ -3506,7 +3539,7 @@ mod tests {
                         && !matches!(
                             c,
                             Control::Segmented {
-                                group: Group::Shell,
+                                group: Group::Shell | Group::SearchHotkey,
                                 ..
                             }
                         )
@@ -3514,6 +3547,9 @@ mod tests {
                         assert!(c.bounds().bottom() <= track.y, "{c:?}");
                     }
                 }
+                let (hotkey, _, _) = l.segmented(Group::SearchHotkey).expect("Search hotkey");
+                assert_eq!(hotkey.y - track.y, ROW_H);
+                assert!(hotkey.bottom() <= first.bottom());
                 assert!(track.bottom() <= first.bottom());
                 for key in [Key::ShellCli, Key::ShellCliDesc] {
                     assert!(l.texts.iter().any(|t| t.text == text(lang, key)));
