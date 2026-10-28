@@ -110,6 +110,13 @@ pub(super) fn shot_view<'a>(shots: &'a Shots, view: &View) -> Option<ShotView<'a
     })
 }
 
+/// A preview that ran its full time untouched: the screenshot to delete,
+/// only while "Jika diabaikan" is Hapus now (set back to Simpan meanwhile,
+/// it is kept). Simpan, the default, never deletes.
+pub(super) fn delete_when_ignored(on_ignore: ShotIgnore, id: u64) -> Option<u64> {
+    (on_ignore == ShotIgnore::Delete).then_some(id)
+}
+
 /// A change in Settings → Clipboard → Screenshot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShotSetting {
@@ -139,7 +146,8 @@ impl App {
         let thumb = dib
             .as_deref()
             .and_then(|d| {
-                image::dib_info(d).map(|i| image::thumbnail_fit(d, &i, PREVIEW_MAX.0, PREVIEW_MAX.1))
+                image::dib_info(d)
+                    .map(|i| image::thumbnail_fit(d, &i, PREVIEW_MAX.0, PREVIEW_MAX.1))
             })
             .unwrap_or_else(|| img.thumb.clone());
         let state = ShotState {
@@ -254,7 +262,11 @@ impl App {
                     self.shots.checking = None;
                     self.stop_shot_retry();
                 }
-                let waiting = self.shots.waiting.as_ref().is_some_and(|s| s.look.id == shot);
+                let waiting = self
+                    .shots
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|s| s.look.id == shot);
                 if waiting {
                     if self.config.screenshot.preview && !self.state.fullscreen() {
                         self.show_waiting_shot();
@@ -277,7 +289,12 @@ impl App {
                 if looking {
                     self.shots.checking = None;
                 }
-                if self.shots.waiting.as_ref().is_some_and(|s| s.look.id == shot) {
+                if self
+                    .shots
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|s| s.look.id == shot)
+                {
                     self.shots.waiting = None;
                 }
             }
@@ -362,6 +379,10 @@ impl App {
                 None
             }
             ShotAction::Delete(id) => self.delete_shot(id),
+            ShotAction::DeleteIgnored(id) => {
+                let id = delete_when_ignored(self.config.screenshot.on_ignore, id)?;
+                self.delete_shot(id)
+            }
         }
     }
 
@@ -454,7 +475,18 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::delete_when_ignored;
     use crate::clipboard::History;
+    use crate::config::{Config, ShotIgnore};
+
+    #[test]
+    fn an_ignored_preview_deletes_only_with_hapus_set_now() {
+        // The default is Simpan: an ignored preview keeps its file.
+        let default = Config::default().screenshot.on_ignore;
+        assert_eq!(default, ShotIgnore::Keep);
+        assert_eq!(delete_when_ignored(default, 3), None);
+        assert_eq!(delete_when_ignored(ShotIgnore::Delete, 3), Some(3));
+    }
     use crate::clipboard::image::tests::dib24;
     use crate::clipboard::store::{ClipSnapshot, Ingested, ingest};
     use crate::screenshot::{ClipCandidate, FileCandidate, pick_match, thumb_hash};

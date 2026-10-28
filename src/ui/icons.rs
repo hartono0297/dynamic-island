@@ -1184,7 +1184,12 @@ mod tests {
         assert_eq!(count(Icon::Download, 0), "MLMLLML");
         assert_eq!(Icon::Windows.parts().len(), 4);
         // The preview's copy: the front sheet, and the back one's corner.
-        assert!(Icon::Copy.parts().iter().all(|p| p.layer() == Layer::Stroke));
+        assert!(
+            Icon::Copy
+                .parts()
+                .iter()
+                .all(|p| p.layer() == Layer::Stroke)
+        );
         assert_eq!(count(Icon::Copy, 1), "MLALALAL");
     }
 

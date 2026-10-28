@@ -2573,9 +2573,9 @@ mod tests {
             );
             // The defaults: Simpan chosen, 8 s.
             let chosen = l.controls.iter().find_map(|c| match c {
-                Control::Segmented { group, selected, .. } if *group == Group::ShotIgnore => {
-                    Some(*selected)
-                }
+                Control::Segmented {
+                    group, selected, ..
+                } if *group == Group::ShotIgnore => Some(*selected),
                 _ => None,
             });
             assert_eq!(chosen, Some(0), "Simpan");
@@ -2599,7 +2599,11 @@ mod tests {
                     "{lang:?} {key:?}"
                 );
             }
-            assert!(l.texts.iter().any(|t| t.text == text(lang, Key::SecScreenshot).to_uppercase()));
+            assert!(
+                l.texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::SecScreenshot).to_uppercase())
+            );
             // The preview off: only its toggle takes clicks.
             let off = State {
                 shot: ScreenshotSettings {

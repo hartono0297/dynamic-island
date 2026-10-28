@@ -47,10 +47,10 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOULDER, ShapeRect, badge_letter, badge_style,
-    compact_layout, compact_layout_robot, corner_radius, equalizer_heights, idle_layout,
-    lyric_layout, lyric_layout_robot, lyric_overflow, notice_action, notice_action_w,
-    notice_layout, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, shot_fit, shot_layout, shot_regions,
+    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, SHOULDER,
+    ShapeRect, badge_letter, badge_style, compact_layout, compact_layout_robot, corner_radius,
+    equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot, lyric_overflow,
+    notice_action, notice_action_w, notice_layout, shot_fit, shot_layout, shot_regions,
 };
 use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
@@ -1430,8 +1430,20 @@ impl Renderer {
         // `.act`, `.act.pri` and `.act.dng`.
         let buttons = [
             (Icon::Copy, i18n::Key::ShotCopyAgain, p.raised, 1.0, p.text),
-            (Icon::Download, i18n::Key::ShotKeep, p.accent, 1.0, p.on_accent),
-            (Icon::Trash, i18n::Key::ShotDelete, theme::SOFT_RED, 0.14, theme::SOFT_RED),
+            (
+                Icon::Download,
+                i18n::Key::ShotKeep,
+                p.accent,
+                1.0,
+                p.on_accent,
+            ),
+            (
+                Icon::Trash,
+                i18n::Key::ShotDelete,
+                theme::SOFT_RED,
+                0.14,
+                theme::SOFT_RED,
+            ),
         ];
         for (r, (icon, key, fill, alpha, ink)) in l.buttons.into_iter().zip(buttons) {
             self.set_color(fill, alpha);

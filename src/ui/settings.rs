@@ -72,9 +72,7 @@ use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
-use crate::config::{
-    ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style,
-};
+use crate::config::{ClipHotkey, ClipboardSettings, Config, ScreenshotSettings, ShotIgnore, Style};
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pomodoro::PomoSettings;

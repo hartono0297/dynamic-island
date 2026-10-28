@@ -401,10 +401,13 @@ pub enum ShotAction {
     Copy(u64),
     /// "Simpan": the file stays; "Disimpan" shows.
     Keep(u64),
-    /// "Hapus" (or a full-time expiry with "Jika diabaikan: Hapus"): the
-    /// file to the Recycle Bin, the clipboard emptied if it still holds the
-    /// image, its history card gone. Only from those two.
+    /// "Hapus" clicked: the file to the Recycle Bin, the clipboard emptied
+    /// if it still holds the image, its history card gone.
     Delete(u64),
+    /// The preview ran its full time untouched and was raised with "Jika
+    /// diabaikan: Hapus". `App` deletes as for `Delete` only if that is
+    /// still the setting now; otherwise the file is kept (Simpan).
+    DeleteIgnored(u64),
     /// The thumbnail: the file in its default app.
     Open(u64),
 }

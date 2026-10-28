@@ -1076,6 +1076,54 @@ mod tests {
     }
 
     #[test]
+    fn the_screenshot_preview_takes_its_clicks() {
+        let s = shape_with_robot(Style::Notch, ShapeKind::NoticeShot, true);
+        let l = shot_layout(s);
+        let mut regions = HitRegions {
+            shape: Some((Style::Notch, s)),
+            regions: shot_regions(&l, 7),
+            ..HitRegions::default()
+        };
+        let mid = |r: Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        for (r, hit) in
+            l.buttons
+                .iter()
+                .zip([Hit::ShotCopy(7), Hit::ShotKeep(7), Hit::ShotDelete(7)])
+        {
+            let (x, y) = mid(*r);
+            assert_eq!(regions.hit(x, y), Some(hit));
+        }
+        let (x, y) = mid(l.thumb);
+        assert_eq!(regions.hit(x, y), Some(Hit::ShotOpen(7)));
+        // The title is no button: a click there is the notice's own.
+        let (x, y) = mid(l.title);
+        assert_eq!(regions.hit(x, y), Some(Hit::Body));
+        regions.regions.clear();
+        assert_eq!(
+            regions.hit(mid(l.buttons[2]).0, mid(l.buttons[2]).1),
+            Some(Hit::Body)
+        );
+    }
+
+    #[test]
+    fn a_screenshot_fits_its_box_whole() {
+        let area = Rect {
+            x: 10.0,
+            y: 20.0,
+            w: 230.0,
+            h: 136.0,
+        };
+        // 16:9 is a little wider than the box: full width, centred down.
+        let f = shot_fit(area, 1280.0, 720.0);
+        assert!((f.w - 230.0).abs() < 0.01 && f.h < 136.0);
+        assert!((f.y - area.y - (136.0 - f.h) / 2.0).abs() < 0.01);
+        // A tall one: full height, centred across.
+        let f = shot_fit(area, 400.0, 1200.0);
+        assert!((f.h - 136.0).abs() < 0.01 && f.w < 230.0 && f.x > area.x);
+        assert_eq!(shot_fit(area, 0.0, 10.0), area);
+    }
+
+    #[test]
     fn robot_widens_compact_shapes_only_when_on() {
         for style in [Style::Pill, Style::Notch] {
             for kind in [

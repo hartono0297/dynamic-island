@@ -75,12 +75,10 @@ pub fn thumb_hash(bgra: &[u8], w: u32, h: u32) -> Option<u64> {
         *cell = sum / ((x1 - x0) * (y1 - y0)) as f64;
     }
     let mean = cells.iter().sum::<f64>() / 64.0;
-    Some(
-        cells
-            .iter()
-            .enumerate()
-            .fold(0u64, |acc, (i, &c)| if c > mean { acc | 1 << i } else { acc }),
-    )
+    Some(cells.iter().enumerate().fold(
+        0u64,
+        |acc, (i, &c)| if c > mean { acc | 1 << i } else { acc },
+    ))
 }
 
 /// The hashes say the same picture, or one of them is unknown.
@@ -97,7 +95,10 @@ fn hash_agrees(clip: Option<u64>, file: Option<u64>) -> bool {
 /// is unknown; then the closest in time wins (the later one on a tie). A
 /// different size, a different picture or a time outside the window is no
 /// match: never a guess.
-pub fn pick_match<'a>(clip: &ClipCandidate, files: &'a [FileCandidate]) -> Option<&'a FileCandidate> {
+pub fn pick_match<'a>(
+    clip: &ClipCandidate,
+    files: &'a [FileCandidate],
+) -> Option<&'a FileCandidate> {
     files
         .iter()
         .filter(|f| in_window(clip, f) && hash_agrees(clip.hash, f.hash))
@@ -181,9 +182,11 @@ pub fn image_size(b: &[u8]) -> Option<(u32, u32)> {
 
 /// `.png`, `.jpg` or `.jpeg`, any case.
 fn is_image_name(p: &Path) -> bool {
-    p.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| ["png", "jpg", "jpeg"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["png", "jpg", "jpeg"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 /// Unix ms of `t`; 0 before 1970.
@@ -223,8 +226,8 @@ pub fn list_folder(dir: &Path, from_ms: i64, to_ms: i64) -> Vec<FileCandidate> {
             continue;
         }
         let mut head = Vec::new();
-        let read = std::fs::File::open(&path)
-            .and_then(|f| f.take(HEADER_BYTES).read_to_end(&mut head));
+        let read =
+            std::fs::File::open(&path).and_then(|f| f.take(HEADER_BYTES).read_to_end(&mut head));
         let Some((w, h)) = read.ok().and_then(|_| image_size(&head)) else {
             continue;
         };
@@ -383,7 +386,10 @@ mod tests {
             file("unknown.png", AT + 50, 1280, 720),
             hashed(file("same.png", AT + 2_000, 1280, 720), PIC),
         ];
-        assert_eq!(pick_match(&clip, &files).unwrap().path, PathBuf::from("same.png"));
+        assert_eq!(
+            pick_match(&clip, &files).unwrap().path,
+            PathBuf::from("same.png")
+        );
         // An unknown hash on either side falls back to time and size.
         assert!(pick_match(&clip, &files[..1]).is_some());
         assert!(pick_match(&CLIP, &files[1..]).is_some());
@@ -453,7 +459,10 @@ mod tests {
             file("prev.png", AT - 500, 1280, 720),
             file("next.png", AT + 500, 1280, 720),
         ];
-        assert_eq!(pick_match(&CLIP, &tie).unwrap().path, PathBuf::from("next.png"));
+        assert_eq!(
+            pick_match(&CLIP, &tie).unwrap().path,
+            PathBuf::from("next.png")
+        );
     }
 
     #[test]

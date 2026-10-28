@@ -2146,9 +2146,18 @@ mod tests {
     #[test]
     fn screenshot_texts() {
         use crate::screenshot::FileOutcome;
-        assert_eq!(shot_size(Lang::Id, 1280, 720, 250_880), "1280 × 720 · 245 KB");
-        assert_eq!(shot_size(Lang::Id, 3840, 2160, 1_887_437), "3840 × 2160 · 1,8 MB");
-        assert_eq!(shot_size(Lang::En, 3840, 2160, 1_887_437), "3840 × 2160 · 1.8 MB");
+        assert_eq!(
+            shot_size(Lang::Id, 1280, 720, 250_880),
+            "1280 × 720 · 245 KB"
+        );
+        assert_eq!(
+            shot_size(Lang::Id, 3840, 2160, 1_887_437),
+            "3840 × 2160 · 1,8 MB"
+        );
+        assert_eq!(
+            shot_size(Lang::En, 3840, 2160, 1_887_437),
+            "3840 × 2160 · 1.8 MB"
+        );
         assert_eq!(shot_size(Lang::En, 2, 2, 90), "2 × 2 · 1 KB");
         assert_eq!(
             shot_deleted(Lang::Id, FileOutcome::Recycled, true),

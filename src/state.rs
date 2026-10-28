@@ -1167,7 +1167,7 @@ impl IslandState {
                 } = n.kind
                     && !self.shot_touched
                 {
-                    effects.push(Effect::Shot(ShotAction::Delete(shot)));
+                    effects.push(Effect::Shot(ShotAction::DeleteIgnored(shot)));
                 }
                 self.current = None;
             }
@@ -3921,7 +3921,12 @@ mod tests {
     fn deletes(effects: &[Effect]) -> usize {
         effects
             .iter()
-            .filter(|e| matches!(e, Effect::Shot(ShotAction::Delete(_))))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Effect::Shot(ShotAction::Delete(_) | ShotAction::DeleteIgnored(_))
+                )
+            })
             .count()
     }
 
@@ -3998,7 +4003,10 @@ mod tests {
         ] {
             let mut s = st();
             s.apply(Event::Notice(shot(1, true)), t0);
-            assert_eq!(s.apply(Event::Click(hit), t0 + secs(1)), [Effect::Shot(action)]);
+            assert_eq!(
+                s.apply(Event::Click(hit), t0 + secs(1)),
+                [Effect::Shot(action)]
+            );
             assert!(!s.has_shot(1));
             // Long after: nothing more, the opt-in delete included.
             assert!(s.apply(Event::Tick, t0 + secs(60)).is_empty());
@@ -4023,7 +4031,7 @@ mod tests {
         s.apply(Event::Notice(shot(1, true)), t0);
         assert_eq!(deletes(&s.apply(Event::Tick, t0 + secs(7))), 0);
         let fx = s.apply(Event::Tick, t0 + secs(8));
-        assert_eq!(fx, [Effect::Shot(ShotAction::Delete(1))]);
+        assert_eq!(fx, [Effect::Shot(ShotAction::DeleteIgnored(1))]);
         assert_eq!(s.view(), View::Idle);
         assert!(s.apply(Event::Tick, t0 + secs(20)).is_empty(), "once");
         // Never when it did not run its time untouched.
@@ -4031,7 +4039,10 @@ mod tests {
             vec![(Event::Click(Hit::Body), secs(3))],
             vec![(Event::Notice(shot(2, false)), secs(3))],
             vec![(Event::Fullscreen(true), secs(3))],
-            vec![(Event::Hover(true), secs(3)), (Event::Hover(false), secs(4))],
+            vec![
+                (Event::Hover(true), secs(3)),
+                (Event::Hover(false), secs(4)),
+            ],
             vec![(Event::Click(Hit::ShotOpen(1)), secs(3))],
         ];
         for case in cases {
@@ -4042,10 +4053,7 @@ mod tests {
                 case.iter().map(|(e, d)| (e.clone(), t0 + *d)).collect(),
             ));
             fx.extend(s.apply(Event::Tick, t0 + secs(60)));
-            assert!(
-                !fx.contains(&Effect::Shot(ShotAction::Delete(1))),
-                "{case:?}"
-            );
+            assert_eq!(deletes(&fx), 0, "{case:?}");
         }
     }
 
