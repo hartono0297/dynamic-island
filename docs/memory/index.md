@@ -61,3 +61,4 @@ One note per decision, gotcha or convention. Link each new note here.
 
 - [[studio-bata-logo-sources]]
 - [[screenshot-capture-script]]
+- [[logo]]: the cat head is the logo (icon, tray, Settings, README); Windows icon caches

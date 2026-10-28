@@ -1,9 +1,11 @@
-# Renders the Vale logo (the "eared tile": terracotta tile with two cat ears,
-# espresso island, cream dot, fixed brand colours) and writes assets\icon.ico
-# (16-256 px) and assets\logo-256.png. The vector source is assets\logo.svg;
-# keep both in sync. Sizes up to 32 px use hand-snapped geometry so the tile
-# and pill keep crisp edges; larger sizes scale the 256 px design and round to
-# whole pixels.
+# Renders the Vale logo, the cat head (a flat-based dome, two ears and two plain
+# espresso pill eyes, fixed brand colours, the same cat as the one in the
+# notch, see src/ui/robot.rs) and writes assets\icon.ico (16-256 px) and
+# assets\logo-256.png. The vector source is assets\logo.svg (and its copy
+# site\img\logo.svg); the settings window draws the same shapes in
+# `fn logo` of src/ui/settings_controls.rs. Keep all of them in sync.
+# Sizes up to 32 px snap the eyes to whole pixels so they stay crisp; the head
+# and ears scale with the 256 px design.
 # Every size is drawn at 8x and reduced, which gives clean anti-aliasing.
 # Requires Windows PowerShell 5.1 or later. Per-size PNGs go to -OutDir
 # (default target\icon) for inspection.
@@ -50,86 +52,50 @@ New-Item -ItemType Directory -Force -Path $assets, $OutDir | Out-Null
 $sizes = 16, 20, 24, 32, 40, 48, 64, 128, 256
 $supersample = 8
 
-$tileColor = [System.Drawing.Color]::FromArgb(255, 0xE2, 0x68, 0x3C)
-$pillColor = [System.Drawing.Color]::FromArgb(255, 0x17, 0x12, 0x0F)
-$dotColor = [System.Drawing.Color]::FromArgb(255, 0xF4, 0xED, 0xE4)
+$headColor = [System.Drawing.Color]::FromArgb(255, 0xE2, 0x68, 0x3C)
+$eyeColor = [System.Drawing.Color]::FromArgb(255, 0x17, 0x12, 0x0F)
 
-# The 256 px design (logo.svg): the tile is x 12..244, y 52..244, radius 72;
-# the pill 140 x 48 centred at y 146; the ears are triangles with a 16 px round
-# stroke, (30,104) (52,22) (116,64) and mirrored. Fractions are of the tile's
-# width (232) or height (192).
-$design = @{ Inset = 12 / 256; Top = 52 / 256; Radius = 72 / 232; PillW = 140 / 232; PillH = 48 / 232; PillMid = 94 / 192; Dot = 19 / 48 }
+# The 256 px design (logo.svg): the robot's 64 grid scaled by 4.6 about the
+# middle of the cat. The head spans x 13..243, y 97..235 (a dome on a flat
+# base, bottom corners 18.5); the ears are triangles with a 23 px round
+# stroke, (22,157) (36,32.5) (105,106) and mirrored; the eyes are 26 x 46
+# pills at x 78 and 152, y 147.5.
 $ears = @(
-    @(@(30, 104), @(52, 22), @(116, 64)),
-    @(@(226, 104), @(204, 22), @(140, 64))
+    @(@(22, 157), @(36, 32.5), @(105, 106)),
+    @(@(234, 157), @(220, 32.5), @(151, 106))
 )
+$earStroke = 23
+$eyes = @(@(78, 147.5), @(152, 147.5))
+$eyeW = 26
+$eyeH = 46
 
-# Hand-tuned small sizes: tile inset (sides and bottom) and top, pill width,
-# height and top (absolute y), dot diameter. The pill is centred on whole
-# pixels and the dot on the pill's right end cap. 16 px spans the whole width
-# so the terracotta reads on dark and light taskbars alike.
-$hand = @{
-    16 = @{ Inset = 0; Top = 3; PillW = 10; PillH = 4; PillY = 8; Dot = 2 }
-    20 = @{ Inset = 1; Top = 4; PillW = 12; PillH = 4; PillY = 10; Dot = 2 }
-    24 = @{ Inset = 1; Top = 5; PillW = 14; PillH = 6; PillY = 11; Dot = 2 }
-    32 = @{ Inset = 1; Top = 7; PillW = 18; PillH = 6; PillY = 16; Dot = 2 }
+# GDI+ draws only cubic curves: a quadratic (p0, c, p1) becomes the cubic with
+# controls p0 + 2/3 (c - p0) and p1 + 2/3 (c - p1).
+function Add-Quad($path, $p0, $c, $p1, [double]$k) {
+    $ax = ($p0[0] + 2 / 3 * ($c[0] - $p0[0])) * $k
+    $ay = ($p0[1] + 2 / 3 * ($c[1] - $p0[1])) * $k
+    $bx = ($p1[0] + 2 / 3 * ($c[0] - $p1[0])) * $k
+    $by = ($p1[1] + 2 / 3 * ($c[1] - $p1[1])) * $k
+    $path.AddBezier([single]($p0[0] * $k), [single]($p0[1] * $k), [single]$ax, [single]$ay, [single]$bx, [single]$by, [single]($p1[0] * $k), [single]($p1[1] * $k))
 }
 
-function Round-Parity([double]$value, [int]$parity) {
-    # Nearest integer whose parity matches $parity (0 even, 1 odd).
-    $low = [math]::Floor($value)
-    if (($low % 2) -ne $parity) { $low -= 1 }
-    if (($value - $low) -le 1) { return [int]$low }
-    return [int]($low + 2)
-}
-
-function Get-Geometry([int]$size) {
-    if ($hand.ContainsKey($size)) {
-        $g = $hand[$size]
-        $inset = $g.Inset; $top = $g.Top; $pillW = $g.PillW; $pillH = $g.PillH; $pillY = $g.PillY; $dot = $g.Dot
-    } else {
-        $inset = [int][math]::Round($size * $design.Inset)
-        $top = [int][math]::Round($size * $design.Top)
-        $tile = $size - 2 * $inset
-        $tileH = $size - $inset - $top
-        # Same parity as the canvas keeps the pill centred on whole pixels.
-        $pillW = Round-Parity ($tile * $design.PillW) ($size % 2)
-        $pillH = Round-Parity ($tile * $design.PillH) ($size % 2)
-        # Keep the design's pill centre, so the snapped pill stays centred.
-        $pillY = $top + [int][math]::Round($tileH * $design.PillMid - $pillH / 2)
-        if ($size -ge 128) {
-            # Big enough for the exact dot; anti-aliasing hides the half pixels.
-            $dot = $pillH * $design.Dot
-        } else {
-            # Same parity as the pill height keeps the dot on whole pixels.
-            $dot = Round-Parity ($pillH * $design.Dot) ($pillH % 2)
-        }
-    }
-    $pillX = ($size - $pillW) / 2
-    return @{
-        Inset = $inset; Top = $top; TileW = $size - 2 * $inset; TileH = $size - $inset - $top
-        PillX = $pillX; PillY = $pillY; PillW = $pillW; PillH = $pillH
-        DotCx = $pillX + $pillW - $pillH / 2; DotCy = $pillY + $pillH / 2; Dot = $dot
-    }
-}
-
-function New-RoundRectPath([double]$x, [double]$y, [double]$w, [double]$h, [double]$r) {
-    $d = 2 * $r
+function New-HeadPath([double]$k) {
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc([single]$x, [single]$y, [single]$d, [single]$d, 180, 90)
-    $path.AddArc([single]($x + $w - $d), [single]$y, [single]$d, [single]$d, 270, 90)
-    $path.AddArc([single]($x + $w - $d), [single]($y + $h - $d), [single]$d, [single]$d, 0, 90)
-    $path.AddArc([single]$x, [single]($y + $h - $d), [single]$d, [single]$d, 90, 90)
+    $path.StartFigure()
+    $path.AddLine([single](13 * $k), [single](216.5 * $k), [single](13 * $k), [single](175 * $k))
+    Add-Quad $path @(13, 175) @(13, 97) @(128, 97) $k
+    Add-Quad $path @(128, 97) @(243, 97) @(243, 175) $k
+    $path.AddLine([single](243 * $k), [single](175 * $k), [single](243 * $k), [single](216.5 * $k))
+    Add-Quad $path @(243, 216.5) @(243, 235) @(224.6, 235) $k
+    $path.AddLine([single](224.6 * $k), [single](235 * $k), [single](31.4 * $k), [single](235 * $k))
+    Add-Quad $path @(31.4, 235) @(13, 235) @(13, 216.5) $k
     $path.CloseFigure()
     return $path
 }
 
-# An ear's triangle, from the 256 px design onto this size's tile: x follows
-# the tile's width, y its top and height, so the ears stay on the snapped tile.
-function New-EarPath($points, $g, [double]$s) {
-    $kx = $g.TileW / 232; $ky = $g.TileH / 192
+function New-EarPath($points, [double]$k) {
     $pts = foreach ($p in $points) {
-        New-Object System.Drawing.PointF ([single](($g.Inset + ($p[0] - 12) * $kx) * $s)), ([single](($g.Top + ($p[1] - 52) * $ky) * $s))
+        New-Object System.Drawing.PointF ([single]($p[0] * $k)), ([single]($p[1] * $k))
     }
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
     $path.AddPolygon([System.Drawing.PointF[]]$pts)
@@ -138,46 +104,49 @@ function New-EarPath($points, $g, [double]$s) {
 
 function New-PillPath([double]$x, [double]$y, [double]$w, [double]$h) {
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc([single]$x, [single]$y, [single]$h, [single]$h, 90, 180)
-    $path.AddArc([single]($x + $w - $h), [single]$y, [single]$h, [single]$h, 270, 180)
+    if ($w -le $h) {
+        $path.AddArc([single]$x, [single]$y, [single]$w, [single]$w, 180, 180)
+        $path.AddArc([single]$x, [single]($y + $h - $w), [single]$w, [single]$w, 0, 180)
+    } else {
+        $path.AddArc([single]$x, [single]$y, [single]$h, [single]$h, 90, 180)
+        $path.AddArc([single]($x + $w - $h), [single]$y, [single]$h, [single]$h, 270, 180)
+    }
     $path.CloseFigure()
     return $path
 }
 
 function Render-Logo([int]$size) {
-    $g = Get-Geometry $size
     $s = $supersample
+    $k = $size / 256.0
     $big = New-Object System.Drawing.Bitmap ($size * $s), ($size * $s), ([System.Drawing.Imaging.PixelFormat]::Format32bppPArgb)
     $gfx = [System.Drawing.Graphics]::FromImage($big)
     $gfx.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $gfx.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $gfx.Clear([System.Drawing.Color]::Transparent)
 
-    $tileBrush = New-Object System.Drawing.SolidBrush $tileColor
-    $earPen = New-Object System.Drawing.Pen $tileColor, ([single](16 * $g.TileW / 232 * $s))
+    $headBrush = New-Object System.Drawing.SolidBrush $headColor
+    $earPen = New-Object System.Drawing.Pen $headColor, ([single]($earStroke * $k * $s))
     $earPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
     foreach ($ear in $ears) {
-        $path = New-EarPath $ear $g $s
-        $gfx.FillPath($tileBrush, $path)
+        $path = New-EarPath $ear ($k * $s)
+        $gfx.FillPath($headBrush, $path)
         $gfx.DrawPath($earPen, $path)
     }
     $earPen.Dispose()
-    $radius = $g.TileW * $design.Radius
-    $tile = New-RoundRectPath ($g.Inset * $s) ($g.Top * $s) ($g.TileW * $s) ($g.TileH * $s) ($radius * $s)
-    $gfx.FillPath($tileBrush, $tile)
+    $gfx.FillPath($headBrush, (New-HeadPath ($k * $s)))
 
-    $pillBrush = New-Object System.Drawing.SolidBrush $pillColor
-    $gfx.FillPath($pillBrush, (New-PillPath ($g.PillX * $s) ($g.PillY * $s) ($g.PillW * $s) ($g.PillH * $s)))
-
-    $dotBrush = New-Object System.Drawing.SolidBrush $dotColor
-    $d = $g.Dot * $s
-    $dx = $g.DotCx * $s - $d / 2
-    $dy = $g.DotCy * $s - $d / 2
-    if ($g.Dot -le 2) {
-        # A 2 px circle smears into four pale pixels; a square stays a dot.
-        $gfx.FillRectangle($dotBrush, [single]$dx, [single]$dy, [single]$d, [single]$d)
-    } else {
-        $gfx.FillEllipse($dotBrush, [single]$dx, [single]$dy, [single]$d, [single]$d)
+    # Eyes: the design's, or snapped to whole pixels at the small sizes.
+    $eyeBrush = New-Object System.Drawing.SolidBrush $eyeColor
+    foreach ($eye in $eyes) {
+        $x = $eye[0] * $k; $y = $eye[1] * $k; $w = $eyeW * $k; $h = $eyeH * $k
+        if ($size -le 32) {
+            $w2 = [math]::Max(2, [math]::Round($w))
+            $h2 = [math]::Max(4, [math]::Round($h))
+            $x = [math]::Round($x + ($w - $w2) / 2)
+            $y = [math]::Round($y + ($h - $h2) / 2)
+            $w = $w2; $h = $h2
+        }
+        $gfx.FillPath($eyeBrush, (New-PillPath ($x * $s) ($y * $s) ($w * $s) ($h * $s)))
     }
     $gfx.Dispose()
 

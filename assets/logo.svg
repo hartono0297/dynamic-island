@@ -1,12 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- Vector source of the Vale logo, the "eared tile": a terracotta tile with
-       two cat ears, an espresso island and a cream camera dot. These are fixed
-       brand colours, independent of the user's accent. scripts/make-icon.ps1
-       draws the same shapes and src/ui/settings_controls.rs draws them in the
-       settings window. The ears are triangles with a 16 px round stroke. -->
-  <path d="M30 104L52 22L116 64Z" fill="#E2683C" stroke="#E2683C" stroke-width="16" stroke-linejoin="round"/>
-  <path d="M226 104L204 22L140 64Z" fill="#E2683C" stroke="#E2683C" stroke-width="16" stroke-linejoin="round"/>
-  <rect x="12" y="52" width="232" height="192" rx="72" fill="#E2683C"/>
-  <rect x="58" y="122" width="140" height="48" rx="24" fill="#17120F"/>
-  <circle cx="174" cy="146" r="9.5" fill="#F4EDE4"/>
+  <!-- Vector source of the Vale logo, the cat head: a terracotta dome on a
+       flat base, two ears and two plain espresso pill eyes, the same cat as in
+       the notch (src/ui/robot.rs, its 64 grid scaled by 4.6). Fixed brand
+       colours, independent of the user's accent. scripts/make-icon.ps1 draws
+       the same shapes and src/ui/settings_controls.rs draws them in the
+       settings window. The ears are triangles with a 23 px round stroke. -->
+  <path d="M22 157L36 32.5L105 106Z" fill="#E2683C" stroke="#E2683C" stroke-width="23" stroke-linejoin="round"/>
+  <path d="M234 157L220 32.5L151 106Z" fill="#E2683C" stroke="#E2683C" stroke-width="23" stroke-linejoin="round"/>
+  <path d="M13 216.5V175Q13 97 128 97Q243 97 243 175V216.5Q243 235 224.6 235H31.4Q13 235 13 216.5Z" fill="#E2683C"/>
+  <rect x="78" y="147.5" width="26" height="46" rx="13" fill="#17120F"/>
+  <rect x="152" y="147.5" width="26" height="46" rx="13" fill="#17120F"/>
 </svg>

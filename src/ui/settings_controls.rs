@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FIGURE_END_CLOSED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
@@ -49,11 +49,10 @@ use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
 use crate::theme::{Accent, Palette, WindowPalette};
 
-/// The Vale logo's fixed brand colours, whatever the accent: terracotta
-/// eared tile, espresso island, cream "camera" dot.
-const LOGO_TILE: u32 = 0xE2683C;
-const LOGO_PILL: u32 = 0x17120F;
-const LOGO_DOT: u32 = 0xF4EDE4;
+/// The Vale logo's fixed brand colours, whatever the accent: the terracotta
+/// cat head and its ears, the espresso pill eyes.
+const LOGO_HEAD: u32 = 0xE2683C;
+const LOGO_EYE: u32 = 0x17120F;
 /// The equalizer of the preview, frozen mid-beat (the design's sample
 /// heights; the tallest is `BAR_MAX_H`).
 const PREVIEW_BARS: [f32; BAR_COUNT] = [5.0, 11.0, 8.0, 13.0, 6.0];
@@ -102,6 +101,8 @@ pub struct Gfx {
     widths: RefCell<HashMap<(String, Font), f32>>,
     /// The logo's two ear triangles in its 256-unit design space.
     ears: ID2D1PathGeometry,
+    /// The logo's head, a dome on a flat base, in the same space.
+    head: ID2D1PathGeometry,
     /// Round joins, for the ears' stroke.
     round: ID2D1StrokeStyle,
     target: Option<Target>,
@@ -145,6 +146,7 @@ impl Gfx {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                 )?,
                 ears: ears_geometry(&d2d)?,
+                head: head_geometry(&d2d)?,
                 round: d2d.CreateStrokeStyle(
                     &D2D1_STROKE_STYLE_PROPERTIES {
                         lineJoin: D2D1_LINE_JOIN_ROUND,
@@ -498,7 +500,7 @@ impl Painter<'_> {
         }
     }
 
-    /// The app logo, the eared tile (assets/logo.svg), scaled into `r`.
+    /// The app logo, the cat head (assets/logo.svg), scaled into `r`.
     fn logo(&self, r: Rect) {
         if r.w <= 0.0 {
             return;
@@ -517,33 +519,25 @@ impl Painter<'_> {
                 M32: r.y,
             };
             rt.SetTransform(&(local * previous));
-            // Ears: triangles with a 16-unit round stroke, behind the tile.
-            self.set(LOGO_TILE, 1.0);
+            // Ears: triangles with a 23-unit round stroke, behind the head.
+            self.set(LOGO_HEAD, 1.0);
             rt.FillGeometry(&self.gfx.ears, self.brush, None);
-            rt.DrawGeometry(&self.gfx.ears, self.brush, 16.0, &self.gfx.round);
-            self.fill_round(
-                Rect {
-                    x: 12.0,
-                    y: 52.0,
-                    w: 232.0,
-                    h: 192.0,
-                },
-                72.0,
-                LOGO_TILE,
-                1.0,
-            );
-            self.fill_round(
-                Rect {
-                    x: 58.0,
-                    y: 122.0,
-                    w: 140.0,
-                    h: 48.0,
-                },
-                24.0,
-                LOGO_PILL,
-                1.0,
-            );
-            self.circle(174.0, 146.0, 9.5, LOGO_DOT, 1.0);
+            rt.DrawGeometry(&self.gfx.ears, self.brush, 23.0, &self.gfx.round);
+            rt.FillGeometry(&self.gfx.head, self.brush, None);
+            // Two plain pill eyes, 26 x 46.
+            for x in [78.0, 152.0] {
+                self.fill_round(
+                    Rect {
+                        x,
+                        y: 147.5,
+                        w: 26.0,
+                        h: 46.0,
+                    },
+                    13.0,
+                    LOGO_EYE,
+                    1.0,
+                );
+            }
             rt.SetTransform(&previous);
         }
     }
@@ -1173,21 +1167,46 @@ pub(super) fn rounded(r: Rect, radius: f32) -> D2D1_ROUNDED_RECT {
     }
 }
 
-/// The logo's ears (assets/logo.svg): (30,104) (52,22) (116,64) and mirrored.
+/// The logo's ears (assets/logo.svg): (22,157) (36,32.5) (105,106) and mirrored.
 fn ears_geometry(d2d: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
     let pt = |x: f32, y: f32| Vector2::new(x, y);
     unsafe {
         let path = d2d.CreatePathGeometry()?;
         let sink = path.Open()?;
         for [a, b, c] in [
-            [(30.0, 104.0), (52.0, 22.0), (116.0, 64.0)],
-            [(226.0, 104.0), (204.0, 22.0), (140.0, 64.0)],
+            [(22.0, 157.0), (36.0, 32.5), (105.0, 106.0)],
+            [(234.0, 157.0), (220.0, 32.5), (151.0, 106.0)],
         ] {
             sink.BeginFigure(pt(a.0, a.1), D2D1_FIGURE_BEGIN_FILLED);
             sink.AddLine(pt(b.0, b.1));
             sink.AddLine(pt(c.0, c.1));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         }
+        sink.Close()?;
+        Ok(path)
+    }
+}
+
+/// The logo's head (assets/logo.svg): a dome on a flat base with small bottom
+/// corners, x 13..243, y 97..235.
+fn head_geometry(d2d: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
+    let pt = |x: f32, y: f32| Vector2::new(x, y);
+    let quad = |c: (f32, f32), e: (f32, f32)| D2D1_QUADRATIC_BEZIER_SEGMENT {
+        point1: pt(c.0, c.1),
+        point2: pt(e.0, e.1),
+    };
+    unsafe {
+        let path = d2d.CreatePathGeometry()?;
+        let sink = path.Open()?;
+        sink.BeginFigure(pt(13.0, 216.5), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddLine(pt(13.0, 175.0));
+        sink.AddQuadraticBezier(&quad((13.0, 97.0), (128.0, 97.0)));
+        sink.AddQuadraticBezier(&quad((243.0, 97.0), (243.0, 175.0)));
+        sink.AddLine(pt(243.0, 216.5));
+        sink.AddQuadraticBezier(&quad((243.0, 235.0), (224.6, 235.0)));
+        sink.AddLine(pt(31.4, 235.0));
+        sink.AddQuadraticBezier(&quad((13.0, 235.0), (13.0, 216.5)));
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         sink.Close()?;
         Ok(path)
     }

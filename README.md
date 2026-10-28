@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Vale logo: a terracotta tile with two cat ears, a dark pill and a cream dot"></p>
+<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Vale logo: a terracotta cat head with two ears and two dark pill eyes"></p>
 
 # Vale for Windows
 

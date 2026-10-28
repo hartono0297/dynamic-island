@@ -1,22 +1,23 @@
 ---
 tags: [convention, logo, assets]
-date: 2026-10-28
+date: 2026-10-29
 ---
 
 # The Vale logo lives in three places that must match
 
-The "eared tile" (v3.1, Run 13): tile #E2683C (rect 12,52,232,192 rx 72 in
-the 256 space) with two ears (triangles (30,104) (52,22) (116,64) and
-mirrored, a 16-unit round stroke), pill #17120F (rect 58,122,140,48 rx 24),
-dot #F4EDE4 (circle 174,146 r9.5). Fixed brand colours, independent of the
-user accent. The same numbers are in `assets/logo.svg`, `scripts/make-icon.ps1`
-(which regenerates `assets/icon.ico` and `assets/logo-256.png`) and
-`fn logo` in `src/ui/settings_controls.rs`. Change all three together.
+The cat head (v3.2.1, see [[logo]]; it replaced the v3.1 "eared tile"): the
+notch cat's 64 grid scaled by 4.6 into the 256 space. Head #E2683C, a dome on
+a flat base (x 13..243, y 97..235, bottom corners 18.5), two ears (triangles
+(22,157) (36,32.5) (105,106) and mirrored, a 23-unit round stroke) and two
+pill eyes #17120F (26 x 46 at x 78 and 152, y 147.5). Fixed brand colours,
+independent of the user accent. The same numbers are in `assets/logo.svg`,
+`scripts/make-icon.ps1` (which regenerates `assets/icon.ico` and
+`assets/logo-256.png`) and `fn logo` / `head_geometry` / `ears_geometry` in
+`src/ui/settings_controls.rs`. Change all three together.
 
-The 16/20/24/32 px sizes use a hand-snapped table in `make-icon.ps1` (tile
-inset and top, pill, 2 px dot) so they stay crisp; the ears follow the snapped
-tile. Larger sizes are computed. `site/img/logo.svg` is a copy of
-`assets/logo.svg`. The 16 px icon reads as a cat on dark and light taskbars.
+The 16/20/24/32 px sizes snap the eyes to whole pixels (2 x 4 at 16 px) so
+they stay crisp; head and ears just scale. `site/img/logo.svg` is a copy of
+`assets/logo.svg`.
 
 The cat in the notch uses the same brand colours (no bow since 2026-10-28), see
 [[bata-robot-expressions]].
