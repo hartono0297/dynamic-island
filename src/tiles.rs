@@ -583,7 +583,7 @@ mod tests {
     fn with_own(own: usize) -> ShortcutTiles {
         let mut t = ShortcutTiles::default();
         for i in 0..own {
-            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, "a.exe")));
+            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, r"C:.exe")));
         }
         t
     }
@@ -598,7 +598,7 @@ mod tests {
         assert!(t.toggle(0), "back on: 12 again");
         // A new own tile comes in on, past the twelfth: it cannot be
         // switched off and on again to jump the queue.
-        assert!(t.add(custom("Baru", CustomKind::App, "b.exe")));
+        assert!(t.add(custom("Baru", CustomKind::App, r"C:\b.exe")));
         let last = t.entries().len() - 1;
         assert!(t.toggle(last), "off");
         assert!(!t.toggle(last), "full: stays off");
