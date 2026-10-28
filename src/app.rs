@@ -776,6 +776,11 @@ impl App {
         {
             self.read_explorer(true);
         }
+        // "Folder terakhir" set after following Explorer: back to the
+        // user's own folder (no read needed).
+        if shown && !was_cli && self.config.cli_start == cli_folders::CliStart::Last {
+            self.back_to_last_cli_folder();
+        }
         if self.state.cli_menu() && !was_menu {
             self.rebuild_cli_menu();
             self.read_explorer(false);
@@ -834,12 +839,35 @@ impl App {
             &self.explorer.folders,
             &self.cli_cwd,
         ) else {
+            // No Explorer window any more: not its folder either.
+            self.back_to_last_cli_folder();
             return;
         };
         let line = i18n::cli_moved_to(i18n::lang(), &dir.to_string_lossy());
         self.cli_cwd = dir;
         self.cli_from_explorer = true;
         self.cli.note(line);
+    }
+
+    /// A folder taken from Explorer gives way to the user's own last one
+    /// (cli-cwd.txt) when `back_to_last` says so, with the same "moved" line.
+    fn back_to_last_cli_folder(&mut self) {
+        if !cli_folders::back_to_last(
+            self.config.cli_start,
+            self.cli.running().is_some(),
+            self.cli_pinned,
+            &self.explorer.folders,
+            self.cli_from_explorer,
+        ) {
+            return;
+        }
+        let dir = cli::load_cwd(&cli::cwd_path());
+        self.cli_from_explorer = false;
+        if dir != self.cli_cwd {
+            self.cli
+                .note(i18n::cli_moved_to(i18n::lang(), &dir.to_string_lossy()));
+            self.cli_cwd = dir;
+        }
     }
 
     /// The menu's lines from the lists as they are now; gone folders hidden.
@@ -849,7 +877,8 @@ impl App {
             &self.cli_favorites,
             &self.cli_recent,
             Local::now().naive_local(),
-            &|p| p.is_dir(),
+            // Never a network check on the UI thread.
+            &cli_folders::exists_quick,
         );
         self.cli_menu_view.items = cli_folders::menu_items(&sections);
     }
@@ -876,7 +905,7 @@ impl App {
         if self.cli.running().is_some() {
             return;
         }
-        if dir.is_dir() {
+        if cli_folders::exists_quick(&dir) {
             self.set_cli_folder(dir);
         } else {
             self.cli.note(cli::cd_error(&dir.to_string_lossy()));

@@ -241,6 +241,20 @@ pub fn choose_on_open(
     (!same_folder(first, current)).then(|| first.clone())
 }
 
+/// The CLI followed Explorer before (`from_explorer`) and should go back to
+/// the user's own last folder (cli-cwd.txt) as its page opens: in "Folder
+/// terakhir" mode, or with no Explorer window left. Never while a command
+/// runs or after a cd this visit.
+pub fn back_to_last(
+    mode: CliStart,
+    running: bool,
+    pinned: bool,
+    explorer: &[PathBuf],
+    from_explorer: bool,
+) -> bool {
+    from_explorer && !running && !pinned && (mode == CliStart::Last || explorer.is_empty())
+}
+
 /// The menu's sections, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -319,6 +333,34 @@ pub fn local_time(unix: i64) -> Option<NaiveDateTime> {
 /// folders that `exists` says are gone are left out (they stay in their
 /// files). Sections without rows are left out; with none at all the menu
 /// shows `MenuItem::Empty`.
+/// A folder on a network share (UNC, or a drive letter mapped to one): a
+/// check of it can block for many seconds when the share is unreachable, so
+/// the UI thread never makes one.
+pub fn unverifiable(path: &Path) -> bool {
+    let s = path.to_string_lossy().replace('/', "\\");
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return rest.len() >= 4 && rest[..4].eq_ignore_ascii_case(r"UNC\");
+    }
+    if s.starts_with(r"\\") {
+        return true;
+    }
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        // GetDriveTypeW asks the mount manager, not the share.
+        const DRIVE_REMOTE: u32 = 4;
+        let root = windows::core::HSTRING::from(format!("{}:\\", bytes[0] as char));
+        let kind = unsafe { windows::Win32::Storage::FileSystem::GetDriveTypeW(&root) };
+        return kind == DRIVE_REMOTE;
+    }
+    false
+}
+
+/// The menu's "is it still there": a network folder is taken as there (a
+/// pick of a gone one says so then), a local one is looked at.
+pub fn exists_quick(path: &Path) -> bool {
+    unverifiable(path) || path.is_dir()
+}
+
 pub fn menu_rows(
     explorer: &[PathBuf],
     favorites: &FolderList,
@@ -416,6 +458,20 @@ pub fn menu_items(sections: &[MenuSection]) -> Vec<MenuItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_folders_are_not_checked_on_the_ui_thread() {
+        // An unreachable share blocks a check for many seconds.
+        for p in [r"\\nas\proj", r"\\?\UNC\nas\proj", r"//nas/proj"] {
+            assert!(unverifiable(Path::new(p)), "{p}");
+        }
+        for p in [r"C:\Users\x", r"\\?\C:\Users\x", r"relative\dir"] {
+            assert!(!unverifiable(Path::new(p)), "{p}");
+        }
+        // The menu's check: a share counts as there; a local folder is looked at.
+        assert!(exists_quick(Path::new(r"\\nas-that-is-not-there\proj")));
+        assert!(!exists_quick(Path::new(r"C:\no\such\folder\vale")));
+    }
 
     /// A fresh directory under the system temp dir; removed on drop.
     struct TempDir(PathBuf);
@@ -569,6 +625,28 @@ mod tests {
                 used: None
             }]
         );
+    }
+
+    #[test]
+    fn a_followed_folder_goes_back_to_the_last_one_without_explorer() {
+        let explorer = [p(r"D:\Downloads")];
+        // Followed Explorer earlier; now no Explorer window: back to cli-cwd.txt.
+        assert!(back_to_last(CliStart::Explorer, false, false, &[], true));
+        // "Folder terakhir" chosen meanwhile: back as well.
+        assert!(back_to_last(CliStart::Last, false, false, &explorer, true));
+        // Still an Explorer window: follow it instead (choose_on_open).
+        assert!(!back_to_last(
+            CliStart::Explorer,
+            false,
+            false,
+            &explorer,
+            true
+        ));
+        // The folder is the user's own already, a command runs, or a cd
+        // this visit: stay.
+        assert!(!back_to_last(CliStart::Explorer, false, false, &[], false));
+        assert!(!back_to_last(CliStart::Last, true, false, &[], true));
+        assert!(!back_to_last(CliStart::Last, false, true, &[], true));
     }
 
     #[test]
