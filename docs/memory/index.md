@@ -32,6 +32,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[mole-mode]]
 - [[clipboard-history]]
 - [[screenshot-preview]]
+- [[v3-1-handoff]]: where v3.1 stands, how to continue on another PC
 
 ## Gotchas
 
