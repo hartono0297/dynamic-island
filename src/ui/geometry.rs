@@ -33,6 +33,9 @@ pub enum ShapeKind {
     MediaLyric,
     PomodoroCompact,
     Notice,
+    /// The screenshot preview (keputusan-v3.1 p6): 10 px padding, a
+    /// 230 × 136 thumbnail and a right column of 178 px, radius 26.
+    NoticeShot,
     Panel,
     /// The CLI page enlarged: the panel 440 px tall.
     PanelTall,
@@ -64,6 +67,7 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
         // Sized by its line (`lyric_shape`); without one, the narrowest.
         ShapeKind::MediaLyric => (LYRIC_MIN_W, 34.0),
         ShapeKind::Notice => (360.0, 76.0),
+        ShapeKind::NoticeShot => (SHOT_W, SHOT_H),
         ShapeKind::Panel => (560.0, 290.0),
         ShapeKind::PanelTall => (560.0, 440.0),
         ShapeKind::PanelClean => (560.0, 352.0),
@@ -72,7 +76,7 @@ pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
     // are a full pill floating, a gentler curve hanging from the edge.
     let radius = match kind {
         ShapeKind::Panel | ShapeKind::PanelTall | ShapeKind::PanelClean => radius::PANEL,
-        ShapeKind::Notice => radius::NOTICE,
+        ShapeKind::Notice | ShapeKind::NoticeShot => radius::NOTICE,
         _ if style == Style::Pill => h / 2.0,
         _ => NOTCH_COMPACT_RADIUS,
     };
@@ -526,6 +530,71 @@ pub fn notice_layout(s: ShapeRect, action: Option<f32>) -> NoticeLayout {
     }
 }
 
+/// The screenshot preview's size (`.nt.big` around `.shot.lg` in
+/// keputusan-v3.1.html p6).
+pub const SHOT_W: f32 = 440.0;
+pub const SHOT_H: f32 = 156.0;
+const SHOT_PAD: f32 = 10.0;
+pub const SHOT_THUMB_W: f32 = 230.0;
+pub const SHOT_THUMB_H: f32 = 136.0;
+/// The thumbnail's corners (`.shot`).
+pub const SHOT_THUMB_RADIUS: f32 = 12.0;
+const SHOT_GAP: f32 = 12.0;
+/// Bata (or the Camera badge) beside the title.
+pub const SHOT_ROBOT: f32 = 26.0;
+pub const SHOT_BUTTON_H: f32 = 24.0;
+const SHOT_BUTTON_GAP: f32 = 6.0;
+
+/// Where the preview draws: the thumbnail at the left; the right column
+/// with the robot, the title and the two-line meta at its top and the three
+/// stacked buttons (Salin lagi, Simpan, Hapus) at its bottom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotLayout {
+    pub thumb: Rect,
+    pub robot: Rect,
+    pub title: Rect,
+    /// "1280 × 720 · 245 KB", then "sudah disalin".
+    pub meta: [Rect; 2],
+    pub buttons: [Rect; 3],
+}
+
+pub fn shot_layout(s: ShapeRect) -> ShotLayout {
+    let thumb = Rect {
+        x: s.x + SHOT_PAD,
+        y: s.y + SHOT_PAD,
+        w: SHOT_THUMB_W,
+        h: SHOT_THUMB_H,
+    };
+    let col_x = thumb.right() + SHOT_GAP;
+    let col_w = (s.x + s.w - SHOT_PAD - col_x).max(0.0);
+    let top = thumb.y;
+    // Title (17) over two meta lines (14 each), the robot centred on them.
+    let block = 17.0 + 2.0 * 14.0;
+    let robot = square(col_x, top + (block - SHOT_ROBOT) / 2.0, SHOT_ROBOT);
+    let text_x = robot.right() + 8.0;
+    let text_w = (col_x + col_w - text_x).max(0.0);
+    let line = |y: f32, h: f32| Rect {
+        x: text_x,
+        y,
+        w: text_w,
+        h,
+    };
+    let bottom = thumb.bottom();
+    let button = |i: usize| Rect {
+        x: col_x,
+        y: bottom - (3 - i) as f32 * SHOT_BUTTON_H - (2 - i) as f32 * SHOT_BUTTON_GAP,
+        w: col_w,
+        h: SHOT_BUTTON_H,
+    };
+    ShotLayout {
+        thumb,
+        robot,
+        title: line(top, 17.0),
+        meta: [line(top + 17.0, 14.0), line(top + 31.0, 14.0)],
+        buttons: [button(0), button(1), button(2)],
+    }
+}
+
 /// What the last frame drew, for mapping clicks back to targets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitRegions {
@@ -604,6 +673,10 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         // With the robot off: the Clipboard icon, as on the Pintasan tile.
         NoticeKind::Copied => tint(p.accent, Icon::Clipboard),
+        // With the robot off: the Camera, as on the Pintasan tile.
+        NoticeKind::Screenshot { .. } => tint(p.accent, Icon::Camera),
+        NoticeKind::ShotSaved => tint(p.sage, Icon::Download),
+        NoticeKind::ShotDeleted => tint(crate::theme::SOFT_RED, Icon::Trash),
         NoticeKind::Pomodoro => tint(p.phase(pomo_next), Icon::Timer),
         NoticeKind::Reminder { .. } => BadgeStyle {
             fill: p.accent,
@@ -940,6 +1013,32 @@ mod tests {
             assert_eq!((l.badge.w, l.badge.h), (ROBOT_NOTICE, ROBOT_NOTICE));
             head_inside(n, l.badge);
             assert!(l.title.x >= l.badge.right());
+        }
+    }
+
+    #[test]
+    fn the_screenshot_preview_follows_the_design() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = shape_with_robot(style, ShapeKind::NoticeShot, true);
+            assert_eq!((s.w, s.h, s.radius), (440.0, 156.0, 26.0));
+            assert_eq!(s.x * 2.0 + s.w, WINDOW_W, "centred");
+            assert!(s.y + s.h <= WINDOW_H, "fits the small canvas");
+            let l = shot_layout(s);
+            assert_eq!((l.thumb.x - s.x, l.thumb.y - s.y), (10.0, 10.0));
+            assert_eq!((l.thumb.w, l.thumb.h), (230.0, 136.0));
+            assert!(l.buttons[0].w >= 178.0, "right column");
+            assert_eq!(l.buttons[2].bottom(), l.thumb.bottom());
+            assert_eq!(l.buttons[0].x, l.thumb.right() + 12.0);
+            assert!((l.buttons[0].right() - (s.x + s.w - 10.0)).abs() < 0.01);
+            for pair in l.buttons.windows(2) {
+                assert!(pair[0].bottom() < pair[1].y, "stacked, apart");
+            }
+            assert!(l.meta[1].bottom() <= l.buttons[0].y);
+            assert_eq!(l.robot.w, 26.0);
+            assert!(l.title.x >= l.robot.right() && inside(s, l.title));
+            for r in l.buttons.iter().chain([&l.thumb, &l.robot]) {
+                assert!(inside(s, *r), "{style:?} {r:?}");
+            }
         }
     }
 

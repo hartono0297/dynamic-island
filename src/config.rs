@@ -82,6 +82,52 @@ pub struct Config {
     pub mole_defaults_added: bool,
     /// The clipboard history and its page.
     pub clipboard: ClipboardSettings,
+    /// The screenshot preview in the notch (Settings → Clipboard, its
+    /// second card).
+    pub screenshot: ScreenshotSettings,
+}
+
+crate::theme::named_enum! {
+    /// "Jika diabaikan": what happens to a screenshot's file when its preview
+    /// ran its full time without a click. Keep (Simpan) by default; Delete
+    /// (Hapus) is an explicit opt-in. Any other name reads as `Keep`.
+    ShotIgnore { Keep, Delete }
+}
+
+/// "Lama tampil" in seconds: (min, max, step).
+pub const SHOT_SECS_RANGE: (u32, u32, u32) = (4, 30, 2);
+
+/// Settings → Clipboard → Screenshot.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScreenshotSettings {
+    /// "Preview di notch".
+    pub preview: bool,
+    /// "Jika diabaikan".
+    pub on_ignore: ShotIgnore,
+    /// "Lama tampil", kept in `SHOT_SECS_RANGE`.
+    #[serde(deserialize_with = "shot_secs")]
+    pub show_secs: u32,
+}
+
+impl Default for ScreenshotSettings {
+    fn default() -> Self {
+        ScreenshotSettings {
+            preview: true,
+            on_ignore: ShotIgnore::Keep,
+            show_secs: 8,
+        }
+    }
+}
+
+/// Any number, kept in `SHOT_SECS_RANGE`; a non-number is the default.
+fn shot_secs<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let (min, max, _) = SHOT_SECS_RANGE;
+    Ok(v.as_f64()
+        .map_or(ScreenshotSettings::default().show_secs, |n| {
+            n.clamp(f64::from(min), f64::from(max)).round() as u32
+        }))
 }
 
 crate::theme::named_enum! {
@@ -206,6 +252,7 @@ impl Default for Config {
             mole_protect_defaults: true,
             mole_defaults_added: false,
             clipboard: ClipboardSettings::default(),
+            screenshot: ScreenshotSettings::default(),
         }
     }
 }
@@ -281,6 +328,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         mole_protect_defaults: mem.mole_protect_defaults,
         mole_defaults_added: mem.mole_defaults_added,
         clipboard: mem.clipboard,
+        screenshot: mem.screenshot,
         ..disk
     }
 }
@@ -608,8 +656,46 @@ mod tests {
                 hotkey: ClipHotkey::WinAltV,
                 copied_feedback_all: true,
             },
+            screenshot: ScreenshotSettings {
+                preview: false,
+                on_ignore: ShotIgnore::Delete,
+                show_secs: 12,
+            },
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn screenshot_settings_default_clamp_and_belong_to_the_island() {
+        let d = ScreenshotSettings::default();
+        assert!(d.preview);
+        assert_eq!((d.on_ignore, d.show_secs), (ShotIgnore::Keep, 8));
+        // An older config.json without the key loads the defaults.
+        let old = parse(r#"{"style":"Notch","clipboard":{"enabled":false}}"#);
+        assert_eq!(old.screenshot, ScreenshotSettings::default());
+        assert_eq!(old.style, Style::Notch);
+        // Bad values fall back or clamp; the rest of the file stays.
+        let bad =
+            parse(r#"{"style":"Notch","screenshot":{"on_ignore":"Buang","show_secs":"lama"}}"#);
+        assert_eq!(bad.style, Style::Notch);
+        assert_eq!(bad.screenshot, ScreenshotSettings::default());
+        let long = parse(r#"{"screenshot":{"show_secs":600}}"#);
+        assert_eq!(long.screenshot.show_secs, 30);
+        let short = parse(r#"{"screenshot":{"show_secs":1}}"#);
+        assert_eq!(short.screenshot.show_secs, 4);
+        let del = parse(r#"{"screenshot":{"on_ignore":"delete","preview":false}}"#);
+        assert_eq!(del.screenshot.on_ignore, ShotIgnore::Delete);
+        assert!(!del.screenshot.preview);
+        // Set in the settings window: the island's own, over the file.
+        let mem = Config {
+            screenshot: ScreenshotSettings {
+                on_ignore: ShotIgnore::Delete,
+                ..ScreenshotSettings::default()
+            },
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert_eq!(merged.screenshot.on_ignore, ShotIgnore::Delete);
     }
 
     #[test]

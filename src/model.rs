@@ -9,6 +9,7 @@ use crate::cli::CliEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pomodoro::PomoSettings;
+use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::system::SystemSample;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,6 +61,20 @@ pub enum NoticeKind {
     /// "Disalin": an entry was copied from the island (or, with the setting,
     /// any copy). Short (`COPIED_DURATION`); a newer one replaces it.
     Copied,
+    /// The big screenshot preview (`ShapeKind::NoticeShot`): its thumbnail,
+    /// size and Salin lagi / Simpan / Hapus. `shot` names `App`'s screenshot
+    /// state; it shows `secs` from when it becomes current (never expiring
+    /// under the pointer), and only a true full-time expiry with
+    /// `delete_if_ignored` ("Jika diabaikan: Hapus") asks to delete.
+    Screenshot {
+        shot: u64,
+        secs: u32,
+        delete_if_ignored: bool,
+    },
+    /// "Disimpan · Pictures\Screenshots" after Simpan (Bata happy).
+    ShotSaved,
+    /// "Dihapus · clipboard dikosongkan" after Hapus (Bata idle).
+    ShotDeleted,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,6 +190,21 @@ pub enum Event {
     },
     /// The cleaner's remembered mode (`clean_mode`), at startup.
     CleanModeSetting(CleanMode),
+    /// A folder check for screenshot `shot` ended: the Screenshots folder
+    /// and the file that matched, if any. `App` keeps it, the reducer
+    /// ignores it.
+    ShotFolder {
+        shot: u64,
+        dir: Option<PathBuf>,
+        found: Option<FileCandidate>,
+    },
+    /// "Hapus" ran for `shot`: what became of the file, and whether the
+    /// clipboard was emptied. `App` raises the notice; the reducer ignores it.
+    ShotRecycled {
+        shot: u64,
+        file: FileOutcome,
+        emptied: bool,
+    },
     Tick,
 }
 
@@ -273,6 +303,12 @@ pub enum Hit {
     ClipPin(u64),
     ClipPlain(u64),
     ClipDelete(u64),
+    /// The screenshot preview's buttons and its thumbnail (screenshot id):
+    /// "Salin lagi", "Simpan", "Hapus", and opening the file.
+    ShotCopy(u64),
+    ShotKeep(u64),
+    ShotDelete(u64),
+    ShotOpen(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -354,6 +390,23 @@ pub enum Effect {
     ReleaseClipFocus,
     /// Something to do with a history entry.
     Clip(ClipAction),
+    /// Something to do with the screenshot on preview.
+    Shot(ShotAction),
+}
+
+/// What the screenshot preview asks for (screenshot id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShotAction {
+    /// "Salin lagi": the image onto the clipboard again; the file stays.
+    Copy(u64),
+    /// "Simpan": the file stays; "Disimpan" shows.
+    Keep(u64),
+    /// "Hapus" (or a full-time expiry with "Jika diabaikan: Hapus"): the
+    /// file to the Recycle Bin, the clipboard emptied if it still holds the
+    /// image, its history card gone. Only from those two.
+    Delete(u64),
+    /// The thumbnail: the file in its default app.
+    Open(u64),
 }
 
 /// What a Clipboard card's click or button asks for.

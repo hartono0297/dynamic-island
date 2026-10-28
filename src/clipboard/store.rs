@@ -109,6 +109,9 @@ pub struct ClipSnapshot {
     pub files: Vec<PathBuf>,
     /// A packed DIB.
     pub dib: Option<Vec<u8>>,
+    /// `GetClipboardSequenceNumber()` when it was read (the screenshot
+    /// preview's "Hapus" empties only while it is still this one).
+    pub sequence: u32,
 }
 
 /// What `ingest` did.
@@ -335,21 +338,37 @@ pub fn ingest(history: &mut History, snap: ClipSnapshot, at: i64) -> Ingested {
         let kind = detect_kind(&text);
         return history.push(kind, ClipData::Text(text), at);
     }
-    let Some(dib) = snap.dib.filter(|d| d.len() <= MAX_IMAGE_BYTES) else {
-        return Ingested::Nothing;
-    };
-    let Some(info) = image::dib_info(&dib) else {
-        return Ingested::Nothing;
-    };
-    let img = ClipImage {
+    match make_image(snap.dib, snap.only_bitmaps) {
+        Some(img) => history.push(ClipKind::Image, ClipData::Image(img), at),
+        None => Ingested::Nothing,
+    }
+}
+
+/// The bitmap entry for `dib`, if it is one the history reads.
+fn make_image(dib: Option<Vec<u8>>, only_bitmaps: bool) -> Option<ClipImage> {
+    let dib = dib.filter(|d| d.len() <= MAX_IMAGE_BYTES)?;
+    let info = image::dib_info(&dib)?;
+    Some(ClipImage {
         width: info.w,
         height: info.h,
         thumb: image::thumbnail(&dib, &info),
         fingerprint: image::fingerprint(&dib),
-        screenshot: snap.only_bitmaps,
+        screenshot: only_bitmaps,
         full: (dib.len() <= FULL_BUDGET).then(|| Arc::new(dib)),
-    };
-    history.push(ClipKind::Image, ClipData::Image(img), at)
+    })
+}
+
+/// With the history off and the screenshot preview on: the image `ingest`
+/// would have made of `snap`, by the same rules (password-manager content
+/// skipped, files and text first), without any entry.
+pub fn image_only(snap: ClipSnapshot) -> Option<ClipImage> {
+    if should_skip(&snap.formats)
+        || !snap.files.is_empty()
+        || snap.text.as_ref().is_some_and(|t| !t.trim().is_empty())
+    {
+        return None;
+    }
+    make_image(snap.dib, snap.only_bitmaps)
 }
 
 /// A one-line preview for the "Disalin" notice: whitespace runs become one
@@ -567,6 +586,24 @@ pub mod tests {
             ..ClipSnapshot::default()
         };
         assert_eq!(ingest(&mut h, bad, 2), Ingested::Nothing);
+    }
+
+    #[test]
+    fn image_only_follows_the_ingest_rules() {
+        let img = image_only(image(1280, 720)).unwrap();
+        assert_eq!((img.width, img.height, img.screenshot), (1280, 720, true));
+        // Password-manager content and text or files first: no image.
+        let secret = ClipSnapshot {
+            formats: vec![("ExcludeClipboardContentFromMonitorProcessing".into(), None)],
+            ..image(10, 10)
+        };
+        assert_eq!(image_only(secret), None);
+        let with_text = ClipSnapshot {
+            text: Some("x".into()),
+            ..image(10, 10)
+        };
+        assert_eq!(image_only(with_text), None);
+        assert_eq!(image_only(ClipSnapshot::default()), None);
     }
 
     #[test]

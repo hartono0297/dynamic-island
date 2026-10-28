@@ -9,7 +9,7 @@ use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
     CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page,
-    Shortcut, Timeline, View,
+    Shortcut, ShotAction, Timeline, View,
 };
 use crate::mole::MoleOpts;
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
@@ -22,12 +22,28 @@ pub const GREETING_DURATION: Duration = Duration::from_secs(4);
 /// "Disalin" is only a confirmation.
 pub const COPIED_DURATION: Duration = Duration::from_millis(1500);
 
+/// "Disimpan" and "Dihapus" after a screenshot's button.
+pub const SHOT_DONE_DURATION: Duration = Duration::from_millis(2500);
+/// The screenshot preview never expires under the pointer; once it leaves,
+/// at least this much more, so a click is never beaten by the timeout.
+pub const SHOT_LEAVE_GRACE: Duration = Duration::from_secs(2);
+
 /// How long `notice` stays once it is current.
 fn duration_of(notice: &Notice) -> Duration {
     match notice.kind {
         NoticeKind::Greeting => GREETING_DURATION,
         NoticeKind::Copied => COPIED_DURATION,
+        NoticeKind::Screenshot { secs, .. } => Duration::from_secs(u64::from(secs)),
+        NoticeKind::ShotSaved | NoticeKind::ShotDeleted => SHOT_DONE_DURATION,
         _ => NOTICE_DURATION,
+    }
+}
+
+/// The screenshot id of a preview notice.
+fn shot_of(notice: &Notice) -> Option<u64> {
+    match notice.kind {
+        NoticeKind::Screenshot { shot, .. } => Some(shot),
+        _ => None,
     }
 }
 
@@ -186,6 +202,9 @@ pub struct IslandState {
     /// A Mole notice was clicked: the next panel on the System page opens
     /// the cleaner on Mole's log.
     mole_pending: bool,
+    /// The pointer visited the current screenshot preview, or its file was
+    /// opened: its expiry is no longer "ignored", so it never deletes.
+    shot_touched: bool,
 }
 
 impl IslandState {
@@ -225,6 +244,7 @@ impl IslandState {
             mole: MolePhase::Unknown,
             mole_opts: MoleOpts::default(),
             mole_pending: false,
+            shot_touched: false,
         }
     }
 
@@ -241,7 +261,7 @@ impl IslandState {
         if let Some(done) = self.pomodoro.tick(now) {
             self.phase_done(done, &mut effects);
         }
-        self.advance(now);
+        self.advance(now, &mut effects);
         self.expire_confirm(now);
         match event {
             Event::Media(media) => self.set_media(media, now),
@@ -271,7 +291,23 @@ impl IslandState {
                 | NoticeKind::SystemLow
                 | NoticeKind::CleanDone
                 | NoticeKind::MoleDone
+                | NoticeKind::ShotSaved
+                | NoticeKind::ShotDeleted
                 | NoticeKind::Pomodoro => self.queue.push_back(notice),
+                // A newer screenshot replaces an older preview and a
+                // "Disalin" (both kept, nothing deleted); it never removes
+                // another kind of notice and never shows over a game.
+                NoticeKind::Screenshot { .. } => {
+                    if !self.fullscreen {
+                        let replaced =
+                            |n: &Notice| shot_of(n).is_some() || n.kind == NoticeKind::Copied;
+                        self.queue.retain(|n| !replaced(n));
+                        if matches!(&self.current, Some((n, _)) if replaced(n)) {
+                            self.current = None;
+                        }
+                        self.queue.push_back(notice);
+                    }
+                }
                 // Never over a fullscreen app (`App` checks first and tries
                 // again later; this only guards a race).
                 NoticeKind::Greeting => {
@@ -291,8 +327,25 @@ impl IslandState {
                 }
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
-            Event::Fullscreen(on) => self.fullscreen = on,
+            Event::Fullscreen(on) => {
+                self.fullscreen = on;
+                // Hidden by a game: the preview goes, its file kept.
+                if on {
+                    self.queue.retain(|n| shot_of(n).is_none());
+                    if matches!(&self.current, Some((n, _)) if shot_of(n).is_some()) {
+                        self.current = None;
+                    }
+                }
+            }
             Event::Hover(on) => {
+                // The pointer left the preview: at least the grace more.
+                if !on
+                    && self.hover
+                    && let Some((n, expires)) = &mut self.current
+                    && shot_of(n).is_some()
+                {
+                    *expires = (*expires).max(now + SHOT_LEAVE_GRACE);
+                }
                 self.hover = on;
                 // The pointer arrived: hover holds the hotkey's panel now,
                 // and leaving closes it as usual.
@@ -339,6 +392,8 @@ impl IslandState {
             | Event::SystemSample(_)
             | Event::Clean(_)
             | Event::Mole(_)
+            | Event::ShotFolder { .. }
+            | Event::ShotRecycled { .. }
             | Event::Tick => {}
             Event::CleanFinished => self.clean_busy = false,
             Event::CleanModeSetting(mode) => self.clean_mode = mode,
@@ -355,7 +410,11 @@ impl IslandState {
             }
         }
         // A new notice or a dismissal may have left the slot free for the next queued one.
-        self.advance(now);
+        self.advance(now, &mut effects);
+        // The pointer over the preview: its expiry is no longer "ignored".
+        if self.hover && self.shown_shot().is_some() {
+            self.shot_touched = true;
+        }
         // The input lets go once its page is gone: another page, or the
         // panel shut for a shortcut.
         if self.cli_focused && (self.page != Page::Cli || self.collapsed != Collapse::No) {
@@ -514,7 +573,12 @@ impl IslandState {
     /// The earliest of the current notice's expiry and the pomodoro phase end;
     /// the caller should deliver a `Tick` then.
     pub fn next_deadline(&self) -> Option<Instant> {
-        let notice = self.current.as_ref().map(|(_, expires)| *expires);
+        // A preview under the pointer has no deadline until it leaves.
+        let notice = self
+            .current
+            .as_ref()
+            .filter(|(n, _)| !(self.hover && shot_of(n).is_some()))
+            .map(|(_, expires)| *expires);
         let armed = self.cleaner.and_then(|c| c.armed_until);
         [notice, self.pomodoro.next_deadline(), armed]
             .into_iter()
@@ -955,6 +1019,16 @@ impl IslandState {
             Hit::ClipPin(id) => effects.push(Effect::Clip(ClipAction::TogglePin(id))),
             Hit::ClipPlain(id) => effects.push(Effect::Clip(ClipAction::CopyPlain(id))),
             Hit::ClipDelete(id) => effects.push(Effect::Clip(ClipAction::Delete(id))),
+            Hit::ShotCopy(id) => self.shot_button(id, ShotAction::Copy(id), effects),
+            Hit::ShotKeep(id) => self.shot_button(id, ShotAction::Keep(id), effects),
+            Hit::ShotDelete(id) => self.shot_button(id, ShotAction::Delete(id), effects),
+            // The preview stays; opening the file counts as a visit.
+            Hit::ShotOpen(id) => {
+                if self.shown_shot() == Some(id) {
+                    self.shot_touched = true;
+                    effects.push(Effect::Shot(ShotAction::Open(id)));
+                }
+            }
             Hit::CliInput
             | Hit::CliStop
             | Hit::CliExpand
@@ -1078,16 +1152,53 @@ impl IslandState {
         effects.push(Effect::PlaySound);
     }
 
-    /// Drops the current notice once it has expired and promotes the next queued one.
-    fn advance(&mut self, now: Instant) {
-        if matches!(&self.current, Some((_, expires)) if *expires <= now) {
-            self.current = None;
+    /// Drops the current notice once it has expired and promotes the next
+    /// queued one. A screenshot preview under the pointer does not expire;
+    /// one that ran its full time untouched with "Jika diabaikan: Hapus"
+    /// asks for the delete (the only way besides the Hapus click).
+    fn advance(&mut self, now: Instant, effects: &mut Vec<Effect>) {
+        if let Some((n, expires)) = &self.current {
+            let held = self.hover && shot_of(n).is_some();
+            if !held && *expires <= now {
+                if let NoticeKind::Screenshot {
+                    shot,
+                    delete_if_ignored: true,
+                    ..
+                } = n.kind
+                    && !self.shot_touched
+                {
+                    effects.push(Effect::Shot(ShotAction::Delete(shot)));
+                }
+                self.current = None;
+            }
         }
         if self.current.is_none()
             && let Some(next) = self.queue.pop_front()
         {
             let expires = now + duration_of(&next);
+            if shot_of(&next).is_some() {
+                self.shot_touched = false;
+            }
             self.current = Some((next, expires));
+        }
+    }
+
+    /// The screenshot preview on screen now, by id.
+    fn shown_shot(&self) -> Option<u64> {
+        self.current.as_ref().and_then(|(n, _)| shot_of(n))
+    }
+
+    /// Screenshot `id`'s preview is on screen or waits in the queue.
+    pub fn has_shot(&self, id: u64) -> bool {
+        self.shown_shot() == Some(id) || self.queue.iter().any(|n| shot_of(n) == Some(id))
+    }
+
+    /// A button of the preview on screen: it closes (the file kept unless
+    /// it is Hapus) and `App` does the rest.
+    fn shot_button(&mut self, id: u64, action: ShotAction, effects: &mut Vec<Effect>) {
+        if self.shown_shot() == Some(id) {
+            self.current = None;
+            effects.push(Effect::Shot(action));
         }
     }
 
@@ -3787,5 +3898,256 @@ mod tests {
         assert_eq!(s.timeline(), Some(&t));
         s.apply(Event::MediaTimeline(None), resumed);
         assert_eq!(s.timeline(), None);
+    }
+
+    // ---- The screenshot preview (Run 8) ----
+
+    /// Screenshot `id`'s preview: 8 s, the file kept when ignored (the
+    /// default) or deleted (`delete`, the opt-in).
+    fn shot(id: u64, delete: bool) -> Notice {
+        Notice {
+            key: format!("shot-{id}"),
+            source: "Screenshot".into(),
+            title: "Screenshot".into(),
+            body: String::new(),
+            kind: NoticeKind::Screenshot {
+                shot: id,
+                secs: 8,
+                delete_if_ignored: delete,
+            },
+        }
+    }
+
+    fn copied() -> Notice {
+        Notice {
+            key: "clip-copied".into(),
+            source: "Clipboard".into(),
+            title: "Disalin".into(),
+            body: "x".into(),
+            kind: NoticeKind::Copied,
+        }
+    }
+
+    fn deletes(effects: &[Effect]) -> usize {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Shot(ShotAction::Delete(_))))
+            .count()
+    }
+
+    /// Every effect of `events` applied in order at their times.
+    fn run(s: &mut IslandState, events: Vec<(Event, Instant)>) -> Vec<Effect> {
+        events
+            .into_iter()
+            .flat_map(|(e, at)| s.apply(e, at))
+            .collect()
+    }
+
+    #[test]
+    fn an_ignored_preview_goes_after_eight_seconds_and_keeps_the_file() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert!(s.apply(Event::Notice(shot(1, false)), t0).is_empty());
+        assert_eq!(s.view(), View::Notice(shot(1, false)));
+        assert!(s.has_shot(1));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(8)));
+        assert!(s.apply(Event::Tick, t0 + secs(7)).is_empty());
+        assert_eq!(s.view(), View::Notice(shot(1, false)));
+        let fx = s.apply(Event::Tick, t0 + secs(8));
+        assert_eq!(deletes(&fx), 0, "Simpan is the default: kept");
+        assert_eq!(s.view(), View::Idle);
+        assert!(!s.has_shot(1));
+    }
+
+    #[test]
+    fn the_default_never_deletes_without_the_hapus_click() {
+        let t0 = Instant::now();
+        // Timeout, Body click, Salin lagi, Simpan, a newer shot, fullscreen,
+        // the pointer holding it: none of them asks for a delete.
+        let cases: Vec<Vec<(Event, Duration)>> = vec![
+            vec![(Event::Tick, secs(30))],
+            vec![(Event::Click(Hit::Body), secs(1))],
+            vec![(Event::Click(Hit::ShotCopy(1)), secs(1))],
+            vec![(Event::Click(Hit::ShotKeep(1)), secs(1))],
+            vec![(Event::Click(Hit::ShotOpen(1)), secs(1))],
+            vec![
+                (Event::Notice(shot(2, false)), secs(2)),
+                (Event::Tick, secs(60)),
+            ],
+            vec![(Event::Fullscreen(true), secs(1)), (Event::Tick, secs(60))],
+            vec![
+                (Event::Hover(true), secs(1)),
+                (Event::Tick, secs(30)),
+                (Event::Hover(false), secs(31)),
+                (Event::Tick, secs(40)),
+            ],
+        ];
+        for case in cases {
+            let mut s = st();
+            let mut fx = s.apply(Event::Notice(shot(1, false)), t0);
+            fx.extend(run(
+                &mut s,
+                case.iter().map(|(e, d)| (e.clone(), t0 + *d)).collect(),
+            ));
+            assert_eq!(deletes(&fx), 0, "{case:?}");
+        }
+        // Only the Hapus click.
+        let mut s = st();
+        s.apply(Event::Notice(shot(1, false)), t0);
+        let fx = s.apply(Event::Click(Hit::ShotDelete(1)), t0 + secs(1));
+        assert_eq!(fx, [Effect::Shot(ShotAction::Delete(1))]);
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn buttons_close_the_preview_and_name_their_action() {
+        let t0 = Instant::now();
+        for (hit, action) in [
+            (Hit::ShotCopy(1), ShotAction::Copy(1)),
+            (Hit::ShotKeep(1), ShotAction::Keep(1)),
+        ] {
+            let mut s = st();
+            s.apply(Event::Notice(shot(1, true)), t0);
+            assert_eq!(s.apply(Event::Click(hit), t0 + secs(1)), [Effect::Shot(action)]);
+            assert!(!s.has_shot(1));
+            // Long after: nothing more, the opt-in delete included.
+            assert!(s.apply(Event::Tick, t0 + secs(60)).is_empty());
+        }
+        // A button of another (older) shot does nothing.
+        let mut s = st();
+        s.apply(Event::Notice(shot(2, false)), t0);
+        assert!(s.apply(Event::Click(Hit::ShotDelete(1)), t0).is_empty());
+        assert!(s.has_shot(2));
+        // The thumbnail opens the file and the preview stays.
+        assert_eq!(
+            s.apply(Event::Click(Hit::ShotOpen(2)), t0),
+            [Effect::Shot(ShotAction::Open(2))]
+        );
+        assert!(s.has_shot(2));
+    }
+
+    #[test]
+    fn hapus_on_ignore_deletes_only_after_the_full_time() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(shot(1, true)), t0);
+        assert_eq!(deletes(&s.apply(Event::Tick, t0 + secs(7))), 0);
+        let fx = s.apply(Event::Tick, t0 + secs(8));
+        assert_eq!(fx, [Effect::Shot(ShotAction::Delete(1))]);
+        assert_eq!(s.view(), View::Idle);
+        assert!(s.apply(Event::Tick, t0 + secs(20)).is_empty(), "once");
+        // Never when it did not run its time untouched.
+        let cases: Vec<Vec<(Event, Duration)>> = vec![
+            vec![(Event::Click(Hit::Body), secs(3))],
+            vec![(Event::Notice(shot(2, false)), secs(3))],
+            vec![(Event::Fullscreen(true), secs(3))],
+            vec![(Event::Hover(true), secs(3)), (Event::Hover(false), secs(4))],
+            vec![(Event::Click(Hit::ShotOpen(1)), secs(3))],
+        ];
+        for case in cases {
+            let mut s = st();
+            let mut fx = s.apply(Event::Notice(shot(1, true)), t0);
+            fx.extend(run(
+                &mut s,
+                case.iter().map(|(e, d)| (e.clone(), t0 + *d)).collect(),
+            ));
+            fx.extend(s.apply(Event::Tick, t0 + secs(60)));
+            assert!(
+                !fx.contains(&Effect::Shot(ShotAction::Delete(1))),
+                "{case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_preview_waits_for_its_turn_and_counts_from_then() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let other = Notice {
+            kind: NoticeKind::CleanDone,
+            ..copied()
+        };
+        s.apply(Event::Notice(other.clone()), t0);
+        s.apply(Event::Notice(shot(1, true)), t0 + secs(1));
+        // It never removes another kind of notice.
+        assert_eq!(s.view(), View::Notice(other));
+        assert!(s.has_shot(1));
+        // Current at 5 s, so it ends at 13 s.
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Notice(shot(1, true)));
+        assert_eq!(deletes(&s.apply(Event::Tick, t0 + secs(12))), 0);
+        assert_eq!(deletes(&s.apply(Event::Tick, t0 + secs(13))), 1);
+    }
+
+    #[test]
+    fn the_pointer_holds_the_preview_then_two_seconds_more() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(shot(1, false)), t0);
+        s.apply(Event::Hover(true), t0 + secs(6));
+        assert_eq!(s.next_deadline(), None, "no expiry under the pointer");
+        s.apply(Event::Tick, t0 + secs(20));
+        assert_eq!(s.view(), View::Notice(shot(1, false)));
+        // A click right before leaving still lands.
+        s.apply(Event::Hover(false), t0 + secs(21));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(23)));
+        s.apply(Event::Tick, t0 + secs(22));
+        assert_eq!(s.view(), View::Notice(shot(1, false)));
+        s.apply(Event::Tick, t0 + secs(23));
+        assert_eq!(s.view(), View::Idle);
+        // Leaving early keeps the full time.
+        let mut s = st();
+        s.apply(Event::Notice(shot(1, false)), t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(8)));
+    }
+
+    #[test]
+    fn a_newer_screenshot_replaces_previews_and_copied_only() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(copied()), t0);
+        s.apply(Event::Notice(shot(1, false)), t0);
+        assert_eq!(s.view(), View::Notice(shot(1, false)), "over Disalin");
+        s.apply(Event::Notice(shot(2, false)), t0 + secs(1));
+        assert_eq!(s.view(), View::Notice(shot(2, false)));
+        assert!(!s.has_shot(1));
+        // Counted from when it became current.
+        assert_eq!(s.next_deadline(), Some(t0 + secs(9)));
+        // A reminder (sticky) stays underneath.
+        s.apply(Event::Notice(reminder("r1")), t0 + secs(2));
+        s.apply(Event::Tick, t0 + secs(9));
+        assert_eq!(s.view(), View::Notice(reminder("r1")));
+    }
+
+    #[test]
+    fn never_over_a_fullscreen_app() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(shot(1, true)), t0);
+        assert_eq!(s.view(), View::Hidden);
+        assert!(!s.has_shot(1));
+        // Hidden by a game: it goes, kept.
+        let mut s = st();
+        s.apply(Event::Notice(shot(1, true)), t0);
+        let fx = s.apply(Event::Fullscreen(true), t0 + secs(2));
+        assert_eq!(deletes(&fx), 0);
+        assert_eq!(s.view(), View::Hidden);
+        assert!(!s.has_shot(1));
+    }
+
+    #[test]
+    fn saved_and_deleted_notices_are_short() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let saved = Notice {
+            kind: NoticeKind::ShotSaved,
+            ..copied()
+        };
+        s.apply(Event::Notice(saved.clone()), t0);
+        assert_eq!(s.view(), View::Notice(saved));
+        assert_eq!(s.next_deadline(), Some(t0 + SHOT_DONE_DURATION));
     }
 }
