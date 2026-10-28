@@ -101,3 +101,8 @@ Listed in [[index]].
 - Owner check still open: whether Mole 1.30 honours `whitelist.txt` (its docs
   describe it for later releases). The dry-run names groups, not paths, so the
   island cannot check it.
+
+- The elevated step's exit code: an exit code the script sets is its word;
+  a script without one fails on new `$Error` entries or a throw (with every
+  stream redirected `$?` stays true). Tested with a real PowerShell on temp
+  scripts (`the_elevated_step_fails_when_the_script_fails`).

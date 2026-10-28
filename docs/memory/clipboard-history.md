@@ -85,6 +85,15 @@ Run 7 of the v3.1 plan (Keputusan #5). Code in `src/clipboard/` (pure:
   budget. A card with only its thumbnail left says so when copied ("pratinjau
   kecil, aslinya tidak tersimpan").
 
+- The fingerprint hashes every byte (8 at a time): a one-pixel change is a
+  new image. Cards saved by 3.1.0 may not match a re-copy of the same image
+  once (old fingerprint).
+- With "Simpan setelah restart" off, a history file still on disk is removed
+  at startup (`persist::start_items`).
+- Text offered but too big to keep (a large Excel range) keeps its bitmap
+  out of the history too (`win::wants_image`).
+- "Hapus riwayat" needs two clicks, as "Putuskan".
+
 Related: [[clipboard-privacy]], [[settings-appearance-scroll]]
 
 Listed in [[index]].

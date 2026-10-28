@@ -66,3 +66,14 @@ Listed in [[index]].
 - A folder taken from Explorer gives way to cli-cwd.txt (`back_to_last`) when
   the page opens with no Explorer window, or in "Folder terakhir" mode; the
   "dari Explorer" chip goes with it.
+
+- Recent: 25 kept in cli-recent.txt, 5 shown after favourites are left out.
+- The open menu scrolls with the wheel, a row per notch, the section header
+  of the first row kept on top (`cli_folders::scrolled`). A star on a full
+  list (20) prints a note instead of doing nothing.
+- Right-click inside the menu never opens the tray menu (`menu_right_click`).
+- Only the island's own notes are dimmed (`i18n::is_cli_note`), not any line
+  starting with the arrow. Going back to cli-cwd.txt says "kembali ke".
+- An Explorer read still out after 3 s is given up on; its late answer is
+  ignored. A command that runs pins the folder for the visit.
+- Explorer paths past MAX_PATH are read (`SHGetPathFromIDListEx`).

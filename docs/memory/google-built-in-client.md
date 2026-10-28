@@ -35,4 +35,11 @@ To try the built-in look locally, build with placeholder values in those two
 variables (into another `CARGO_TARGET_DIR`) and run `--settings integrations`
 with `DI_GOOGLE=needslogin`.
 
+- A rejected client (`invalid_client`) is a refusal with advice, not "not
+  set up": the user's own → "cek Pengaturan → Integrasi", Vale's → "coba lagi
+  nanti, atau pakai Client ID sendiri" (`sync::rejected`).
+- While an own Client ID is filled in, its fields and "Hubungkan" show and
+  the disclosure is hidden: the button never logs in with a client its label
+  does not name. `Client`'s Debug redacts the secret.
+
 Related: [[v3-1-handoff]], [[v3-studio-overview]]

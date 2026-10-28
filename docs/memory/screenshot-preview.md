@@ -76,6 +76,10 @@ matching, PNG/JPEG headers, folder listing; Win32: `win`) and
 - Simpan without a file (PrtSc with no auto-save) says "Belum ada file · tetap
   di clipboard", not "Disimpan".
 
+- Hapus never removes a pinned history card (`card_to_remove`).
+- A new image gives the shown screenshot one last file look before it takes
+  over the retries (one retry slot only).
+
 Related: [[bata-robot-expressions]], [[system-page]]
 
 Listed in [[index]].

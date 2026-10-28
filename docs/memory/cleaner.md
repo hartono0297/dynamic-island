@@ -84,6 +84,15 @@ settings, NuGet packages, no system temp) the table says so.
   would take documents. A Temp root that is not named Temp/Tmp, holds the
   profile, AppData, Downloads or Windows, or is Windows' own, is left out.
 
+- **Only what the scan counted** (`only_scanned`): the worker keeps its last
+  scan; the confirm re-selects (browsers checked again) and keeps only files
+  the scan listed. New cache files, files that crossed their age line and a
+  browser that closed after the scan are left alone.
+- `*.log` in the profile and Roaming roots go to the Recycle Bin
+  (`Target::recycle`), not gone for good: they sit beside the user's files.
+- Spotify: only `Data` (its cache). `Storage` is Spotify's default offline
+  download folder (Spotify community answers), so it is not a cache.
+
 Related: [[mole-mode]], [[system-page]], [[bata-robot-expressions]],
 [[bata-idle-power-budget]], [[studio-icons]], [[screenshot-capture-script]],
 [[studio-tabular-figures-word-gaps]]

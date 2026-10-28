@@ -28,8 +28,12 @@ Left for the owner:
   `VALE_GOOGLE_CLIENT_ID` and `VALE_GOOGLE_CLIENT_SECRET`
   ([[google-built-in-client]]).
 - Rename the GitHub repo (for example `vale-island`); repo URLs then follow.
-- Check whether Mole 1.30 honours `whitelist.txt` ([[mole-mode]]), and
-  whether `Spotify\Storage` in "Cache aplikasi" holds offline downloads.
+- Check whether Mole 1.30 honours `whitelist.txt` ([[mole-mode]]).
+
+The 25 Minor findings of the verify pass were fixed after the 3.1.0 push (one
+commit per area), except three kept on purpose: the clipboard hotkey opens
+the page without keyboard focus, lowering "Jumlah item" drops the oldest at
+once, and the Windows Update helper re-selects in its own process.
 
 Still open for the owner, never decided by an agent: mascot name, repo licence (no `LICENSE` yet), website contact email, website domain, Google Client ID.
 

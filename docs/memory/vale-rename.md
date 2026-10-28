@@ -36,4 +36,9 @@ say Vale.
   `Run\DynamicIsland` value is deleted only when it starts
   `dynamic-island.exe`.
 
+- Settings → Tentang names the data folder in use (`data_dir::label`): the
+  old one while a failed migration keeps it.
+- Dynamic Island's `settings.json.bak-dynamic-island` (the true original)
+  becomes `settings.json.bak-vale` on the next hooks install.
+
 Related: [[v3-1-handoff]], [[v3-studio-overview]]

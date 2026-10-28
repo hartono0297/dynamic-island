@@ -26,4 +26,8 @@ and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
   `Page::ALL`.
 - The card sits at the end of Tampilan, below Bata's card.
 
+- A page that is off but opened by its button holds only for that visit:
+  when the panel closes the page moves to the nearest one on, so the next
+  hover does not land on it.
+
 Related: [[settings-appearance-scroll]], [[v3-studio-overview]]
