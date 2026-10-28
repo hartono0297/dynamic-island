@@ -16,10 +16,22 @@ const EVENTS: [&str; 5] = [
 ];
 /// Seconds Claude Code waits for `--hook` before giving up on it.
 const HOOK_TIMEOUT_SECS: u64 = 5;
-const BACKUP_NAME: &str = "settings.json.bak-dynamic-island";
-const TEMP_NAME: &str = "settings.json.tmp-dynamic-island";
-/// Any hook command ending like this was written by some copy of the island.
-const ISLAND_COMMAND_SUFFIX: &str = "dynamic-island.exe\" --hook";
+const BACKUP_NAME: &str = "settings.json.bak-vale";
+const TEMP_NAME: &str = "settings.json.tmp-vale";
+/// Any hook command ending in one of these exe names (after a folder or the
+/// opening quote) was written by some copy of the island: Vale, or Dynamic
+/// Island from before the rename.
+const ISLAND_EXES: [&str; 2] = ["vale.exe\" --hook", "dynamic-island.exe\" --hook"];
+
+/// Whether `command` runs some copy of the island's `--hook`.
+fn is_island_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    ISLAND_EXES.iter().any(|exe| {
+        lower
+            .strip_suffix(exe)
+            .is_some_and(|before| before.ends_with('\\') || before.ends_with('"'))
+    })
+}
 
 #[derive(Debug, PartialEq)]
 pub enum InstallOutcome {
@@ -97,12 +109,9 @@ fn repoint_stale_hooks(groups: &mut Vec<Value>, command: &str, present: &mut boo
 }
 
 fn is_stale_island_hook(hook: &Value, command: &str) -> bool {
-    hook["command"].as_str().is_some_and(|existing| {
-        existing != command
-            && existing
-                .to_ascii_lowercase()
-                .ends_with(ISLAND_COMMAND_SUFFIX)
-    })
+    hook["command"]
+        .as_str()
+        .is_some_and(|existing| existing != command && is_island_command(existing))
 }
 
 fn group_has_command(group: &Value, command: &str) -> bool {
@@ -112,9 +121,7 @@ fn group_has_command(group: &Value, command: &str) -> bool {
 }
 
 fn is_island_hook(hook: &Value) -> bool {
-    hook["command"]
-        .as_str()
-        .is_some_and(|c| c.to_ascii_lowercase().ends_with(ISLAND_COMMAND_SUFFIX))
+    hook["command"].as_str().is_some_and(is_island_command)
 }
 
 /// Drops every hook written by any copy of the island, plus the groups and
@@ -252,7 +259,7 @@ pub fn uninstall_for_current_user() -> UninstallOutcome {
 /// `--install-hooks` mode: prints the outcome of `install_for_current_exe`.
 pub fn install_hooks() {
     match install_for_current_exe() {
-        InstallOutcome::Installed => println!("Hook Dynamic Island terpasang."),
+        InstallOutcome::Installed => println!("Hook Vale terpasang."),
         InstallOutcome::AlreadyInstalled => println!("Sudah terpasang."),
         InstallOutcome::Error(e) => eprintln!("Gagal memasang hook: {e}"),
     }
@@ -273,7 +280,7 @@ pub fn install_for_current_exe() -> InstallOutcome {
 
 /// Adds `command` as the island's hook to the settings file at `path`. The
 /// file as it was before the island first changed it is kept beside it as
-/// `settings.json.bak-dynamic-island`.
+/// `settings.json.bak-vale`.
 pub fn install_at(path: &Path, command: &str) -> InstallOutcome {
     match try_install_at(path, command) {
         Ok(true) => InstallOutcome::Installed,
@@ -329,8 +336,8 @@ pub fn uninstall_hooks() {
         return;
     };
     match uninstall_outcome_at(&path) {
-        UninstallOutcome::Removed => println!("Hook Dynamic Island dihapus."),
-        UninstallOutcome::NothingToRemove => println!("Tidak ada hook Dynamic Island."),
+        UninstallOutcome::Removed => println!("Hook Vale dihapus."),
+        UninstallOutcome::NothingToRemove => println!("Tidak ada hook Vale."),
         UninstallOutcome::Error(e) => eprintln!("Gagal menghapus hook: {e}"),
     }
 }
@@ -389,7 +396,7 @@ mod tests {
             .iter()
             .flat_map(|group| group["hooks"].as_array().unwrap().iter())
             .filter_map(|hook| hook["command"].as_str())
-            .filter(|c| c.ends_with(ISLAND_COMMAND_SUFFIX))
+            .filter(|c| is_island_command(c))
             .map(String::from)
             .collect()
     }
@@ -521,6 +528,24 @@ mod tests {
     }
 
     #[test]
+    fn hooks_from_before_the_rename_are_repointed_to_vale_and_removed_with_it() {
+        const VALE: &str = "\"C:\\Programs\\Vale\\vale.exe\" --hook";
+        let mut v =
+            serde_json::json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":OLD}]}]}});
+        assert!(add_island_hooks(&mut v, VALE));
+        let stop = v["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "repointed, not duplicated");
+        assert_eq!(stop[0]["hooks"][0]["command"], VALE);
+        assert!(remove_island_hooks(&mut v));
+        assert!(v["hooks"].get("Stop").is_none());
+        // Another program whose name merely ends in "vale" is not the island.
+        let other = "\"C:\\x\\novale.exe\" --hook";
+        let mut v =
+            serde_json::json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":other}]}]}});
+        assert!(!remove_island_hooks(&mut v));
+    }
+
+    #[test]
     fn island_suffix_match_ignores_case() {
         let upper = "\"C:\\X\\Dynamic-Island.EXE\" --hook";
         let mut v =
@@ -535,8 +560,7 @@ mod tests {
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("dynamic-island-test-{}-{name}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("vale-test-{}-{name}", std::process::id()));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             Self(dir)

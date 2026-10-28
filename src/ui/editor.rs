@@ -817,7 +817,7 @@ pub(super) fn init_common_controls() {
     });
 }
 
-const CLASS_NAME: PCWSTR = w!("DynamicIslandEditor");
+const CLASS_NAME: PCWSTR = w!("ValeEditor");
 
 fn register_class(instance: HINSTANCE) -> Result<()> {
     let (icon, icon_small) = app_icon::class_icons(instance);
@@ -1485,7 +1485,7 @@ impl Editor {
         );
         self.target = target;
         if let Err(error) = result {
-            eprintln!("dynamic-island: editor draw failed: {error}");
+            eprintln!("vale: editor draw failed: {error}");
         }
     }
 
@@ -2009,7 +2009,7 @@ fn run(hwnd: HWND, next: Option<Next>) {
                         ed.invalidate();
                     });
                 }
-                Err(error) => eprintln!("dynamic-island: cannot open the popover: {error}"),
+                Err(error) => eprintln!("vale: cannot open the popover: {error}"),
             }
         }
         Some(Next::Focus(target)) => unsafe {
@@ -2960,14 +2960,14 @@ pub fn run_demo(which: Option<&str>) {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(owner_proc),
             hInstance: instance,
-            lpszClassName: w!("DynamicIslandEditorDemoOwner"),
+            lpszClassName: w!("ValeEditorDemoOwner"),
             ..Default::default()
         };
         RegisterClassExW(&class);
         // Hidden, like the island is to the editor: just something to own it.
         let Ok(owner) = CreateWindowExW(
             WS_EX_TOOLWINDOW,
-            w!("DynamicIslandEditorDemoOwner"),
+            w!("ValeEditorDemoOwner"),
             w!(""),
             WS_POPUP,
             0,

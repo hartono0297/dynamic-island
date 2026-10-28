@@ -19,12 +19,12 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
 
 $powershellAumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 $stamp = Get-Date -Format 'HH:mm:ss'
-$title = "Dynamic Island test $stamp"
+$title = "Vale test $stamp"
 
 if ($Long) {
     # Emoji are built from code points so this file stays ASCII (PowerShell 5.1 reads BOM-less files as ANSI).
     $emoji = [char]::ConvertFromUtf32(0x1F680) + [char]::ConvertFromUtf32(0x1F389) + [char]::ConvertFromUtf32(0x2728)
-    $filler = 'This is a long test notification body for the Dynamic Island probe, checking how text wraps and truncates. '
+    $filler = 'This is a long test notification body for the Vale probe, checking how text wraps and truncates. '
     while ($filler.Length -lt 300) { $filler += $filler }
     $prefix = "$emoji "
     $body = $prefix + $filler.Substring(0, 300 - $prefix.Length).TrimEnd()

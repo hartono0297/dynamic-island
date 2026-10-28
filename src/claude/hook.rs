@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn send_to_missing_pipe_is_silent_and_fast() {
         // A name no test server listens on; the real pipe may be live on this machine.
-        let name = format!(r"\\.\pipe\dynamic-island-missing-{}", std::process::id());
+        let name = format!(r"\\.\pipe\vale-missing-{}", std::process::id());
         let msg = HookMessage {
             kind: HookKind::Done,
             session_id: "s".into(),

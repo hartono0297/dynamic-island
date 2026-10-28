@@ -9,6 +9,7 @@ mod cli_folders;
 mod cli_panel;
 mod clipboard;
 mod config;
+mod data_dir;
 mod dpapi;
 mod google;
 mod i18n;
@@ -133,7 +134,7 @@ fn main() {
         }
         Some(other) => {
             attach_parent_console();
-            eprintln!("dynamic-island: unknown argument `{other}`");
+            eprintln!("vale: unknown argument `{other}`");
             std::process::exit(2);
         }
     }

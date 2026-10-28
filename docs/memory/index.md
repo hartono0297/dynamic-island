@@ -33,6 +33,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[clipboard-history]]
 - [[screenshot-preview]]
 - [[panel-pages]]
+- [[vale-rename]]
 - [[v3-1-handoff]]: where v3.1 stands, how to continue on another PC
 
 ## Gotchas

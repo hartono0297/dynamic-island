@@ -135,7 +135,7 @@ impl RemindersStore {
         store
     }
 
-    /// `%APPDATA%\DynamicIsland\reminders.json`, next to the config file.
+    /// `%APPDATA%\Vale\reminders.json`, next to the config file.
     pub fn default_path() -> PathBuf {
         crate::config::path().with_file_name("reminders.json")
     }
@@ -517,7 +517,7 @@ mod tests {
         fn new(name: &str) -> Self {
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-reminders-{name}-{}-{}",
+                "vale-reminders-{name}-{}-{}",
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             ));

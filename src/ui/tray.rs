@@ -29,9 +29,11 @@ use crate::ui::app_icon;
 /// mouse message (legacy notify-icon version).
 pub const WM_APP_TRAY: u32 = WM_APP + 2;
 const TRAY_ID: u32 = 1;
-const TOOLTIP: &str = "Dynamic Island";
+const TOOLTIP: &str = "Vale";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "DynamicIsland";
+const RUN_VALUE: &str = "Vale";
+/// The Run value from before the rename; removed whenever autostart is set.
+const OLD_RUN_VALUE: &str = "DynamicIsland";
 
 /// The logo icon the tray currently shows, if loaded (null otherwise). Kept
 /// alive while the icon is in the notification area and replaced on re-add.
@@ -206,7 +208,8 @@ fn run_command(exe: &Path) -> String {
     format!("\"{}\"", exe.display())
 }
 
-/// Writes or deletes `HKCU\...\Run\DynamicIsland` for the current exe. Debug
+/// Writes or deletes `HKCU\...\Run\Vale` for the current exe, and always
+/// deletes the old `Run\DynamicIsland` (it points at the old exe). Debug
 /// builds leave the registry alone, so `cargo run` never points autostart at
 /// `target\debug`.
 pub fn set_autostart(enabled: bool) -> Result<()> {
@@ -227,6 +230,8 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
             None,
         )
         .ok()?;
+        // The old value starts a Dynamic Island that is no longer there.
+        let _ = RegDeleteValueW(key, &HSTRING::from(OLD_RUN_VALUE));
         let result = if enabled {
             write_run_value(key)
         } else {
@@ -355,8 +360,8 @@ mod tests {
     #[test]
     fn run_command_quotes_the_exe() {
         assert_eq!(
-            run_command(Path::new(r"D:\Program Files\dynamic-island.exe")),
-            r#""D:\Program Files\dynamic-island.exe""#
+            run_command(Path::new(r"D:\Program Files\vale.exe")),
+            r#""D:\Program Files\vale.exe""#
         );
     }
 }

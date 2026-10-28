@@ -28,7 +28,7 @@ pub const SETTLE: Duration = Duration::from_secs(1);
 /// timeline arrived before its title.
 const LENGTH_JUMP_MS: u64 = 2_000;
 const USER_AGENT: &str = concat!(
-    "DynamicIsland/",
+    "Vale/",
     env!("CARGO_PKG_VERSION"),
     " (https://github.com/hartono0297/dynamic-island)"
 );
@@ -348,13 +348,9 @@ impl DiskCache {
         Self { dir }
     }
 
-    /// `%APPDATA%\DynamicIsland\lyrics-cache`.
+    /// `%APPDATA%\Vale\lyrics-cache`.
     pub fn default_dir() -> PathBuf {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join("DynamicIsland")
-            .join("lyrics-cache")
+        crate::data_dir::dir().join("lyrics-cache")
     }
 
     fn file(&self, key: &str, ext: &str) -> PathBuf {
@@ -999,7 +995,7 @@ mod tests {
             ..q
         };
         assert!(lrclib_url(&short).ends_with("&duration=1"));
-        assert!(USER_AGENT.starts_with("DynamicIsland/"));
+        assert!(USER_AGENT.starts_with("Vale/"));
     }
 
     #[test]
@@ -1060,10 +1056,8 @@ mod tests {
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-lyrics-{name}-{}",
-                std::process::id()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("vale-lyrics-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             TempDir(dir)
         }

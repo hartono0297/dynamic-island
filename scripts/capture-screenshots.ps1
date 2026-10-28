@@ -4,7 +4,7 @@
   build's demo modes.
 
 .DESCRIPTION
-  Each shot starts `dynamic-island.exe` in a demo mode (`--demo`,
+  Each shot starts `vale.exe` in a demo mode (`--demo`,
   `--demo-robot`, `--demo-cli`, `--demo-editor`, `--settings`) with
   DI_LANG=en, waits for its window, and copies it from the screen twice: once
   over a black backdrop and once over a white one. The two copies give each
@@ -13,7 +13,7 @@
   window. Nothing is clicked; the demo process is killed after each shot.
 
   Run from the repository root in Windows PowerShell after `cargo build`.
-  Stop a running island first (Stop-Process -Name dynamic-island); it would
+  Stop a running island first (Stop-Process -Name vale); it would
   sit over the demo windows. The backdrop briefly covers the window being
   captured, so leave the mouse and keyboard alone while it runs.
 
@@ -25,7 +25,7 @@
   .\scripts\capture-screenshots.ps1 -Only calendar,cli
 #>
 param(
-    [string]$Exe = 'target\debug\dynamic-island.exe',
+    [string]$Exe = 'target\debug\vale.exe',
     [string]$Out = 'assets\screenshots',
     # Names of the shots to take (see $shots below); all when empty.
     [string[]]$Only = @(),
@@ -153,8 +153,8 @@ public static class Shot {
 
 [void][Shot]::SetProcessDPIAware()
 if (-not (Test-Path $Exe)) { throw "No ${Exe}: run cargo build first." }
-if (Get-Process dynamic-island -ErrorAction SilentlyContinue | Where-Object { $_.Path -ne (Resolve-Path $Exe).Path }) {
-    Write-Warning 'Another dynamic-island is running and may cover the demo windows.'
+if (Get-Process vale -ErrorAction SilentlyContinue | Where-Object { $_.Path -ne (Resolve-Path $Exe).Path }) {
+    Write-Warning 'Another vale is running and may cover the demo windows.'
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 

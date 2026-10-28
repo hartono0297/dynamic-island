@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Dynamic Island logo: a dark pill with a cream dot on a terracotta tile"></p>
+<p align="center"><img src="assets/logo-256.png" width="96" height="96" alt="Vale logo: a dark pill with a cream dot on a terracotta tile"></p>
 
-# Dynamic Island for Windows
+# Vale for Windows
 
 A macOS-style island for the top of your Windows 11 screen: notifications, calendar, pomodoro, reminders, notes, music, a command line and more, in a native Rust app (Win32 + Direct2D, no browser engine). Version 3 brings the **Studio** look: warm terracotta and espresso colours, its own fonts and icons, and Bata, a small robot that lives in the notch.
 
@@ -19,10 +19,10 @@ Windows 11, 64-bit. Open **PowerShell** (no admin needed) and run:
 irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/install.ps1 | iex
 ```
 
-The script downloads the latest [release](https://github.com/hartono0297/dynamic-island/releases), checks its SHA-256, installs `dynamic-island.exe` (one file, about 1.7 MB, no runtime needed) to `%LOCALAPPDATA%\Programs\DynamicIsland`, adds a Start Menu shortcut and starts the island.
+The script downloads the latest [release](https://github.com/hartono0297/dynamic-island/releases), checks its SHA-256, installs `vale.exe` (one file, about 1.7 MB, no runtime needed) to `%LOCALAPPDATA%\Programs\Vale`, adds a Start Menu shortcut and starts the island.
 
 - **Update:** run the same line again. Your settings, notes and Google login are kept.
-- **Without the script:** download `dynamic-island-<version>.zip` from Releases, extract it, right-click `install.ps1` → *Run with PowerShell*. The exe also runs from any folder.
+- **Without the script:** download `vale-<version>.zip` from Releases, extract it, right-click `install.ps1` → *Run with PowerShell*. The exe also runs from any folder.
 - **Uninstall:**
   ```powershell
   irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/uninstall.ps1 | iex
@@ -110,7 +110,7 @@ The cleaner's *Automatic · Mole* mode runs **Mole for Windows** by tw93, a sepa
 
 **Licence:** Mole's `windows` branch was relicensed from MIT to **GPL-3.0** on 2026-10-11. Because the island only runs the Mole you installed as its own process, and contains no Mole code, Mole's licence applies to Mole, not to the island.
 
-**Claude Code hooks:** Settings → Integrations → *Install hooks* adds `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse` and `SessionEnd` hooks to `%USERPROFILE%\.claude\settings.json`. Other hooks are left alone, and a backup is kept as `settings.json.bak-dynamic-island`. Also available as `dynamic-island.exe --install-hooks` / `--uninstall-hooks`.
+**Claude Code hooks:** Settings → Integrations → *Install hooks* adds `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse` and `SessionEnd` hooks to `%USERPROFILE%\.claude\settings.json`. Other hooks are left alone, and a backup is kept as `settings.json.bak-vale`. Also available as `vale.exe --install-hooks` / `--uninstall-hooks`.
 
 ## Setup Google Calendar
 
@@ -128,7 +128,7 @@ While the project's publishing status is **Testing**, Google expires the login a
 
 ## Data and privacy
 
-Everything lives in `%APPDATA%\DynamicIsland\`:
+Everything lives in `%APPDATA%\Vale\`:
 
 | File | Contents |
 |---|---|
@@ -149,7 +149,7 @@ Everything lives in `%APPDATA%\DynamicIsland\`:
 3. From **PowerShell or cmd** (not Git Bash, whose `link.exe` shadows the MSVC linker):
    ```powershell
    cargo build --release --locked
-   .\target\release\dynamic-island.exe
+   .\target\release\vale.exe
    ```
 
 The C runtime is linked statically (`.cargo/config.toml`), so the exe runs without the Visual C++ Redistributable. Quit the island first if it runs from `target\release`. Tests: `cargo test --locked`.
@@ -160,7 +160,7 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 
 ## Troubleshooting
 
-- **No notifications in the island:** check Windows Settings → Privacy & security → Notifications, then run `& "$env:LOCALAPPDATA\Programs\DynamicIsland\dynamic-island.exe" --probe-notifications` to print what arrives for 60 seconds.
+- **No notifications in the island:** check Windows Settings → Privacy & security → Notifications, then run `& "$env:LOCALAPPDATA\Programs\Vale\vale.exe" --probe-notifications` to print what arrives for 60 seconds.
 - **"Add a Google client ID first":** paste the client ID and secret in Settings → Integrations and press **Save**.
 - **"Access blocked" / Error 403 from Google:** your account is not a test user (step 4), or the client is not a *Desktop app*.
 - **"Google Calendar API isn't enabled":** enable it (step 2) in the same project as the client, wait a few minutes, connect again.

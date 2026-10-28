@@ -1057,10 +1057,7 @@ fn ps_quote(s: &str) -> String {
 fn run_elevated(inv: &Invocation) -> Elevated {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let log = std::env::temp_dir().join(format!(
-        "dynamic-island-mole-{}-{n}.log",
-        std::process::id()
-    ));
+    let log = std::env::temp_dir().join(format!("vale-mole-{}-{n}.log", std::process::id()));
     let (program, args) = match inv.args.iter().position(|a| a == "-File") {
         // A script: call it directly, the rest after it.
         Some(i) if i + 1 < inv.args.len() => (inv.args[i + 1].clone(), &inv.args[i + 2..]),
@@ -1191,7 +1188,7 @@ impl MoleWorker {
         match spawned {
             Ok(_) => Some(Self { requests, current }),
             Err(error) => {
-                eprintln!("dynamic-island: no Mole worker: {error}");
+                eprintln!("vale: no Mole worker: {error}");
                 None
             }
         }

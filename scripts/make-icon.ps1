@@ -1,4 +1,4 @@
-# Renders the Dynamic Island logo ("Bata": terracotta tile, espresso island,
+# Renders the Vale logo ("Bata": terracotta tile, espresso island,
 # cream dot, fixed brand colours) and writes assets\icon.ico (16-256 px) and
 # assets\logo-256.png. The vector source is assets\logo.svg; keep both in sync.
 # Sizes up to 32 px use hand-snapped geometry so the pill keeps crisp edges;

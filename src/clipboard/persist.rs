@@ -177,7 +177,7 @@ pub fn save_to(path: &Path, items: &[Clip]) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let mut plain = encode(items);
-    let sealed = dpapi::protect(&plain, w!("Dynamic Island clipboard history"));
+    let sealed = dpapi::protect(&plain, w!("Vale clipboard history"));
     dpapi::wipe(&mut plain);
     let tmp = path.with_extension("bin.tmp");
     std::fs::write(&tmp, sealed?)?;

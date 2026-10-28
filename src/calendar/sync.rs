@@ -98,7 +98,7 @@ pub fn save_failed_notice(message: String) -> Notice {
     }
 }
 
-/// `%APPDATA%\DynamicIsland\calendar-cache.json`, next to the config file.
+/// `%APPDATA%\Vale\calendar-cache.json`, next to the config file.
 pub fn cache_path() -> PathBuf {
     config::path().with_file_name("calendar-cache.json")
 }
@@ -585,7 +585,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "dynamic-island-cal-test-{}-{}",
+            "vale-cal-test-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
         ));

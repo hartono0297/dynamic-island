@@ -403,7 +403,7 @@ fn set_cue(edit: HWND) {
     send(edit, EM_SETCUEBANNER, 1, cue.as_ptr() as isize);
 }
 
-const CLASS_NAME: PCWSTR = w!("DynamicIslandEditorPopover");
+const CLASS_NAME: PCWSTR = w!("ValeEditorPopover");
 const SUBCLASS_ID: usize = 2;
 const ID_TYPE: i32 = 401;
 
@@ -806,7 +806,7 @@ impl Popover {
             },
         );
         if let Err(error) = result {
-            eprintln!("dynamic-island: popover draw failed: {error}");
+            eprintln!("vale: popover draw failed: {error}");
         }
     }
 }

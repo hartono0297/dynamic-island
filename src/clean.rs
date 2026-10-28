@@ -1035,7 +1035,7 @@ impl Cleaner {
         match spawned {
             Ok(_) => Some(Self { requests }),
             Err(error) => {
-                eprintln!("dynamic-island: no cleaner: {error}");
+                eprintln!("vale: no cleaner: {error}");
                 None
             }
         }

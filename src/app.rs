@@ -51,6 +51,7 @@ use crate::cli::{self, Builtin, CliEvent, History, HistoryCursor, RunHandle, Ses
 use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
+use crate::data_dir;
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::media_log;
@@ -200,6 +201,11 @@ pub fn run(media_log_flag: bool) {
     if !claim_single_instance() {
         return;
     }
+    // Before anything reads the data folder: DynamicIsland becomes Vale once.
+    let moved = data_dir::migrate(&data_dir::root());
+    if let data_dir::Migration::Failed(error) = &moved {
+        eprintln!("vale: data folder not moved, the old one stays in use: {error}");
+    }
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
@@ -212,7 +218,7 @@ pub fn run(media_log_flag: bool) {
     let renderer = Renderer::new().expect("create renderer");
     let hwnd = win.hwnd();
     let cli_input = CliInput::create(hwnd, deliver_cli_key)
-        .inspect_err(|e| eprintln!("dynamic-island: no CLI input: {e}"))
+        .inspect_err(|e| eprintln!("vale: no CLI input: {e}"))
         .ok();
     let clip_input = CliInput::create_with(
         hwnd,
@@ -220,7 +226,7 @@ pub fn run(media_log_flag: bool) {
         SEARCH_LIMIT,
         deliver_clip_key,
     )
-    .inspect_err(|e| eprintln!("dynamic-island: no Clipboard search: {e}"))
+    .inspect_err(|e| eprintln!("vale: no Clipboard search: {e}"))
     .ok();
     let (tx, rx) = mpsc::channel();
 
@@ -368,16 +374,19 @@ fn poster(hwnd: HWND, msg: u32) -> impl Fn() + Send + Copy + 'static {
     }
 }
 
-/// False when another island already runs in this session. The mutex handle
-/// is never closed, so it is held for the life of the process.
+/// False when another island already runs in this session, this name or the
+/// one from before the rename (whose data folder must not be moved under
+/// it). The mutex handles are never closed, so they are held for the life of
+/// the process, which also keeps an old Dynamic Island from starting beside it.
 fn claim_single_instance() -> bool {
-    unsafe {
-        match CreateMutexW(None, false, w!("Local\\DynamicIsland")) {
+    let claim = |name| unsafe {
+        match CreateMutexW(None, false, name) {
             Ok(_) => GetLastError() != ERROR_ALREADY_EXISTS,
             // Cannot tell; better to run than to show nothing.
             Err(_) => true,
         }
-    }
+    };
+    claim(w!("Local\\Vale")) & claim(w!("Local\\DynamicIsland"))
 }
 
 struct App {
@@ -1120,7 +1129,7 @@ impl App {
                 if let Some(install) = &self.mole.install
                     && let Err(error) = mole::open_whitelist(install)
                 {
-                    eprintln!("dynamic-island: cannot open Mole's whitelist: {error}");
+                    eprintln!("vale: cannot open Mole's whitelist: {error}");
                 }
             }
             Effect::OpenMoleInstall => {
@@ -1289,7 +1298,7 @@ impl App {
                 Some(Event::EditorOpen(true))
             }
             Err(error) => {
-                eprintln!("dynamic-island: cannot open the editor: {error}");
+                eprintln!("vale: cannot open the editor: {error}");
                 None
             }
         }
@@ -3038,7 +3047,7 @@ impl App {
             .renderer
             .draw(win, self.config.style, shape, &frame, opacity)
         {
-            eprintln!("dynamic-island: draw failed: {error}");
+            eprintln!("vale: draw failed: {error}");
         }
         // The IME composes where the panel drew the caret.
         if focused && let (Some(input), Some(caret)) = (input, self.renderer.cli_caret()) {
@@ -3584,8 +3593,8 @@ impl FrameLog {
 /// A temporary notice from the island itself.
 fn island_notice(key: &str, title: &str, body: &str) -> Notice {
     Notice {
-        key: format!("dynamic-island-{key}"),
-        source: "Dynamic Island".into(),
+        key: format!("vale-{key}"),
+        source: "Vale".into(),
         title: title.into(),
         body: body.into(),
         kind: NoticeKind::App { app_id: None },
@@ -3817,7 +3826,7 @@ fn open_settings(hwnd: HWND) {
         return;
     };
     if let Err(error) = settings::open(hwnd, model, None) {
-        eprintln!("dynamic-island: cannot open settings: {error}");
+        eprintln!("vale: cannot open settings: {error}");
     }
 }
 
@@ -4298,7 +4307,7 @@ mod tests {
     #[test]
     fn island_notices_are_temporary_and_open_nothing() {
         for notice in [dnd_notice(), invalid_config_notice(None)] {
-            assert_eq!(notice.source, "Dynamic Island");
+            assert_eq!(notice.source, "Vale");
             assert_eq!(notice.kind, NoticeKind::App { app_id: None });
         }
     }
@@ -4843,8 +4852,7 @@ mod tests {
     }
 
     fn temp_notes(name: &str) -> (PathBuf, NotesStore) {
-        let dir =
-            std::env::temp_dir().join(format!("dynamic-island-app-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vale-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = NotesStore::open(dir.join("notes.json"));
         (dir, store)
@@ -4998,10 +5006,8 @@ mod tests {
 
     #[test]
     fn reminder_editor_opens_the_reminder_or_a_new_one_next_hour() {
-        let dir = std::env::temp_dir().join(format!(
-            "dynamic-island-app-reminder-kind-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vale-app-reminder-kind-{}", std::process::id()));
         let mut store = RemindersStore::open(dir.join("reminders.json"));
         let due = local_unix(date(27), 7, 15);
         let id = store
@@ -5057,10 +5063,8 @@ mod tests {
 
     #[test]
     fn unreadable_reminders_file_is_announced() {
-        let dir = std::env::temp_dir().join(format!(
-            "dynamic-island-app-reminders-bad-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vale-app-reminders-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("reminders.json"), "[{").unwrap();
         let store = RemindersStore::open(dir.join("reminders.json"));
@@ -5085,7 +5089,7 @@ mod tests {
 
     #[test]
     fn invalid_config_notice_says_where_the_file_went() {
-        let bak = PathBuf::from(r"C:\x\DynamicIsland\config.json.bak");
+        let bak = PathBuf::from(r"C:\x\Vale\config.json.bak");
         let saved = invalid_config_notice(Some(&Repair::BackedUp(bak)));
         assert_eq!(saved.title, "config.json tidak valid");
         assert_eq!(saved.body, "Disalin ke config.json.bak — cek lagi isinya");
@@ -5100,7 +5104,7 @@ mod tests {
     #[test]
     fn island_notices_in_english() {
         i18n::set_lang(i18n::Lang::En);
-        let bak = PathBuf::from(r"C:\x\DynamicIsland\config.json.bak");
+        let bak = PathBuf::from(r"C:\x\Vale\config.json.bak");
         let saved = invalid_config_notice(Some(&Repair::BackedUp(bak)));
         assert_eq!(saved.title, "config.json is invalid");
         assert_eq!(saved.body, "Copied to config.json.bak — check its contents");

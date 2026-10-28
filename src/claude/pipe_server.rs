@@ -21,7 +21,7 @@ const BUFFER_SIZE: u32 = 4096;
 /// Longest line accepted from a client; anything past it is dropped.
 const MAX_LINE: u64 = 64 * 1024;
 
-/// Listens on `\\.\pipe\dynamic-island` on a background thread and turns each
+/// Listens on `\\.\pipe\vale` on a background thread and turns each
 /// hook message into an `Event`. Gives up quietly if another process already
 /// owns the pipe.
 pub fn spawn_pipe_server(tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn round_trip_ignores_malformed_lines() {
-        let name = format!(r"\\.\pipe\dynamic-island-test-{}", std::process::id());
+        let name = format!(r"\\.\pipe\vale-test-{}", std::process::id());
         let (tx, rx) = mpsc::channel();
         let (wake_tx, wake_rx) = mpsc::channel();
         let server_name = name.clone();

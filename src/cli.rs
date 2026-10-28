@@ -464,12 +464,12 @@ pub fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `%APPDATA%\DynamicIsland\cli-history.txt`.
+/// `%APPDATA%\Vale\cli-history.txt`.
 pub fn history_path() -> PathBuf {
     crate::config::path().with_file_name("cli-history.txt")
 }
 
-/// `%APPDATA%\DynamicIsland\cli-cwd.txt`: the folder `cd` last went to.
+/// `%APPDATA%\Vale\cli-cwd.txt`: the folder `cd` last went to.
 pub fn cwd_path() -> PathBuf {
     crate::config::path().with_file_name("cli-cwd.txt")
 }
@@ -807,7 +807,7 @@ mod tests {
             use std::sync::atomic::AtomicU32;
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-cli-{name}-{}-{}",
+                "vale-cli-{name}-{}-{}",
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             ));

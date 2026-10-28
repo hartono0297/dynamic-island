@@ -1,5 +1,5 @@
 # Builds, signs and registers the sparse MSIX package that gives
-# target\release\dynamic-island.exe its package identity.
+# target\release\vale.exe its package identity.
 # Safe to re-run: existing certificate, staging and registration are reused or replaced.
 # Requires Windows PowerShell 5.1 or later; no elevation.
 
@@ -13,8 +13,8 @@ $cerPath = Join-Path $certDir 'dev.cer'
 $passwordPath = Join-Path $certDir 'password.txt'
 $stagingDir = Join-Path $packagingDir 'staging'
 $releaseDir = Join-Path $root 'target\release'
-$exePath = Join-Path $releaseDir 'dynamic-island.exe'
-$msixPath = Join-Path $root 'target\DynamicIsland.msix'
+$exePath = Join-Path $releaseDir 'vale.exe'
+$msixPath = Join-Path $root 'target\Vale.msix'
 $importCommand = "Import-Certificate -FilePath `"$cerPath`" -CertStoreLocation Cert:\LocalMachine\TrustedPeople"
 
 function Write-ImportInstructions {
@@ -118,8 +118,8 @@ if (-not $trusted) {
     Write-Warning 'The development certificate is not in Cert:\LocalMachine\TrustedPeople yet; registration will most likely fail.'
 }
 
-$existing = Get-AppxPackage -Name DynamicIsland
-if ($existing) {
+# DynamicIsland: the package name before the rename to Vale.
+foreach ($existing in Get-AppxPackage -Name Vale, DynamicIsland) {
     Write-Host "Removing existing registration $($existing.PackageFullName)"
     $existing | Remove-AppxPackage
 }
@@ -139,5 +139,5 @@ catch {
     exit 1
 }
 
-Get-AppxPackage -Name DynamicIsland | Format-List Name, PackageFullName, InstallLocation, Status
+Get-AppxPackage -Name Vale | Format-List Name, PackageFullName, InstallLocation, Status
 Write-Host 'Package registered.' -ForegroundColor Green

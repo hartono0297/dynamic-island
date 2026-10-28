@@ -62,7 +62,7 @@ pub fn read_folders(request: u64, tx: Sender<Event>, wake: impl Fn() + Send + 's
     match spawned {
         Ok(_) => true,
         Err(error) => {
-            eprintln!("dynamic-island: cannot read Explorer folders: {error}");
+            eprintln!("vale: cannot read Explorer folders: {error}");
             false
         }
     }

@@ -1,5 +1,5 @@
 //! Where the CLI page starts and the folder menu's rows: favourite and
-//! recently used folders (kept in `%APPDATA%\DynamicIsland`), whether to
+//! recently used folders (kept in `%APPDATA%\Vale`), whether to
 //! follow the last active File Explorer window when the page opens, and the
 //! menu built from those lists. Pure: no COM and no Win32, so all of it is
 //! tested without a window. The Explorer windows themselves are read by
@@ -62,12 +62,12 @@ impl<'de> Deserialize<'de> for CliStart {
     }
 }
 
-/// `%APPDATA%\DynamicIsland\cli-favorites.txt`: one folder per line.
+/// `%APPDATA%\Vale\cli-favorites.txt`: one folder per line.
 pub fn favorites_path() -> PathBuf {
     crate::config::path().with_file_name("cli-favorites.txt")
 }
 
-/// `%APPDATA%\DynamicIsland\cli-recent.txt`: `<unix secs>\t<folder>` per
+/// `%APPDATA%\Vale\cli-recent.txt`: `<unix secs>\t<folder>` per
 /// line, newest first.
 pub fn recent_path() -> PathBuf {
     crate::config::path().with_file_name("cli-recent.txt")
@@ -425,7 +425,7 @@ mod tests {
             use std::sync::atomic::{AtomicU32, Ordering};
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-folders-{name}-{}-{}",
+                "vale-folders-{name}-{}-{}",
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             ));

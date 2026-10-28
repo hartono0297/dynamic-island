@@ -239,7 +239,7 @@ pub fn probe() {
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("dynamic-island: notification listener unavailable: {e}");
+            eprintln!("vale: notification listener unavailable: {e}");
             std::process::exit(1);
         }
     };
@@ -257,7 +257,7 @@ pub fn probe() {
                     println!("{} | {} | {}", notice.source, notice.title, notice.body);
                 }
             }
-            Err(e) => eprintln!("dynamic-island: reading notifications failed: {e}"),
+            Err(e) => eprintln!("vale: reading notifications failed: {e}"),
         }
         std::thread::sleep(POLL_INTERVAL);
     }

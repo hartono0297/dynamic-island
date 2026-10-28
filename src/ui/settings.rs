@@ -435,7 +435,7 @@ fn post_action(owner: HWND, action: Action) {
     }
 }
 
-const CLASS_NAME: PCWSTR = w!("DynamicIslandSettings");
+const CLASS_NAME: PCWSTR = w!("ValeSettings");
 
 fn register_class(instance: HINSTANCE) -> Result<()> {
     static ONCE: Once = Once::new();
@@ -1182,7 +1182,7 @@ impl Settings {
         };
         let dpi = self.dpi as f32;
         if let Err(error) = self.gfx.paint(self.hwnd, size, dpi, &scene) {
-            eprintln!("dynamic-island: settings draw failed: {error}");
+            eprintln!("vale: settings draw failed: {error}");
         }
         let content_was_running = self.anims.content.is_some();
         self.anims.prune(now);
@@ -2034,13 +2034,13 @@ pub fn run_demo(args: &[String]) {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(owner_proc),
             hInstance: instance,
-            lpszClassName: w!("DynamicIslandSettingsDemoOwner"),
+            lpszClassName: w!("ValeSettingsDemoOwner"),
             ..Default::default()
         };
         RegisterClassExW(&class);
         let Ok(owner) = CreateWindowExW(
             WS_EX_TOOLWINDOW,
-            w!("DynamicIslandSettingsDemoOwner"),
+            w!("ValeSettingsDemoOwner"),
             w!(""),
             WS_POPUP,
             0,

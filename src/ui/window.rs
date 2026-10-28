@@ -32,7 +32,7 @@ pub struct IslandWindow {
 
 impl IslandWindow {
     pub fn create(wnd_proc: WNDPROC) -> Result<Self> {
-        let class_name = w!("DynamicIslandWindow");
+        let class_name = w!("ValeWindow");
         unsafe {
             let instance = GetModuleHandleW(None)?.into();
             let class = WNDCLASSEXW {
@@ -60,7 +60,7 @@ impl IslandWindow {
             let hwnd = CreateWindowExW(
                 ex_style,
                 class_name,
-                w!("Dynamic Island"),
+                w!("Vale"),
                 WS_POPUP,
                 origin.x,
                 origin.y,

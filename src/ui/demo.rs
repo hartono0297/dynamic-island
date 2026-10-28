@@ -868,7 +868,7 @@ fn run_scenes(scenes: &[Scene]) {
         key: "demo-wait".into(),
         source: "Claude".into(),
         title: tr(Key::ClaudeWaiting).into(),
-        body: "Dynamic Island".into(),
+        body: "Vale".into(),
         kind: NoticeKind::ClaudeWaiting {
             session_id: "demo".into(),
         },
@@ -1260,7 +1260,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::Claude => notice(
             "Claude",
             tr(Key::ClaudeWaiting),
-            format!("dynamic-island · {}", tr(Key::DemoClaudeAsks)),
+            format!("vale · {}", tr(Key::DemoClaudeAsks)),
             NoticeKind::ClaudeWaiting {
                 session_id: "demo".into(),
             },
@@ -1314,7 +1314,7 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
         DemoNotice::ClaudeWorking => notice(
             "Claude",
             tr(Key::DemoClaudeWorking),
-            format!("dynamic-island · {}", tr(Key::DemoFilesChanged)),
+            format!("vale · {}", tr(Key::DemoFilesChanged)),
             NoticeKind::ClaudeDone {
                 session_id: "demo".into(),
             },

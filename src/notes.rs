@@ -55,7 +55,7 @@ impl NotesStore {
         }
     }
 
-    /// `%APPDATA%\DynamicIsland\notes.json`, next to the config file.
+    /// `%APPDATA%\Vale\notes.json`, next to the config file.
     pub fn default_path() -> PathBuf {
         crate::config::path().with_file_name("notes.json")
     }
@@ -157,7 +157,7 @@ mod tests {
         fn new(name: &str) -> Self {
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-notes-{name}-{}-{}",
+                "vale-notes-{name}-{}-{}",
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             ));

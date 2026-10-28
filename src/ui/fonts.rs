@@ -391,7 +391,7 @@ pub fn register_gdi() -> GdiFonts {
             let handle =
                 unsafe { AddFontMemResourceEx(file.as_ptr().cast(), len, None, count_out) };
             if handle.is_invalid() {
-                eprintln!("dynamic-island: cannot register an embedded font with GDI");
+                eprintln!("vale: cannot register an embedded font with GDI");
             } else {
                 installed += count;
             }
@@ -404,7 +404,7 @@ pub fn register_gdi() -> GdiFonts {
             dm_mono: gdi_has(DM_MONO),
         };
         if !fonts.dm_sans || !fonts.dm_mono {
-            eprintln!("dynamic-island: embedded fonts incomplete for GDI: {fonts:?}");
+            eprintln!("vale: embedded fonts incomplete for GDI: {fonts:?}");
         }
         fonts
     })

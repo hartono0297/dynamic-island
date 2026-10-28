@@ -483,7 +483,7 @@ fn respond(mut stream: &TcpStream, status: &str, body: &str) {
     let _ = stream.shutdown(Shutdown::Write);
 }
 
-/// `%APPDATA%\DynamicIsland\google-token.bin`, next to the config file.
+/// `%APPDATA%\Vale\google-token.bin`, next to the config file.
 fn token_path() -> PathBuf {
     config::path().with_file_name("google-token.bin")
 }
@@ -513,7 +513,7 @@ fn save_tokens_to(path: &Path, tokens: &Tokens) -> io::Result<()> {
     }
     let plain = serde_json::to_vec(tokens).map_err(io::Error::other)?;
     // DPAPI, current-user scope: only this Windows account can decrypt it.
-    let sealed = dpapi::protect(&plain, w!("Dynamic Island Google token"))?;
+    let sealed = dpapi::protect(&plain, w!("Vale Google token"))?;
     let tmp = path.with_extension("bin.tmp");
     std::fs::write(&tmp, sealed)?;
     std::fs::rename(&tmp, path)
@@ -830,10 +830,7 @@ mod tests {
 
     #[test]
     fn dpapi_round_trip() {
-        let path = std::env::temp_dir().join(format!(
-            "dynamic-island-token-test-{}.bin",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("vale-token-test-{}.bin", std::process::id()));
         let tokens = Tokens {
             access: "ya29.access-token-text".into(),
             refresh: "1//refresh-token-text".into(),

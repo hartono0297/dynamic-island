@@ -546,7 +546,7 @@ impl Sampler {
         match spawned {
             Ok(_) => Some(Self { requests }),
             Err(error) => {
-                eprintln!("dynamic-island: no system sampler: {error}");
+                eprintln!("vale: no system sampler: {error}");
                 None
             }
         }

@@ -440,13 +440,10 @@ pub fn backup_path(path: &Path) -> PathBuf {
         .unwrap_or(first)
 }
 
-/// `%APPDATA%\DynamicIsland\config.json`, or the current directory when APPDATA is unset.
+/// `%APPDATA%\Vale\config.json` (`data_dir::dir`); every other data file sits
+/// next to it.
 pub fn path() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join("DynamicIsland")
-        .join("config.json")
+    crate::data_dir::dir().join("config.json")
 }
 
 pub fn load() -> Config {
@@ -1080,7 +1077,7 @@ mod tests {
             use std::sync::atomic::{AtomicU32, Ordering};
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "dynamic-island-config-{name}-{}-{}",
+                "vale-config-{name}-{}-{}",
                 std::process::id(),
                 SEQ.fetch_add(1, Ordering::Relaxed)
             ));

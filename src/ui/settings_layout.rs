@@ -1184,15 +1184,15 @@ impl Builder<'_> {
         self.l.brand = Some(Text {
             // No fill or divider marks the sidebar's edge, so the brand may
             // run into the gutter, up to half a gap before the content
-            // column. DM Sans 600 draws "Dynamic Island" at 16 px about
-            // 112 px wide; the estimate asks 148, more than the sidebar has.
+            // column. DM Sans 600 draws "Vale" at 16 px about
+            // 40 px wide; the estimate is well inside what the sidebar has.
             rect: Rect {
                 x: brand_x,
                 y: 22.0,
                 w: CONTENT_X - GAP / 2.0 - brand_x,
                 h: LOGO,
             },
-            text: "Dynamic Island".into(),
+            text: "Vale".into(),
             font: Font::Brand,
             tone: Tone::Primary,
             align: Align::Left,
@@ -2024,7 +2024,7 @@ fn about(b: &mut Builder, s: &State) {
     };
     b.text(
         line(top + 2.0, 26.0),
-        "Dynamic Island".into(),
+        "Vale".into(),
         Font::AboutName,
         Tone::Primary,
         Align::Left,
@@ -2067,7 +2067,7 @@ fn about(b: &mut Builder, s: &State) {
         (
             Hit::DataFolder,
             Key::DataFolder,
-            r"%APPDATA%\DynamicIsland".to_owned(),
+            r"%APPDATA%\Vale".to_owned(),
             Key::OpenDataFolder,
             ButtonKind::Secondary,
         ),

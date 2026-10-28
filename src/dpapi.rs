@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_garbage_is_refused() {
-        let sealed = protect(b"secret text", w!("Dynamic Island test")).unwrap();
+        let sealed = protect(b"secret text", w!("Vale test")).unwrap();
         assert!(!sealed.windows(6).any(|w| w == b"secret"));
         assert_eq!(unprotect(&sealed).unwrap(), b"secret text");
         assert!(unprotect(b"not a dpapi blob").is_err());

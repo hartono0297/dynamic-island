@@ -387,7 +387,7 @@ keys! {
     MenuSettings => "Pengaturan…", "Settings…";
 
     // Settings window.
-    SettingsTitle => "Pengaturan Dynamic Island", "Dynamic Island Settings";
+    SettingsTitle => "Pengaturan Vale", "Vale Settings";
     SecAppearance => "Tampilan", "Appearance";
     SecGeneral => "Umum", "General";
     SecPomodoro => "Pomodoro", "Pomodoro";
@@ -1325,7 +1325,7 @@ pub fn unknown_format(lang: Lang, path: &str) -> String {
 /// The page the browser shows after the Google login.
 pub fn oauth_page(lang: Lang, key: Key) -> String {
     format!(
-        "<!doctype html><html lang=\"{}\"><meta charset=\"utf-8\"><title>Dynamic Island</title>\
+        "<!doctype html><html lang=\"{}\"><meta charset=\"utf-8\"><title>Vale</title>\
          <p style=\"font:16px sans-serif\">{}</p>",
         lang.code(),
         text(lang, key)

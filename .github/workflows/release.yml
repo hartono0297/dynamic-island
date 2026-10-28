@@ -1,8 +1,8 @@
 name: release
 
 # Pushing a tag like v2.0.0 builds the exe and publishes a GitHub release with:
-#   dynamic-island.exe, dynamic-island.exe.sha256 (used by install.ps1)
-#   dynamic-island-<tag>.zip (exe + install/uninstall scripts + README)
+#   vale.exe, vale.exe.sha256 (used by install.ps1)
+#   vale-<tag>.zip (exe + install/uninstall scripts + README)
 on:
   push:
     tags: ['v*']
@@ -29,11 +29,11 @@ jobs:
         run: |
           $tag = '${{ github.ref_name }}'
           New-Item -ItemType Directory dist, pkg | Out-Null
-          Copy-Item target/release/dynamic-island.exe dist/
-          $hash = (Get-FileHash dist/dynamic-island.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path dist/dynamic-island.exe.sha256 -Value "$hash  dynamic-island.exe" -NoNewline -Encoding ascii
-          Copy-Item dist/dynamic-island.exe, install.ps1, uninstall.ps1, README.md pkg/
-          Compress-Archive -Path pkg/* -DestinationPath "dist/dynamic-island-$tag.zip"
+          Copy-Item target/release/vale.exe dist/
+          $hash = (Get-FileHash dist/vale.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path dist/vale.exe.sha256 -Value "$hash  vale.exe" -NoNewline -Encoding ascii
+          Copy-Item dist/vale.exe, install.ps1, uninstall.ps1, README.md pkg/
+          Compress-Archive -Path pkg/* -DestinationPath "dist/vale-$tag.zip"
 
       - name: Publish release
         shell: pwsh
