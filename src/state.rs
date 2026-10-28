@@ -460,6 +460,9 @@ impl IslandState {
             self.hover_opened = None;
         }
         if panel_was_open && !self.panel_open() {
+            // A page that is off was opened by its button for that visit
+            // only; the next hover starts on a page that is on.
+            self.leave_hidden_page();
             self.wheel = 0;
             self.notes_page = 0;
             self.reminders_page = 0;
@@ -1095,14 +1098,23 @@ impl IslandState {
     fn set_pages(&mut self, pages: PanelPages) {
         let was_on = self.pages.is_on(self.page);
         self.pages = pages;
-        if was_on && !self.pages.is_on(self.page) {
-            let next = self.pages.step(self.page, 1);
-            self.page = if next == self.page {
-                self.pages.step(self.page, -1)
-            } else {
-                next
-            };
+        if was_on {
+            self.leave_hidden_page();
         }
+    }
+
+    /// A page that is off hands over to the next page on (or the one before
+    /// it at the end of the order).
+    fn leave_hidden_page(&mut self) {
+        if self.pages.is_on(self.page) {
+            return;
+        }
+        let next = self.pages.step(self.page, 1);
+        self.page = if next == self.page {
+            self.pages.step(self.page, -1)
+        } else {
+            next
+        };
     }
 
     /// Day view: one day, and the selection follows. Week: 7 days. Month: one
@@ -2028,6 +2040,23 @@ mod tests {
         // The next shown page after it; the wheel then walks the rest.
         assert_eq!(s.page(), Page::Media);
         assert_eq!(s.pages().visible().len(), Page::ALL.len() - 1);
+    }
+
+    #[test]
+    fn a_page_turned_off_does_not_come_back_on_the_next_hover() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Notes);
+        s.apply(Event::PanelPages(pages), t0);
+        // Opened once by its own button (here: set while hovering).
+        s.apply(Event::Hover(true), t0);
+        s.page = Page::Notes;
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        s.apply(Event::Hover(false), t0);
+        // The next visit starts on a page that is on.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
     }
 
     #[test]

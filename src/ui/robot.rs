@@ -248,13 +248,15 @@ impl Line {
 /// One mark of a face.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Part {
-    /// A filled espresso rounded rect (the open eyes are pills).
+    /// A filled espresso rounded rect (the open eyes are pills; a short
+    /// one has elliptic corners, `rx` across and `ry` down).
     Pill {
         x: f32,
         y: f32,
         w: f32,
         h: f32,
-        r: f32,
+        rx: f32,
+        ry: f32,
     },
     /// A filled circle (round eyes, shine, the note's heads, thinking dots).
     Dot {
@@ -289,14 +291,17 @@ pub struct Face {
     pub tilt: f32,
 }
 
-/// An espresso pill centred on (x, y).
-fn pill(x: f32, y: f32, w: f32, h: f32, r: f32) -> Part {
+/// An espresso pill centred on (x, y), with SVG's corner rule: `rx` is
+/// half the width and `ry` the same, each capped at half its side.
+fn pill(x: f32, y: f32, w: f32, h: f32) -> Part {
+    let rx = w / 2.0;
     Part::Pill {
         x: x - w / 2.0,
         y: y - h / 2.0,
         w,
         h,
-        r,
+        rx,
+        ry: rx.min(h / 2.0),
     }
 }
 
@@ -310,8 +315,7 @@ fn lashes(dy: f32, droop: f32) -> Part {
 
 /// The design's `open(h, w, dy)`: two pills, fully rounded.
 fn open(h: f32, w: f32, dy: f32) -> [Part; 2] {
-    let r = w.min(h) / 2.0;
-    [pill(L, Y + dy, w, h, r), pill(R, Y + dy, w, h, r)]
+    [pill(L, Y + dy, w, h), pill(R, Y + dy, w, h)]
 }
 
 /// The design's `shine(dy)`: a cream glint high on each eye.
@@ -374,14 +378,16 @@ pub fn face(expr: Expr, blink: bool) -> Face {
                     y: Y - 7.5,
                     w: 6.0,
                     h: 8.5,
-                    r: 3.0,
+                    rx: 3.0,
+                    ry: 3.0,
                 },
                 Part::Pill {
                     x: R - 1.0,
                     y: Y - 7.5,
                     w: 6.0,
                     h: 8.5,
-                    r: 3.0,
+                    rx: 3.0,
+                    ry: 3.0,
                 },
                 lashes(-2.5, 0.0),
             ],
@@ -674,9 +680,16 @@ impl RobotPainter {
             rt.SetTransform(&world);
             for part in &face.parts {
                 match *part {
-                    Part::Pill { x, y, w, h, r } => {
+                    Part::Pill { x, y, w, h, rx, ry } => {
                         brush.SetColor(&color(ESPRESSO, 1.0));
-                        rt.FillRoundedRectangle(&rounded((x, y, w, h, r)), brush);
+                        rt.FillRoundedRectangle(
+                            &D2D1_ROUNDED_RECT {
+                                radiusX: rx,
+                                radiusY: ry,
+                                ..rounded((x, y, w, h, 0.0))
+                            },
+                            brush,
+                        );
                     }
                     Part::Dot { cx, cy, r, ink } => {
                         brush.SetColor(&color(ink.rgb(), 1.0));
@@ -1301,14 +1314,16 @@ mod tests {
                     y: 30.25,
                     w: 7.0,
                     h: 9.5,
-                    r: 3.5
+                    rx: 3.5,
+                    ry: 3.5
                 },
                 Part::Pill {
                     x: 36.5,
                     y: 30.25,
                     w: 7.0,
                     h: 9.5,
-                    r: 3.5
+                    rx: 3.5,
+                    ry: 3.5
                 },
                 Part::Dot {
                     cx: L + 1.2,
@@ -1329,6 +1344,14 @@ mod tests {
             (idle.ears, idle.bob, idle.tilt),
             (Ears::default(), 0.0, 0.0)
         );
+        // The design's rounded rects: rx = w / 2, ry capped at h / 2, so a
+        // short eye is a flat ellipse (focus 7.5 x 4.2, low 6.5 x 6).
+        let corners = |e| match face(e, false).parts[0] {
+            Part::Pill { rx, ry, .. } => (rx, ry),
+            _ => panic!("{e:?} has no pill eyes"),
+        };
+        assert_eq!(corners(Expr::Focus), (3.75, 2.1));
+        assert_eq!(corners(Expr::Sad), (3.25, 3.0));
         // The ears carry the mood: up when alert, down asleep, drooped when low.
         let ears = |e| face(e, false).ears;
         assert_eq!(

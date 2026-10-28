@@ -41,6 +41,12 @@ pub fn dir() -> PathBuf {
     pick(&root())
 }
 
+/// How Settings → Tentang names `dir`: `%APPDATA%\` and its folder name.
+pub fn label(dir: &Path) -> String {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    format!(r"%APPDATA%\{name}")
+}
+
 /// `root\Vale` when it exists or nothing else does; the old folder while it
 /// is the only one (a migration that failed).
 pub fn pick(root: &Path) -> PathBuf {
@@ -203,6 +209,14 @@ mod tests {
         assert!(old.join("config.json").is_file());
         assert!(old.join(MOVED_NOTE).is_file());
         assert_eq!(pick(&root), new);
+    }
+
+    #[test]
+    fn settings_name_the_folder_in_use() {
+        let root = Path::new(r"C:\Users\x\AppData\Roaming");
+        assert_eq!(label(&root.join(DIR)), r"%APPDATA%\Vale");
+        // A migration that failed keeps the old folder in use: say so.
+        assert_eq!(label(&root.join(OLD_DIR)), r"%APPDATA%\DynamicIsland");
     }
 
     #[test]

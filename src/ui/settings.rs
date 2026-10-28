@@ -385,6 +385,8 @@ struct Settings {
     confirm: bool,
     /// "Lanjutan" under Google is open: the own Client ID fields show.
     google_advanced: bool,
+    /// `%APPDATA%\Vale`, or the old folder while a failed migration keeps it.
+    data_label: String,
     /// Small and large window icons, owned (not shared) and destroyed with the window.
     icons: [HICON; 2],
     /// The mode the title bar and fields were last styled for.
@@ -674,6 +676,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         hook_note: None,
         confirm: false,
         google_advanced,
+        data_label: crate::data_dir::label(&crate::data_dir::dir()),
         icons: [HICON::default(); 2],
         styled_light: None,
     };
@@ -960,6 +963,7 @@ impl Settings {
             shot: m.shot,
             pages: m.pages.clone(),
             version: env!("CARGO_PKG_VERSION"),
+            data_dir: &self.data_label,
         }
     }
 

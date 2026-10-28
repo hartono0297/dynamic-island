@@ -673,6 +673,8 @@ pub struct State<'a> {
     /// "Halaman panel": the pages' order and which the wheel shows.
     pub pages: PanelPages,
     pub version: &'a str,
+    /// The data folder in use, as `data_dir::label` names it.
+    pub data_dir: &'a str,
 }
 
 pub fn accent_key(a: Accent) -> Key {
@@ -1876,7 +1878,8 @@ fn integrations(b: &mut Builder, s: &State) {
     b.eyebrow(Key::GoogleCalendar, x - GAP - CONTENT_X - 2.0);
     // With Vale's own client the card is one button; the user's own Client
     // ID and secret wait under "Lanjutan".
-    let fields = !g.built_in || g.advanced;
+    // An own ID in the field keeps them open: it is the one a login uses.
+    let fields = !g.built_in || g.advanced || g.has_id;
     let card = b.card(if fields {
         6.0 + 2.0 * FIELD_ROW_H + ROW_H
     } else {
@@ -1995,7 +1998,7 @@ fn integrations(b: &mut Builder, s: &State) {
             b.chip(card.x + INSET, row_cy, b.t(key), tone, left_w);
         }
     }
-    if g.built_in {
+    if g.built_in && !g.has_id {
         // Under the card, on the left: the way to the user's own client.
         let advanced = b.t(Key::GoogleAdvanced);
         let kind = ButtonKind::Disclosure(g.advanced);
@@ -2103,7 +2106,7 @@ fn about(b: &mut Builder, s: &State) {
         (
             Hit::DataFolder,
             Key::DataFolder,
-            r"%APPDATA%\Vale".to_owned(),
+            s.data_dir.to_owned(),
             Key::OpenDataFolder,
             ButtonKind::Secondary,
         ),
@@ -2230,6 +2233,7 @@ mod tests {
                             PanelPages::default()
                         },
                         version: "2.1.0",
+                        data_dir: r"%APPDATA%\Vale",
                     });
                 }
             }
@@ -3048,6 +3052,11 @@ mod tests {
         });
         assert_eq!(plain.fields.len(), 2);
         assert!(button(&plain, Hit::GoogleAdvanced).is_none());
+        // An own Client ID wins over Vale's: while one is filled in, its
+        // fields and "Hubungkan" show, never "Masuk dengan Google".
+        let own = at(GoogleState { has_id: true, ..g });
+        assert_eq!(own.fields.len(), 2);
+        assert_eq!(button(&own, Hit::GoogleConnect).unwrap().label, "Hubungkan");
     }
 
     #[test]

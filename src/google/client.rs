@@ -22,12 +22,23 @@ const fn or_empty(value: Option<&'static str>) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Client {
     pub id: String,
     pub secret: String,
     /// The user's own client, not the built-in one.
     pub own: bool,
+}
+
+/// Redacted, like `Tokens`, so a stray `{:?}` cannot leak the secret.
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("id", &self.id)
+            .field("secret", &"<redacted>")
+            .field("own", &self.own)
+            .finish()
+    }
 }
 
 /// The client to use: `own` (ID, secret) when its ID is set, else `built_in`
@@ -97,6 +108,15 @@ mod tests {
         // Neither: not configured.
         assert_eq!(choose(("", ""), ("", "")), None);
         assert_eq!(choose(("", ""), (" ", "secret")), None);
+    }
+
+    #[test]
+    fn debug_output_never_shows_the_secret() {
+        let shown = format!("{:?}", client("id.apps", "very-secret", true));
+        assert!(
+            shown.contains("id.apps") && !shown.contains("very-secret"),
+            "{shown}"
+        );
     }
 
     #[test]

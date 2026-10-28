@@ -171,6 +171,8 @@ keys! {
         "The Google sign-in changed, so the old login no longer works";
     ClientRejected => "Client ID atau secret ditolak — cek Pengaturan → Integrasi",
         "Client ID or secret rejected — check Settings → Integrations";
+    BuiltInRejected => "Login Google Vale sedang ditolak — coba lagi nanti, atau pakai Client ID sendiri (Pengaturan → Integrasi → Lanjutan)",
+        "Vale's Google sign-in is being refused — try again later, or use your own Client ID (Settings → Integrations → Advanced)";
     ApiDisabled => "Google Calendar API belum diaktifkan — lihat README",
         "Google Calendar API isn't enabled — see the README";
     NoTitle => "(Tanpa judul)", "(No title)";

@@ -17,6 +17,8 @@ const EVENTS: [&str; 5] = [
 /// Seconds Claude Code waits for `--hook` before giving up on it.
 const HOOK_TIMEOUT_SECS: u64 = 5;
 const BACKUP_NAME: &str = "settings.json.bak-vale";
+/// Dynamic Island's backup, from before the rename: the true original.
+const OLD_BACKUP_NAME: &str = "settings.json.bak-dynamic-island";
 const TEMP_NAME: &str = "settings.json.tmp-vale";
 /// Any hook command ending in one of these exe names (after a folder or the
 /// opening quote) was written by some copy of the island: Vale, or Dynamic
@@ -373,6 +375,13 @@ pub fn uninstall_at(path: &Path) -> Result<bool, String> {
 /// Keeps the oldest backup: the settings as they were before the island
 /// first touched them.
 fn write_backup_once(backup: &Path, original: &str) -> Result<(), String> {
+    // Dynamic Island's backup predates any island hooks: it becomes Vale's.
+    if let Some(dir) = backup.parent() {
+        let old = dir.join(OLD_BACKUP_NAME);
+        if !backup.exists() && old.is_file() && fs::rename(&old, backup).is_ok() {
+            return Ok(());
+        }
+    }
     match OpenOptions::new().write(true).create_new(true).open(backup) {
         Ok(mut file) => file
             .write_all(original.as_bytes())
@@ -640,6 +649,26 @@ mod tests {
         for e in EVENTS {
             assert_eq!(island_commands(&v, e), vec![NEW.to_string()]);
         }
+    }
+
+    #[test]
+    fn the_backup_from_before_the_rename_becomes_vales() {
+        // Dynamic Island kept the untouched original under its own name;
+        // the settings now hold its hooks, so they are no original.
+        let dir = TempDir::new("old-backup");
+        let old = dir.0.join(OLD_BACKUP_NAME);
+        fs::write(&old, r#"{"pristine":true}"#).unwrap();
+        fs::write(
+            dir.settings(),
+            format!(r#"{{"x":"{}"}}"#, "with island hooks"),
+        )
+        .unwrap();
+        assert_eq!(install_at(&dir.settings(), NEW), InstallOutcome::Installed);
+        assert_eq!(
+            fs::read_to_string(dir.backup()).unwrap(),
+            r#"{"pristine":true}"#
+        );
+        assert!(!old.exists());
     }
 
     #[test]

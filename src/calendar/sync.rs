@@ -195,15 +195,28 @@ fn google_notice(e: &AuthError) -> Option<Notice> {
     })
 }
 
-/// The notice after a browser login that failed. With a client ID set,
-/// `NotConfigured` means Google rejected the client ID or secret.
-fn login_notice(e: &AuthError, configured: bool) -> Option<Notice> {
-    match e {
-        AuthError::NotConfigured if configured => {
-            google_notice(&AuthError::Google(tr(Key::ClientRejected).into()))
+/// With a client set (`own`: the user's own or Vale's built-in one),
+/// `NotConfigured` means Google rejected that client: a refusal saying what
+/// to do, which keeps the connect button (NeedsLogin), not "not set up".
+fn rejected(e: AuthError, own: Option<bool>) -> AuthError {
+    match (e, own) {
+        (AuthError::NotConfigured, Some(true)) => AuthError::Google(tr(Key::ClientRejected).into()),
+        (AuthError::NotConfigured, Some(false)) => {
+            AuthError::Google(tr(Key::BuiltInRejected).into())
         }
-        other => google_notice(other),
+        (e, _) => e,
     }
+}
+
+/// The notice after a browser login that failed (`own` as in `rejected`).
+fn login_notice(e: &AuthError, own: Option<bool>) -> Option<Notice> {
+    google_notice(&rejected(e.clone(), own))
+}
+
+/// Whose client the config gives: `Some(true)` the user's own,
+/// `Some(false)` Vale's built-in one, `None` none.
+fn client_owner(cfg: &Config) -> Option<bool> {
+    client::for_config(cfg).map(|c| c.own)
 }
 
 /// Runs `call` with `token`; on a 401 gets a fresh token from `refresh` and
@@ -393,7 +406,10 @@ impl Worker {
         if recent && !force {
             return;
         }
-        let result = self.with_token(|http, token| api::fetch_range(http, token, range.0, range.1));
+        let own = client_owner(&self.cfg);
+        let result = self
+            .with_token(|http, token| api::fetch_range(http, token, range.0, range.1))
+            .map_err(|e| rejected(e, own));
         let ok = result.is_ok();
         if let Some(notice) = result.as_ref().err().and_then(google_notice) {
             self.notify_once(notice);
@@ -472,7 +488,7 @@ impl Worker {
             // there is something (a cancel or timeout needs no words).
             Err(e) => {
                 let configured = configured(&self.cfg);
-                if let Some(notice) = login_notice(&e, configured) {
+                if let Some(notice) = login_notice(&e, client_owner(&self.cfg)) {
                     // Shown on every failed attempt: each one was a click.
                     self.send(Event::Notice(notice));
                 }
@@ -786,17 +802,42 @@ mod tests {
         ] {
             assert!(google_notice(&quiet).is_none(), "{quiet:?}");
         }
-        // At login, NotConfigured with an ID set means Google rejected the client.
-        let n = login_notice(&AuthError::NotConfigured, true).unwrap();
+        // NotConfigured with a client set means Google rejected that client.
+        let n = login_notice(&AuthError::NotConfigured, Some(true)).unwrap();
         assert_eq!(n.title, "Google menolak");
-        assert!(login_notice(&AuthError::NotConfigured, false).is_none());
+        assert!(login_notice(&AuthError::NotConfigured, None).is_none());
         assert!(
-            login_notice(&AuthError::NeedsLogin, true).is_none(),
+            login_notice(&AuthError::NeedsLogin, Some(true)).is_none(),
             "cancelled"
         );
         assert_eq!(
-            login_notice(&AuthError::MissingScopes, true).unwrap().title,
+            login_notice(&AuthError::MissingScopes, Some(true))
+                .unwrap()
+                .title,
             "Izin Google belum lengkap"
+        );
+    }
+
+    #[test]
+    fn a_rejected_client_is_not_called_unconfigured() {
+        // The user's own client: they can fix it in Settings.
+        assert_eq!(
+            rejected(AuthError::NotConfigured, Some(true)),
+            AuthError::Google(tr(Key::ClientRejected).into())
+        );
+        // Vale's own: nothing to fix in Settings; say so, and keep the
+        // connect button (NeedsLogin, not NotConfigured).
+        let built_in = rejected(AuthError::NotConfigured, Some(false));
+        assert_eq!(built_in, AuthError::Google(tr(Key::BuiltInRejected).into()));
+        assert_eq!(status_for(&built_in), CalStatus::NeedsLogin);
+        // No client at all, or another error: as it was.
+        assert_eq!(
+            rejected(AuthError::NotConfigured, None),
+            AuthError::NotConfigured
+        );
+        assert_eq!(
+            rejected(AuthError::NeedsLogin, Some(false)),
+            AuthError::NeedsLogin
         );
     }
 
