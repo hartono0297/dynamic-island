@@ -99,4 +99,16 @@ at y = 14 and at the idle island only; the y = 2 run was not completed), drops
 on the halo itself, and drag-out. (The halo no longer sits over clicks: it
 exists only with the button down.) `DI_SHELF_LOG` debugging was removed again.
 
+## v3.2.1 review fixes (2026-10-29)
+
+- A `Drop` that was accepting but reads no paths sends `ShelfDragOver(false)`,
+  so the drop zone and the hold end (no drop follows).
+- A card press is forgotten on `WM_MOUSELEAVE` and on a move whose `wparam`
+  lacks `MK_LBUTTON` (the release may have happened off the island).
+- Drag out: a thread-local `DRAGGING_OUT` (set around `DoDragDrop`) makes the
+  island's own `DragEnter`/`Drop` ignore its own drag (no drop zone, no
+  re-add). After `drag_out` returns, `shelf_after_drag_out` cancels the swipe
+  (its release was swallowed) and runs the leave path if the pointer ended
+  off the island. Still not verified live.
+
 Related: [[mixer]], [[open-mode]].

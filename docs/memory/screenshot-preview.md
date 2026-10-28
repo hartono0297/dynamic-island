@@ -50,8 +50,8 @@ matching, PNG/JPEG headers, folder listing; Win32: `win`) and
   then only if the setting is still Hapus (`delete_when_ignored`). Expiry,
   Body click, a newer shot or a game always keep the file.
 - **Hapus** moves the file to the Recycle Bin through the cleaner's
-  `IFileOperation` recycle on an STA worker (no file matched yet: one last
-  look, same rules), removes the history card, and empties the clipboard
+  `IFileOperation` recycle on an STA worker (no confirmed file yet: it waits
+  for one, see the 3.2.1 fixes below), removes the history card, and empties the clipboard
   only while `GetClipboardSequenceNumber` is still the one read with the
   image (checked again with the clipboard open, `should_empty`).
 - **Settings → Clipboard**, a second card under an eyebrow "Screenshot":
@@ -123,6 +123,31 @@ Now:
   clipboard at all (the only trigger is `WM_CLIPBOARDUPDATE`; there is no
   folder watcher); whether Pictures is OneDrive-redirected (its files can look
   like reparse points, which `list_folder` skips).
+
+## v3.2.1 review fixes: waiting for the file, safer deletes (2026-10-29)
+
+- **Simpan and Hapus wait for Snipping Tool's file.** Clicked before the file
+  arrived, they used to conclude "no file" at once (and the preview closing
+  dropped the in-flight look). Now their workers keep looking themselves
+  (`screenshot::wait_for`, every `LOOK_EVERY_MS` 300 ms) until the window has
+  closed (+ `SETTLE_MS` 500 ms). Simpan takes the file found instead of
+  writing a duplicate; only without one does it write. The notice can come up
+  to ~5.5 s after the click.
+- **Deletes need a confirmed hash** (`confirmed`, `pick_confirmed`,
+  `find_confirmed_in`): both hashes read and within `HASH_MAX_DIST`. The lax
+  rule (unknown hash allowed) is kept only for the preview's own match (the
+  size line, the thumbnail opening it). The delete worker re-hashes the
+  matched file before recycling; a file already gone reports "tidak ada file"
+  (`delete_outcome`), not Recycled.
+- **Simpan's name is chosen on the UI thread** (`save_path`, also skipping
+  names a running save holds) and joins `taken` before the worker starts, so
+  the next screenshot cannot claim it.
+- **"Jika diabaikan: Hapus" needs a matched file** (`delete_when_ignored(..,
+  has_file)`): an image-editor copy with no file keeps its clipboard and card.
+- **Windows end at the next image** (`ClipCandidate::to_ms`, `window_end`,
+  `Arrivals` shared with the workers): an earlier screenshot's last look (or
+  its waiting Simpan/Hapus) never claims a file written after the next image
+  arrived; a look that set out before is checked again on return.
 
 ## Gotcha: Controlled folder access (found 2026-10-28)
 

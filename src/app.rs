@@ -3248,7 +3248,7 @@ impl App {
         self.mixer_follow(lparam);
         if self.state.view() == View::Panel(Page::Clipboard) {
             let hit = self.hit_at(lparam);
-            self.clip_hover(hit.as_ref());
+            self.clip_hover(client_xy(lparam), hit.as_ref());
         }
         if !self.hover.needs_arming() {
             return;
@@ -3282,6 +3282,7 @@ impl App {
 
     fn on_mouse_leave(&mut self) {
         self.click.clear();
+        self.shelf_release();
         self.bata.brain.hover(false, Instant::now());
         match self.hover.on_leave() {
             Some(event) => self.apply_now(event),
@@ -5041,8 +5042,9 @@ unsafe extern "system" fn wnd_proc(
             with_app(|app| app.on_mouse_move(lparam));
             // A card pulled off the shelf: the drag blocks until the button
             // is let go, so it starts outside the app borrow.
-            if let Some(path) = with_app(|app| app.shelf_drag_start(lparam)).flatten() {
+            if let Some(path) = with_app(|app| app.shelf_drag_start(wparam, lparam)).flatten() {
                 shelf_ole::drag_out(&path);
+                with_app(App::shelf_after_drag_out);
             }
             LRESULT(0)
         }

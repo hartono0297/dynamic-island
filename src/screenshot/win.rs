@@ -5,12 +5,15 @@
 //! system temp dir (the others would read the owner's folder or delete a
 //! file).
 //!
-//! No watcher and no polling: each worker lists the folder once and ends.
+//! No watcher and no polling: the check worker lists the folder once and
+//! ends; the Simpan and Hapus workers keep looking (a few times a second)
+//! only until the screenshot's match window has closed, then end.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::time::{Duration, SystemTime};
 
 use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Imaging::{
@@ -29,7 +32,10 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
 
-use super::{ClipCandidate, FileOutcome, find_in, save_name, thumb_hash};
+use super::{
+    Arrivals, ClipCandidate, FileOutcome, SETTLE_MS, confirmed, delete_outcome, find_confirmed_in,
+    find_in, thumb_hash, unix_ms, wait_for,
+};
 use crate::clipboard::image::{self, thumb_size};
 use crate::model::Event;
 
@@ -147,40 +153,22 @@ fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Writes `bytes` to a new file in `dir`, named by `save_name` with `exists`
-/// as its guide. The file is created only if no file has that name (create
-/// new, never open an existing one): a name taken in the meantime moves on
-/// to the next " (n)". A file this made and could not fill is removed; no
-/// other file is ever touched.
-fn write_new(
-    dir: &Path,
-    now: chrono::NaiveDateTime,
-    bytes: &[u8],
-    exists: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    let mut taken: Vec<String> = Vec::new();
-    for _ in 0..16 {
-        let name = save_name(now, |n| taken.iter().any(|t| t == n) || exists(&dir.join(n)));
-        let path = dir.join(&name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                let written = file.write_all(bytes).and_then(|()| file.sync_all());
-                drop(file);
-                if written.is_ok() {
-                    return Some(path);
-                }
-                let _ = std::fs::remove_file(&path);
-                return None;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => taken.push(name),
-            Err(_) => return None,
-        }
+/// Writes `bytes` to a new file at `path` (create new: an existing file is
+/// never opened). A file this made and could not fill is removed.
+fn write_at(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .ok()?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if written.is_ok() {
+        Some(path.to_path_buf())
+    } else {
+        let _ = std::fs::remove_file(path);
+        None
     }
-    None
 }
 
 /// The pixels of a clipboard DIB at full size, top-down BGRA (the
@@ -191,27 +179,66 @@ fn full_pixels(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     Some((full.w, full.h, full.bgra))
 }
 
-/// "Simpan" for a screenshot with no file: writes the picture as a PNG in the
-/// Screenshots folder (made if it is missing), named like Windows names them
-/// and never over another file, on a short-lived thread. Posts
-/// `Event::ShotSaveDone` with the path, `None` when anything failed. False
-/// when the thread could not start.
-pub fn spawn_save(
-    shot: u64,
-    dib: Arc<Vec<u8>>,
-    now: chrono::NaiveDateTime,
-    tx: Sender<Event>,
-    wake: impl Fn() + Send + 'static,
-) -> bool {
+/// Looks for `clip`'s file until its window has closed (`wait_for`): Simpan
+/// and Hapus may be clicked before Snipping Tool has written it. Only a file
+/// whose hash is confirmed counts. Needs COM on the calling thread (WIC).
+fn wait_for_file(clip: ClipCandidate, taken: &[PathBuf], arrivals: &Arrivals) -> Option<PathBuf> {
+    let dir = screenshots_dir()?;
+    let end = || arrivals.window_end(clip.at_ms);
+    wait_for(
+        || end() + SETTLE_MS,
+        || unix_ms(SystemTime::now()),
+        || {
+            let clip = ClipCandidate {
+                to_ms: end(),
+                ..clip
+            };
+            find_confirmed_in(&dir, &clip, taken, file_hash).map(|f| f.path)
+        },
+        |ms| std::thread::sleep(Duration::from_millis(ms)),
+    )
+}
+
+/// What "Simpan" hands the worker.
+pub struct SaveJob {
+    pub shot: u64,
+    pub dib: Arc<Vec<u8>>,
+    /// Where a new file goes, named on the UI thread (and already in `taken`
+    /// there, so the next screenshot cannot claim it).
+    pub path: PathBuf,
+    pub clip: ClipCandidate,
+    /// Files other screenshots matched (this job's own `path` among them).
+    pub taken: Vec<PathBuf>,
+    pub arrivals: Arrivals,
+}
+
+/// "Simpan" for a screenshot with no file yet, on a short-lived thread:
+/// first it waits for Snipping Tool's own file (its window); found, that is
+/// the saved file. Else it writes the picture as a PNG at `job.path` (the
+/// folder made if it is missing). Posts `Event::ShotSaveDone` with the path,
+/// `None` when anything failed. False when the thread could not start.
+pub fn spawn_save(job: SaveJob, tx: Sender<Event>, wake: impl Fn() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .name("shot-save".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-            let path = screenshots_dir().and_then(|dir| {
-                std::fs::create_dir_all(&dir).ok()?;
+            let SaveJob {
+                shot,
+                dib,
+                path,
+                clip,
+                mut taken,
+                arrivals,
+            } = job;
+            taken.retain(|p| *p != path);
+            let path = wait_for_file(clip, &taken, &arrivals).or_else(|| {
+                let dir = path.parent()?;
+                std::fs::create_dir_all(dir).ok()?;
                 let (w, h, bgra) = full_pixels(&dib)?;
                 let png = encode_png(w, h, &bgra)?;
-                write_new(&dir, now, &png, Path::exists)
+                // The UI thread named it; a file that took the name since
+                // is never opened (create new), the save then fails.
+                write_at(&path, &png)
             });
             if inited {
                 unsafe { CoUninitialize() };
@@ -226,36 +253,38 @@ pub fn spawn_save(
 /// What "Hapus" hands the worker.
 pub struct DeleteJob {
     pub shot: u64,
-    /// The file matched so far; `None` runs one last check first.
+    /// The file matched so far (its hash is checked again before it goes);
+    /// `None`, or a hash that does not confirm, waits for the file first.
     pub file: Option<PathBuf>,
     pub clip: ClipCandidate,
     /// Files other screenshots matched: never this one's.
     pub taken: Vec<PathBuf>,
+    pub arrivals: Arrivals,
     /// The clipboard was emptied (on the UI thread, before this).
     pub emptied: bool,
 }
 
 /// Moves the screenshot's file to the Recycle Bin on a short-lived thread
 /// (COM single-threaded there, as `IFileOperation` wants) through the
-/// cleaner's `recycle`: never a permanent delete. Without a matched file it
-/// looks once more, right now, and acts only on what that finds. Posts
-/// `Event::ShotRecycled`. False when the thread could not start.
+/// cleaner's `recycle`: never a permanent delete. Only a file whose hash
+/// confirms the clipboard's goes: the matched one if it does, else the one
+/// that turns up before its window closes (`wait_for_file`). A file gone by
+/// then is no file. Posts `Event::ShotRecycled`. False when the thread could
+/// not start.
 pub fn spawn_delete(job: DeleteJob, tx: Sender<Event>, wake: impl Fn() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .name("shot-delete".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-            let file = job.file.or_else(|| {
-                screenshots_dir()
-                    .and_then(|d| find_in(&d, &job.clip, &job.taken, file_hash))
-                    .map(|f| f.path)
-            });
+            let file = job
+                .file
+                .filter(|p| confirmed(job.clip.hash, file_hash(p)))
+                .or_else(|| wait_for_file(job.clip, &job.taken, &job.arrivals));
             let outcome = match file {
                 None => FileOutcome::NoFile,
-                Some(path) if crate::clean::recycle(std::slice::from_ref(&path)) == 0 => {
-                    FileOutcome::Recycled
-                }
-                Some(_) => FileOutcome::Failed,
+                Some(path) => delete_outcome(path.exists(), || {
+                    crate::clean::recycle(std::slice::from_ref(&path))
+                }),
             };
             if inited {
                 unsafe { CoUninitialize() };
@@ -286,12 +315,6 @@ mod tests {
     use super::*;
     use crate::clipboard::image::tests::dib24;
 
-    fn at() -> chrono::NaiveDateTime {
-        chrono::NaiveDate::from_ymd_opt(2026, 10, 28)
-            .and_then(|d| d.and_hms_opt(14, 30, 12))
-            .expect("valid time")
-    }
-
     #[test]
     fn a_picture_round_trips_through_a_png_in_a_temp_folder() {
         let dir = std::env::temp_dir().join(format!("vale-shot-{}", std::process::id()));
@@ -311,7 +334,7 @@ mod tests {
         }
         let png = png.expect("WIC encoded it");
         assert_eq!(crate::screenshot::png_size(&png), Some((w, h)));
-        let path = write_new(&dir, at(), &png, Path::exists).expect("written");
+        let path = write_at(&dir.join("t.png"), &png).expect("written");
         assert_eq!(std::fs::read(&path).expect("the file"), png);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -323,12 +346,10 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let first = dir.join("Screenshot 2026-10-28 143012.png");
         std::fs::write(&first, b"theirs").expect("a file already there");
-        // The check says the name is free (a file made in the meantime):
-        // creating it fails, and the next name is taken instead.
-        let path = write_new(&dir, at(), b"ours", |_| false).expect("written");
-        assert_eq!(path, dir.join("Screenshot 2026-10-28 143012 (2).png"));
+        // The UI thread named it, a file took the name since: it is never
+        // opened, and the save fails instead.
+        assert_eq!(write_at(&first, b"ours"), None);
         assert_eq!(std::fs::read(&first).expect("theirs"), b"theirs", "untouched");
-        assert_eq!(std::fs::read(&path).expect("ours"), b"ours");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

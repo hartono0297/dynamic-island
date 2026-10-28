@@ -47,6 +47,34 @@ pub fn choose_effect(offered: u32) -> u32 {
     }
 }
 
+thread_local! {
+    /// `drag_out` is running on this (the UI) thread: the drag that enters
+    /// the island now is its own.
+    static DRAGGING_OUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Sets `DRAGGING_OUT` while it lives (also on an early return or a panic).
+struct OwnDrag;
+
+impl OwnDrag {
+    fn start() -> Self {
+        DRAGGING_OUT.with(|d| d.set(true));
+        OwnDrag
+    }
+}
+
+impl Drop for OwnDrag {
+    fn drop(&mut self) {
+        DRAGGING_OUT.with(|d| d.set(false));
+    }
+}
+
+/// A drag carrying files (`files`) is taken by the shelf, unless it is the
+/// island's own drag out.
+fn takes_drag(files: bool) -> bool {
+    files && !DRAGGING_OUT.with(Cell::get)
+}
+
 /// Whether `data` can give a file list.
 fn has_files(data: &IDataObject) -> bool {
     let format = FORMATETC {
@@ -133,7 +161,9 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        let files = data.as_ref().is_some_and(has_files);
+        // The island's own drag out (a card pulled over the island) is not
+        // a drop onto the shelf.
+        let files = takes_drag(data.as_ref().is_some_and(has_files));
         self.accepting.set(files);
         self.effect_for(effect);
         if files {
@@ -166,12 +196,20 @@ impl IDropTarget_Impl for DropTarget_Impl {
         _pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
-        let paths = data.as_ref().map(read_paths).unwrap_or_default();
+        let paths = match data.as_ref() {
+            Some(data) if takes_drag(true) => read_paths(data),
+            _ => Vec::new(),
+        };
+        let was_accepting = self.accepting.get();
         self.accepting.set(!paths.is_empty());
         self.effect_for(effect);
         self.accepting.set(false);
         if !paths.is_empty() {
             self.send(Event::ShelfDrop(paths));
+        } else if was_accepting {
+            // The list came up empty after all: no drop follows, so the drop
+            // zone and the panel's hold end as on a leave.
+            self.send(Event::ShelfDragOver(false));
         }
         Ok(())
     }
@@ -242,6 +280,7 @@ pub fn drag_out(path: &Path) -> bool {
         let source: IDropSource = DragSource.into();
         let mut effect = DROPEFFECT_NONE;
         let allowed = DROPEFFECT(DROPEFFECT_COPY.0 | DROPEFFECT_LINK.0);
+        let _own = OwnDrag::start();
         let _ = DoDragDrop(&data, &source, allowed, &mut effect);
     }
     true
@@ -263,5 +302,17 @@ mod tests {
         assert_eq!(choose_effect(0), DROPEFFECT_NONE.0);
         // The scroll flag in the high bit is not an effect.
         assert_eq!(choose_effect(0x8000_0000 | mv), DROPEFFECT_NONE.0);
+    }
+
+    #[test]
+    fn the_islands_own_drag_out_is_not_a_drop_onto_the_shelf() {
+        assert!(takes_drag(true));
+        assert!(!takes_drag(false));
+        {
+            let _own = OwnDrag::start();
+            assert!(!takes_drag(true), "a card pulled over the island");
+        }
+        // Over once `DoDragDrop` returns.
+        assert!(takes_drag(true));
     }
 }
