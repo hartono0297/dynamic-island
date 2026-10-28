@@ -497,7 +497,7 @@ impl IslandState {
             | Event::Cli(_)
             | Event::ExplorerFolders { .. }
             | Event::SystemSample(_)
-            | Event::Audio(_)
+            | Event::Audio(..)
             | Event::SearchIndex(_)
             | Event::ShelfDrop(_)
             | Event::ShelfDragOver(_)
@@ -2627,7 +2627,7 @@ mod tests {
         // The slider's own click (a press already set it) does nothing, and
         // a reading is the app's.
         assert!(s.apply(Event::Click(Hit::MixerSlider(1)), t0).is_empty());
-        assert!(s.apply(Event::Audio(None), t0).is_empty());
+        assert!(s.apply(Event::Audio(1, None), t0).is_empty());
         assert_eq!(s.view(), View::Panel(Page::Mixer));
     }
 

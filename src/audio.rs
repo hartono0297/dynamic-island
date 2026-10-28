@@ -11,8 +11,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
-    AudioSessionStateActive, IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2,
-    IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, eMultimedia, eRender,
+    AudioSessionStateActive, AudioSessionStateExpired, IAudioSessionControl, IAudioSessionControl2,
+    IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator,
+    eMultimedia, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
@@ -93,11 +94,22 @@ pub const SCROLL_POINTS_PER_NOTCH: i32 = 2;
 /// louder), keeping what does not make a point yet in `sum`, so a touchpad's
 /// small deltas still turn the volume.
 pub fn wheel_points(sum: &mut i32, delta: i32) -> i32 {
+    wheel_units(sum, delta, 120 / SCROLL_POINTS_PER_NOTCH)
+}
+
+/// Whole wheel notches (120 each, positive up) a delta adds up to, keeping
+/// the rest in `sum`: a Mixer row steps 5 % a notch, and a touchpad's small
+/// deltas make a step once they add up to a notch.
+pub fn wheel_notches(sum: &mut i32, delta: i32) -> i32 {
+    wheel_units(sum, delta, 120)
+}
+
+/// `sum` plus `delta` cut into whole units of `per_unit`; the rest stays.
+fn wheel_units(sum: &mut i32, delta: i32, per_unit: i32) -> i32 {
     *sum = sum.saturating_add(delta);
-    let per_point = 120 / SCROLL_POINTS_PER_NOTCH;
-    let points = *sum / per_point;
-    *sum -= points * per_point;
-    points
+    let units = *sum / per_unit;
+    *sum -= units * per_unit;
+    units
 }
 
 /// `level` moved by `points` percent points, kept in 0..=100 %.
@@ -138,8 +150,9 @@ pub struct RawSession {
 /// The page's rows: the master level first, then the apps (one row per
 /// program, all its sessions set together; active ones first, then by
 /// name), at most `MAX_APPS` of them, then the system sounds when they
-/// play. A session whose program is unknown is left out; so is a repeat of
-/// the same process id.
+/// play. A session whose program is unknown is left out. A program with
+/// several sessions (one process can have more than one) is active if any
+/// is, muted only if all are, and shows its first active session's level.
 pub fn rows(master: (f32, bool), sessions: &[RawSession]) -> Vec<MixerRow> {
     let mut out = vec![MixerRow {
         target: Target::Master,
@@ -147,14 +160,9 @@ pub fn rows(master: (f32, bool), sessions: &[RawSession]) -> Vec<MixerRow> {
         level: clamp_level(master.0),
         muted: master.1,
     }];
-    let mut seen: Vec<u32> = Vec::new();
     let mut apps: Vec<(bool, MixerRow)> = Vec::new();
     let mut system: Option<MixerRow> = None;
     for s in sessions {
-        if seen.contains(&s.pid) && !s.system {
-            continue;
-        }
-        seen.push(s.pid);
         if s.system {
             if s.active {
                 system = Some(MixerRow {
@@ -171,9 +179,12 @@ pub fn rows(master: (f32, bool), sessions: &[RawSession]) -> Vec<MixerRow> {
         }
         let target = Target::App(s.key.clone());
         match apps.iter_mut().find(|(_, r)| r.target == target) {
-            // Another process of the same program: it is active if any is;
-            // the row shows the first one's level.
+            // Another session of the same program: a playing session's
+            // level wins over a silent one's.
             Some((active, row)) => {
+                if s.active && !*active {
+                    row.level = clamp_level(s.level);
+                }
                 *active |= s.active;
                 row.muted &= s.muted;
             }
@@ -194,10 +205,67 @@ pub fn rows(master: (f32, bool), sessions: &[RawSession]) -> Vec<MixerRow> {
     out
 }
 
+/// A fresh reading's rows in the order the page already shows (`shown`), so
+/// a row does not move under the pointer between a scan and a click: rows
+/// still there keep their place with the new values, new ones come after
+/// them in the reading's order, gone ones drop. The master stays first and
+/// the system sounds last.
+pub fn keep_order(shown: &[MixerRow], fresh: Vec<MixerRow>) -> Vec<MixerRow> {
+    let place = |row: &MixerRow| {
+        shown
+            .iter()
+            .position(|s| s.target == row.target)
+            .unwrap_or(usize::MAX)
+    };
+    let band = |row: &MixerRow| match row.target {
+        Target::Master => 0,
+        Target::App(_) => 1,
+        Target::System => 2,
+    };
+    let mut out: Vec<(usize, MixerRow)> = fresh.into_iter().enumerate().collect();
+    // New rows (no place yet) keep the reading's order among themselves.
+    out.sort_by_key(|(i, row)| (band(row), place(row), *i));
+    out.into_iter().map(|(_, row)| row).collect()
+}
+
+/// A reading asked for with request number `asked` is older than the last
+/// level or mute the page sent (request number `last_set`): it may still
+/// hold the value from before the change, so it does not replace the rows.
+pub fn reading_is_stale(asked: u64, last_set: u64) -> bool {
+    asked < last_set
+}
+
+/// Program names by process id, so a scan every second does not open every
+/// process again. Only names that were read are kept, and only for the
+/// processes the last scan saw (a gone process's id may be reused).
+#[derive(Default)]
+pub struct Names(std::collections::HashMap<u32, String>);
+
+impl Names {
+    /// `pid`'s `exe_key`, asking `read` only the first time; an empty
+    /// answer (a protected or starting process) is asked again next time.
+    pub fn key(&mut self, pid: u32, read: impl FnOnce(u32) -> String) -> String {
+        if let Some(key) = self.0.get(&pid) {
+            return key.clone();
+        }
+        let key = read(pid);
+        if !key.is_empty() {
+            self.0.insert(pid, key.clone());
+        }
+        key
+    }
+
+    /// Forgets every process not in `seen`.
+    pub fn keep_only(&mut self, seen: &[u32]) {
+        self.0.retain(|pid, _| seen.contains(pid));
+    }
+}
+
 /// A request to the worker.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Req {
-    Scan,
+    /// A reading, numbered so its answer can be told from an older one's.
+    Scan(u64),
     Level(Target, f32),
     Mute(Target, bool),
 }
@@ -207,7 +275,7 @@ pub enum Req {
 /// and one scan (a drag sends one per pointer move).
 pub fn coalesce(batch: Vec<Req>) -> Vec<Req> {
     let same = |a: &Req, b: &Req| match (a, b) {
-        (Req::Scan, Req::Scan) => true,
+        (Req::Scan(_), Req::Scan(_)) => true,
         (Req::Level(x, _), Req::Level(y, _)) | (Req::Mute(x, _), Req::Mute(y, _)) => x == y,
         _ => false,
     };
@@ -251,20 +319,23 @@ impl Audio {
 fn serve(rx: &Receiver<Req>, tx: &Sender<Event>, wake: impl Fn()) {
     // Without COM there is nothing to read: say "no device" to each scan.
     let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let mut names = Names::default();
     while let Ok(first) = rx.recv() {
         let mut batch = vec![first];
         batch.extend(rx.try_iter());
-        let mut scan = false;
+        let mut scan = None;
         for req in coalesce(batch) {
             match req {
-                Req::Scan => scan = true,
-                Req::Level(target, level) => set(&target, Some(clamp_level(level)), None),
-                Req::Mute(target, muted) => set(&target, None, Some(muted)),
+                Req::Scan(asked) => scan = Some(asked),
+                Req::Level(target, level) => {
+                    set(&target, Some(clamp_level(level)), None, &mut names);
+                }
+                Req::Mute(target, muted) => set(&target, None, Some(muted), &mut names),
             }
         }
-        if scan {
-            let found = if com { read() } else { None };
-            if tx.send(Event::Audio(found)).is_err() {
+        if let Some(asked) = scan {
+            let found = if com { read(&mut names) } else { None };
+            if tx.send(Event::Audio(asked, found)).is_err() {
                 break;
             }
             wake();
@@ -312,7 +383,7 @@ fn process_key(pid: u32) -> String {
 }
 
 /// Every session of the default device, as the Core Audio reports it.
-fn sessions(device: &IMMDevice) -> Vec<(IAudioSessionControl, RawSession)> {
+fn sessions(device: &IMMDevice, names: &mut Names) -> Vec<(IAudioSessionControl, RawSession)> {
     let mut out = Vec::new();
     unsafe {
         let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
@@ -326,6 +397,13 @@ fn sessions(device: &IMMDevice) -> Vec<(IAudioSessionControl, RawSession)> {
             let Ok(control) = list.GetSession(i) else {
                 continue;
             };
+            // A session its app has closed: nothing plays or can be set.
+            if control
+                .GetState()
+                .is_ok_and(|state| state == AudioSessionStateExpired)
+            {
+                continue;
+            }
             let (Ok(c2), Ok(volume)) = (
                 control.cast::<IAudioSessionControl2>(),
                 control.cast::<ISimpleAudioVolume>(),
@@ -335,7 +413,7 @@ fn sessions(device: &IMMDevice) -> Vec<(IAudioSessionControl, RawSession)> {
             let pid = c2.GetProcessId().unwrap_or(0);
             let raw = RawSession {
                 pid,
-                key: process_key(pid),
+                key: names.key(pid, process_key),
                 // S_OK (0) is yes, S_FALSE (1) is no: both are "ok" to `is_ok`.
                 system: c2.IsSystemSoundsSession().0 == 0,
                 active: control
@@ -351,7 +429,7 @@ fn sessions(device: &IMMDevice) -> Vec<(IAudioSessionControl, RawSession)> {
 }
 
 /// The rows now; `None` without an output device.
-fn read() -> Option<Vec<MixerRow>> {
+fn read(names: &mut Names) -> Option<Vec<MixerRow>> {
     let device = default_device()?;
     let master = unsafe {
         let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None).ok()?;
@@ -360,12 +438,16 @@ fn read() -> Option<Vec<MixerRow>> {
             volume.GetMute().is_ok_and(|m| m.as_bool()),
         )
     };
-    let raw: Vec<RawSession> = sessions(&device).into_iter().map(|(_, s)| s).collect();
+    let raw: Vec<RawSession> = sessions(&device, names)
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect();
+    names.keep_only(&raw.iter().map(|s| s.pid).collect::<Vec<_>>());
     Some(rows(master, &raw))
 }
 
 /// Sets a level and/or a mute on `target`.
-fn set(target: &Target, level: Option<f32>, muted: Option<bool>) {
+fn set(target: &Target, level: Option<f32>, muted: Option<bool>, names: &mut Names) {
     let Some(device) = default_device() else {
         return;
     };
@@ -382,7 +464,7 @@ fn set(target: &Target, level: Option<f32>, muted: Option<bool>) {
             }
             return;
         }
-        for (control, raw) in sessions(&device) {
+        for (control, raw) in sessions(&device, names) {
             let hit = match target {
                 Target::System => raw.system,
                 Target::App(key) => !raw.system && raw.key == *key,
@@ -546,11 +628,11 @@ mod tests {
         let spotify = Target::App("spotify".into());
         let batch = vec![
             Req::Level(Target::Master, 0.1),
-            Req::Scan,
+            Req::Scan(1),
             Req::Level(spotify.clone(), 0.2),
             Req::Level(Target::Master, 0.3),
             Req::Mute(Target::Master, true),
-            Req::Scan,
+            Req::Scan(4),
             Req::Mute(Target::Master, false),
         ];
         assert_eq!(
@@ -558,9 +640,136 @@ mod tests {
             vec![
                 Req::Level(spotify, 0.2),
                 Req::Level(Target::Master, 0.3),
-                Req::Scan,
+                Req::Scan(4),
                 Req::Mute(Target::Master, false),
+            ],
+            "the newest scan's number answers"
+        );
+    }
+
+    #[test]
+    fn a_process_with_two_sessions_counts_both_and_shows_the_playing_ones_level() {
+        // Before the fix the second session of pid 10 was dropped: the row
+        // read as silent at the silent session's level.
+        let sessions = [
+            raw(10, "spotify", false, 0.3),
+            raw(10, "spotify", true, 0.8),
+            raw(20, "aimp", false, 0.5),
+        ];
+        let got = rows((0.5, false), &sessions);
+        assert_eq!(got[1].name, "Spotify", "active, so it leads");
+        assert_eq!(got[1].level, 0.8);
+        // Muted only when every session is.
+        let mut sessions = sessions;
+        sessions[0].muted = true;
+        assert!(!rows((0.5, false), &sessions)[1].muted);
+        sessions[1].muted = true;
+        assert!(rows((0.5, false), &sessions)[1].muted);
+        // No session plays: the first one's level.
+        let quiet = [raw(10, "vlc", false, 0.2), raw(11, "vlc", false, 0.9)];
+        assert_eq!(rows((0.5, false), &quiet)[1].level, 0.2);
+    }
+
+    fn row(target: Target, level: f32) -> MixerRow {
+        MixerRow {
+            name: match &target {
+                Target::App(key) => display_name(key),
+                _ => String::new(),
+            },
+            target,
+            level,
+            muted: false,
+        }
+    }
+
+    fn app(key: &str) -> Target {
+        Target::App(key.into())
+    }
+
+    #[test]
+    fn rows_keep_the_order_shown_while_new_ones_append_and_gone_ones_drop() {
+        let shown = [
+            row(Target::Master, 0.5),
+            row(app("chrome"), 0.5),
+            row(app("spotify"), 0.5),
+            row(app("teams"), 0.5),
+            row(Target::System, 0.5),
+        ];
+        // The next reading sorts Spotify first (it started playing), lost
+        // Teams and found Discord and Zoom.
+        let fresh = vec![
+            row(Target::Master, 0.6),
+            row(app("spotify"), 0.9),
+            row(app("zoom"), 0.4),
+            row(app("chrome"), 0.1),
+            row(app("discord"), 0.3),
+            row(Target::System, 0.2),
+        ];
+        let got = keep_order(&shown, fresh);
+        let targets: Vec<&Target> = got.iter().map(|r| &r.target).collect();
+        assert_eq!(
+            targets,
+            [
+                &Target::Master,
+                &app("chrome"),
+                &app("spotify"),
+                &app("zoom"),
+                &app("discord"),
+                &Target::System,
             ]
         );
+        // The values are the reading's.
+        assert_eq!(got[0].level, 0.6);
+        assert_eq!(got[1].level, 0.1);
+        assert_eq!(got[2].level, 0.9);
+        // Nothing shown yet: the reading's own order.
+        let fresh = vec![row(Target::Master, 0.5), row(app("b"), 0.5), row(app("a"), 0.5)];
+        assert_eq!(keep_order(&[], fresh.clone()), fresh);
+    }
+
+    #[test]
+    fn a_reading_asked_before_the_last_change_is_stale() {
+        // Scan 3 was asked, then a level went out as request 4.
+        assert!(reading_is_stale(3, 4));
+        // The scan asked after it (5) shows the change.
+        assert!(!reading_is_stale(5, 4));
+        // Nothing set yet.
+        assert!(!reading_is_stale(1, 0));
+    }
+
+    #[test]
+    fn program_names_are_read_once_per_process_while_it_is_seen() {
+        let mut names = Names::default();
+        let mut reads = 0;
+        let mut read = |pid: u32| {
+            reads += 1;
+            if pid == 7 { String::new() } else { format!("app{pid}") }
+        };
+        assert_eq!(names.key(10, &mut read), "app10");
+        assert_eq!(names.key(10, &mut read), "app10");
+        // A name that could not be read is asked again.
+        assert_eq!(names.key(7, &mut read), "");
+        assert_eq!(names.key(7, &mut read), "");
+        // A process the last scan did not see is forgotten (its id may be
+        // reused by another program).
+        names.keep_only(&[7]);
+        assert_eq!(names.key(10, &mut read), "app10");
+        assert_eq!(reads, 4);
+    }
+
+    #[test]
+    fn the_mixer_wheel_adds_small_deltas_up_to_whole_notches() {
+        let mut sum = 0;
+        assert_eq!(wheel_notches(&mut sum, 120), 1);
+        assert_eq!(wheel_notches(&mut sum, -240), -2);
+        assert_eq!(sum, 0);
+        // A touchpad: 30 at a time steps once every four messages.
+        let steps: Vec<i32> = (0..8).map(|_| wheel_notches(&mut sum, 30)).collect();
+        assert_eq!(steps, [0, 0, 0, 1, 0, 0, 0, 1]);
+        // Back the other way cancels what was kept.
+        let mut sum = 0;
+        assert_eq!(wheel_notches(&mut sum, 90), 0);
+        assert_eq!(wheel_notches(&mut sum, -90), 0);
+        assert_eq!(sum, 0);
     }
 }

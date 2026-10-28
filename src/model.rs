@@ -218,8 +218,9 @@ pub enum Event {
     /// "Pintasan", at startup and when the settings window changes it.
     ShortcutTiles(ShortcutTiles),
     /// The Mixer's rows as the audio thread read them (`None`: no output
-    /// device). `App` keeps them, the reducer ignores it.
-    Audio(Option<Vec<MixerRow>>),
+    /// device), with the number of the scan that asked. `App` keeps them,
+    /// the reducer ignores it.
+    Audio(u64, Option<Vec<MixerRow>>),
     /// The pointer asks row `index` of the Mixer for this level (0..=1).
     MixerLevel(usize, f32),
     /// Files are being dragged over the island (`true`: it opens on the

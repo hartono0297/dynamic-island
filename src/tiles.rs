@@ -583,7 +583,7 @@ mod tests {
     fn with_own(own: usize) -> ShortcutTiles {
         let mut t = ShortcutTiles::default();
         for i in 0..own {
-            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, r"C:.exe")));
+            assert!(t.add(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe")));
         }
         t
     }
