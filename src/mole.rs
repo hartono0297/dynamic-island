@@ -1096,6 +1096,20 @@ fn ps_quote(s: &str) -> String {
     out
 }
 
+/// The elevated PowerShell's command: `call` (already quoted) with all its
+/// output to `log`, then its exit code, and 1 for a script that failed
+/// without one.
+fn elevated_script(call: &str, log: &str) -> String {
+    // `$LASTEXITCODE` alone is stale or empty after a script that ends
+    // without `exit`, and 0 after one that only wrote errors (with every
+    // stream redirected `$?` stays true). An exit code the script set is
+    // its word; without one, new entries in `$Error` or a throw fail it.
+    format!(
+        "$global:LASTEXITCODE = $null; $errors = $Error.Count; try {{ & {call} *> {}; if ($null -ne $LASTEXITCODE) {{ exit [int]$LASTEXITCODE }}; if ($Error.Count -gt $errors) {{ exit 1 }}; exit 0 }} catch {{ exit 1 }}",
+        ps_quote(log)
+    )
+}
+
 /// `inv` elevated through `ShellExecuteExW` verb `runas` (UAC), hidden:
 /// PowerShell runs it with all its output sent to a temporary log file,
 /// read back once it ends. The island itself is never elevated.
@@ -1111,11 +1125,7 @@ fn run_elevated(inv: &Invocation) -> Elevated {
     let call: Vec<String> = std::iter::once(ps_quote(&program))
         .chain(args.iter().map(|a| ps_quote(a)))
         .collect();
-    let script = format!(
-        "& {} *> {}; exit $LASTEXITCODE",
-        call.join(" "),
-        ps_quote(&log.to_string_lossy())
-    );
+    let script = elevated_script(&call.join(" "), &log.to_string_lossy());
     let params = HSTRING::from(format!(
         "-NoProfile -ExecutionPolicy Bypass -Command \"{script}\""
     ));
@@ -2047,6 +2057,34 @@ mod tests {
             utf16(&format!("{before}C:\\Users\\x\\.cargo\\git\r\n"))
         );
         assert_eq!(append_defaults(&path, &wanted).unwrap(), 0, "never twice");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_elevated_step_fails_when_the_script_fails() {
+        // A real Windows PowerShell on throwaway scripts in a test folder
+        // (nothing elevated, nothing of Mole's).
+        let dir = temp_dir("elevated-exit");
+        let log = dir.join("out.log");
+        let code = |body: &str| {
+            let script = dir.join("s.ps1");
+            std::fs::write(&script, body).unwrap();
+            // As `run_elevated` calls mole.ps1: the script itself.
+            let call = ps_quote(&script.to_string_lossy());
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"])
+                .arg(elevated_script(&call, &log.to_string_lossy()))
+                .status()
+                .unwrap()
+                .code()
+        };
+        assert_eq!(code("Write-Output ok"), Some(0));
+        assert_eq!(code("exit 3"), Some(3));
+        // An error without `exit` is still a failure, never "done".
+        assert_ne!(code("Write-Error 'broken'"), Some(0));
+        assert_ne!(code("throw 'broken'"), Some(0));
+        // An explicit exit code is the script's own word, errors or not.
+        assert_eq!(code("Write-Error 'minor'; exit 0"), Some(0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

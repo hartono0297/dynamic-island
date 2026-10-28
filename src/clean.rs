@@ -355,6 +355,10 @@ use Root::{Downloads, LocalAppData, Profile, RoamingAppData, Temp, Windows};
 ///   cache, npm's default is the local one.
 /// - Windows Update: the download cache only, without stopping the service
 ///   (a file in use is skipped).
+/// - Spotify: its cache (`Data`) only; `Storage` is its default folder for
+///   songs downloaded for offline play.
+/// - `*.log` in the profile and Roaming roots go to the Recycle Bin: they
+///   sit beside the user's own files.
 pub const LOCATIONS: &[Location] = &[
     // File sementara & log.
     older(7, tree(TempLogs, Temp, "")),
@@ -522,7 +526,7 @@ pub const LOCATIONS: &[Location] = &[
     tree(AppCache, RoamingAppData, "discord\\Code Cache"),
     tree(AppCache, RoamingAppData, "discord\\GPUCache"),
     tree(AppCache, LocalAppData, "Spotify\\Data"),
-    tree(AppCache, LocalAppData, "Spotify\\Storage"),
+    // Not Spotify\Storage: Spotify's default offline-download folder.
     Location {
         keep: &["db", "enc", "ini", "json", "xml"],
         ..tree(AppCache, RoamingAppData, "Zoom\\data")
@@ -591,6 +595,10 @@ pub struct Target {
     pub cat: CleanCat,
     pub path: PathBuf,
     pub size: u64,
+    /// To the Recycle Bin rather than gone for good: its category's rule,
+    /// or a file found beside the user's own (a `top_files` location: the
+    /// profile and Roaming roots).
+    pub recycle: bool,
 }
 
 /// What `select` found.
@@ -642,6 +650,8 @@ pub fn select(
                                 cat: loc.cat,
                                 path,
                                 size,
+                                recycle: loc.cat.removal() == Removal::RecycleBin
+                                    || loc.depth == Depth::Top,
                             });
                         }
                     }
@@ -652,6 +662,22 @@ pub fn select(
         }
     }
     sel
+}
+
+/// `now` (chosen again at the confirm, browsers checked again) cut down to
+/// the files `scanned` counted: nothing the user did not see in the sizes
+/// is deleted (a new cache file, a file that crossed its age line since, a
+/// browser that closed after the scan).
+pub fn only_scanned(now: Selection, scanned: &Selection) -> Selection {
+    let seen: HashSet<&Path> = scanned.targets.iter().map(|t| t.path.as_path()).collect();
+    Selection {
+        targets: now
+            .targets
+            .into_iter()
+            .filter(|t| seen.contains(t.path.as_path()))
+            .collect(),
+        ..now
+    }
 }
 
 /// Not a symlink, junction or other reparse point.
@@ -1099,18 +1125,20 @@ fn serve(rx: &Receiver<Request>, tx: &Sender<Event>, wake: impl Fn()) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
+    // The last scan: a clean deletes only files it counted.
+    let mut scanned = Selection::default();
     while let Ok(request) = rx.recv() {
         let event = match request {
             Request::Scan => {
-                let sel = select(
+                scanned = select(
                     &Roots::known(),
                     &CleanCat::ALL,
                     SystemTime::now(),
                     &process_names(),
                 );
-                CleanEvent::Scanned(summarize(&sel))
+                CleanEvent::Scanned(summarize(&scanned))
             }
-            Request::Delete(cats) => CleanEvent::Done(clean(&cats)),
+            Request::Delete(cats) => CleanEvent::Done(clean(&cats, &scanned)),
         };
         if tx.send(Event::Clean(event)).is_err() {
             return;
@@ -1120,15 +1148,19 @@ fn serve(rx: &Receiver<Request>, tx: &Sender<Event>, wake: impl Fn()) {
 }
 
 /// The delete itself: the files chosen again now (the browsers checked
-/// again just before), the drives measured before and after.
-fn clean(cats: &[CleanCat]) -> CleanReport {
+/// again just before) that the last scan counted, the drives measured
+/// before and after.
+fn clean(cats: &[CleanCat], scanned: &Selection) -> CleanReport {
     let roots = Roots::known();
     let user: Vec<CleanCat> = cats
         .iter()
         .copied()
         .filter(|c| c.removal() != Removal::Admin)
         .collect();
-    let sel = select(&roots, &user, SystemTime::now(), &process_names());
+    let sel = only_scanned(
+        select(&roots, &user, SystemTime::now(), &process_names()),
+        scanned,
+    );
     let mut letters: Vec<char> = sel
         .targets
         .iter()
@@ -1145,10 +1177,8 @@ fn clean(cats: &[CleanCat]) -> CleanReport {
         .filter_map(|l| drive_free(*l).map(|f| (*l, f)))
         .collect();
 
-    let (permanent, recycled): (Vec<Target>, Vec<Target>) = sel
-        .targets
-        .into_iter()
-        .partition(|t| t.cat.removal() == Removal::Permanent);
+    let (permanent, recycled): (Vec<Target>, Vec<Target>) =
+        sel.targets.into_iter().partition(|t| !t.recycle);
     let tally = delete_files(&permanent);
     let paths: Vec<PathBuf> = recycled.into_iter().map(|t| t.path).collect();
     let mut skipped = tally.skipped.saturating_add(recycle(&paths));
@@ -1530,6 +1560,58 @@ mod tests {
         prune_emptied(&again.targets, &again.folders);
         assert!(!locked.parent().unwrap().exists());
         assert!(t.base.join("Roaming\\Code\\Cache").exists());
+    }
+
+    #[test]
+    fn spotify_downloads_are_not_a_cache() {
+        // Spotify's default "offline storage location" is Spotify\Storage:
+        // songs downloaded for offline play. Its cache is Spotify\Data.
+        let spotify: Vec<&str> = LOCATIONS
+            .iter()
+            .filter(|l| l.path.starts_with("Spotify"))
+            .map(|l| l.path)
+            .collect();
+        assert_eq!(spotify, [r"Spotify\Data"]);
+    }
+
+    #[test]
+    fn logs_beside_the_users_own_files_go_to_the_recycle_bin() {
+        let t = TestTree::new("recycle-logs");
+        let roots = t.roots();
+        let profile_log = t.file(r"Profile\setup.log", 10, days(30.0));
+        let roaming_log = t.file(r"Roaming\tool.log", 10, days(30.0));
+        let temp = t.file(r"Temp\x.tmp", 10, days(30.0));
+        let sel = select(&roots, &[CleanCat::TempLogs], SystemTime::now(), &none());
+        let recycle = |p: &PathBuf| sel.targets.iter().find(|x| &x.path == p).unwrap().recycle;
+        // In the profile and Roaming roots a .log may be the user's own.
+        assert!(recycle(&profile_log) && recycle(&roaming_log));
+        // Temp is the system's: gone for good, as before.
+        assert!(!recycle(&temp));
+    }
+
+    #[test]
+    fn a_clean_deletes_only_what_the_scan_counted() {
+        let t = TestTree::new("only-scanned");
+        let roots = t.roots();
+        let seen = t.file(r"Roaming\Code\Cache\seen.bin", 10, days(1.0));
+        let scan = select(&roots, &[CleanCat::AppCache], SystemTime::now(), &none());
+        // After the scan: a new cache file, and an old temp file the scan
+        // did not count (its category was not asked for).
+        let new = t.file(r"Roaming\Code\Cache\new.bin", 10, days(0.0));
+        let now = select(
+            &roots,
+            &[CleanCat::AppCache, CleanCat::TempLogs],
+            SystemTime::now(),
+            &none(),
+        );
+        assert!(now.targets.iter().any(|x| x.path == new));
+        let go = only_scanned(now, &scan);
+        let paths: Vec<&PathBuf> = go.targets.iter().map(|x| &x.path).collect();
+        assert_eq!(paths, [&seen]);
+        // A file gone since the scan simply is not there to delete.
+        fs::remove_file(&seen).unwrap();
+        let again = select(&roots, &[CleanCat::AppCache], SystemTime::now(), &none());
+        assert!(only_scanned(again, &scan).targets.is_empty());
     }
 
     #[test]
