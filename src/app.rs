@@ -716,6 +716,19 @@ impl SystemState {
             raised: false,
         }
     }
+
+    /// The last reading is older than `HISTORY_STALE` (the page was closed
+    /// since): it goes, with its line and its easing, so the page shows
+    /// dashes and the next reading shows at once instead of gliding from it.
+    fn forget_stale(&mut self, now: Instant) -> bool {
+        let stale = self.history.stale(now);
+        if stale {
+            self.sample = None;
+            self.history = CpuHistory::default();
+            self.ease = SysEase::default();
+        }
+        stale
+    }
 }
 
 /// The cleaner: its thread (started on the first scan), the last scan and
@@ -2058,13 +2071,18 @@ impl App {
         sent
     }
 
-    /// The System page just showed: a sample at once; it left: the 2 s
-    /// one-shot goes (a sample still on its way is kept but re-arms nothing).
+    /// The System page just showed: a sample at once (a stale reading goes
+    /// first); it left: the `LIVE_MS` one-shot goes (a sample still on its
+    /// way is kept but re-arms nothing).
     fn sync_system_page(&mut self) {
         let wanted = system_sample_wanted(&self.state.view(), self.state.cleaner().is_some());
         self.system.requests = requests_while(wanted, self.system.requests);
         match system_page_plan(wanted, self.system.page_timer, self.system.page_pending) {
             PagePlan::Request => {
+                // Opened again after a while: dashes, not the last figures.
+                if self.system.requests == 0 && self.system.forget_stale(Instant::now()) {
+                    self.redraw_system_page();
+                }
                 let kind = crate::system::kind_for_request(self.system.requests);
                 self.system.requests = self.system.requests.wrapping_add(1);
                 self.system.page_pending = self.request_system(kind);
@@ -4213,15 +4231,15 @@ fn requests_while(wanted: bool, requests: u32) -> u32 {
 /// What the System page's sampling does after a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PagePlan {
-    /// Ask for a sample now (the page just showed, or its 2 s are up).
+    /// Ask for a sample now (the page just showed, or its 1 s is up).
     Request,
     /// The page is gone: kill the one-shot.
     Stop,
     Keep,
 }
 
-/// `wanted`: the page shows; `timer`: the 2 s one-shot is set; `pending`:
-/// a sample is on its way (its arrival sets the timer).
+/// `wanted`: the page shows; `timer`: the `LIVE_MS` one-shot is set;
+/// `pending`: a sample is on its way (its arrival sets the timer).
 fn system_page_plan(wanted: bool, timer: bool, pending: bool) -> PagePlan {
     match (wanted, timer, pending) {
         (true, false, false) => PagePlan::Request,
@@ -5563,6 +5581,43 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_system_reading_is_forgotten_and_the_next_one_snaps() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let reading = |cpu| SystemSample {
+            kind: SampleKind::Page,
+            cpu,
+            cores: 8,
+            ram_used: 50,
+            ram_total: 100,
+            drives: Vec::new(),
+            procs: Vec::new(),
+            uptime: Duration::ZERO,
+        };
+        let mut sys = SystemState::new(WarnMonitor::new(10, 90));
+        // Nothing read yet: nothing to forget.
+        assert!(!sys.forget_stale(t0));
+        let take = |sys: &mut SystemState, cpu, now| {
+            let s = reading(cpu);
+            sys.history.push(s.cpu, now);
+            sys.ease.update(&s, now);
+            sys.sample = Some(s);
+        };
+        take(&mut sys, 20.0, t0);
+        // Opened again within 10 s: the figures stay and glide on.
+        assert!(!sys.forget_stale(at(10)));
+        assert!(sys.sample.is_some() && sys.ease.figures(at(10)).is_some());
+        // Later: dashes until a fresh reading, which shows without a glide.
+        assert!(sys.forget_stale(at(11)));
+        assert!(sys.sample.is_none() && sys.history.points().is_empty());
+        assert_eq!(sys.ease.figures(at(11)), None);
+        take(&mut sys, 80.0, at(12));
+        assert!(!sys.ease.running(at(12)));
+        assert_eq!(sys.ease.figures(at(12)).unwrap().cpu, 80.0);
+        assert_eq!(sys.history.points(), [80.0]);
+    }
+
+    #[test]
     fn system_page_samples_only_while_it_shows() {
         // Only the System page of the open panel wants samples, and not
         // while the cleaner covers it.
@@ -5579,7 +5634,7 @@ mod tests {
             assert!(!system_sample_wanted(&view, false), "{view:?}");
         }
         use PagePlan::*;
-        // Just shown: ask at once. Waiting on a sample or the 2 s: nothing.
+        // Just shown: ask at once. Waiting on a sample or the 1 s: nothing.
         assert_eq!(system_page_plan(true, false, false), Request);
         assert_eq!(system_page_plan(true, false, true), Keep);
         assert_eq!(system_page_plan(true, true, false), Keep);

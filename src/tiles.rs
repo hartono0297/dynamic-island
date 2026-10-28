@@ -264,6 +264,7 @@ impl ShortcutTiles {
         self.entries.iter().filter(|(_, on)| *on).count()
     }
 
+    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Only `add` and tests count.
     pub fn customs(&self) -> usize {
         self.entries
             .iter()
@@ -305,6 +306,7 @@ impl ShortcutTiles {
     }
 
     /// Adds a custom tile at the end, on; false when the list is full.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Only the debug demo adds one.
     pub fn add(&mut self, tile: CustomTile) -> bool {
         if self.customs() >= MAX_CUSTOM {
             return false;

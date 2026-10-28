@@ -38,8 +38,16 @@ the warning logic live in `src/system.rs`; the page in
   from wherever the figure is. The first reading shows at once. While one
   runs, `animating_at` is true (`system_easing`, only with the page shown)
   so the frame clock draws; when they rest the clock stops, so an idle
-  page costs nothing between readings. The sparkline keeps 60 one-second
-  points (`HISTORY_LEN`); the demo's `DEMO_CPU` has 60 to match.
+  page costs nothing between readings. The same reading again, or one
+  less than `EASE_MIN_STEP` (0.002) off, starts no glide (`Eased::retarget`
+  returns early), else every unchanged figure would keep the clock busy for
+  500 ms a second. The sparkline keeps 60
+  one-second points (`HISTORY_LEN`); the demo's `DEMO_CPU` has 60 to match.
+- **Reopened page.** When the page shows again and the last reading is
+  older than `HISTORY_STALE` (10 s), `SystemState::forget_stale` drops the
+  sample, the sparkline and the easing: the page shows dashes until the
+  first fresh reading, which shows at once instead of gliding from the last
+  session's figures. Within 10 s the old figures stay and glide on.
 - **Background warnings.** `TIMER_SYSTEM_WARN` is a one-shot, every 5 min,
   re-armed when its reading comes back. It is sooner only to confirm RAM's
   minute above the limit. A drain that holds only system readings does not
@@ -64,9 +72,9 @@ the warning logic live in `src/system.rs`; the page in
   older config still loads. Like the battery threshold, the file owns them
   (`merge_owned`). Settings → Umum shows them in a second card, so General
   now scrolls like [[settings-appearance-scroll]].
-- **Order.** `Page::System` sits between Clipboard ([[clipboard-history]])
-  and CLI for now (nine pages). Run 9 sets the final order and the page
-  settings.
+- **Order.** `Page::System` sits between the file shelf ([[shelf]]) and
+  CLI, one of 11 pages in `Page::ALL`; the owner reorders them in Settings
+  ([[panel-pages]]).
 
 Demo: `system`, `system-low` and `bata-sistem` use fixed figures
 ([[demo-data-time-of-day]]). Shots `system` and `system-warning` are in
