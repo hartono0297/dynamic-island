@@ -22,7 +22,7 @@ are listed in the session report.
 
 Left for the owner:
 
-- Tag `v3.1.0` (the release workflow builds and publishes) and deploy.
+- Released: tag `v3.1.0` pushed on 2026-10-28 (owner's go-ahead); the release has `vale.exe`, its checksum and `vale-v3.1.0.zip`, and `irm .../install.ps1 | iex` installs it. `install.ps1` still accepts the pre-3.1 asset names.
 - Google: create the project and Desktop client, publish the consent screen
   (path B, then verification C with `site/`), add the repository secrets
   `VALE_GOOGLE_CLIENT_ID` and `VALE_GOOGLE_CLIENT_SECRET`
