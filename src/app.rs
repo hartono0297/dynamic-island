@@ -90,6 +90,7 @@ use crate::system::{
     CpuHistory, SampleKind, Sampler, SysEase, SystemSample, WarnMonitor, alert_notice,
 };
 use crate::theme::{self, Theme};
+use crate::ui::app_icon;
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
@@ -303,6 +304,9 @@ pub fn run(media_log_flag: bool) {
     let battery = BatteryMonitor::new(config.battery_threshold);
     let warn = WarnMonitor::new(config.disk_warn_gb, config.ram_warn_percent);
     let _ = tray::set_autostart(config.start_with_windows);
+    // Explorer caches the exe's icon (the taskbar button shows it): tell it
+    // once per version that it changed.
+    app_icon::refresh_shell_icon_once(&app_icon::stamp_path());
 
     let rest = shape_for(config.style, ShapeKind::Idle);
     let pomodoro = config.pomodoro;
