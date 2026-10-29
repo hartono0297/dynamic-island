@@ -190,9 +190,9 @@ pub struct Transit {
     /// Opacity of a compact view's or notice's content while its shape
     /// morphs (1 at rest).
     pub content_alpha: f32,
-    /// The panel closing: the page it showed and how visible its content
-    /// still is while the shape shrinks.
-    pub leaving: Option<(Page, f32)>,
+    /// The panel closing: the page it showed, its content fading out with
+    /// the shape's height (`panel_fade`) while the shape shrinks.
+    pub leaving: Option<Page>,
 }
 
 impl Default for Transit {
@@ -424,20 +424,50 @@ mod tests {
     #[test]
     fn page_changes_slide_only_while_the_panel_shows() {
         use PageMotion::*;
-        assert_eq!(page_motion(Page::Calendar, Page::Media, true, true, true), Slide);
+        assert_eq!(
+            page_motion(Page::Calendar, Page::Media, true, true, true),
+            Slide
+        );
         // The Clipboard tile, a disk warning's "Buka": a page change like any.
-        assert_eq!(page_motion(Page::Shortcuts, Page::Clipboard, true, true, true), Slide);
-        assert_eq!(page_motion(Page::Calendar, Page::System, true, true, true), Slide);
+        assert_eq!(
+            page_motion(Page::Shortcuts, Page::Clipboard, true, true, true),
+            Slide
+        );
+        assert_eq!(
+            page_motion(Page::Calendar, Page::System, true, true, true),
+            Slide
+        );
         // Nothing changed, or the panel was not (or is no longer) there.
-        assert_eq!(page_motion(Page::Media, Page::Media, true, true, true), None);
-        assert_eq!(page_motion(Page::Calendar, Page::Media, false, true, true), None);
-        assert_eq!(page_motion(Page::Calendar, Page::Media, true, false, true), None);
+        assert_eq!(
+            page_motion(Page::Media, Page::Media, true, true, true),
+            None
+        );
+        assert_eq!(
+            page_motion(Page::Calendar, Page::Media, false, true, true),
+            None
+        );
+        assert_eq!(
+            page_motion(Page::Calendar, Page::Media, true, false, true),
+            None
+        );
         // The search fades in and out, never slides.
-        assert_eq!(page_motion(Page::Media, Page::Search, true, true, true), Fade);
-        assert_eq!(page_motion(Page::Search, Page::Media, true, true, true), Fade);
+        assert_eq!(
+            page_motion(Page::Media, Page::Search, true, true, true),
+            Fade
+        );
+        assert_eq!(
+            page_motion(Page::Search, Page::Media, true, true, true),
+            Fade
+        );
         // Windows' animations off: instant.
-        assert_eq!(page_motion(Page::Calendar, Page::Media, true, true, false), None);
-        assert_eq!(page_motion(Page::Media, Page::Search, true, true, false), None);
+        assert_eq!(
+            page_motion(Page::Calendar, Page::Media, true, true, false),
+            None
+        );
+        assert_eq!(
+            page_motion(Page::Media, Page::Search, true, true, false),
+            None
+        );
     }
 
     #[test]
@@ -554,7 +584,10 @@ mod tests {
         assert_eq!(panel_fade(compact, rest, compact), 0.0);
         assert_eq!(panel_fade(rest, rest, compact), 1.0);
         // Fully there by 70 % of the height, whichever way it moves.
-        assert_eq!(panel_fade(compact + 0.7 * (rest - compact), rest, compact), 1.0);
+        assert_eq!(
+            panel_fade(compact + 0.7 * (rest - compact), rest, compact),
+            1.0
+        );
         let mid = panel_fade(100.0, rest, compact);
         assert!(mid > 0.0 && mid < 1.0);
     }

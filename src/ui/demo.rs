@@ -14,6 +14,13 @@
 //!   A scene's name works too: `DI_DEMO_STEP=cal-day`, or `notch:cal-day`.
 //! - `DI_DEMO_T=0.5` freezes the morph into that step at this progress.
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
+//! - `DI_DEMO_REVEAL=0.5` freezes a sub-view `Reveal` (the new content
+//!   fading in over 160 ms, 8 px from where it rests) at that progress, in
+//!   the scenes `cal-week-to-day` (from below), `cleaner-open` (from below)
+//!   and `search-open` (a plain fade). Without it they play once from the
+//!   step's start. While a scene morphs in from a panel, a compact view or
+//!   notice fades in with the morph (`DI_DEMO_T=0.5` shows it halfway), and
+//!   the panel it replaces fades out with the shrinking shape.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
 //! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
 //! - `DI_CLOCK=0` draws the idle island without its clock.
@@ -53,6 +60,7 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
+use super::motion::{REVEAL_MS, RevealDir, Transit, content_alpha, reveal_frame};
 use super::render::{
     CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
     RobotFrame, SearchView, ShotView, SystemView,
@@ -139,6 +147,8 @@ struct Scene {
     clean: Option<CleanDemo>,
     /// What the Clipboard page shows.
     clip: ClipDemo,
+    /// The page content is a sub-view `Reveal` in this direction.
+    reveal: Option<RevealDir>,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -308,6 +318,7 @@ const BASE: Scene = Scene {
     system_low: false,
     clean: None,
     clip: ClipDemo::Design,
+    reveal: None,
 };
 
 const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
@@ -393,7 +404,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 90] = [
+const SCENES: [Scene; 93] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -701,6 +712,23 @@ const SCENES: [Scene; 90] = [
         View0::Notice(DemoNotice::System),
         Expr::Sad,
     ),
+    // Sub-view reveals (`DI_DEMO_REVEAL`): the new content fades in from
+    // 8 px away. The week became the day; the cleaner just opened; the
+    // search came over a page (a plain fade).
+    Scene {
+        cal_view: CalView::Day,
+        reveal: Some(RevealDir::Open),
+        ..panel("cal-week-to-day", Page::Calendar)
+    },
+    Scene {
+        reveal: Some(RevealDir::Open),
+        ..cleaner("cleaner-open", CleanDemo::Ticks)
+    },
+    Scene {
+        search: true,
+        reveal: Some(RevealDir::Fade),
+        ..panel("search-open", Page::Search)
+    },
 ];
 
 /// The design's CPU line: 60 points (60 s, one per second), ending on the ring's 33 %.
@@ -939,6 +967,7 @@ fn run_scenes(scenes: &[Scene]) {
     let lyric_at: Option<u64> = env("DI_LYRIC_AT");
     let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
     let lyric_scroll: Option<u64> = env("DI_LYRIC_SCROLL");
+    let frozen_reveal: Option<f32> = env("DI_DEMO_REVEAL");
     let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -985,8 +1014,12 @@ fn run_scenes(scenes: &[Scene]) {
         };
         // The equalizer and a scrolling line animate; everything else redraws
         // only while morphing.
+        let reveal_playing = scene.reveal.is_some()
+            && frozen_reveal.is_none()
+            && into < (ANIM_MS + REVEAL_MS) as u128 + 50;
         let animated = scene.view == View0::MediaCompact
-            || (scene.view == View0::MediaLyric && lyric_scroll.is_none() && scroll > 0.0);
+            || (scene.view == View0::MediaLyric && lyric_scroll.is_none() && scroll > 0.0)
+            || reveal_playing;
         if step != settled || animated {
             if t >= 1.0 {
                 if settled != step {
@@ -1172,6 +1205,27 @@ fn run_scenes(scenes: &[Scene]) {
                         bytes,
                     }
                 }),
+                transit: {
+                    let reveal_at =
+                        frozen_reveal.unwrap_or((into as f32 / REVEAL_MS as f32).min(1.0));
+                    let compact = !matches!(scene.view, View0::Panel(_));
+                    let morphing = t < 1.0;
+                    Transit {
+                        reveal: scene.reveal.map(|dir| reveal_frame(dir, 0.0, reveal_at)),
+                        page_fade: None,
+                        // The morph's content: a compact view or notice
+                        // fades in, the panel before it fades out.
+                        content_alpha: if compact && morphing {
+                            content_alpha(t)
+                        } else {
+                            1.0
+                        },
+                        leaving: match prev.view {
+                            View0::Panel(page) if compact && morphing => Some(page),
+                            _ => None,
+                        },
+                    }
+                },
             };
             if let Err(error) = renderer.draw(&win, style, shape, &frame, 1.0) {
                 eprintln!("demo: draw failed: {error}");

@@ -54,6 +54,7 @@ use super::geometry::{
     shot_regions,
 };
 use super::icons::{Icon, IconSet};
+use super::motion::Transit;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::audio::MixerRow;
@@ -171,6 +172,9 @@ pub struct Frame<'a> {
     pub cleaner: Option<&'a CleanerView<'a>>,
     /// The screenshot preview's picture and size, while it shows.
     pub shot: Option<ShotView<'a>>,
+    /// What transitions add to this frame (`ui::motion`); all at rest by
+    /// default.
+    pub transit: Transit,
 }
 
 /// What the screenshot preview draws (`NoticeKind::Screenshot`): its
@@ -645,6 +649,9 @@ struct Target {
     brush: ID2D1SolidColorBrush,
     /// Clips panel content to the rounded shape.
     layer: ID2D1Layer,
+    /// An opacity layer inside the first (a page fading in, compact content
+    /// fading with its morph). A layer cannot be pushed twice at once.
+    layer2: ID2D1Layer,
 }
 
 /// 32-bpp top-down DIB selected into a memory DC; the render target draws here.
@@ -1102,7 +1109,13 @@ impl Renderer {
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let brush = rt.CreateSolidColorBrush(&color(self.palette.text, 1.0), None)?;
             let layer = rt.CreateLayer(None)?;
-            self.target = Some(Target { rt, brush, layer });
+            let layer2 = rt.CreateLayer(None)?;
+            self.target = Some(Target {
+                rt,
+                brush,
+                layer,
+                layer2,
+            });
         }
         Ok(())
     }
@@ -1186,6 +1199,17 @@ impl Renderer {
                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             );
         }
+        // The panel that is closing fades out as its shape shrinks, while the
+        // compact view or notice that follows fades in with the morph.
+        let leaving = match frame.transit.leaving {
+            Some(page) => self.paint_leaving_panel(style, shape, frame, page),
+            None => Ok(()),
+        };
+        let content_alpha = frame.transit.content_alpha.clamp(0.0, 1.0);
+        let faded = content_alpha < 1.0;
+        if faded {
+            self.push_opacity(content_alpha);
+        }
         let robot = frame.robot;
         let content = match view {
             View::MediaCompact => frame.media.map_or(Ok(()), |m| {
@@ -1243,8 +1267,34 @@ impl Renderer {
             );
         }
         let target = self.target.as_ref().expect("target ensured by paint");
-        unsafe { target.rt.PopAxisAlignedClip() };
-        content
+        unsafe {
+            if faded {
+                target.rt.PopLayer();
+            }
+            target.rt.PopAxisAlignedClip();
+        }
+        leaving.and(content)
+    }
+
+    /// Everything drawn until `PopLayer` is at `opacity`: a second layer, so
+    /// it may sit inside the panel's own mask layer.
+    fn push_opacity(&self, opacity: f32) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: D2D_RECT_F {
+                left: -f32::MAX,
+                top: -f32::MAX,
+                right: f32::MAX,
+                bottom: f32::MAX,
+            },
+            geometricMask: ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe { target.rt.PushLayer(&params, &target.layer2) };
     }
 
     /// Bata filling the square `area`.

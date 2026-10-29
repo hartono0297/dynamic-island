@@ -849,9 +849,9 @@ impl IslandState {
             armed,
             self.linger_until,
         ]
-            .into_iter()
-            .flatten()
-            .min()
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// The current notice waits for the pointer: it has a button and the
@@ -4221,7 +4221,10 @@ mod tests {
     fn a_click_outside_ends_the_linger() {
         let t0 = Instant::now();
         let mut s = lingering_after_editor(t0);
-        assert!(s.outside_click_wanted(), "the poll watches while it lingers");
+        assert!(
+            s.outside_click_wanted(),
+            "the poll watches while it lingers"
+        );
         s.apply(Event::Dismiss, t0 + secs(2));
         assert_eq!(s.view(), View::Idle);
         assert_eq!(s.next_deadline(), None);
@@ -4301,7 +4304,11 @@ mod tests {
         let mut s = lingering_after_editor(t0);
         s.apply(Event::Hover(true), t0 + secs(2));
         s.apply(Event::Tick, t0 + secs(6));
-        assert_eq!(s.view(), View::Panel(Page::Calendar), "the pointer holds it");
+        assert_eq!(
+            s.view(),
+            View::Panel(Page::Calendar),
+            "the pointer holds it"
+        );
         assert_eq!(s.next_deadline(), None);
         s.apply(Event::Hover(false), t0 + secs(7));
         assert_eq!(s.view(), View::Idle, "nothing of the linger is left");

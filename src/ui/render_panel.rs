@@ -52,6 +52,7 @@ use crate::tiles::Tile;
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
+use crate::ui::motion::{ease_out_cubic, panel_fade};
 use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
     CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
@@ -363,40 +364,116 @@ impl Renderer {
         let rest = shape_for(style, kind);
         let settled = shape == rest;
         // Content is fully visible by ~70 % of the growth, so the panel reads
-        // as open while the shape is still easing into place.
+        // as open while the shape is still easing into place; closing, it
+        // fades the same way (`paint_leaving_panel`).
         let fade = if settled {
             1.0
         } else {
-            ((shape.h - COMPACT_H) / (rest.h - COMPACT_H) / 0.7).clamp(0.0, 1.0)
+            panel_fade(shape.h, rest.h, COMPACT_H)
         };
         if fade <= 0.0 {
             return Ok(());
         }
         let mask = self.shape_geometry(style, shape)?;
         self.push_mask(&mask, fade);
-        let painted = self.paint_panel_content(rest, frame, settled);
+        let painted = self.paint_panel_content(rest, frame, frame.page, settled, false);
         self.set_offset(0.0);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopLayer() };
         painted
     }
 
-    fn paint_panel_content(&mut self, s: ShapeRect, frame: &Frame, settled: bool) -> Result<()> {
+    /// The panel that is closing, drawn inside the shape that shrinks around
+    /// it, fading with the shape's height. It takes no clicks and slides or
+    /// reveals nothing.
+    pub(super) fn paint_leaving_panel(
+        &mut self,
+        style: Style,
+        shape: ShapeRect,
+        frame: &Frame,
+        page: Page,
+    ) -> Result<()> {
+        let rest = shape_for(style, panel_kind(page, false, false));
+        let fade = panel_fade(shape.h, rest.h, COMPACT_H);
+        if fade <= 0.0 {
+            return Ok(());
+        }
+        let mask = self.shape_geometry(style, shape)?;
+        self.push_mask(&mask, fade);
+        let painted = self.paint_panel_content(rest, frame, page, false, true);
+        self.set_offset(0.0);
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe { target.rt.PopLayer() };
+        painted
+    }
+
+    /// One page at `offset` and `alpha`; an opacity layer only below 1.
+    fn paint_page_at(
+        &mut self,
+        frame: &Frame,
+        layout: &PageLayout,
+        (dx, dy): (f32, f32),
+        alpha: f32,
+    ) -> Result<()> {
+        let layered = alpha < 1.0;
+        if layered {
+            self.push_opacity(alpha.clamp(0.0, 1.0));
+        }
+        self.set_translation(dx, dy);
+        let painted = self.paint_page(frame, layout);
+        self.set_translation(0.0, 0.0);
+        if layered {
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe { target.rt.PopLayer() };
+        }
+        painted
+    }
+
+    /// `closing`: the panel on its way out, shown as it was (no slide, fade
+    /// or reveal, no click regions).
+    fn paint_panel_content(
+        &mut self,
+        s: ShapeRect,
+        frame: &Frame,
+        page: Page,
+        settled: bool,
+        closing: bool,
+    ) -> Result<()> {
         let strip = frame.strip.is_some();
-        let page = frame.page;
         let layout = self.page_layout(s, frame, page, strip);
-        let slide = frame.page_slide.clamp(-1.0, 1.0);
-        if slide != 0.0 {
-            // The page it came from sits one panel width further on.
-            if let Some(from) = frame.page_from.filter(|p| *p != page) {
+        let (slide, fade, reveal) = if closing {
+            (0.0, None, None)
+        } else {
+            (
+                frame.page_slide.clamp(-2.0, 2.0),
+                frame.transit.page_fade,
+                frame.transit.reveal,
+            )
+        };
+        let from = frame.page_from.filter(|p| *p != page);
+        match (from, fade) {
+            // Two pages cross-fade (the search comes and goes over a page).
+            (Some(from), Some(t)) => {
+                let t = ease_out_cubic(t);
                 let old = self.page_layout(s, frame, from, strip);
-                self.set_offset((slide - slide.signum()) * s.w);
-                self.paint_page(frame, &old)?;
+                self.paint_page_at(frame, &old, (0.0, 0.0), 1.0 - t)?;
+                self.paint_page_at(frame, &layout, (0.0, 0.0), t)?;
+            }
+            _ => {
+                if slide != 0.0 {
+                    // The page it came from sits one panel width further on.
+                    if let Some(from) = from {
+                        let old = self.page_layout(s, frame, from, strip);
+                        let dx = (slide - slide.signum()) * s.w;
+                        self.paint_page_at(frame, &old, (dx, 0.0), 1.0)?;
+                    }
+                }
+                // A sub-view switch: the new content fades in, a few px
+                // from where it will rest.
+                let (alpha, dx, dy) = reveal.map_or((1.0, 0.0, 0.0), |r| (r.alpha, r.dx, r.dy));
+                self.paint_page_at(frame, &layout, (slide * s.w + dx, dy), alpha)?;
             }
         }
-        self.set_offset(slide * s.w);
-        self.paint_page(frame, &layout)?;
-        self.set_offset(0.0);
 
         if let Some(notice) = frame.strip {
             self.paint_strip(s, notice);
@@ -423,7 +500,7 @@ impl Renderer {
         }
         // No clicks on a page still sliding in: its controls are not where
         // the regions say yet, and the old page's are still under the pointer.
-        if settled && slide == 0.0 {
+        if settled && !closing && slide == 0.0 && fade.is_none() {
             let mut hits = regions(s, &layout, strip);
             if matches!(layout, PageLayout::Media(_)) && frame.media.is_none() {
                 hits.retain(|r| !matches!(r.hit, Hit::Prev | Hit::PlayPause | Hit::Next));
@@ -3365,8 +3442,13 @@ impl Renderer {
 
     /// Shifts everything drawn next `dx` logical px to the right.
     fn set_offset(&self, dx: f32) {
+        self.set_translation(dx, 0.0);
+    }
+
+    /// Shifts everything drawn next `dx` right and `dy` down.
+    fn set_translation(&self, dx: f32, dy: f32) {
         let target = self.target.as_ref().expect("target ensured by paint");
-        unsafe { target.rt.SetTransform(&Matrix3x2::translation(dx, 0.0)) };
+        unsafe { target.rt.SetTransform(&Matrix3x2::translation(dx, dy)) };
     }
 
     /// A 1 px outline.
