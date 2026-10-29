@@ -24,7 +24,7 @@ asked: planned by Opus, built by four Sonnet builders in parallel worktrees
 - **Google sign-in guide** for the owner: `docs/google-login-setup.md`.
 - The whole repo was `cargo fmt`-ed once (it had drifted on the other PC).
 
-Not released: `Cargo.toml` is still 3.2.1 and no tag was pushed.
+Released as v3.3.0 on 2026-10-30 (owner's go-ahead); `Cargo.toml`, `app.manifest` and `AppxManifest.xml` say 3.3.0.
 
 Owner checks no agent could do: the icon on taskbar, Alt+Tab, Start Menu and
 a pinned button after reinstalling; the rise with stay-behind on (smooth, no
