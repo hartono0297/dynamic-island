@@ -984,18 +984,46 @@ fn edit_text(edit: HWND) -> String {
 }
 
 /// Takes the typed text into the picture (an empty text is dropped) and
-/// removes the EDIT.
-fn commit_text(hwnd: HWND) {
-    finish_text(hwnd, true);
+/// removes the EDIT. True when an EDIT was open.
+fn commit_text(hwnd: HWND) -> bool {
+    finish_text(hwnd, true)
 }
 
 fn cancel_text(hwnd: HWND) {
     finish_text(hwnd, false);
 }
 
-fn finish_text(hwnd: HWND, keep: bool) {
+/// What a canvas click does with the Text tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextClick {
+    /// Not the Text tool: the click is for something else.
+    NotText,
+    /// An EDIT was open: the click only finishes it, so the focus goes back
+    /// to the editor and the keys (Ctrl+C, Ctrl+S, Delete, Esc, V/T/R) work.
+    CommitOnly,
+    /// No EDIT was open: the click places a new one.
+    Place,
+}
+
+/// `edit_was_open`: the press committed an open EDIT.
+fn text_click_action(edit_was_open: bool, tool: Tool) -> TextClick {
+    match (tool, edit_was_open) {
+        (Tool::Text, true) => TextClick::CommitOnly,
+        (Tool::Text, false) => TextClick::Place,
+        _ => TextClick::NotText,
+    }
+}
+
+/// Whether a `WM_APP_TEXT` belongs to the EDIT open now: the post carries the
+/// sender's HWND, and one from an EDIT already gone must never close a newer
+/// one.
+fn text_msg_is_current(open_edit: Option<isize>, sender: isize) -> bool {
+    open_edit == Some(sender)
+}
+
+fn finish_text(hwnd: HWND, keep: bool) -> bool {
     let Some(Some(t)) = with(hwnd, |e| e.text.take()) else {
-        return;
+        return false;
     };
     let typed = edit_text(t.edit);
     unsafe {
@@ -1025,6 +1053,7 @@ fn finish_text(hwnd: HWND, keep: bool) {
         }
     }
     invalidate(hwnd);
+    true
 }
 
 /// Enter commits, Shift+Enter adds a line, Esc cancels, losing focus commits.
@@ -1090,7 +1119,7 @@ fn xy(lparam: LPARAM) -> (f32, f32) {
 
 fn on_down(hwnd: HWND, lparam: LPARAM, double: bool) {
     let (x, y) = xy(lparam);
-    commit_text(hwnd);
+    let edit_was_open = commit_text(hwnd);
     let toolbar_hit = with(hwnd, |e| {
         let hit = e.layout.hit(x, y);
         if let Some(h) = hit {
@@ -1141,7 +1170,11 @@ fn on_down(hwnd: HWND, lparam: LPARAM, double: bool) {
                 }
                 None
             }
-            Tool::Text => Some((p, None)),
+            Tool::Text => match text_click_action(edit_was_open, Tool::Text) {
+                TextClick::Place => Some((p, None)),
+                // The click only finished the open text.
+                TextClick::CommitOnly | TextClick::NotText => None,
+            },
             tool => {
                 let style = e.session.style();
                 let ann = match tool {
@@ -1498,7 +1531,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_APP_TEXT => {
             let current = with(hwnd, |e| e.text.as_ref().map(|t| t.edit.0 as isize)).flatten();
-            if current != Some(lparam.0) {
+            if !text_msg_is_current(current, lparam.0) {
                 // From an EDIT already committed or cancelled.
                 return LRESULT(0);
             }
@@ -2287,6 +2320,30 @@ mod tests {
             let copy = l.rect_of(Hit::Copy).expect("copy");
             assert!(copy.x >= l.left_end, "{ui}");
         }
+    }
+
+    #[test]
+    fn a_text_click_after_typing_only_commits() {
+        // An EDIT was open: the click finishes it and places nothing.
+        assert_eq!(text_click_action(true, Tool::Text), TextClick::CommitOnly);
+        // No EDIT: a click places a new one.
+        assert_eq!(text_click_action(false, Tool::Text), TextClick::Place);
+        // Other tools are not the text rule's business.
+        for tool in Tool::ALL {
+            if tool != Tool::Text {
+                assert_eq!(text_click_action(true, tool), TextClick::NotText);
+                assert_eq!(text_click_action(false, tool), TextClick::NotText);
+            }
+        }
+    }
+
+    #[test]
+    fn a_text_message_from_a_gone_edit_is_ignored() {
+        assert!(text_msg_is_current(Some(0x1234), 0x1234));
+        // A newer EDIT is open: the old one's post does not touch it.
+        assert!(!text_msg_is_current(Some(0x5678), 0x1234));
+        // Nothing open: nothing to close.
+        assert!(!text_msg_is_current(None, 0x1234));
     }
 
     #[test]

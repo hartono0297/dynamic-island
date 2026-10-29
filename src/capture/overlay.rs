@@ -25,10 +25,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
-    GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, LoadCursorW, MSG,
+    GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, IsWindow, LoadCursorW,
+    MSG,
     PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
     SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_ACTIVATE, WM_ACTIVATEAPP,
-    WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -84,6 +85,48 @@ thread_local! {
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
+/// The highlight and the size label wear the island's accent, not the
+/// window palette's (that one is a darker shade in light mode, for text
+/// on a light window).
+fn island_accent() -> u32 {
+    theme::current().accent.rgb()
+}
+
+/// Clears `STARTING` on every way out of `start`, a panic included.
+struct Starting;
+
+impl Starting {
+    fn begin() -> Self {
+        STARTING.set(true);
+        Starting
+    }
+}
+
+impl Drop for Starting {
+    fn drop(&mut self) {
+        STARTING.set(false);
+    }
+}
+
+/// Takes the value out of `slot` when `owns` says it is the caller's: the
+/// one place the overlay's state leaves its slot, so a second close finds
+/// nothing and a stale window handle never takes another overlay's state.
+fn take_owned<T>(slot: &mut Option<T>, owns: impl FnOnce(&T) -> bool) -> Option<T> {
+    if slot.as_ref().is_some_and(owns) {
+        slot.take()
+    } else {
+        None
+    }
+}
+
+/// The overlay's state, when it is `hwnd`'s.
+fn take_state(hwnd: Option<HWND>) -> Option<State> {
+    OVERLAY.with(|c| {
+        let mut slot = c.try_borrow_mut().ok()?;
+        take_owned(&mut slot, |s| hwnd.is_none_or(|h| s.hwnd == h))
+    })
+}
+
 /// True while an overlay is up or being made.
 pub fn active() -> bool {
     STARTING.get() || OVERLAY.with(|c| c.try_borrow().map_or(true, |s| s.is_some()))
@@ -99,7 +142,7 @@ pub fn start() {
     if active() {
         return;
     }
-    STARTING.set(true);
+    let starting = Starting::begin();
     let up = (|| {
         let bounds = win::virtual_screen();
         let windows = win::top_windows(bounds);
@@ -107,7 +150,7 @@ pub fn start() {
         let cands: Vec<Candidate> = windows.iter().map(TopWindow::candidate).collect();
         create(frame, cands, Some(windows), false)
     })();
-    STARTING.set(false);
+    drop(starting);
     if up.is_none() {
         eprintln!("vale: the capture overlay could not start");
     }
@@ -193,7 +236,7 @@ fn create(
         hover,
         down: None,
         drag: None,
-        accent: theme::current_window().accent,
+        accent: island_accent(),
         demo,
         lost: 0,
         armed: false,
@@ -267,8 +310,12 @@ fn take_foreground(hwnd: HWND) -> bool {
 /// Closes the overlay. `choice` is the rectangle to keep (virtual-screen
 /// pixels); it is cropped from the frame, the frame is freed, the window
 /// closes and the editor opens at once.
+///
+/// Idempotent: the state leaves its slot first, so a second call (the
+/// `WM_ACTIVATE` that `DestroyWindow` itself sends, an Alt+F4 after a click)
+/// finds nothing and does nothing.
 fn finish(choice: Option<Rect>) {
-    let Some(state) = OVERLAY.with(|c| c.try_borrow_mut().ok().and_then(|mut s| s.take())) else {
+    let Some(state) = take_state(None) else {
         return;
     };
     state.stop.store(true, Ordering::Relaxed);
@@ -285,7 +332,11 @@ fn finish(choice: Option<Rect>) {
     // The picture, the target and the frame go now.
     drop(state);
     unsafe {
-        let _ = DestroyWindow(hwnd);
+        // Not while the window is already on its way out (closed by the
+        // system from outside).
+        if IsWindow(Some(hwnd)).as_bool() {
+            let _ = DestroyWindow(hwnd);
+        }
     }
     match shot {
         Some((shot, r)) => crate::shot_edit::window::open(shot, r.center(), demo),
@@ -494,7 +545,24 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             deactivated();
             LRESULT(0)
         }
+        WM_CLOSE => {
+            // Alt+F4 and the like: the same way out as Esc. No DefWindowProc,
+            // whose DestroyWindow would come on top of `finish`'s own.
+            finish(None);
+            LRESULT(0)
+        }
         WM_DESTROY => {
+            // The window went without `finish` (closed from outside): free
+            // the frame (it is over 100 MB on a big desktop) and let
+            // `active()` say false. Only this window's own state.
+            if let Some(state) = take_state(Some(hwnd)) {
+                state.stop.store(true, Ordering::Relaxed);
+                let demo = state.demo;
+                drop(state);
+                if demo {
+                    unsafe { PostQuitMessage(0) };
+                }
+            }
             // Results that were posted but not taken: free their boxes.
             let mut m = MSG::default();
             while unsafe { PeekMessageW(&mut m, Some(hwnd), WM_APP_UIA, WM_APP_UIA, PM_REMOVE) }
@@ -701,6 +769,47 @@ mod tests {
         assert!(!is_deactivation(1));
         assert!(!is_deactivation(2));
         assert!(!is_deactivation(0x0001_0001));
+    }
+
+    #[test]
+    fn the_state_leaves_its_slot_once() {
+        let mut slot = Some(7);
+        assert_eq!(take_owned(&mut slot, |_| true), Some(7));
+        // A second close finds nothing: finish is idempotent.
+        assert_eq!(take_owned(&mut slot, |_| true), None);
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn a_stale_window_never_takes_another_overlays_state() {
+        let mut slot = Some(7);
+        assert_eq!(take_owned(&mut slot, |s| *s == 8), None);
+        assert_eq!(slot, Some(7), "still there for its own window");
+        assert_eq!(take_owned(&mut slot, |s| *s == 7), Some(7));
+        let mut empty: Option<i32> = None;
+        assert_eq!(take_owned(&mut empty, |_| true), None);
+    }
+
+    #[test]
+    fn starting_clears_on_every_way_out() {
+        assert!(!active());
+        {
+            let _starting = Starting::begin();
+            assert!(active(), "a second trigger is ignored meanwhile");
+        }
+        assert!(!active());
+        // Also when the start unwinds.
+        let r = std::panic::catch_unwind(|| {
+            let _starting = Starting::begin();
+            panic!("boom");
+        });
+        assert!(r.is_err());
+        assert!(!active());
+    }
+
+    #[test]
+    fn the_highlight_is_the_island_accent() {
+        assert_eq!(island_accent(), theme::current().accent.rgb());
     }
 
     #[test]
