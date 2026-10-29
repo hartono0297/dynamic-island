@@ -44,8 +44,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE,
     GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PBT_POWERSETTINGCHANGE, PM_REMOVE,
-    PeekMessageW, PostMessageW, PostQuitMessage, SM_SWAPBUTTON, SW_SHOWNORMAL, SetCoalescableTimer,
-    SetForegroundWindow, SetTimer, TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_APP,
+    PeekMessageW, PostMessageW, PostQuitMessage, SM_SWAPBUTTON, SPI_GETCLIENTAREAANIMATION,
+    SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetCoalescableTimer, SetForegroundWindow,
+    SetTimer, SystemParametersInfoW, TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_APP,
     WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
@@ -83,7 +84,7 @@ use crate::sources::battery::{
 };
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{explorer, media, notifications};
-use crate::state::{IslandState, is_media_hit};
+use crate::state::{IslandState, ShownPanel, is_media_hit};
 use crate::system::{
     CpuHistory, SampleKind, Sampler, SysEase, SystemSample, WarnMonitor, alert_notice,
 };
@@ -95,8 +96,12 @@ use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
     ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect, Under,
-    ease_out_back, lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
-    lyric_shape, lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
+    lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape,
+    lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
+};
+use crate::ui::motion::{
+    COMPACT_H, FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
+    content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, panel_fade, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -334,6 +339,12 @@ pub fn run(media_log_flag: bool) {
             tx: tx.clone(),
             anim: Anim::settled(rest, 0.0),
             slide: None,
+            page_fade: None,
+            reveal: None,
+            leaving: None,
+            closed_panel: None,
+            fade_floor_h: COMPACT_H,
+            animations: client_animations_on(),
             clock: None,
             frame_log: FrameLog::from_env(),
             drawn: View::Hidden,
@@ -534,7 +545,27 @@ struct App {
     anim: Anim,
     /// A panel page switch in progress.
     slide: Option<Slide>,
-    /// Paces animation frames; exists only while `anim` or `slide` runs.
+    /// Two pages cross-fading (the search comes or goes over a page).
+    page_fade: Option<PageFade>,
+    /// A sub-view switch fading in (`ui::motion`): the calendar's range, the
+    /// cleaner opening, Mole's stages, the CLI's folder menu.
+    reveal: Option<Reveal>,
+    /// The panel that is closing, as it showed, while its content fades
+    /// with the shrinking shape; set at the morph's start, gone at its end.
+    leaving: Option<ShownPanel>,
+    /// The panel as it showed before the event that took it off screen
+    /// (its close resets the cleaner, the CLI's size, the page indices);
+    /// `leaving` takes it when the closing morph starts.
+    closed_panel: Option<ShownPanel>,
+    /// The height at which the panel's content is invisible during the
+    /// current morph (`motion::fade_floor`): the target's height while the
+    /// panel closes, so its fade ends with the morph.
+    fade_floor_h: f32,
+    /// Windows' "Animation effects" (`SPI_GETCLIENTAREAANIMATION`) is on.
+    /// Off: no slides, no reveals, and the morph eases without overshoot.
+    animations: bool,
+    /// Paces animation frames; exists only while `anim`, `slide`, `reveal`
+    /// or `page_fade` runs, and only while it does.
     clock: Option<FrameClock>,
     frame_log: FrameLog,
     /// The view frames draw: the current one, or the last visible one while
@@ -994,6 +1025,8 @@ impl App {
                 other => other,
             };
             let page = self.state.page();
+            let before = self.panel_snap();
+            let shown_before = self.state.shown_panel();
             let cli_was = (
                 self.state.view() == View::Panel(Page::Cli),
                 self.state.cli_menu(),
@@ -1022,7 +1055,8 @@ impl App {
                 let why = if click.guarded { "guard" } else { "no media" };
                 media_log::log_command(&click, media_log::Outcome::Ignored(why), &self.media_app());
             }
-            self.follow_page(page, now);
+            self.follow_transition(before, now);
+            self.follow_closed_panel(shown_before);
             self.follow_cli_page(cli_was);
             self.follow_clip_page(cli_was.2);
             self.follow_shot();
@@ -1571,24 +1605,87 @@ impl App {
         }
     }
 
-    /// Slides in the page the wheel just switched to.
-    fn follow_page(&mut self, before: Page, now: Instant) {
-        let after = self.state.page();
-        // The search comes and goes over a page: no sliding to or from it.
-        if after == before
-            || Page::Search == before
-            || Page::Search == after
-            || !matches!(self.state.view(), View::Panel(_))
-        {
-            return;
+    /// What the panel shows, for `follow_transition`.
+    fn panel_snap(&self) -> Snap {
+        let s = &self.state;
+        let cleaner = s.cleaner();
+        Snap {
+            panel: matches!(s.view(), View::Panel(_)),
+            page: s.page(),
+            sub: SubView {
+                cal_view: s.cal_view(),
+                cal_anchor: s.cal_anchor(),
+                day_page: s.day_page(),
+                notes_page: s.notes_page(),
+                reminders_page: s.reminders_page(),
+                cleaner: cleaner.map(|c| c.mode),
+                mole: mole_code(s.mole_phase()),
+                mole_log: cleaner.is_some_and(|c| c.mole_log),
+                cli_menu: s.cli_menu(),
+            },
         }
-        // A later page in the owner's order comes in from the right.
-        self.slide = Some(Slide {
-            from: slide_from(self.state.pages(), before, after),
-            from_page: before,
-            start: now,
-        });
-        self.ensure_clock();
+    }
+
+    /// After any applied event: what changed inside the open panel moves
+    /// (`ui::motion::transition`). A page change slides (the wheel, the
+    /// Clipboard tile, a disk warning's "Buka", a page switched off while it
+    /// shows), the search cross-fades, a sub-view switch (the calendar's
+    /// range, the cleaner, Mole's stages, the CLI menu) reveals. A slide that
+    /// starts during one continues from where the page is. Nothing runs
+    /// unless something changed, and everything rides the frame clock.
+    fn follow_transition(&mut self, before: Snap, now: Instant) {
+        let after = self.panel_snap();
+        match transition(&before, &after, self.animations) {
+            Transition::None => {
+                if !after.panel {
+                    self.slide = None;
+                    self.page_fade = None;
+                    self.reveal = None;
+                }
+            }
+            Transition::Slide => {
+                // A later page in the owner's order comes in from the right.
+                let dir = slide_from(self.state.pages(), before.page, after.page);
+                // One that runs goes on as the same strip: the pages on
+                // screen keep their places.
+                let running = self.slide.filter(|s| s.progress(now) < 1.0);
+                let offset = running.map_or(0.0, |s| s.offset(now));
+                let strip = running.map(|s| s.strip);
+                self.slide = Some(Slide {
+                    strip: SlideStrip::next(strip.as_ref(), offset, before.page, dir),
+                    start: now,
+                });
+                self.page_fade = None;
+                self.reveal = None;
+                self.ensure_clock();
+            }
+            Transition::Fade => {
+                self.page_fade = Some(PageFade {
+                    from_page: before.page,
+                    start: now,
+                });
+                self.slide = None;
+                self.reveal = None;
+                self.ensure_clock();
+            }
+            Transition::Reveal(dir) => {
+                // One cut short continues from the opacity it had.
+                let from_alpha = self
+                    .reveal
+                    .filter(|r| !r.done(now))
+                    .map_or(0.0, |r| r.frame(now).alpha);
+                self.reveal = Some(Reveal::new(now, dir, from_alpha));
+                self.ensure_clock();
+            }
+        }
+    }
+
+    /// After any applied event: the panel that showed before it and does not
+    /// now is kept as it was, for its fade-out (`refresh` hands it to
+    /// `leaving`). Its close already reset what it showed.
+    fn follow_closed_panel(&mut self, shown_before: Option<ShownPanel>) {
+        self.closed_panel =
+            closed_panel_after(&self.state.view(), shown_before, self.closed_panel.take());
     }
 
     /// Without a client ID there is nothing to log in to; the notice says
@@ -2712,11 +2809,44 @@ impl App {
         let resize = view == View::MediaLyric
             && self.drawn == View::MediaLyric
             && self.anim.to_opacity == 1.0;
-        if view != View::Hidden {
+        // A compact view or notice replacing another fades in with its
+        // morph, and a panel closing into one fades out as the shape shrinks.
+        let was_panel = match &self.drawn {
+            View::Panel(page) => Some(*page),
+            _ => None,
+        };
+        let is_panel = matches!(view, View::Panel(_));
+        let compact_swap = view != self.drawn && !is_panel && view != View::Hidden && !resize;
+        // A fade cut short goes on from the alpha it reached: new content
+        // starts from it, and the same content keeps fading in.
+        let fading = self.anim.fading(now);
+        let fade_from = if is_panel || view == View::Hidden {
+            None
+        } else if compact_swap {
+            Some(fading.unwrap_or(0.0))
+        } else {
+            fading
+        };
+        let hiding = view == View::Hidden;
+        if !hiding {
             self.drawn = view;
         }
         if retarget {
             let (shape, opacity) = self.anim.frame(now);
+            // Drawn on screen before this morph (not hidden, not heading
+            // for it): only then does a closing panel have content to fade.
+            let from_visible = self.anim.to_opacity == 1.0;
+            // Panel content caught mid-fade: a panel still opening, or a
+            // closing one still fading out (as `draw` paints them).
+            let panel_alpha = if !self.anim.running || !from_visible {
+                None
+            } else if was_panel.is_some() {
+                Some(panel_fade(shape.h, self.anim.to.h, self.fade_floor_h))
+            } else {
+                self.leaving
+                    .as_ref()
+                    .map(|shown| panel_fade(shape.h, panel_rest_h(style, shown), self.fade_floor_h))
+            };
             // Hidden keeps the shape where it is and only fades it out.
             let (to, to_opacity) = target.map_or((shape, 0.0), |s| (s, 1.0));
             self.anim = Anim {
@@ -2727,7 +2857,43 @@ impl App {
                 start: now,
                 ms: if resize { LYRIC_RESIZE_MS } else { ANIM_MS },
                 running: true,
+                plain: !self.animations,
+                fade_from,
             };
+            (self.leaving, self.closed_panel) = leaving_on_morph(
+                MorphTo {
+                    is_panel,
+                    hiding,
+                    compact_swap,
+                },
+                was_panel,
+                from_visible,
+                self.leaving.take(),
+                self.closed_panel.take(),
+            );
+            if !hiding {
+                // The panel whose content fades in this morph: the one it
+                // opens into, else the one closing.
+                let rest_h = if is_panel {
+                    to.h
+                } else {
+                    self.leaving
+                        .as_ref()
+                        .map_or(to.h, |shown| panel_rest_h(style, shown))
+                };
+                self.fade_floor_h = fade_floor(
+                    is_panel,
+                    to.h,
+                    rest_h,
+                    FadeStart {
+                        shape_h: shape.h,
+                        from_panel: was_panel.is_some(),
+                        from_visible,
+                        carried: self.fade_floor_h,
+                        alpha: panel_alpha,
+                    },
+                );
+            }
             // The enlarged panel needs the taller canvas before it grows.
             self.sync_window_height(now);
             self.frame_log.start(now);
@@ -2751,13 +2917,16 @@ impl App {
             && system_sample_wanted(&self.state.view(), self.state.cleaner().is_some())
     }
 
-    /// A morph, page slide, lyric crossfade or scroll, robot lift/bounce, or
-    /// the island's rise from behind a window runs at `now`.
+    /// A morph, page slide or fade, sub-view reveal, lyric crossfade or
+    /// scroll, robot lift/bounce, or the island's rise from behind a window
+    /// runs at `now`.
     fn animating_at(&self, now: Instant) -> bool {
         self.anim.running
             || self.rise.is_some_and(|r| r.running(now))
             || self.system_easing(now)
             || self.slide.is_some()
+            || self.reveal.is_some()
+            || self.page_fade.is_some()
             || self.lyric_fading
             || self.lyric_scrolling
             || self.robot_moving(now)
@@ -3466,6 +3635,8 @@ impl App {
         let now = Instant::now();
         let shape_done = self.anim.progress(now) >= 1.0;
         let slide_done = self.slide.is_none_or(|s| s.progress(now) >= 1.0);
+        let reveal_done = self.reveal.is_none_or(|r| r.done(now));
+        let fade_done = self.page_fade.is_none_or(|f| f.progress(now) >= 1.0);
         // The resting t = 1 frame is always drawn before the clock stops, so a
         // fade-out never leaves faint pixels that still catch clicks, and the
         // settled page registers its click regions.
@@ -3473,6 +3644,8 @@ impl App {
         self.frame_log.frame(now);
         if shape_done && self.anim.running {
             self.anim.running = false;
+            // The panel that was closing is gone with its morph.
+            self.leaving = None;
             self.frame_log.finish();
             // Back from the enlarged panel: the canvas shrinks again.
             if self.sync_window_height(now) {
@@ -3494,6 +3667,12 @@ impl App {
         }
         if slide_done {
             self.slide = None;
+        }
+        if reveal_done {
+            self.reveal = None;
+        }
+        if fade_done {
+            self.page_fade = None;
         }
         // The rise ends on the frame drawn at its end: fully opaque, in place.
         if self.rise.is_some_and(|r| !r.running(now)) {
@@ -4103,6 +4282,25 @@ impl App {
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
         let (shape, opacity) = rise_frame(shape, opacity, self.rise.as_ref(), now);
+        let morphing = self.anim.running;
+        // The closing panel draws what it showed, not what its close reset.
+        let leaving = self.leaving.as_ref().filter(|_| morphing);
+        let transit = Transit {
+            reveal: self.reveal.map(|r| r.frame(now)),
+            // Its last frame (t = 1) is drawn settled, with click regions.
+            page_fade: self
+                .page_fade
+                .and_then(|f| page_fade_frame(f.progress(now))),
+            content_alpha: if morphing {
+                self.anim.fade_from.map_or(1.0, |from| {
+                    content_alpha_from(from, self.anim.progress(now))
+                })
+            } else {
+                1.0
+            },
+            leaving: leaving.map(|shown| shown.page),
+            fade_floor_h: self.fade_floor_h,
+        };
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
         let input = self.cli_input.as_ref();
@@ -4124,7 +4322,11 @@ impl App {
             disk_warn_gb: self.config.disk_warn_gb,
             ram_warn_percent: self.config.ram_warn_percent,
         };
-        let cleaner = state.cleaner().map(|c| CleanerView {
+        let (cleaner_ui, mole_phase) = match leaving {
+            Some(shown) => (shown.cleaner, shown.mole),
+            None => (state.cleaner().copied(), state.mole_phase()),
+        };
+        let cleaner = cleaner_ui.map(|c| CleanerView {
             mode: c.mode,
             checked: c.checked,
             armed: c.armed(),
@@ -4132,7 +4334,7 @@ impl App {
             scanning: self.clean.scanning,
             busy: state.clean_busy(),
             mole: MoleView {
-                phase: state.mole_phase(),
+                phase: mole_phase,
                 opts: state.mole_opts(),
                 show_log: c.mole_log,
                 version: self
@@ -4171,8 +4373,11 @@ impl App {
             pomodoro: state.pomodoro(),
             now,
             today: state.today(),
-            page: state.page(),
-            strip: state.waiting_strip(),
+            page: leaving.map_or(state.page(), |shown| shown.page),
+            strip: match leaving {
+                Some(shown) => shown.strip.as_ref(),
+                None => state.waiting_strip(),
+            },
             cal_view: state.cal_view(),
             cal_anchor: state.cal_anchor(),
             cal_selected: state.cal_selected(),
@@ -4182,11 +4387,14 @@ impl App {
             shelf_drag: self.shelf.dragging,
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
-            reminders_page: state.reminders_page(),
-            notes_page: state.notes_page(),
-            day_page: state.day_page(),
+            reminders_page: leaving.map_or(state.reminders_page(), |shown| shown.reminders_page),
+            notes_page: leaving.map_or(state.notes_page(), |shown| shown.notes_page),
+            day_page: leaving.map_or(state.day_page(), |shown| shown.day_page),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
-            page_from: self.slide.map(|s| s.from_page),
+            page_trail: self
+                .slide
+                .map_or([None; 2], |s| s.strip.visible(s.offset(now))),
+            page_from: self.page_fade.map(|f| f.from_page),
             pages: state.pages().visible(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
@@ -4214,9 +4422,11 @@ impl App {
                 focused,
                 suggestions,
                 selected: self.cli_pick,
-                tall: state.cli_tall(),
+                tall: leaving.map_or(state.cli_tall(), |shown| shown.cli_tall),
                 from_explorer: self.cli_from_explorer,
-                menu: state.cli_menu().then_some(&self.cli_menu_view),
+                menu: leaving
+                    .map_or(state.cli_menu(), |shown| shown.cli_menu)
+                    .then_some(&self.cli_menu_view),
             },
             clip,
             search: SearchView {
@@ -4233,6 +4443,7 @@ impl App {
             system: Some(&system),
             cleaner: cleaner.as_ref(),
             shot: shot::shot_view(&self.shots, &self.drawn),
+            transit,
         };
         if let Err(error) = self
             .renderer
@@ -4483,6 +4694,12 @@ struct Anim {
     start: Instant,
     ms: u64,
     running: bool,
+    /// Windows' animations are off: a plain ease-out, no overshoot.
+    plain: bool,
+    /// The content of the compact view or notice this morph leads to fades
+    /// in with it, from this alpha (`motion::content_alpha_from`); `None`:
+    /// no fade.
+    fade_from: Option<f32>,
 }
 
 impl Anim {
@@ -4495,7 +4712,16 @@ impl Anim {
             start: Instant::now(),
             ms: ANIM_MS,
             running: false,
+            plain: false,
+            fade_from: None,
         }
+    }
+
+    /// The content's alpha while its fade-in is still running, else `None`.
+    fn fading(&self, now: Instant) -> Option<f32> {
+        let t = self.progress(now);
+        let from = self.fade_from.filter(|_| self.running && t < 1.0)?;
+        Some(content_alpha_from(from, t))
     }
 
     fn progress(&self, now: Instant) -> f32 {
@@ -4511,7 +4737,7 @@ impl Anim {
         if t >= 1.0 {
             return (self.to, self.to_opacity);
         }
-        let shape = lerp_shape(self.from, self.to, ease_out_back(t));
+        let shape = lerp_shape(self.from, self.to, morph_ease(self.plain, t));
         let opacity = self.from_opacity + (self.to_opacity - self.from_opacity) * t;
         (shape, opacity)
     }
@@ -4592,13 +4818,28 @@ impl LyricFit {
     }
 }
 
-/// A panel page switch: `page_slide` eases from `from` (±1) to 0 over `SLIDE_MS`.
+/// A panel page switch: `page_slide` eases from `strip.from` to 0 over
+/// `SLIDE_MS`, the pages going out moving with it.
 #[derive(Clone, Copy)]
 struct Slide {
-    from: f32,
-    /// The page it slides away from, drawn beside the new one.
+    strip: SlideStrip,
+    start: Instant,
+}
+
+/// Two panel pages cross-fading (the search over a page, or back):
+/// `progress` runs 0..1 over `PAGE_FADE_MS`.
+#[derive(Clone, Copy)]
+struct PageFade {
+    /// The page it fades away from, drawn under the new one.
     from_page: Page,
     start: Instant,
+}
+
+impl PageFade {
+    fn progress(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.start).as_secs_f32() * 1000.0;
+        (elapsed / PAGE_FADE_MS as f32).min(1.0)
+    }
 }
 
 /// +1 when `after` comes later than `before` in the owner's page order
@@ -4620,7 +4861,7 @@ impl Slide {
     fn offset(&self, now: Instant) -> f32 {
         let t = self.progress(now);
         // Cubic ease-out: fast start, gentle landing, no overshoot past the page.
-        self.from * (1.0 - t).powi(3)
+        self.strip.from * (1.0 - t).powi(3)
     }
 }
 
@@ -5470,6 +5711,97 @@ fn is_color_set_change(lparam: LPARAM) -> bool {
     !area.is_null() && unsafe { area.to_string() }.is_ok_and(|a| a == "ImmersiveColorSet")
 }
 
+/// The panel that fades out while the island morphs into a compact view or
+/// notice: what `closed_panel` kept, only if that panel was on screen when
+/// the morph started (`from_visible`) and is the page that was drawn. A
+/// panel that went off screen with a fullscreen app has nothing to fade when
+/// the island comes back.
+fn leaving_snapshot(
+    was_panel: Option<Page>,
+    from_visible: bool,
+    closed: Option<ShownPanel>,
+) -> Option<ShownPanel> {
+    if !from_visible {
+        return None;
+    }
+    closed.filter(|shown| Some(shown.page) == was_panel)
+}
+
+/// Where a morph that `refresh` starts is heading, for `leaving_on_morph`.
+#[derive(Clone, Copy, Debug)]
+struct MorphTo {
+    /// To a panel.
+    is_panel: bool,
+    /// To Hidden (a fullscreen app): the shape stays and fades out.
+    hiding: bool,
+    /// To another compact view or notice than the one drawn.
+    compact_swap: bool,
+}
+
+/// `closed_panel` after an applied event (`follow_closed_panel`): gone
+/// while a panel shows, else the panel that showed before the event and
+/// does not now (`shown_before`), else what it kept.
+fn closed_panel_after(
+    view: &View,
+    shown_before: Option<ShownPanel>,
+    closed: Option<ShownPanel>,
+) -> Option<ShownPanel> {
+    if matches!(view, View::Panel(_)) {
+        None
+    } else {
+        shown_before.or(closed)
+    }
+}
+
+/// `(leaving, closed_panel)` once a morph starts. A panel opening, or the
+/// island going off screen (nothing of the panel is left to fade out when
+/// it comes back), clears both. A panel closing into a compact view or a
+/// notice hands its snapshot to the fade (`leaving_snapshot`). Any other
+/// retarget (a close retargeted mid-way) keeps them: the fade goes on.
+fn leaving_on_morph(
+    to: MorphTo,
+    was_panel: Option<Page>,
+    from_visible: bool,
+    leaving: Option<ShownPanel>,
+    closed: Option<ShownPanel>,
+) -> (Option<ShownPanel>, Option<ShownPanel>) {
+    if to.is_panel || to.hiding {
+        (None, None)
+    } else if to.compact_swap && was_panel.is_some() {
+        // As it showed before its close reset it; without that, no
+        // fade-out rather than content that is not what was there.
+        (leaving_snapshot(was_panel, from_visible, closed), None)
+    } else {
+        (leaving, closed)
+    }
+}
+
+/// The height of the panel a snapshot showed, as `paint_leaving_panel`
+/// sizes it.
+fn panel_rest_h(style: Style, shown: &ShownPanel) -> f32 {
+    shape_for(
+        style,
+        panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+    )
+    .h
+}
+
+/// Windows' "Animation effects" (Settings, Accessibility, Visual effects;
+/// `SPI_GETCLIENTAREAANIMATION`). On when it cannot be read.
+fn client_animations_on() -> bool {
+    // A BOOL: four bytes.
+    let mut on: i32 = 1;
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut i32 as *mut c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || on != 0
+}
+
 /// Windows switched between light and dark apps: windows following it restyle.
 /// The island itself is dark either way.
 fn on_system_theme_changed() {
@@ -5702,6 +6034,9 @@ unsafe extern "system" fn wnd_proc(
             if is_color_set_change(lparam) {
                 on_system_theme_changed();
             }
+            // The animation switch is read again (no timer, no poll); it
+            // only matters to the next transition.
+            with_app(|app| app.animations = client_animations_on());
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_DESTROY => {
@@ -5754,6 +6089,130 @@ mod tests {
         assert!(!greet_may_try(Startup, true));
     }
 
+    fn shown(page: Page) -> ShownPanel {
+        ShownPanel {
+            page,
+            cleaner: None,
+            mole: crate::state::MolePhase::Unknown,
+            cli_tall: false,
+            cli_menu: false,
+            notes_page: 0,
+            reminders_page: 0,
+            day_page: 0,
+            strip: None,
+        }
+    }
+
+    #[test]
+    fn a_visible_panel_closing_hands_its_snapshot_to_the_fade() {
+        let snapshot = shown(Page::Notes);
+        assert_eq!(
+            leaving_snapshot(Some(Page::Notes), true, Some(snapshot.clone())),
+            Some(snapshot.clone())
+        );
+        // Not the page that was drawn: no fade-out of the wrong content.
+        assert_eq!(
+            leaving_snapshot(Some(Page::Media), true, Some(snapshot)),
+            None
+        );
+        assert_eq!(leaving_snapshot(Some(Page::Notes), true, None), None);
+    }
+
+    fn morph_to(is_panel: bool, hiding: bool, compact_swap: bool) -> MorphTo {
+        MorphTo {
+            is_panel,
+            hiding,
+            compact_swap,
+        }
+    }
+
+    #[test]
+    fn a_fullscreen_hide_then_an_idle_return_fades_no_panel() {
+        let notes = Some(Page::Notes);
+        // The Notes panel shows: nothing is kept.
+        let closed = closed_panel_after(&View::Panel(Page::Notes), None, None);
+        assert_eq!(closed, None);
+        // Fullscreen(true): the view is Hidden, and the event keeps the
+        // panel as it showed (`follow_closed_panel`).
+        let closed = closed_panel_after(&View::Hidden, Some(shown(Page::Notes)), closed);
+        assert_eq!(closed, Some(shown(Page::Notes)));
+        // `refresh` retargets to Hidden (`drawn` still says Panel, the
+        // panel was visible): both are cleared.
+        let (leaving, closed) =
+            leaving_on_morph(morph_to(false, true, false), notes, true, None, closed);
+        assert_eq!((&leaving, &closed), (&None, &None));
+        // The game ends: the event that brings Idle back had no panel
+        // before it, so nothing is stored again.
+        let closed = closed_panel_after(&View::Idle, None, closed);
+        assert_eq!(closed, None);
+        // `refresh` to Idle: `drawn` still says Panel, so it is a compact
+        // swap from a panel, but the island was hidden: no fade.
+        let from_visible = false;
+        let (leaving, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            from_visible,
+            leaving,
+            closed,
+        );
+        assert_eq!((leaving, closed), (None, None));
+        // Even a snapshot that survived is not handed over from hidden.
+        let (leaving, _) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            from_visible,
+            None,
+            Some(shown(Page::Notes)),
+        );
+        assert_eq!(leaving, None);
+    }
+
+    #[test]
+    fn the_leaving_snapshot_follows_the_morph() {
+        let notes = Some(Page::Notes);
+        let snapshot = Some(shown(Page::Notes));
+        // A visible panel closing into a compact view: the snapshot fades.
+        let (leaving, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            true,
+            None,
+            snapshot.clone(),
+        );
+        assert_eq!((&leaving, &closed), (&snapshot, &None));
+        // Retargeted mid-close (no panel drawn now): the fade goes on.
+        let (kept, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            None,
+            true,
+            leaving.clone(),
+            closed,
+        );
+        assert_eq!((&kept, &closed), (&snapshot, &None));
+        let (kept, _) = leaving_on_morph(morph_to(false, false, false), None, true, leaving, None);
+        assert_eq!(kept, snapshot);
+        // Reopened mid-close: the panel shows itself, nothing leaves.
+        let (leaving, closed) =
+            leaving_on_morph(morph_to(true, false, false), None, true, kept, snapshot);
+        assert_eq!((leaving, closed), (None, None));
+    }
+
+    #[test]
+    fn the_closing_panel_is_sized_as_it_showed() {
+        let tall = ShownPanel {
+            cli_tall: true,
+            ..shown(Page::Cli)
+        };
+        assert_eq!(
+            panel_rest_h(Style::Notch, &tall),
+            shape_for(Style::Notch, ShapeKind::PanelTall).h
+        );
+        assert_eq!(
+            panel_rest_h(Style::Notch, &shown(Page::Notes)),
+            shape_for(Style::Notch, ShapeKind::Panel).h
+        );
+    }
+
     #[test]
     fn session_lock_query_runs() {
         // Desktop or CI service session: whatever it answers, reading and
@@ -5794,7 +6253,23 @@ mod tests {
             start,
             ms: ANIM_MS,
             running: true,
+            plain: false,
+            fade_from: None,
         }
+    }
+
+    #[test]
+    fn a_fade_cut_short_reports_where_it_is() {
+        let t0 = Instant::now();
+        let mut anim = morph(t0);
+        assert_eq!(anim.fading(t0), None, "no fade, nothing to carry on");
+        anim.fade_from = Some(0.0);
+        let mid = t0 + Duration::from_millis(ANIM_MS * 3 / 4);
+        let a = anim.fading(mid).expect("still fading");
+        assert!(a > 0.0 && a < 1.0);
+        assert_eq!(anim.fading(t0 + Duration::from_millis(ANIM_MS)), None);
+        anim.running = false;
+        assert_eq!(anim.fading(mid), None);
     }
 
     #[test]
@@ -5966,7 +6441,11 @@ mod tests {
         assert_eq!(at(&morph(t0), ANIM_MS), 1.0);
         // The same eased overshoot, only quicker.
         let (mid, _) = resize.frame(half);
-        let eased = lerp_shape(resize.from, resize.to, ease_out_back(resize.progress(half)));
+        let eased = lerp_shape(
+            resize.from,
+            resize.to,
+            crate::ui::geometry::ease_out_back(resize.progress(half)),
+        );
         assert_eq!(mid, eased);
         assert_eq!(
             resize.frame(t0 + Duration::from_millis(LYRIC_RESIZE_MS)).0,
@@ -6541,8 +7020,7 @@ mod tests {
         let t0 = Instant::now();
         let ms = |n| t0 + Duration::from_millis(n);
         let right = Slide {
-            from: 1.0,
-            from_page: Page::Calendar,
+            strip: SlideStrip::next(None, 0.0, Page::Calendar, 1.0),
             start: t0,
         };
         assert_eq!(right.offset(t0), 1.0);
@@ -6553,12 +7031,109 @@ mod tests {
         assert_eq!(right.offset(ms(220)), 0.0);
         assert_eq!(right.offset(ms(500)), 0.0);
         let left = Slide {
-            from: -1.0,
-            from_page: Page::Pomodoro,
+            strip: SlideStrip::next(None, 0.0, Page::Pomodoro, -1.0),
             start: t0,
         };
         assert_eq!(left.offset(t0), -1.0);
         assert!(left.offset(ms(110)) < 0.0);
+    }
+
+    #[test]
+    fn the_last_page_fade_frame_registers_regions() {
+        let t0 = Instant::now();
+        let fade = PageFade {
+            from_page: Page::Calendar,
+            start: t0,
+        };
+        let at = |ms: u64| page_fade_frame(fade.progress(t0 + Duration::from_millis(ms)));
+        assert!(at(PAGE_FADE_MS / 2).is_some());
+        // The frame drawn when `animate` sees the fade done is a settled one:
+        // the renderer gets no fade and registers the page's regions.
+        assert_eq!(at(PAGE_FADE_MS), None);
+        assert!(crate::ui::motion::panel_regions_wanted(
+            true,
+            false,
+            0.0,
+            at(PAGE_FADE_MS)
+        ));
+        assert!(!crate::ui::motion::panel_regions_wanted(
+            true,
+            false,
+            0.0,
+            at(PAGE_FADE_MS / 2)
+        ));
+    }
+
+    #[test]
+    fn a_slide_started_mid_slide_keeps_the_pages_where_they_are() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // Calendar to Media; a fast spin turns again 20 ms in, while the
+        // Calendar still covers most of the panel.
+        let first = Slide {
+            strip: SlideStrip::next(None, 0.0, Page::Calendar, 1.0),
+            start: t0,
+        };
+        let offset = first.offset(ms(20));
+        assert!(offset > 0.5 && offset < 1.0, "{offset}");
+        // Where each page is drawn at `now`: the page coming in at the
+        // offset, the pages going out from the strip.
+        let drawn = |slide: &Slide, coming: Page, now: Instant| {
+            let at = slide.offset(now);
+            let mut pages: Vec<(Page, f32)> =
+                slide.strip.visible(at).into_iter().flatten().collect();
+            if at.abs() < 1.0 {
+                pages.push((coming, at));
+            }
+            pages
+        };
+        let before = drawn(&first, Page::Media, ms(20));
+        assert_eq!(before.len(), 2);
+        for (dir, coming) in [(1.0, Page::Notes), (-1.0, Page::Calendar)] {
+            let next = Slide {
+                strip: SlideStrip::next(Some(&first.strip), offset, Page::Media, dir),
+                start: ms(20),
+            };
+            // Every page on screen at the old slide's last frame is drawn at
+            // the same place at the new slide's first.
+            let after = drawn(&next, coming, ms(20));
+            for (page, x) in &before {
+                assert!(
+                    after
+                        .iter()
+                        .any(|(p, at)| p == page && (at - x).abs() < 1e-5),
+                    "dir {dir}: {page:?} at {x} is gone or moved: {after:?}"
+                );
+            }
+            // And it ends at rest like any slide.
+            assert_eq!(next.offset(ms(20 + SLIDE_MS as u64)), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_morph_without_windows_animations_never_overshoots() {
+        let t0 = Instant::now();
+        let plain = Anim {
+            plain: true,
+            ..morph(t0)
+        };
+        let target = plain.to;
+        for ms in (0..=ANIM_MS).step_by(8) {
+            let (shape, _) = plain.frame(t0 + Duration::from_millis(ms));
+            assert!(
+                shape.w <= target.w + 1e-3 && shape.h <= target.h + 1e-3,
+                "{ms} ms"
+            );
+        }
+        let overshoots = (0..=ANIM_MS).step_by(8).any(|ms| {
+            let (shape, _) = morph(t0).frame(t0 + Duration::from_millis(ms));
+            shape.h > target.h + 1e-3
+        });
+        assert!(
+            overshoots,
+            "with animations on, the spring still overshoots"
+        );
+        assert_eq!(plain.frame(t0 + Duration::from_millis(ANIM_MS)).0, target);
     }
 
     fn temp_notes(name: &str) -> (PathBuf, NotesStore) {

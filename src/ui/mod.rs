@@ -11,6 +11,7 @@ pub mod frame_clock;
 pub mod geometry;
 pub mod icons;
 pub mod month_grid;
+pub mod motion;
 pub mod panel_layout;
 pub mod render;
 pub mod robot;
