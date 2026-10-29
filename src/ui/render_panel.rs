@@ -68,8 +68,6 @@ use crate::ui::panel_layout::{
 };
 use crate::ui::robot::{Expr, Pose};
 
-/// Height of the compact shapes the panel grows from.
-const COMPACT_H: f32 = 34.0;
 /// A heading's line (DM Sans 600 20, 26 px) is taller than the 22 px header
 /// row: its box grows by this much above and below so the line, descenders
 /// included, is not clipped.
@@ -369,7 +367,7 @@ impl Renderer {
         let fade = if settled {
             1.0
         } else {
-            panel_fade(shape.h, rest.h, COMPACT_H)
+            panel_fade(shape.h, rest.h, frame.transit.fade_floor_h)
         };
         if fade <= 0.0 {
             return Ok(());
@@ -384,7 +382,9 @@ impl Renderer {
     }
 
     /// The panel that is closing, drawn inside the shape that shrinks around
-    /// it, fading with the shape's height. It takes no clicks and slides or
+    /// it, fading with the shape's height down to the height of the view it
+    /// shrinks into (`Transit::fade_floor_h`), so it is gone exactly when the
+    /// morph ends. It takes no clicks and slides or
     /// reveals nothing.
     pub(super) fn paint_leaving_panel(
         &mut self,
@@ -398,7 +398,7 @@ impl Renderer {
             style,
             panel_kind(page, frame.cli.tall, frame.cleaner.is_some()),
         );
-        let fade = panel_fade(shape.h, rest.h, COMPACT_H);
+        let fade = panel_fade(shape.h, rest.h, frame.transit.fade_floor_h);
         if fade <= 0.0 {
             return Ok(());
         }

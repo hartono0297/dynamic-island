@@ -64,8 +64,8 @@ outside into `Dismiss`). It stops when the linger ends.
 | Idle, MediaCompact, MediaLyric, PomodoroCompact | content drawn at full alpha at once inside the morphing shape | when it replaces another view and the shape morphs, content fades in with the morph (`content_alpha`, 0 to 1 from 30 % to 100 % of the morph); a swap with no shape change (no morph) stays instant; the lyric notch's width-only resize is excluded (`resize`). Bata is never in the faded layer (`Renderer::robot_later`: drawn at full alpha after it), so he does not blink out, nor does a notice's alert bounce. A morph retargeted mid-fade carries on from the alpha it reached (`Anim::fade_from`, `motion::content_alpha_from`) |
 | Notices (including the screenshot preview) | same | same fade in with the morph |
 | The strip (sticky notice in the panel) | pops with the page | unchanged: part of the page's content, fades with the panel |
-| Panel opens | content faded in with the height | same, now via `motion::panel_fade` (shared) |
-| Panel closes | content gone on the first frame (the drawn view became the compact one) | the panel's content stays and fades out with the shape's height, the compact view fades in (`Transit::leaving`, `paint_leaving_panel`); no clicks while it closes. It draws what it showed (`ShownPanel`, below), not what the close reset |
+| Panel opens | content faded in with the height | same, now via `motion::panel_fade` (shared), from the height of the view it grows from (a Notice's 76 px, not 34) |
+| Panel closes | content gone on the first frame (the drawn view became the compact one) | the panel's content stays and fades out with the shape's height down to the target view's height (compact, Notice, NoticeShot), the new view fades in (`Transit::leaving`, `paint_leaving_panel`); no clicks while it closes. It draws what it showed (`ShownPanel`, below), not what the close reset |
 | Page change by the wheel | slides | slides |
 | Other page changes (Clipboard tile, page tiles, a disk warning's "Buka", the Mole notice, hotkeys over an open panel, a page switched off while it shows) | `follow_page` already ran after every applied event, but only looked at the view afterwards: a change at the same moment as the panel opening slid from nothing, a change under a notice slid unseen | `follow_transition` compares the panel before and after the event (`motion::transition`): slide only when it showed both before and after |
 | A slide that starts during a slide | restarted from +-1: the page on screen jumped | continues the same strip (`SlideStrip`): every page on screen keeps its place, either way |
@@ -119,6 +119,24 @@ outside into `Dismiss`). It stops when the linger ends.
   page indices, CLI size and menu, cleaner and Mole stage), and
   `paint_leaving_panel` sizes it with the same `panel_kind`. Without a
   snapshot for that page there is no fade-out, never a reset page.
+- **Gotcha, the fade floor is the morph's target, not 34 px:** a panel can
+  close into a Notice (76 px) or a NoticeShot (`SHOT_H`, 156 px). With a fixed
+  34 px floor the old content was still at about 23 % (Notice) or 68 %
+  (NoticeShot) when the morph ended and popped away. `motion::panel_fade(h,
+  rest_h, floor_h)` is now zero exactly at `floor_h`, and `motion::fade_floor`
+  picks it when `refresh` retargets: the target's height when the panel closes
+  into a view (`App::fade_floor_h`, handed to the renderer in
+  `Transit::fade_floor_h`), the height of the visible view it grows from when
+  it opens, the floor it already had when a panel resizes. Tests in
+  `motion.rs` pin 1 at the panel's height, a monotonic fall and 0 at 34, 76
+  and `SHOT_H`.
+- **Gotcha, Fullscreen clears the leaving snapshot:** `Fullscreen(true)` takes
+  the panel off screen (view Hidden) while `drawn` still says Panel, so the
+  snapshot `closed_panel` kept would become `leaving` when the game ends and
+  the island returns as Idle, and old panel content showed faintly. `refresh`
+  now clears `leaving` and `closed_panel` on a Hidden retarget, and
+  `leaving_snapshot` hands one over only when the morph starts from a view
+  that was visible (`anim.to_opacity == 1.0`), never from a hidden one.
 - The CLI folder menu's reveal uses `layer2` too, so it is skipped (the menu
   shows at once) while a page cross-fade is running: D2D cannot push one
   layer twice, and `EndDraw` would fail.
@@ -145,7 +163,8 @@ Nothing new at idle and no new repeating timer. `reveal`, `page_fade`,
 `FrameClock` starts when a transition begins (`ensure_clock`) and stops when
 `animating_at` turns false. Only the linger's `TIMER_OUTSIDE` poll (above) and
 one deadline on `TIMER_DEADLINE` are added, both only for the 4 s after an
-action. See [[bata-idle-power-budget]].
+action. The fade floor adds no timer and no frame. See [[bata-idle-power-budget]]
+and [[panel-pages]].
 
 **Not verified live:** the drawing (layers, the closing panel's fade, the
 folder menu's reveal) was run in `--demo` only to check that nothing errors;

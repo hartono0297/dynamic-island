@@ -67,15 +67,49 @@ pub fn content_alpha_from(from: f32, progress: f32) -> f32 {
     from + (1.0 - from) * content_alpha(progress)
 }
 
+/// The height of the compact shapes: where a panel's content is invisible
+/// unless the morph says otherwise (`fade_floor`).
+pub const COMPACT_H: f32 = 34.0;
+
 /// How visible a panel's content is while its shape is `h` tall on its way
-/// between `compact_h` and `rest_h`: fully there by 70 % of the height, the
-/// same on the way up and on the way down.
-pub fn panel_fade(h: f32, rest_h: f32, compact_h: f32) -> f32 {
-    let span = rest_h - compact_h;
+/// between `floor_h` (the height of the view it grows from or shrinks into:
+/// compact, a notice, a screenshot notice) and `rest_h`: invisible at
+/// `floor_h`, fully there by 70 % of the way up, the same on the way up and
+/// on the way down. So the closing panel reaches 0 exactly when its morph
+/// ends, whatever it shrinks into.
+pub fn panel_fade(h: f32, rest_h: f32, floor_h: f32) -> f32 {
+    let span = rest_h - floor_h;
     if span <= 0.0 {
         return 1.0;
     }
-    ((h - compact_h) / span / 0.7).clamp(0.0, 1.0)
+    ((h - floor_h) / span / 0.7).clamp(0.0, 1.0)
+}
+
+/// The height at which the panel's content is invisible during a morph that
+/// starts at `shape_h` (a retarget) and heads for `to_h`.
+///
+/// - Not heading for a panel (it closes into a compact view, a notice or a
+///   screenshot notice): the target's height, so the fade ends with the morph.
+/// - Opening or resizing a panel: the floor it already had while the panel
+///   was on screen (`carried`), else the height of the visible view it grows
+///   from, else the compact height (it comes from nothing).
+pub fn fade_floor(
+    to_panel: bool,
+    to_h: f32,
+    from_panel: bool,
+    carried: f32,
+    from_visible: bool,
+    shape_h: f32,
+) -> f32 {
+    if !to_panel {
+        to_h
+    } else if from_panel {
+        carried
+    } else if from_visible {
+        shape_h.max(COMPACT_H)
+    } else {
+        COMPACT_H
+    }
 }
 
 /// The most pages a slide keeps on their way out.
@@ -277,6 +311,9 @@ pub struct Transit {
     /// The panel closing: the page it showed, its content fading out with
     /// the shape's height (`panel_fade`) while the shape shrinks.
     pub leaving: Option<Page>,
+    /// The height at which a panel's content is invisible during this morph
+    /// (`fade_floor`): the closing panel fades to the target's height.
+    pub fade_floor_h: f32,
 }
 
 impl Default for Transit {
@@ -286,6 +323,7 @@ impl Default for Transit {
             page_fade: None,
             content_alpha: 1.0,
             leaving: None,
+            fade_floor_h: COMPACT_H,
         }
     }
 }
@@ -752,6 +790,47 @@ mod tests {
         );
         let mid = panel_fade(100.0, rest, compact);
         assert!(mid > 0.0 && mid < 1.0);
+    }
+
+    #[test]
+    fn the_closing_fade_reaches_zero_at_the_morphs_target() {
+        use crate::ui::geometry::SHOT_H;
+        let rest = 290.0;
+        // Compact (34), Notice (76) and NoticeShot (SHOT_H): whatever the
+        // panel shrinks into, it is fully there at its own height, falls
+        // all the way and is gone exactly where the morph ends.
+        for target in [COMPACT_H, 76.0, SHOT_H] {
+            assert_eq!(panel_fade(rest, rest, target), 1.0, "{target}");
+            assert_eq!(panel_fade(target, rest, target), 0.0, "{target}");
+            let mut last = 1.0;
+            for i in 0..=100 {
+                let h = rest + (target - rest) * i as f32 / 100.0;
+                let a = panel_fade(h, rest, target);
+                assert!(a <= last, "{target}: {a} after {last}");
+                last = a;
+            }
+            assert_eq!(last, 0.0, "{target}");
+            // Overshooting the target stays at 0.
+            assert_eq!(panel_fade(target - 3.0, rest, target), 0.0, "{target}");
+        }
+        // The old fixed floor left the Notice's morph at about 23 %.
+        assert!(panel_fade(76.0, rest, COMPACT_H) > 0.2);
+    }
+
+    #[test]
+    fn the_fade_floor_follows_the_morphs_target() {
+        use crate::ui::geometry::SHOT_H;
+        // Closing into a view: its height.
+        assert_eq!(fade_floor(false, 76.0, true, 34.0, true, 200.0), 76.0);
+        assert_eq!(fade_floor(false, SHOT_H, true, 34.0, true, 200.0), SHOT_H);
+        assert_eq!(fade_floor(false, 34.0, true, 76.0, true, 200.0), 34.0);
+        // A panel resizing keeps the floor it opened with.
+        assert_eq!(fade_floor(true, 440.0, true, 76.0, true, 290.0), 76.0);
+        // Opening from a notice starts its content at 0 from there.
+        assert_eq!(fade_floor(true, 290.0, false, 34.0, true, 76.0), 76.0);
+        // From a compact view or from nothing: the compact height.
+        assert_eq!(fade_floor(true, 290.0, false, 34.0, true, 34.0), COMPACT_H);
+        assert_eq!(fade_floor(true, 290.0, false, 76.0, false, 90.0), COMPACT_H);
     }
 
     #[test]

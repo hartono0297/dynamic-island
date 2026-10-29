@@ -62,7 +62,8 @@ use super::geometry::{
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
 use super::motion::{
-    PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame, reveal_frame,
+    COMPACT_H, PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame,
+    reveal_frame,
 };
 use super::render::{
     CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
@@ -1240,6 +1241,14 @@ fn run_scenes(scenes: &[Scene]) {
                         leaving: match prev.view {
                             View0::Panel(page) if compact && morphing => Some(page),
                             _ => None,
+                        },
+                        // Into a view: its height; from one: the view's.
+                        fade_floor_h: if compact {
+                            to.h
+                        } else if matches!(prev.view, View0::Panel(_)) {
+                            COMPACT_H
+                        } else {
+                            from.h.max(COMPACT_H)
                         },
                     }
                 },

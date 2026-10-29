@@ -100,8 +100,8 @@ use crate::ui::geometry::{
     lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
 use crate::ui::motion::{
-    PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition, content_alpha_from,
-    mole_code, morph_ease, page_fade_frame, transition,
+    COMPACT_H, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
+    content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -343,6 +343,7 @@ pub fn run(media_log_flag: bool) {
             reveal: None,
             leaving: None,
             closed_panel: None,
+            fade_floor_h: COMPACT_H,
             animations: client_animations_on(),
             clock: None,
             frame_log: FrameLog::from_env(),
@@ -556,6 +557,10 @@ struct App {
     /// (its close resets the cleaner, the CLI's size, the page indices);
     /// `leaving` takes it when the closing morph starts.
     closed_panel: Option<ShownPanel>,
+    /// The height at which the panel's content is invisible during the
+    /// current morph (`motion::fade_floor`): the target's height while the
+    /// panel closes, so its fade ends with the morph.
+    fade_floor_h: f32,
     /// Windows' "Animation effects" (`SPI_GETCLIENTAREAANIMATION`) is on.
     /// Off: no slides, no reveals, and the morph eases without overshoot.
     animations: bool,
@@ -2815,11 +2820,15 @@ impl App {
         } else {
             fading
         };
-        if view != View::Hidden {
+        let hiding = view == View::Hidden;
+        if !hiding {
             self.drawn = view;
         }
         if retarget {
             let (shape, opacity) = self.anim.frame(now);
+            // Drawn on screen before this morph (not hidden, not heading
+            // for it): only then does a closing panel have content to fade.
+            let from_visible = self.anim.to_opacity == 1.0;
             // Hidden keeps the shape where it is and only fades it out.
             let (to, to_opacity) = target.map_or((shape, 0.0), |s| (s, 1.0));
             self.anim = Anim {
@@ -2833,16 +2842,28 @@ impl App {
                 plain: !self.animations,
                 fade_from,
             };
+            if !hiding {
+                self.fade_floor_h = fade_floor(
+                    is_panel,
+                    to.h,
+                    was_panel.is_some(),
+                    self.fade_floor_h,
+                    from_visible,
+                    shape.h,
+                );
+            }
             if is_panel {
+                self.leaving = None;
+                self.closed_panel = None;
+            } else if hiding {
+                // Off screen (a fullscreen app): nothing of the panel is
+                // left to fade out when the island comes back.
                 self.leaving = None;
                 self.closed_panel = None;
             } else if compact_swap && was_panel.is_some() {
                 // As it showed before its close reset it; without that, no
                 // fade-out rather than content that is not what was there.
-                self.leaving = self
-                    .closed_panel
-                    .take()
-                    .filter(|shown| Some(shown.page) == was_panel);
+                self.leaving = leaving_snapshot(was_panel, from_visible, self.closed_panel.take());
             }
             // The enlarged panel needs the taller canvas before it grows.
             self.sync_window_height(now);
@@ -4248,6 +4269,7 @@ impl App {
                 1.0
             },
             leaving: leaving.map(|shown| shown.page),
+            fade_floor_h: self.fade_floor_h,
         };
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
@@ -5661,6 +5683,22 @@ fn is_color_set_change(lparam: LPARAM) -> bool {
 
 /// Windows' "Animation effects" (Settings, Accessibility, Visual effects;
 /// `SPI_GETCLIENTAREAANIMATION`). On when it cannot be read.
+/// The panel that fades out while the island morphs into a compact view or
+/// notice: what `closed_panel` kept, only if that panel was on screen when
+/// the morph started (`from_visible`) and is the page that was drawn. A
+/// panel that went off screen with a fullscreen app has nothing to fade when
+/// the island comes back.
+fn leaving_snapshot(
+    was_panel: Option<Page>,
+    from_visible: bool,
+    closed: Option<ShownPanel>,
+) -> Option<ShownPanel> {
+    if !from_visible {
+        return None;
+    }
+    closed.filter(|shown| Some(shown.page) == was_panel)
+}
+
 fn client_animations_on() -> bool {
     // A BOOL: four bytes.
     let mut on: i32 = 1;
@@ -5960,6 +5998,52 @@ mod tests {
         assert!(!greet_may_try(Wake { by_user: false }, true));
         assert!(greet_may_try(Startup, false));
         assert!(!greet_may_try(Startup, true));
+    }
+
+    fn shown(page: Page) -> ShownPanel {
+        ShownPanel {
+            page,
+            cleaner: None,
+            mole: crate::state::MolePhase::Unknown,
+            cli_tall: false,
+            cli_menu: false,
+            notes_page: 0,
+            reminders_page: 0,
+            day_page: 0,
+            strip: None,
+        }
+    }
+
+    #[test]
+    fn a_visible_panel_closing_hands_its_snapshot_to_the_fade() {
+        let snapshot = shown(Page::Notes);
+        assert_eq!(
+            leaving_snapshot(Some(Page::Notes), true, Some(snapshot.clone())),
+            Some(snapshot.clone())
+        );
+        // Not the page that was drawn: no fade-out of the wrong content.
+        assert_eq!(
+            leaving_snapshot(Some(Page::Media), true, Some(snapshot)),
+            None
+        );
+        assert_eq!(leaving_snapshot(Some(Page::Notes), true, None), None);
+    }
+
+    #[test]
+    fn a_fullscreen_hide_then_an_idle_return_fades_no_panel() {
+        let shape = shape_for(Style::Notch, ShapeKind::Panel);
+        // The panel was on screen, then Fullscreen hid it (retarget to
+        // Hidden: opacity 0) and the game ended (retarget to Idle). The
+        // snapshot is gone and the morph did not start from a visible view.
+        let mut anim = Anim::settled(shape, 1.0);
+        assert_eq!(anim.to_opacity, 1.0);
+        anim.to_opacity = 0.0;
+        let from_visible = anim.to_opacity == 1.0;
+        assert!(!from_visible);
+        assert_eq!(
+            leaving_snapshot(Some(Page::Notes), from_visible, Some(shown(Page::Notes))),
+            None
+        );
     }
 
     #[test]
