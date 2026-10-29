@@ -72,6 +72,7 @@ use crate::notes::Note;
 use crate::pomodoro::{PomoStatus, Pomodoro};
 use crate::reminders::Reminder;
 use crate::search::SearchResult;
+use crate::search_details::Detail;
 use crate::state::MolePhase;
 use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
@@ -451,6 +452,11 @@ pub struct SearchView<'a> {
     pub results: &'a [SearchResult],
     /// The highlighted row (Enter runs it).
     pub selected: usize,
+    /// What the details worker found for the rows (icons, counts, sizes), by
+    /// path. A row without an entry shows its glyph.
+    pub details: &'a std::collections::HashMap<std::path::PathBuf, Detail>,
+    /// The first walk of the user's folders is still running.
+    pub indexing: bool,
 }
 
 /// What the Clipboard page shows.
@@ -539,6 +545,9 @@ pub struct Renderer {
     /// Clipboard thumbnails as bitmaps of the current target, by entry id;
     /// entries no longer drawn are dropped each frame.
     clip_thumbs: std::cell::RefCell<Vec<(u64, ID2D1Bitmap)>>,
+    /// The quick search's shell icons as bitmaps of the current target, by
+    /// path; paths no longer shown are dropped each frame.
+    search_icons: std::cell::RefCell<Vec<(std::path::PathBuf, ID2D1Bitmap)>>,
     /// The screenshot preview's thumbnail as a bitmap, by screenshot id.
     shot_thumb: std::cell::RefCell<Option<(u64, ID2D1Bitmap)>>,
 }
@@ -761,6 +770,7 @@ impl Renderer {
                 clip_caret: std::cell::Cell::new(None),
                 search_caret: std::cell::Cell::new(None),
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
+                search_icons: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
             })
         }
@@ -792,6 +802,7 @@ impl Renderer {
             self.target = None;
             self.art.clear();
             self.clip_thumbs.borrow_mut().clear();
+            self.search_icons.borrow_mut().clear();
             self.shot_thumb.borrow_mut().take();
             self.regions = HitRegions::default();
             self.paint(style, shape, frame, opacity)?;
