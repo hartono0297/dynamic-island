@@ -120,7 +120,8 @@ fn floor_for_alpha(h: f32, rest_h: f32, alpha: f32) -> f32 {
 ///   and the target's height would make it jump up, the floor that keeps
 ///   its alpha instead: higher than the target, so it still reaches 0 by
 ///   the end. A target that needs a higher floor drops the alpha; it must.
-/// - A panel resizing: the floor it already had (`carried`).
+/// - A panel resizing: the floor that keeps its alpha (1 when settled),
+///   `carried` whenever that does, so its content never dims on the way.
 /// - Opening a panel from a settled view: the height of the visible view it
 ///   grows from, else the compact height (it comes from nothing).
 /// - Reopening while the closing content still fades out (the pointer left
@@ -137,7 +138,14 @@ pub fn fade_floor(to_panel: bool, to_h: f32, rest_h: f32, start: FadeStart) -> f
         };
     }
     if start.from_panel {
-        return start.carried;
+        // A settled panel is fully there (`alpha` is None): keep 1, else keep
+        // the alpha it was opening at.
+        let alpha = start.alpha.unwrap_or(1.0);
+        return if (panel_fade(h, rest_h, start.carried) - alpha).abs() <= 1e-3 {
+            start.carried
+        } else {
+            floor_for_alpha(h, rest_h, alpha)
+        };
     }
     let settled = if start.from_visible {
         h.max(COMPACT_H)
@@ -887,9 +895,9 @@ mod tests {
         };
         assert_eq!(fade_floor(false, 76.0, rest, full), 76.0);
         assert_eq!(fade_floor(false, 34.0, rest, full), 34.0);
-        // A panel resizing keeps the floor it opened with.
+        // A panel shrinking that stays fully there keeps the floor it had.
         assert_eq!(
-            fade_floor(true, 440.0, 440.0, settled(290.0, true, 76.0, true)),
+            fade_floor(true, rest, rest, settled(440.0, true, 76.0, true)),
             76.0
         );
         // Opening from a notice starts its content at 0 from there.
@@ -906,6 +914,28 @@ mod tests {
             fade_floor(true, rest, rest, settled(90.0, false, 76.0, false)),
             COMPACT_H
         );
+    }
+
+    #[test]
+    fn a_settled_panel_growing_stays_fully_there() {
+        use crate::ui::geometry::SHOT_H;
+        // CLI going tall (290 -> 440) from a panel opened out of a Notice or
+        // a NoticeShot: no dip at the start, none on the way.
+        for carried in [COMPACT_H, 76.0, SHOT_H] {
+            let floor = fade_floor(true, 440.0, 440.0, settled(290.0, true, carried, true));
+            for h in [290.0, 320.0, 352.0, 400.0, 440.0] {
+                assert_eq!(panel_fade(h, 440.0, floor), 1.0, "{carried} at {h}");
+            }
+        }
+        // A panel still opening when it resizes keeps the alpha it had.
+        let alpha = panel_fade(200.0, 290.0, 76.0);
+        let start = FadeStart {
+            alpha: Some(alpha),
+            ..settled(200.0, true, 76.0, true)
+        };
+        let floor = fade_floor(true, 440.0, 440.0, start);
+        assert!((panel_fade(200.0, 440.0, floor) - alpha).abs() < 1e-3);
+        assert_eq!(panel_fade(440.0, 440.0, floor), 1.0);
     }
 
     /// A morph retargeted while a panel closing into `floor` is at `h`: the
