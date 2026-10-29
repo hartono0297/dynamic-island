@@ -4,9 +4,9 @@ export const meta = {
   whenToUse: 'Every code change. args: a request string, or {request, defer: true} to build now and verify heavy tasks later, or {verify: [...]} for the deferred review/check pass',
   phases: [
     { title: 'Plan', detail: 'split into tasks, mark each light or heavy, write a checklist for heavy ones', model: 'opus' },
-    { title: 'Build', detail: 'one builder per task, in its own worktree', model: 'opus' },
+    { title: 'Build', detail: 'one builder per task, in its own worktree', model: 'sonnet' },
     { title: 'Review', detail: 'heavy only: blind review of a pinned commit, fixes land in the builder worktree', model: 'opus' },
-    { title: 'Check', detail: 'heavy only: tests + the written checklist', model: 'sonnet' },
+    { title: 'Check', detail: 'heavy only: tests + the written checklist', model: 'opus' },
     { title: 'Ship', detail: 'merge passing tasks into local main, test once; no push', model: 'sonnet' },
   ],
 }
@@ -221,7 +221,7 @@ if (input.verify) {
     async r => {
       if (r.state !== 'reviewed' || r.verdict !== 'SHIP') return { ...r, check: { passed: false, skipped: true, items: [], notes: 'not checked: review did not end in SHIP' } }
       const where = r.worktree ? `Work in the worktree ${r.worktree} (cd there).` : `Check out ${r.sha} detached in your own worktree.`
-      const c = await safe(`check:${r.id}`, checkPrompt(where, r.sha, r.task), { phase: 'Check', isolation: r.worktree ? undefined : 'worktree', model: SONNET, schema: CHECK })
+      const c = await safe(`check:${r.id}`, checkPrompt(where, r.sha, r.task), { phase: 'Check', isolation: r.worktree ? undefined : 'worktree', model: OPUS, schema: CHECK })
       return { ...r, check: checkResult(c) }
     }
   )
@@ -269,7 +269,7 @@ const results = await pipeline(
     const b = await safe(
       `build:${task.id}`,
       `Build this task. FIRST: your worktree may start from an older commit (the last pushed origin/main), not from the local main that holds all finished work. Before anything else run git log -1 --format=%H main and create your branch from that commit: git checkout -b "task/${task.id}" main. Verify with git merge-base --is-ancestor main HEAD. Then work and commit on that branch. Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Run the relevant tests (cargo test --locked) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
-      { phase: 'Build', isolation: 'worktree', model: OPUS, schema: BUILD }
+      { phase: 'Build', isolation: 'worktree', model: SONNET, schema: BUILD }
     )
     return b ? { ...b, id: task.id, weight: task.weight, state: 'built' } : { id: task.id, weight: task.weight, state: 'build-failed' }
   },
@@ -302,7 +302,7 @@ const results = await pipeline(
     if (r.state !== 'built') return r
     if (r.verdict === 'SKIPPED' || r.verdict === 'DEFERRED') return { ...r, check: { passed: true, skipped: true, items: [], notes: r.verdict === 'SKIPPED' ? 'light task: the builder ran the tests and Ship tests main' : 'deferred to the verify pass' } }
     if (r.verdict !== 'SHIP') return { ...r, check: { passed: false, skipped: true, items: [], notes: 'not checked: review did not end in SHIP' } }
-    const c = await safe(`check:${task.id}`, checkPrompt(`Work in the builder's worktree ${r.worktree} (cd there); branch "${r.branch}".`, r.sha, task), { phase: 'Check', model: SONNET, schema: CHECK })
+    const c = await safe(`check:${task.id}`, checkPrompt(`Work in the builder's worktree ${r.worktree} (cd there); branch "${r.branch}".`, r.sha, task), { phase: 'Check', model: OPUS, schema: CHECK })
     return { ...r, check: checkResult(c) }
   }
 )

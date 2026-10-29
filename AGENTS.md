@@ -1,13 +1,6 @@
 # Agent rules
 
-> **Temporarily disabled (2026-10-28).** The `build` workflow is switched off for
-> this project: make code changes directly in the main session, without
-> multi-agent orchestration. The workflow file was moved to
-> `.claude/workflows-disabled/build.js`. To switch it back on, move it to
-> `.claude/workflows/build.js` and delete this note; the section below then
-> applies again.
-
-## Models per phase (applies now, with or without the workflow)
+## Models per phase (set in `.claude/workflows/build.js`)
 
 | Phase | Model |
 |---|---|
@@ -22,7 +15,7 @@
 - If a model cannot be selected (for example `model_not_found`), say so and
   ask before falling back to another model.
 
-## Every code change goes through the `build` workflow (disabled, see above)
+## Every code change goes through the `build` workflow (re-enabled 2026-10-29)
 
 I opt in to multi-agent orchestration for this project. Whenever I ask for a code
 change (new feature, bug fix, refactor), run the `build` workflow
