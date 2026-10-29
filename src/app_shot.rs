@@ -241,6 +241,7 @@ fn show_step(fullscreen: bool, tries: u8) -> ShowStep {
 /// A change in Settings → Clipboard → Screenshot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShotSetting {
+    Tool(crate::config::ShotTool),
     Preview(bool),
     OnIgnore(ShotIgnore),
     Secs(u32),
@@ -259,6 +260,11 @@ impl App {
         sequence: u32,
     ) -> bool {
         if !self.config.screenshot.preview {
+            return false;
+        }
+        // The editor's own Copy (Vale's screenshot editor): that one image
+        // is no new screenshot, whatever formats it carries.
+        if crate::shot_edit::is_own_copy(sequence, crate::shot_edit::own_copy_seq()) {
             return false;
         }
         self.shots.next_id += 1;
@@ -711,6 +717,7 @@ impl App {
     pub(super) fn on_shot_setting(&mut self, change: ShotSetting) {
         let cfg = &mut self.config.screenshot;
         match change {
+            ShotSetting::Tool(v) => cfg.tool = v,
             ShotSetting::Preview(on) => cfg.preview = on,
             ShotSetting::OnIgnore(v) => cfg.on_ignore = v,
             ShotSetting::Secs(n) => {

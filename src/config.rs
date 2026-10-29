@@ -136,6 +136,14 @@ crate::theme::named_enum! {
     ShotIgnore { Keep, Delete }
 }
 
+crate::theme::named_enum! {
+    /// "Alat screenshot": what the Screenshot tile starts. Vale is its own
+    /// region capture with the editor straight after; Windows is Snipping
+    /// Tool (`ms-screenclip:`). An old config without it, or any other name,
+    /// reads as `Vale`.
+    ShotTool { Vale, Windows }
+}
+
 /// "Lama tampil" in seconds: (min, max, step).
 pub const SHOT_SECS_RANGE: (u32, u32, u32) = (4, 30, 2);
 
@@ -150,6 +158,9 @@ pub struct ScreenshotSettings {
     /// "Lama tampil", kept in `SHOT_SECS_RANGE`.
     #[serde(deserialize_with = "shot_secs")]
     pub show_secs: u32,
+    /// "Alat screenshot".
+    #[serde(deserialize_with = "shot_tool")]
+    pub tool: ShotTool,
 }
 
 impl Default for ScreenshotSettings {
@@ -158,8 +169,16 @@ impl Default for ScreenshotSettings {
             preview: true,
             on_ignore: ShotIgnore::Keep,
             show_secs: 8,
+            tool: ShotTool::Vale,
         }
     }
+}
+
+/// A name or anything else (a number, null): any name that is not a tool
+/// reads as Vale, so a bad value never makes the whole config invalid.
+fn shot_tool<'de, D: Deserializer<'de>>(d: D) -> Result<ShotTool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str().and_then(ShotTool::from_name).unwrap_or_default())
 }
 
 /// Any number, kept in `SHOT_SECS_RANGE`; a non-number is the default.
@@ -784,6 +803,7 @@ mod tests {
                 preview: false,
                 on_ignore: ShotIgnore::Delete,
                 show_secs: 12,
+                tool: ShotTool::Windows,
             },
             panel_pages: vec![PageEntry {
                 page: "Media".into(),
@@ -824,6 +844,27 @@ mod tests {
         };
         let merged = merge_owned(Config::default(), &mem);
         assert_eq!(merged.screenshot.on_ignore, ShotIgnore::Delete);
+    }
+
+    #[test]
+    fn the_screenshot_tool_is_vale_unless_the_file_says_windows() {
+        assert_eq!(ScreenshotSettings::default().tool, ShotTool::Vale);
+        // An old file without the key, and bad values of any type: Vale,
+        // and the rest of the file stays.
+        for text in [
+            r#"{"style":"Notch","screenshot":{"preview":false}}"#,
+            r#"{"style":"Notch","screenshot":{"tool":"Paint"}}"#,
+            r#"{"style":"Notch","screenshot":{"tool":7}}"#,
+            r#"{"style":"Notch","screenshot":{"tool":null}}"#,
+        ] {
+            let c = parse(text);
+            assert_eq!(c.style, Style::Notch, "{text}");
+            assert_eq!(c.screenshot.tool, ShotTool::Vale, "{text}");
+        }
+        let win = parse(r#"{"screenshot":{"tool":"windows"}}"#);
+        assert_eq!(win.screenshot.tool, ShotTool::Windows);
+        let back = parse(&serde_json::to_string(&win).unwrap());
+        assert_eq!(back.screenshot.tool, ShotTool::Windows);
     }
 
     #[test]

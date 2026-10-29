@@ -2144,6 +2144,16 @@ impl App {
     /// Runs `action` on `TIMER_SHORTCUT`, once the panel has collapsed;
     /// replaces a pending one, so only the last click runs.
     fn queue_shortcut(&mut self, action: shortcuts::Action) {
+        // The Screenshot tile: Vale's own capture unless Settings chose
+        // Snipping Tool ("Alat screenshot").
+        let action = match action {
+            shortcuts::Action::Open("ms-screenclip:")
+                if self.config.screenshot.tool == config::ShotTool::Vale =>
+            {
+                shortcuts::Action::Capture
+            }
+            other => other,
+        };
         let delay = shortcuts::delay_ms(&action);
         self.shortcut = Some(action);
         unsafe {
@@ -4054,6 +4064,7 @@ impl App {
                 self.on_clip_setting(ClipSetting::FeedbackAll(on))
             }
             SettingsAction::ClipClear => self.on_clip_setting(ClipSetting::Clear),
+            SettingsAction::ShotTool(v) => self.on_shot_setting(ShotSetting::Tool(v)),
             SettingsAction::ShotPreview(on) => self.on_shot_setting(ShotSetting::Preview(on)),
             SettingsAction::ShotOnIgnore(v) => self.on_shot_setting(ShotSetting::OnIgnore(v)),
             SettingsAction::ShotSecs(n) => self.on_shot_setting(ShotSetting::Secs(n)),
