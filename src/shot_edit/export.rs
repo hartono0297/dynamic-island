@@ -103,7 +103,7 @@ pub fn render_bgra(base: &Shot, doc: &[Annotation]) -> Option<Vec<u8>> {
             .CopyPixels(std::ptr::null(), base.w * 4, &mut out)
             .ok()?;
         // Everything is opaque; make sure of it.
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         Some(out)

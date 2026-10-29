@@ -653,11 +653,11 @@ pub struct View {
 }
 
 impl View {
-    pub fn to_image(&self, x: f32, y: f32) -> Pt {
+    pub fn to_image(self, x: f32, y: f32) -> Pt {
         Pt::new((x - self.ox) / self.scale, (y - self.oy) / self.scale)
     }
 
-    pub fn to_view(&self, p: Pt) -> (f32, f32) {
+    pub fn to_view(self, p: Pt) -> (f32, f32) {
         (self.ox + p.x * self.scale, self.oy + p.y * self.scale)
     }
 
@@ -698,7 +698,7 @@ pub fn clip_to_image(r: FRect, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
     let y0 = r.y.floor().max(0.0);
     let x1 = r.right().ceil().min(w as f32);
     let y1 = r.bottom().ceil().min(h as f32);
-    (x1 > x0 && y1 > y0).then(|| (x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
+    (x1 > x0 && y1 > y0).then_some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
 /// The pixels of `region` (x, y, w, h) of a `w` × `h` BGRA picture, each

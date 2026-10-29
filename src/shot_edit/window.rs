@@ -1697,6 +1697,7 @@ enum Glyph {
 }
 
 /// A toolbar icon drawn from a few lines, centred in `r`.
+#[allow(clippy::too_many_arguments)]
 fn glyph(
     rt: &ID2D1RenderTarget,
     brush: &ID2D1SolidColorBrush,
@@ -1948,7 +1949,7 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
     if let Some(a) = session.selected.and_then(|i| session.doc.get(i))
         && editing.is_none()
     {
-        draw_selection(rt, brush, gfx, a, view, p.accent, ui);
+        draw_selection(rt, brush, a, view, p.accent, ui);
     }
     // Toolbar.
     fill(rt, brush, layout.toolbar, p.bg, 1.0);

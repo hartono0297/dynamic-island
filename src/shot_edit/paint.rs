@@ -58,6 +58,7 @@ impl Pix {
 
 /// Draws `doc` over a picture already drawn: each annotation placed by
 /// `view`. `skip` leaves one out (the text being edited in a native EDIT).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_annotations(
     rt: &ID2D1RenderTarget,
     brush: &ID2D1SolidColorBrush,
@@ -219,7 +220,6 @@ fn stroke_path(
 pub fn draw_selection(
     rt: &ID2D1RenderTarget,
     brush: &ID2D1SolidColorBrush,
-    gfx: &Gfx,
     ann: &Annotation,
     view: &View,
     accent: u32,
@@ -245,7 +245,6 @@ pub fn draw_selection(
             rt.DrawRectangle(&r, brush, 1.5 * ui, None);
         }
     }
-    let _ = gfx;
 }
 
 #[cfg(test)]

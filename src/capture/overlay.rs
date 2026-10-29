@@ -26,11 +26,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
     GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, IsWindow, LoadCursorW,
-    MSG,
-    PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
+    MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
     SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_ACTIVATE, WM_ACTIVATEAPP,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, w};

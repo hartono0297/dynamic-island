@@ -42,8 +42,9 @@ Vale.
   right and bottom panes of a big window. Before every call (`uia::Clock`)
   the budget and the stop flag are checked and `IUIAutomation2`'s connection
   and transaction timeouts (`CUIAutomation8`) are set to what is left, so the
-  600 ms holds across all windows, not only between them. No timer, no thread
-  at idle.
+  600 ms holds across all windows, not only between them. A window's result
+  is dropped, not posted, when the stop flag went up meanwhile. No timer, no
+  thread at idle.
 - **UIA results by ticket.** `WM_APP_UIA` carries the capture number in
   `wparam` and a ticket in `lparam`; the boxes wait in a static `INBOX`
   (`deposit`, `withdraw`, `take_result`). Not a boxed pointer: a stray or
@@ -65,6 +66,18 @@ Vale.
   `WM_ACTIVATEAPP` false: Alt+Tab, Win, another app) cancels too; the frozen
   screen would otherwise stay up while the keys went elsewhere. Not armed
   before that, because the input join can move the activation around.
+- **Overlay close and destroy.** The state leaves its slot in one place
+  (`take_owned`), so `finish` is idempotent: the `WM_ACTIVATE` that its own
+  `DestroyWindow` sends, or an Alt+F4 after a click, finds nothing.
+  `WM_CLOSE` is handled as `finish(None)` (no DefWindowProc, which would
+  destroy a second time); `finish` calls `DestroyWindow` only while
+  `IsWindow`. `WM_DESTROY` takes and drops the state still stored for its
+  own hwnd (a close from outside), so `active()` goes false and the frame
+  (over 100 MB on a big desktop) is freed. `STARTING` is cleared by a drop
+  guard on every way out of `start`.
+- **Island accent.** The highlight and the size label use the island's
+  accent (`theme::current().accent.rgb()`), not `current_window()`'s, whose
+  light-mode shade is darker for text on a light window.
 - **Draw errors** (overlay and editor): only `D2DERR_RECREATE_TARGET` is
   retried, at most 3 in a row; anything else stops (overlay cancels; the
   editor shows the canvas without a picture too big for the device and says
@@ -75,10 +88,19 @@ Vale.
   (D2D on a WIC bitmap), so a saved file equals what was seen. Text is a
   native EDIT (IME, paste); its subclass posts commit/cancel to the window so
   the EDIT is never destroyed inside its own proc. The post carries the
-  EDIT's HWND and one from an EDIT that is no longer open is ignored; the
-  subclass is removed before `DestroyWindow` (its WM_KILLFOCUS on the way out
-  would otherwise close the next text box). Closing while dirty shows an
+  EDIT's HWND (see the stale-message note below). Closing while dirty shows an
   inline bar, never a system dialog.
+- **Text click rule** (`text_click_action`, pure). A press on the canvas with
+  the Text tool while an EDIT is open only commits it: no new EDIT, and the
+  focus goes back to the editor window, so Ctrl+C, Ctrl+S, Delete, Esc and
+  V/T/R reach the editor and not a fresh empty EDIT. With no EDIT open a
+  click places one. The decision uses what `commit_text` returned (true when
+  an EDIT was open), not the tool alone.
+- **Stale EDIT message.** `WM_APP_TEXT` carries the posting EDIT's HWND in
+  `lparam`; `text_msg_is_current` accepts it only when that is the EDIT open
+  now. The subclass is removed before `DestroyWindow` and the post is
+  ignored on a mismatch, so the WM_KILLFOCUS of a dying EDIT never closes
+  the next text box.
 - **Save** runs on a worker (inbox + a doorbell message, so a closed window
   leaks nothing). It writes a snapshot; `Session::revision` is taken with it
   and `mark_clean_at` only cleans when nothing changed since. PNG encoding and `save_name` are the preview's own

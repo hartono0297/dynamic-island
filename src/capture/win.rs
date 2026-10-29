@@ -251,7 +251,7 @@ pub fn grab_virtual_screen() -> Option<Frozen> {
         }
     }
     // The screen has no alpha; make every pixel opaque.
-    for px in bgra.chunks_exact_mut(4) {
+    for px in bgra.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     Some(Frozen {

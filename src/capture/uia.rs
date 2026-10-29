@@ -140,6 +140,12 @@ pub fn spawn(
                         // Out of time, stopped, or no limit could be set.
                         break;
                     };
+                    // An overlay that closed meanwhile gets nothing: the boxes
+                    // are dropped here (a post would find its window gone, or
+                    // a new window under the same handle).
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
                     if !found.is_empty() {
                         post(target, capture, found);
                     }
@@ -334,7 +340,7 @@ mod tests {
         );
         assert_eq!(usable(&w, Rect::new(500, 0, 50, 50)), None);
         assert_eq!(usable(&w, Rect::new(0, 0, MIN_SNAP - 1, 100)), None);
-        assert!(MAX_VISITED >= MAX_ELEMENTS);
+        const { assert!(MAX_VISITED >= MAX_ELEMENTS) };
     }
 
     #[test]
