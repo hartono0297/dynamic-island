@@ -60,6 +60,13 @@ pub fn content_alpha(progress: f32) -> f32 {
     u * u * (3.0 - 2.0 * u)
 }
 
+/// `content_alpha` for a fade that starts at `from` (a morph retargeted
+/// while its content was fading in carries on from there, never back to 0).
+pub fn content_alpha_from(from: f32, progress: f32) -> f32 {
+    let from = from.clamp(0.0, 1.0);
+    from + (1.0 - from) * content_alpha(progress)
+}
+
 /// How visible a panel's content is while its shape is `h` tall on its way
 /// between `compact_h` and `rest_h`: fully there by 70 % of the height, the
 /// same on the way up and on the way down.
@@ -755,6 +762,20 @@ mod tests {
         let mut last = 0.0;
         for i in 0..=20 {
             let a = content_alpha(i as f32 / 20.0);
+            assert!(a >= last);
+            last = a;
+        }
+    }
+
+    #[test]
+    fn a_retargeted_fade_carries_on_from_where_it_was() {
+        assert_eq!(content_alpha_from(0.0, 0.5), content_alpha(0.5));
+        assert_eq!(content_alpha_from(0.6, 0.0), 0.6);
+        assert_eq!(content_alpha_from(0.6, 0.3), 0.6);
+        assert_eq!(content_alpha_from(0.6, 1.0), 1.0);
+        let mut last = 0.6;
+        for i in 0..=20 {
+            let a = content_alpha_from(0.6, i as f32 / 20.0);
             assert!(a >= last);
             last = a;
         }

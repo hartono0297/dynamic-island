@@ -31,12 +31,13 @@ of `apply` around the event, not inside `click()`:
 | `EditorOpen(false)` (closed, saved, deleted, cancelled) | the panel was open: the editor was often all that held it |
 | `Click` (any hit but a media button the hover guard drops) | the panel was open and showing its content (not covered by a notice) |
 | `Wheel` that turned a page | same |
-| `CliFocus(false)`, `ClipFocus(false)` | the panel is still open after the event (hover holds it). If the input alone held it, letting go closes it at once, as Esc always did |
+| `CliFocus(false)`, `ClipFocus(false)` | something other than the linger still holds the panel after the event (`panel_held()`, hover). If the input alone held it, letting go closes it at once, as Esc always did, and an earlier click's linger is ended with it, never re-armed |
 
 A new click re-arms (a fresh 4 s). The pointer may come back (hover holds the
 panel as usual) and leaving keeps whatever is left.
 
-Ended early by: `collapse()` (tiles, a copy with Enter, the search closing),
+Ended early by: `collapse()` (tiles, a copy with Enter, the search closing,
+the Clipboard hotkey pressed while its page shows, lingering included),
 `Dismiss` (a click outside), `Fullscreen(true)`, an `OpenMode` change, and
 the panel closing for any reason (at the end of `apply`, `!panel_open()`
 clears it). `Collapse::Shut/Left` always wins (`panel_open` needs
@@ -60,7 +61,7 @@ outside into `Dismiss`). It stops when the linger ends.
 
 | View / change | Before | Now |
 |---|---|---|
-| Idle, MediaCompact, MediaLyric, PomodoroCompact | content drawn at full alpha at once inside the morphing shape | when it replaces another view and the shape morphs, content fades in with the morph (`content_alpha`, 0 to 1 from 30 % to 100 % of the morph); a swap with no shape change (no morph) stays instant; the lyric notch's width-only resize is excluded (`resize`) |
+| Idle, MediaCompact, MediaLyric, PomodoroCompact | content drawn at full alpha at once inside the morphing shape | when it replaces another view and the shape morphs, content fades in with the morph (`content_alpha`, 0 to 1 from 30 % to 100 % of the morph); a swap with no shape change (no morph) stays instant; the lyric notch's width-only resize is excluded (`resize`). Bata is never in the faded layer (`Renderer::robot_later`: drawn at full alpha after it), so he does not blink out, nor does a notice's alert bounce. A morph retargeted mid-fade carries on from the alpha it reached (`Anim::fade_from`, `motion::content_alpha_from`) |
 | Notices (including the screenshot preview) | same | same fade in with the morph |
 | The strip (sticky notice in the panel) | pops with the page | unchanged: part of the page's content, fades with the panel |
 | Panel opens | content faded in with the height | same, now via `motion::panel_fade` (shared) |

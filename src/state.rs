@@ -708,12 +708,16 @@ impl IslandState {
             page_was != self.page,
             panel_open_now,
             panel_view_now,
-            self.panel_open(),
+            self.panel_held(),
         ) && self.collapsed == Collapse::No
             && !self.fullscreen
         {
             self.linger_until = Some(now + ACTIVITY_LINGER);
             self.lingering = true;
+        } else if linger_trigger == LingerTrigger::StillOpen && !self.panel_held() {
+            // The input let go and only an earlier linger is left: it
+            // closes at once, as Esc always did.
+            self.end_linger();
         }
         // Whatever closed the panel ends it.
         if !self.panel_open() {
@@ -1068,6 +1072,11 @@ impl IslandState {
     }
 
     fn panel_open(&self) -> bool {
+        self.panel_held() || (self.collapsed == Collapse::No && self.lingering)
+    }
+
+    /// The panel is open for something other than the linger.
+    fn panel_held(&self) -> bool {
         let pointer = self.hover && !self.hover_blocked && self.open_mode != OpenMode::Click;
         self.collapsed == Collapse::No
             && (pointer
@@ -1077,8 +1086,7 @@ impl IslandState {
                 || self.clip_focused
                 || self.clip_held
                 || self.shelf_held
-                || self.search_open
-                || self.lingering)
+                || self.search_open)
     }
 
     /// What, in `event`, may keep the open panel a while longer.
@@ -1129,7 +1137,12 @@ impl IslandState {
             return;
         }
         if self.view() == View::Panel(Page::Clipboard) {
-            if self.hover || self.editor_open || self.cli_focused || self.clip_focused {
+            if self.hover
+                || self.editor_open
+                || self.cli_focused
+                || self.clip_focused
+                || self.lingering
+            {
                 self.collapse();
             }
             self.clip_held = false;
@@ -1922,7 +1935,7 @@ enum LingerTrigger {
     Always,
     /// Arms when the panel was open and something else still holds it
     /// after the event (the pointer: leaving keeps what is left). A panel
-    /// the event leaves to close does close.
+    /// the event leaves to close does close, an earlier linger included.
     StillOpen,
     /// Arms when the panel was open and showing its content.
     Panel,
@@ -4281,6 +4294,33 @@ mod tests {
         s.apply(Event::CliFocus(false), t0);
         assert_eq!(s.view(), View::Idle);
         assert_eq!(s.next_deadline(), None);
+        // The click that focused the input armed a linger, then the pointer
+        // left: Esc still closes it, it does not re-arm a fresh 4 s.
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliInput), t0);
+        s.apply(Event::CliFocus(true), t0);
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert!(s.panel_is_open());
+        s.apply(Event::CliFocus(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn the_hotkey_closes_a_lingering_clipboard_page() {
+        let t0 = Instant::now();
+        // The wheel to the page armed the linger; the pointer left.
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        s.apply(Event::ClipHotkey, t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+        // The next visit opens it again.
+        s.apply(Event::Hover(true), t0 + secs(3));
+        assert!(s.panel_is_open());
     }
 
     #[test]

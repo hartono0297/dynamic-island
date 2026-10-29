@@ -100,8 +100,8 @@ use crate::ui::geometry::{
     lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
 use crate::ui::motion::{
-    PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition, content_alpha, mole_code,
-    morph_ease, page_fade_frame, transition,
+    PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition, content_alpha_from,
+    mole_code, morph_ease, page_fade_frame, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -2800,6 +2800,16 @@ impl App {
         };
         let is_panel = matches!(view, View::Panel(_));
         let compact_swap = view != self.drawn && !is_panel && view != View::Hidden && !resize;
+        // A fade cut short goes on from the alpha it reached: new content
+        // starts from it, and the same content keeps fading in.
+        let fading = self.anim.fading(now);
+        let fade_from = if is_panel || view == View::Hidden {
+            None
+        } else if compact_swap {
+            Some(fading.unwrap_or(0.0))
+        } else {
+            fading
+        };
         if view != View::Hidden {
             self.drawn = view;
         }
@@ -2816,7 +2826,7 @@ impl App {
                 ms: if resize { LYRIC_RESIZE_MS } else { ANIM_MS },
                 running: true,
                 plain: !self.animations,
-                fade_in: compact_swap,
+                fade_from,
             };
             if is_panel {
                 self.leaving = None;
@@ -4225,8 +4235,10 @@ impl App {
             page_fade: self
                 .page_fade
                 .and_then(|f| page_fade_frame(f.progress(now))),
-            content_alpha: if morphing && self.anim.fade_in {
-                content_alpha(self.anim.progress(now))
+            content_alpha: if morphing {
+                self.anim.fade_from.map_or(1.0, |from| {
+                    content_alpha_from(from, self.anim.progress(now))
+                })
             } else {
                 1.0
             },
@@ -4628,8 +4640,9 @@ struct Anim {
     /// Windows' animations are off: a plain ease-out, no overshoot.
     plain: bool,
     /// The content of the compact view or notice this morph leads to fades
-    /// in with it (`motion::content_alpha`).
-    fade_in: bool,
+    /// in with it, from this alpha (`motion::content_alpha_from`); `None`:
+    /// no fade.
+    fade_from: Option<f32>,
 }
 
 impl Anim {
@@ -4643,8 +4656,15 @@ impl Anim {
             ms: ANIM_MS,
             running: false,
             plain: false,
-            fade_in: false,
+            fade_from: None,
         }
+    }
+
+    /// The content's alpha while its fade-in is still running, else `None`.
+    fn fading(&self, now: Instant) -> Option<f32> {
+        let t = self.progress(now);
+        let from = self.fade_from.filter(|_| self.running && t < 1.0)?;
+        Some(content_alpha_from(from, t))
     }
 
     fn progress(&self, now: Instant) -> f32 {
@@ -5973,8 +5993,22 @@ mod tests {
             ms: ANIM_MS,
             running: true,
             plain: false,
-            fade_in: false,
+            fade_from: None,
         }
+    }
+
+    #[test]
+    fn a_fade_cut_short_reports_where_it_is() {
+        let t0 = Instant::now();
+        let mut anim = morph(t0);
+        assert_eq!(anim.fading(t0), None, "no fade, nothing to carry on");
+        anim.fade_from = Some(0.0);
+        let mid = t0 + Duration::from_millis(ANIM_MS * 3 / 4);
+        let a = anim.fading(mid).expect("still fading");
+        assert!(a > 0.0 && a < 1.0);
+        assert_eq!(anim.fading(t0 + Duration::from_millis(ANIM_MS)), None);
+        anim.running = false;
+        assert_eq!(anim.fading(mid), None);
     }
 
     #[test]

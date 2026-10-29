@@ -558,6 +558,10 @@ pub struct Renderer {
     search_icons: std::cell::RefCell<Vec<(std::path::PathBuf, ID2D1Bitmap)>>,
     /// The screenshot preview's thumbnail as a bitmap, by screenshot id.
     shot_thumb: std::cell::RefCell<Option<(u64, ID2D1Bitmap)>>,
+    /// While a compact view's content fades in with its morph, Bata is not
+    /// part of the fade: `paint_robot` keeps where it goes here, and
+    /// `paint_island` draws it at full alpha once the faded layer is popped.
+    robot_later: std::cell::Cell<Option<Option<(Rect, RobotFrame)>>>,
 }
 
 struct Fonts {
@@ -783,6 +787,7 @@ impl Renderer {
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
                 search_icons: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
+                robot_later: std::cell::Cell::new(None),
             })
         }
     }
@@ -1212,6 +1217,9 @@ impl Renderer {
         let faded = content_alpha < 1.0;
         if faded {
             self.push_opacity(content_alpha);
+            // Bata shows in the view before and after: he stays, only what
+            // pops in fades.
+            self.robot_later.set(Some(None));
         }
         let robot = frame.robot;
         let content = match view {
@@ -1252,6 +1260,13 @@ impl Renderer {
             // The panel returned above.
             View::Panel(_) | View::Hidden => Ok(()),
         };
+        if faded {
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe { target.rt.PopLayer() };
+            if let Some(Some((area, r))) = self.robot_later.take() {
+                self.paint_robot(area, r);
+            }
+        }
         if let (Some(level), View::MediaCompact | View::MediaLyric) = (frame.volume, view) {
             let r = shape_rect(shape);
             let h = crate::ui::panel_layout::VOLUME_HUD_H
@@ -1270,12 +1285,7 @@ impl Renderer {
             );
         }
         let target = self.target.as_ref().expect("target ensured by paint");
-        unsafe {
-            if faded {
-                target.rt.PopLayer();
-            }
-            target.rt.PopAxisAlignedClip();
-        }
+        unsafe { target.rt.PopAxisAlignedClip() };
         leaving.and(content)
     }
 
@@ -1302,6 +1312,10 @@ impl Renderer {
 
     /// Bata filling the square `area`.
     fn paint_robot(&self, area: Rect, robot: RobotFrame) {
+        if self.robot_later.get().is_some() {
+            self.robot_later.set(Some(Some((area, robot))));
+            return;
+        }
         let target = self.target.as_ref().expect("target ensured by paint");
         self.robot
             .paint(&target.rt, &target.brush, area, robot.expr, robot.pose, 1.0);
