@@ -18,6 +18,10 @@ use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
 use crate::tiles::{ShortcutTiles, Tile};
 use crate::ui::geometry::ANIM_MS;
 
+/// How long the panel stays open after the user did something in it (an
+/// editor closing, a click, a page turned) once nothing else holds it.
+pub const ACTIVITY_LINGER: Duration = Duration::from_secs(4);
+
 /// How long each temporary notice stays on screen, counted from when it becomes current.
 pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
 /// The morning greeting goes a little sooner.
@@ -76,6 +80,24 @@ pub const MEDIA_HOVER_GUARD: Duration = Duration::from_millis(ANIM_MS + 300);
 /// How long the cleaner's armed button ("Yakin? Hapus …") waits for the
 /// second click before it turns back.
 pub const CLEAN_CONFIRM: Duration = Duration::from_secs(4);
+
+/// What the open panel shows that closing it resets: the cleaner, the CLI's
+/// size and folder menu, the notes, reminders and day pages, the strip.
+/// `App` keeps it from before the event that closed the panel, so the
+/// closing panel fades out as it was, not as the reset left it
+/// (`docs/memory/panel-linger-and-motion.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShownPanel {
+    pub page: Page,
+    pub cleaner: Option<CleanerUi>,
+    pub mole: MolePhase,
+    pub cli_tall: bool,
+    pub cli_menu: bool,
+    pub notes_page: usize,
+    pub reminders_page: usize,
+    pub day_page: usize,
+    pub strip: Option<Notice>,
+}
 
 /// The cleaner over the System page: its mode, which rows are ticked and
 /// whether its button is armed. Opened by "Bersihkan"; gone when the panel
@@ -256,6 +278,12 @@ pub struct IslandState {
     /// The pointer visited the current screenshot preview, or its file was
     /// opened: its expiry is no longer "ignored", so it never deletes.
     shot_touched: bool,
+    /// The panel stays open until then after something the user did in it
+    /// (`ACTIVITY_LINGER`). Never opens a closed panel.
+    linger_until: Option<Instant>,
+    /// `linger_until` is still in the future, as of the last `apply`
+    /// (`panel_open` has no clock of its own).
+    lingering: bool,
 }
 
 impl IslandState {
@@ -307,6 +335,8 @@ impl IslandState {
             mole_opts: MoleOpts::default(),
             mole_pending: false,
             shot_touched: false,
+            linger_until: None,
+            lingering: false,
         }
     }
 
@@ -317,6 +347,17 @@ impl IslandState {
         let panel_was_open = self.panel_open();
         let cleaner_was = self.cleaner.map(|c| c.mode);
         let hover_on = matches!(event, Event::Hover(true));
+        let page_was = self.page;
+        // The linger runs out here, after the "was" values above saw the
+        // panel as the user last did (the close below still cleans up after
+        // it). From here on `panel_open_now` is the panel the event meets.
+        self.lingering = self.linger_until.is_some_and(|until| until > now);
+        if !self.lingering {
+            self.linger_until = None;
+        }
+        let panel_open_now = self.panel_open();
+        let panel_view_now = matches!(self.view(), View::Panel(_));
+        let linger_trigger = self.linger_trigger(&event, now);
         let mut effects = Vec::new();
         // Finish a phase whose end has passed before handling the input, so a
         // click that beats the deadline's Tick never pauses the timer at 0:00.
@@ -393,6 +434,7 @@ impl IslandState {
                 self.fullscreen = on;
                 if on {
                     self.latched = false;
+                    self.end_linger();
                 }
                 // Hidden by a game: the preview goes, its file kept.
                 if on {
@@ -415,7 +457,7 @@ impl IslandState {
                     *expires = (*expires).max(now + SHOT_LEAVE_GRACE);
                 }
                 if on && !self.hover {
-                    self.hover_blocked = !panel_was_open && self.notice_blocks_hover();
+                    self.hover_blocked = !panel_open_now && self.notice_blocks_hover();
                     self.visit_on_notice = self.current.is_some();
                     // A sticky reminder keeps hover off for one visit only.
                     if self.hover_blocked && self.current.is_none() {
@@ -453,10 +495,12 @@ impl IslandState {
             Event::OpenMode(mode) => {
                 self.open_mode = mode;
                 self.latched = false;
+                self.end_linger();
             }
             // A click outside the island: a panel kept open closes. Under the
             // pointer (an odd case) it stays shut until the pointer comes back.
             Event::Dismiss => {
+                self.end_linger();
                 if self.latched {
                     self.latched = false;
                     if self.hover {
@@ -655,7 +699,31 @@ impl IslandState {
         if !self.latched {
             self.shelf_drop = DropVisit::No;
         }
-        if hover_on && !panel_was_open && self.panel_open() {
+        // Something the user did in the open panel keeps it open a while
+        // longer. Here, around the event, not in `click`: only a panel that
+        // was open (an editor closing may have been all that held it) and
+        // still may be (a tile's collapse, a fullscreen app and Dismiss end
+        // it) lingers.
+        if linger_trigger.armed(
+            page_was != self.page,
+            panel_open_now,
+            panel_view_now,
+            self.panel_held(),
+        ) && self.collapsed == Collapse::No
+            && !self.fullscreen
+        {
+            self.linger_until = Some(now + ACTIVITY_LINGER);
+            self.lingering = true;
+        } else if linger_trigger == LingerTrigger::StillOpen && !self.panel_held() {
+            // The input let go and only an earlier linger is left: it
+            // closes at once, as Esc always did.
+            self.end_linger();
+        }
+        // Whatever closed the panel ends it.
+        if !self.panel_open() {
+            self.end_linger();
+        }
+        if hover_on && !panel_open_now && self.panel_open() {
             self.hover_opened = Some(now);
         }
         // Closed, or no longer open by hover or a click (an editor or the
@@ -797,10 +865,15 @@ impl IslandState {
             .filter(|(n, _)| !self.notice_held(n))
             .map(|(_, expires)| *expires);
         let armed = self.cleaner.and_then(|c| c.armed_until);
-        [notice, self.pomodoro.next_deadline(), armed]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            notice,
+            self.pomodoro.next_deadline(),
+            armed,
+            self.linger_until,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// The current notice waits for the pointer: it has a button and the
@@ -999,6 +1072,11 @@ impl IslandState {
     }
 
     fn panel_open(&self) -> bool {
+        self.panel_held() || (self.collapsed == Collapse::No && self.lingering)
+    }
+
+    /// The panel is open for something other than the linger.
+    fn panel_held(&self) -> bool {
         let pointer = self.hover && !self.hover_blocked && self.open_mode != OpenMode::Click;
         self.collapsed == Collapse::No
             && (pointer
@@ -1011,11 +1089,38 @@ impl IslandState {
                 || self.search_open)
     }
 
+    /// What, in `event`, may keep the open panel a while longer.
+    fn linger_trigger(&self, event: &Event, now: Instant) -> LingerTrigger {
+        match event {
+            // An editor closed, saved, deleted or cancelled: the panel it
+            // held would snap shut with the pointer away.
+            Event::EditorOpen(false) => LingerTrigger::Always,
+            // A click on the panel's content. A media button the hover guard
+            // drops did nothing.
+            Event::Click(hit) if !(is_media_hit(hit) && self.media_guarded(now)) => {
+                LingerTrigger::Panel
+            }
+            // A page turned by the wheel (a notch that did not turn one
+            // arms nothing).
+            Event::Wheel(_) => LingerTrigger::PageTurn,
+            Event::CliFocus(false) | Event::ClipFocus(false) => LingerTrigger::StillOpen,
+            _ => LingerTrigger::No,
+        }
+    }
+
+    /// Ends the linger (a tile's collapse, a click outside, a fullscreen app,
+    /// a mode change, the panel closing).
+    fn end_linger(&mut self) {
+        self.linger_until = None;
+        self.lingering = false;
+    }
+
     /// The panel gets out of the way (a shortcut, a copy with Enter): shut
     /// whatever holds it until the pointer leaves and comes back. Without
     /// hover the pointer is already away: its next visit reopens it.
     fn collapse(&mut self) {
         self.latched = false;
+        self.end_linger();
         self.collapsed = if self.hover {
             Collapse::Shut
         } else {
@@ -1032,7 +1137,12 @@ impl IslandState {
             return;
         }
         if self.view() == View::Panel(Page::Clipboard) {
-            if self.hover || self.editor_open || self.cli_focused || self.clip_focused {
+            if self.hover
+                || self.editor_open
+                || self.cli_focused
+                || self.clip_focused
+                || self.lingering
+            {
                 self.collapse();
             }
             self.clip_held = false;
@@ -1093,7 +1203,7 @@ impl IslandState {
     /// The panel stays open until a click outside the island: `App` watches
     /// the mouse buttons only then, and sends `Event::Dismiss`.
     pub fn outside_click_wanted(&self) -> bool {
-        self.latched && self.panel_open() && !self.fullscreen
+        (self.latched || self.lingering) && self.panel_open() && !self.fullscreen
     }
 
     /// "Mode buka": a click on the compact island opens the panel and keeps it.
@@ -1723,6 +1833,24 @@ impl IslandState {
         self.tiles.visible()
     }
 
+    /// What the panel shows now, `None` while the view is not the panel.
+    pub fn shown_panel(&self) -> Option<ShownPanel> {
+        let View::Panel(page) = self.view() else {
+            return None;
+        };
+        Some(ShownPanel {
+            page,
+            cleaner: self.cleaner,
+            mole: self.mole,
+            cli_tall: self.cli_tall,
+            cli_menu: self.cli_menu,
+            notes_page: self.notes_page,
+            reminders_page: self.reminders_page,
+            day_page: self.day_page,
+            strip: self.sticky.last().cloned(),
+        })
+    }
+
     /// The sticky notice (Claude waiting or a due reminder) to show at the top
     /// of the open panel.
     pub fn waiting_strip(&self) -> Option<&Notice> {
@@ -1811,6 +1939,40 @@ enum Collapse {
     Left,
 }
 
+/// What an event does to the linger (`IslandState::linger_trigger`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LingerTrigger {
+    No,
+    /// Arms when the panel was open before the event.
+    Always,
+    /// Arms when the panel was open and something else still holds it
+    /// after the event (the pointer: leaving keeps what is left). A panel
+    /// the event leaves to close does close, an earlier linger included.
+    StillOpen,
+    /// Arms when the panel was open and showing its content.
+    Panel,
+    /// Arms when the panel was open and the page changed.
+    PageTurn,
+}
+
+impl LingerTrigger {
+    fn armed(
+        self,
+        page_changed: bool,
+        panel_was_open: bool,
+        panel_view_was: bool,
+        open_after: bool,
+    ) -> bool {
+        match self {
+            LingerTrigger::No => false,
+            LingerTrigger::Always => panel_was_open,
+            LingerTrigger::StillOpen => panel_was_open && open_after,
+            LingerTrigger::Panel => panel_was_open && panel_view_was,
+            LingerTrigger::PageTurn => panel_was_open && panel_view_was && page_changed,
+        }
+    }
+}
+
 /// Where the visit of a drop stands, in Hover mode (the other modes keep
 /// the dropped panel by their own rules, and stay `No`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1870,6 +2032,14 @@ mod tests {
 
     fn st() -> IslandState {
         IslandState::new(date(2026, 10, 25), PomoSettings::default())
+    }
+
+    /// The pointer leaves and a click lands outside: no linger holds the
+    /// panel (for tests of what happens once it is shut).
+    fn leave(s: &mut IslandState, now: Instant) -> Vec<Effect> {
+        let mut effects = s.apply(Event::Hover(false), now);
+        effects.extend(s.apply(Event::Dismiss, now));
+        effects
     }
 
     /// Hovers and scrolls the open panel to `page`.
@@ -1979,7 +2149,7 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::Calendar));
         s.apply(Event::Wheel(-480), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.view(), View::MediaCompact);
     }
 
@@ -2162,7 +2332,7 @@ mod tests {
         let mut s = st();
         s.apply(Event::Media(Some(media(true))), t0);
         open_on(&mut s, Page::Media, t0);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         // Hover reopens it on the Music page, under a passing pointer.
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
@@ -2182,7 +2352,7 @@ mod tests {
             vec![Effect::Media(MediaCommand::Pause)]
         );
         // Closing clears it; a later hover open starts a new window.
-        s.apply(Event::Hover(false), after);
+        leave(&mut s, after);
         assert_eq!(s.hover_open_age(after), None);
         let later = t0 + secs(10);
         s.apply(Event::Hover(true), later);
@@ -2455,12 +2625,12 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::Pomodoro));
         // Leaving and coming back is a new visit: the first one since r2
         // appeared keeps hover off.
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.view(), View::Notice(reminder("r2")));
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Notice(reminder("r2")));
         // Only that one: the visit after it opens the panel with the strip.
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         s.apply(Event::Hover(true), t0);
         assert!(matches!(s.view(), View::Panel(_)));
         assert_eq!(s.waiting_strip(), Some(&reminder("r2")));
@@ -2662,6 +2832,9 @@ mod tests {
         s.apply(Event::Dismiss, t0);
         assert!(s.panel_is_open(), "an open editor keeps the panel");
         s.apply(Event::EditorOpen(false), t0);
+        // The editor's close lingers a moment, then the panel goes.
+        assert!(s.panel_is_open());
+        s.apply(Event::Tick, t0 + ACTIVITY_LINGER);
         assert_eq!(s.view(), View::Idle);
     }
 
@@ -2796,7 +2969,7 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::Calendar));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Pomodoro));
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.view(), View::Idle);
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Panel(Page::Pomodoro));
@@ -3013,7 +3186,7 @@ mod tests {
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
         assert!(s.apply(Event::Click(Hit::SystemClean), t0).is_empty());
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert!(s.apply(Event::Click(Hit::SystemProcess), t0).is_empty());
         assert!(s.apply(Event::Click(Hit::SystemDrive('C')), t0).is_empty());
     }
@@ -3036,6 +3209,36 @@ mod tests {
             CleanCat::BrowserCache,
             CleanCat::AppCache,
         ]
+    }
+
+    #[test]
+    fn the_shown_panel_keeps_what_closing_it_resets() {
+        use crate::ui::geometry::{ShapeKind, panel_kind};
+        let t0 = Instant::now();
+        // The cleaner: gone from the state once the panel closes, still in
+        // what it showed, so the closing panel keeps the cleaner's size.
+        let mut s = cleaner_open(t0);
+        let shown = s.shown_panel().expect("the panel shows");
+        assert_eq!(shown.page, Page::System);
+        assert!(shown.cleaner.is_some());
+        leave(&mut s, t0);
+        assert!(s.shown_panel().is_none());
+        assert!(s.cleaner().is_none());
+        assert_eq!(
+            panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+            ShapeKind::PanelClean
+        );
+        // The tall CLI: back to small in the state, tall in what it showed.
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliExpand), t0);
+        let shown = s.shown_panel().expect("the panel shows");
+        leave(&mut s, t0);
+        assert!(!s.cli_tall() && shown.cli_tall);
+        assert_eq!(
+            panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+            ShapeKind::PanelTall
+        );
     }
 
     #[test]
@@ -3069,7 +3272,7 @@ mod tests {
         s.apply(Event::Click(Hit::SystemClean), t0);
         assert_eq!(s.cleaner().unwrap().picked(), default_picks());
         // Closing the panel closes it, like another page.
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert!(s.cleaner().is_none());
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Panel(Page::System));
@@ -3128,7 +3331,7 @@ mod tests {
         assert!(s.apply(Event::Click(Hit::CleanGo), late).is_empty());
         assert!(s.cleaner().unwrap().armed());
         // Closing the panel disarms (and closes) it.
-        s.apply(Event::Hover(false), late);
+        leave(&mut s, late);
         assert!(s.cleaner().is_none());
         assert_eq!(s.next_deadline(), None);
         // Nothing ticked: the button does nothing at all.
@@ -3389,10 +3592,7 @@ mod tests {
     fn closing_the_cleaner_stops_a_mole_preview() {
         let t0 = Instant::now();
         let mut s = mole_scanning(t0);
-        assert_eq!(
-            s.apply(Event::Hover(false), t0),
-            vec![Effect::MoleStopPreview]
-        );
+        assert_eq!(leave(&mut s, t0), vec![Effect::MoleStopPreview]);
         assert_eq!(s.mole_phase(), MolePhase::Unknown);
         // Its late answer is not a preview.
         s.apply(
@@ -3451,7 +3651,7 @@ mod tests {
         );
         s.apply(Event::Click(Hit::MoleGo), ms(1));
         s.apply(Event::Click(Hit::MoleGo), ms(2));
-        s.apply(Event::Hover(false), ms(3));
+        leave(&mut s, ms(3));
         s.apply(Event::MoleFinished { ok: true }, ms(4));
         let done = mole_notice(NoticeKind::MoleDone);
         s.apply(Event::Notice(done.clone()), ms(4));
@@ -3510,9 +3710,12 @@ mod tests {
         let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Go(Page::Notes))), t0);
         assert!(effects.is_empty(), "{effects:?}");
         assert_eq!(s.view(), View::Panel(Page::Notes));
-        // The panel closes: the next visit starts on a page that is on.
-        s.apply(Event::Hover(false), t0);
-        s.apply(Event::Hover(true), t0);
+        // The click lingers the panel; once that has run out and the
+        // pointer is away it closes, and the next visit starts on a page
+        // that is on.
+        let later = t0 + ACTIVITY_LINGER + Duration::from_secs(1);
+        s.apply(Event::Hover(false), later);
+        s.apply(Event::Hover(true), later);
         assert_eq!(s.view(), View::Panel(Page::Media));
     }
 
@@ -3897,7 +4100,7 @@ mod tests {
         open_on(&mut s, Page::Cli, t0);
         s.apply(Event::Click(Hit::CliFolder), t0);
         // The panel closing; it reopens without the menu.
-        assert_eq!(s.apply(Event::Hover(false), t0), vec![]);
+        assert_eq!(leave(&mut s, t0), vec![]);
         assert!(!s.cli_menu());
         s.apply(Event::Hover(true), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
@@ -3936,7 +4139,7 @@ mod tests {
         assert_eq!(s.cli_scroll(), 0);
         // Closing the panel starts it at the bottom again.
         scroll(&mut s, 5);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.cli_scroll(), 0);
         // Scrolling does nothing off the CLI page.
         open_on(&mut s, Page::Notes, t0);
@@ -3968,7 +4171,7 @@ mod tests {
         s.apply(Event::Click(Hit::CliExpand), t0);
         // Focused, the pointer leaving keeps it; letting go closes it.
         s.apply(Event::CliFocus(true), t0);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert!(s.cli_tall());
         s.apply(Event::CliFocus(false), t0);
         assert!(!s.cli_tall());
@@ -4053,7 +4256,7 @@ mod tests {
         );
         s.apply(Event::Click(Hit::Strip), t0);
         assert_eq!(s.waiting_strip(), None);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.view(), View::Idle);
     }
 
@@ -4066,7 +4269,228 @@ mod tests {
         s.apply(Event::Hover(false), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
         s.apply(Event::EditorOpen(false), t0);
+        // Closing it keeps the panel a moment (`ACTIVITY_LINGER`), no more.
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Tick, t0 + ACTIVITY_LINGER);
         assert_eq!(s.view(), View::Idle);
+    }
+
+    // ---- the panel lingers after the user did something in it ----
+
+    /// Hovers, opens an editor, leaves and closes it: the panel is lingering.
+    fn lingering_after_editor(t0: Instant) -> IslandState {
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::EditorOpen(true), t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::EditorOpen(false), t0 + secs(1));
+        s
+    }
+
+    #[test]
+    fn an_editor_closing_with_the_pointer_away_keeps_the_panel_four_seconds() {
+        let t0 = Instant::now();
+        let mut s = lingering_after_editor(t0);
+        assert_eq!(ACTIVITY_LINGER, secs(4));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        // The deadline is on `next_deadline`, so the existing timer ends it.
+        assert_eq!(s.next_deadline(), Some(t0 + secs(5)));
+        s.apply(Event::Tick, t0 + secs(4));
+        assert_eq!(s.view(), View::Panel(Page::Calendar), "1 s of 4 left");
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_click_in_the_panel_arms_or_refreshes_the_linger() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.next_deadline(), None, "hover alone arms nothing");
+        s.apply(Event::Click(Hit::NotesMore), t0 + secs(1));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(5)));
+        // Leaving keeps what is left; a new click re-arms it.
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Hover(true), t0 + secs(3));
+        s.apply(Event::Click(Hit::NotesMore), t0 + secs(3));
+        s.apply(Event::Hover(false), t0 + secs(3));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(7)));
+        s.apply(Event::Tick, t0 + secs(6));
+        assert!(s.panel_is_open());
+        s.apply(Event::Tick, t0 + secs(7));
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn a_wheel_page_turn_lingers_but_a_spent_notch_does_not() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Wheel(-60), t0);
+        assert_eq!(s.next_deadline(), None, "half a notch turned no page");
+        s.apply(Event::Wheel(-60), t0 + secs(1));
+        assert_eq!(s.page(), Page::Pomodoro);
+        assert_eq!(s.next_deadline(), Some(t0 + secs(5)));
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert!(s.panel_is_open());
+    }
+
+    #[test]
+    fn losing_the_keyboard_lingers_only_while_something_still_holds_the_panel() {
+        let t0 = Instant::now();
+        // Held by the pointer too: leaving keeps the remainder.
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::ClipFocus(true), t0);
+        s.apply(Event::ClipFocus(false), t0 + secs(2));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(6)));
+        // The input alone held it: letting go closes it, as Esc always did.
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::CliFocus(true), t0);
+        leave(&mut s, t0);
+        s.apply(Event::CliFocus(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+        // The click that focused the input armed a linger, then the pointer
+        // left: Esc still closes it, it does not re-arm a fresh 4 s.
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliInput), t0);
+        s.apply(Event::CliFocus(true), t0);
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert!(s.panel_is_open());
+        s.apply(Event::CliFocus(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn the_hotkey_closes_a_lingering_clipboard_page() {
+        let t0 = Instant::now();
+        // The wheel to the page armed the linger; the pointer left.
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        s.apply(Event::ClipHotkey, t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+        // The next visit opens it again.
+        s.apply(Event::Hover(true), t0 + secs(3));
+        assert!(s.panel_is_open());
+    }
+
+    #[test]
+    fn a_click_outside_ends_the_linger() {
+        let t0 = Instant::now();
+        let mut s = lingering_after_editor(t0);
+        assert!(
+            s.outside_click_wanted(),
+            "the poll watches while it lingers"
+        );
+        s.apply(Event::Dismiss, t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+        assert!(!s.outside_click_wanted());
+    }
+
+    #[test]
+    fn a_collapse_beats_the_linger() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Click(Hit::NotesMore), t0);
+        assert!(s.next_deadline().is_some());
+        // A tile: the panel shuts for it, linger and all, under the pointer.
+        let effects = s.apply(Event::Click(Hit::SystemProcess), t0 + secs(1));
+        assert_eq!(effects, vec![Effect::RunShortcut(Shortcut::TaskManager)]);
+        assert!(!s.panel_is_open());
+        assert_eq!(s.next_deadline(), None);
+        // Away and back: the new visit opens it, nothing lingers.
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert!(!s.panel_is_open());
+        s.apply(Event::Hover(true), t0 + secs(3));
+        s.apply(Event::Hover(false), t0 + secs(3));
+        assert_eq!(s.view(), View::Idle);
+        // A copy with Enter, and the search closing, do the same.
+        let mut s = st();
+        open_on(&mut s, Page::Clipboard, t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::ClipCommit, t0);
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn fullscreen_a_mode_change_or_the_panel_closing_end_it() {
+        let t0 = Instant::now();
+        let mut s = lingering_after_editor(t0);
+        s.apply(Event::Fullscreen(true), t0 + secs(2));
+        assert_eq!(s.next_deadline(), None);
+        s.apply(Event::Fullscreen(false), t0 + secs(3));
+        assert_eq!(s.view(), View::Idle, "no panel comes back from a game");
+        let mut s = lingering_after_editor(t0);
+        s.apply(Event::OpenMode(OpenMode::Click), t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_closed_panel_is_never_reopened_by_what_arms_the_linger() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::EditorOpen(true), t0);
+        // Pointer never came: the editor held the panel and was closed.
+        s.apply(Event::EditorOpen(false), t0 + secs(1));
+        assert_eq!(s.view(), View::Panel(Page::Calendar), "it did hold it");
+        s.apply(Event::Tick, t0 + secs(5));
+        assert_eq!(s.view(), View::Idle);
+        // Now closed: the same events open nothing.
+        s.apply(Event::EditorOpen(false), t0 + secs(6));
+        s.apply(Event::Click(Hit::NotesMore), t0 + secs(6));
+        s.apply(Event::Wheel(-120), t0 + secs(6));
+        s.apply(Event::CliFocus(false), t0 + secs(6));
+        s.apply(Event::ClipFocus(false), t0 + secs(6));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+        // A late event after the linger ran out but before its Tick does not
+        // re-arm it either.
+        let mut s = lingering_after_editor(t0);
+        s.apply(Event::EditorOpen(false), t0 + secs(10));
+        assert_eq!(s.view(), View::Idle);
+        assert_eq!(s.next_deadline(), None);
+    }
+
+    #[test]
+    fn hover_holds_the_panel_through_the_linger() {
+        let t0 = Instant::now();
+        let mut s = lingering_after_editor(t0);
+        s.apply(Event::Hover(true), t0 + secs(2));
+        s.apply(Event::Tick, t0 + secs(6));
+        assert_eq!(
+            s.view(),
+            View::Panel(Page::Calendar),
+            "the pointer holds it"
+        );
+        assert_eq!(s.next_deadline(), None);
+        s.apply(Event::Hover(false), t0 + secs(7));
+        assert_eq!(s.view(), View::Idle, "nothing of the linger is left");
+    }
+
+    #[test]
+    fn a_guarded_media_click_arms_nothing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Media(Some(media(true))), t0);
+        open_on(&mut s, Page::Media, t0);
+        s.apply(Event::Dismiss, t0);
+        let early = t0 + Duration::from_millis(100);
+        assert!(s.media_guarded(early));
+        assert_eq!(s.apply(Event::Click(Hit::PlayPause), early), vec![]);
+        assert_eq!(s.next_deadline(), None);
     }
 
     // ---- v2: pomodoro ----
@@ -4532,7 +4956,7 @@ mod tests {
 
         s.apply(Event::Wheel(120), t0);
         paged(&mut s);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.day_page(), 0, "panel closed");
     }
 
@@ -4742,7 +5166,7 @@ mod tests {
         s.apply(Event::Click(Hit::RemindersMore), t0);
         s.apply(Event::Click(Hit::RemindersMore), t0);
         assert_eq!(s.reminders_page(), 2);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.reminders_page(), 0);
     }
 
@@ -4766,7 +5190,7 @@ mod tests {
         s.apply(Event::Click(Hit::NotesMore), t0);
         s.apply(Event::Click(Hit::NotesMore), t0);
         assert_eq!(s.notes_page(), 2);
-        s.apply(Event::Hover(false), t0);
+        leave(&mut s, t0);
         assert_eq!(s.notes_page(), 0);
     }
 
@@ -5190,7 +5614,7 @@ mod tests {
         assert_ne!(s.page(), Page::Shelf);
         assert!(!s.latched);
         assert!(!s.shelf_drop_here());
-        s.apply(Event::Hover(false), t0 + secs(3));
+        leave(&mut s, t0 + secs(3));
         assert!(!matches!(s.view(), View::Panel(_)));
     }
 

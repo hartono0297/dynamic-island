@@ -54,6 +54,7 @@ use super::geometry::{
     shot_regions,
 };
 use super::icons::{Icon, IconSet};
+use super::motion::Transit;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
 use crate::audio::MixerRow;
@@ -125,12 +126,15 @@ pub struct Frame<'a> {
     pub reminders_page: usize,
     /// Day view: chunk of the day's events ("+N lagi" clicks).
     pub day_page: usize,
-    /// -1..1 during a page transition, 0 at rest: the page is drawn shifted
-    /// right by `page_slide × panel width`, with the neighbouring page it
-    /// came from beside it. Positive = it came in from the right (scrolled to
-    /// a later page).
+    /// Non-zero during a page slide, 0 at rest: the page is drawn shifted
+    /// right by `page_slide × panel width` (panel widths, at most
+    /// `motion::SLIDE_MAX` away). Positive = it came in from the right
+    /// (scrolled to a later page).
     pub page_slide: f32,
-    /// The page a slide comes from, drawn beside the new one.
+    /// The pages a slide moves out that show this frame, each with its x in
+    /// panel widths (`motion::SlideStrip::visible`).
+    pub page_trail: [Option<(Page, f32)>; 2],
+    /// The page a cross-fade comes from, drawn under the new one.
     pub page_from: Option<Page>,
     /// The pages the dots show ("Halaman panel"), in order.
     pub pages: Vec<Page>,
@@ -171,6 +175,9 @@ pub struct Frame<'a> {
     pub cleaner: Option<&'a CleanerView<'a>>,
     /// The screenshot preview's picture and size, while it shows.
     pub shot: Option<ShotView<'a>>,
+    /// What transitions add to this frame (`ui::motion`); all at rest by
+    /// default.
+    pub transit: Transit,
 }
 
 /// What the screenshot preview draws (`NoticeKind::Screenshot`): its
@@ -551,6 +558,10 @@ pub struct Renderer {
     search_icons: std::cell::RefCell<Vec<(std::path::PathBuf, ID2D1Bitmap)>>,
     /// The screenshot preview's thumbnail as a bitmap, by screenshot id.
     shot_thumb: std::cell::RefCell<Option<(u64, ID2D1Bitmap)>>,
+    /// While a compact view's content fades in with its morph, Bata is not
+    /// part of the fade: `paint_robot` keeps where it goes here, and
+    /// `paint_island` draws it at full alpha once the faded layer is popped.
+    robot_later: std::cell::Cell<Option<Option<(Rect, RobotFrame)>>>,
 }
 
 struct Fonts {
@@ -645,6 +656,9 @@ struct Target {
     brush: ID2D1SolidColorBrush,
     /// Clips panel content to the rounded shape.
     layer: ID2D1Layer,
+    /// An opacity layer inside the first (a page fading in, compact content
+    /// fading with its morph). A layer cannot be pushed twice at once.
+    layer2: ID2D1Layer,
 }
 
 /// 32-bpp top-down DIB selected into a memory DC; the render target draws here.
@@ -773,6 +787,7 @@ impl Renderer {
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
                 search_icons: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
+                robot_later: std::cell::Cell::new(None),
             })
         }
     }
@@ -1102,7 +1117,13 @@ impl Renderer {
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let brush = rt.CreateSolidColorBrush(&color(self.palette.text, 1.0), None)?;
             let layer = rt.CreateLayer(None)?;
-            self.target = Some(Target { rt, brush, layer });
+            let layer2 = rt.CreateLayer(None)?;
+            self.target = Some(Target {
+                rt,
+                brush,
+                layer,
+                layer2,
+            });
         }
         Ok(())
     }
@@ -1186,6 +1207,20 @@ impl Renderer {
                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             );
         }
+        // The panel that is closing fades out as its shape shrinks, while the
+        // compact view or notice that follows fades in with the morph.
+        let leaving = match frame.transit.leaving {
+            Some(page) => self.paint_leaving_panel(style, shape, frame, page),
+            None => Ok(()),
+        };
+        let content_alpha = frame.transit.content_alpha.clamp(0.0, 1.0);
+        let faded = content_alpha < 1.0;
+        if faded {
+            self.push_opacity(content_alpha);
+            // Bata shows in the view before and after: he stays, only what
+            // pops in fades.
+            self.robot_later.set(Some(None));
+        }
         let robot = frame.robot;
         let content = match view {
             View::MediaCompact => frame.media.map_or(Ok(()), |m| {
@@ -1225,6 +1260,13 @@ impl Renderer {
             // The panel returned above.
             View::Panel(_) | View::Hidden => Ok(()),
         };
+        if faded {
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe { target.rt.PopLayer() };
+            if let Some(Some((area, r))) = self.robot_later.take() {
+                self.paint_robot(area, r);
+            }
+        }
         if let (Some(level), View::MediaCompact | View::MediaLyric) = (frame.volume, view) {
             let r = shape_rect(shape);
             let h = crate::ui::panel_layout::VOLUME_HUD_H
@@ -1244,11 +1286,36 @@ impl Renderer {
         }
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
-        content
+        leaving.and(content)
+    }
+
+    /// Everything drawn until `PopLayer` is at `opacity`: a second layer, so
+    /// it may sit inside the panel's own mask layer.
+    fn push_opacity(&self, opacity: f32) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: D2D_RECT_F {
+                left: -f32::MAX,
+                top: -f32::MAX,
+                right: f32::MAX,
+                bottom: f32::MAX,
+            },
+            geometricMask: ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe { target.rt.PushLayer(&params, &target.layer2) };
     }
 
     /// Bata filling the square `area`.
     fn paint_robot(&self, area: Rect, robot: RobotFrame) {
+        if self.robot_later.get().is_some() {
+            self.robot_later.set(Some(Some((area, robot))));
+            return;
+        }
         let target = self.target.as_ref().expect("target ensured by paint");
         self.robot
             .paint(&target.rt, &target.brush, area, robot.expr, robot.pose, 1.0);
