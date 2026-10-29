@@ -89,7 +89,10 @@ Vale.
   native EDIT (IME, paste); its subclass posts commit/cancel to the window so
   the EDIT is never destroyed inside its own proc. The post carries the
   EDIT's HWND (see the stale-message note below). Closing while dirty shows an
-  inline bar, never a system dialog.
+  inline bar, never a system dialog: Enter = Discard, Esc = Keep, every other
+  key is ignored while it is up. The X button and Alt+F4 go through
+  `WM_CLOSE` -> `request_close` too (no `WM_SYSCOMMAND` handler). Paint order
+  matters here: [[shot-editor-paint-order]].
 - **Text click rule** (`text_click_action`, pure). A press on the canvas with
   the Text tool while an EDIT is open only commits it: no new EDIT, and the
   focus goes back to the editor window, so Ctrl+C, Ctrl+S, Delete, Esc and
