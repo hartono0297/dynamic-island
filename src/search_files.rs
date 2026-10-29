@@ -39,8 +39,6 @@ pub const COUNT_CAP: usize = 999;
 const HIDDEN: u32 = 0x2;
 const SYSTEM: u32 = 0x4;
 const DIRECTORY: u32 = 0x10;
-/// A symlink, junction or cloud placeholder.
-const REPARSE_POINT: u32 = 0x400;
 /// A cloud folder: listing it would make the provider download it.
 const RECALL_ON_OPEN: u32 = 0x40000;
 
@@ -209,8 +207,8 @@ fn walk_root(
         for (name, meta, path) in children {
             let attrs = meta.file_attributes();
             let is_dir = attrs & DIRECTORY != 0;
-            let cloud = is_dir && attrs & RECALL_ON_OPEN != 0;
-            if skipped(&name, attrs, is_dir) || (is_dir && !cloud && attrs & REPARSE_POINT != 0) {
+            let visit = visit(&name, attrs, meta.file_type().is_symlink());
+            if visit == Visit::Skip {
                 continue;
             }
             if out.len() - start >= room {
@@ -219,7 +217,7 @@ fn walk_root(
             let lower = name.to_lowercase();
             // Folders to read later: not a cloud folder (listing it would
             // download it), not another root, not below the depth.
-            if is_dir && !cloud && level + 1 < depth && !root_keys.contains(&key(&path)) {
+            if visit == Visit::Enter && level + 1 < depth && !root_keys.contains(&key(&path)) {
                 let below = match &parent {
                     Some(p) => format!("{p}\\{name}"),
                     None => name.clone(),
@@ -237,6 +235,33 @@ fn walk_root(
                 modified: meta.modified().ok(),
             });
         }
+    }
+}
+
+/// What the walk does with one entry it lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visit {
+    /// Not kept, not entered.
+    Skip,
+    /// Kept; a file, or a folder that is not read.
+    List,
+    /// A folder kept and read later (depth and roots allowing).
+    Enter,
+}
+
+/// The walk's choice for an entry named `name` with `attrs`; `link` is a
+/// symlink or junction (a name-surrogate reparse point, what
+/// `FileType::is_symlink` says on Windows).
+fn visit(name: &str, attrs: u32, link: bool) -> Visit {
+    let is_dir = attrs & DIRECTORY != 0;
+    // Only a link leads elsewhere. Other reparse points (OneDrive's cloud
+    // tags) hold their own items: a listed cloud folder is read like any.
+    if link || skipped(name, attrs, is_dir) {
+        Visit::Skip
+    } else if is_dir && attrs & RECALL_ON_OPEN == 0 {
+        Visit::Enter
+    } else {
+        Visit::List
     }
 }
 
@@ -480,6 +505,36 @@ mod tests {
             ["real.txt"],
             "neither the link nor what it points at"
         );
+    }
+
+    /// A symlink, junction or cloud placeholder.
+    const REPARSE_POINT: u32 = 0x400;
+
+    #[test]
+    fn cloud_folders_are_walked_but_links_are_not() {
+        // A OneDrive folder whose items are already listed locally is a
+        // reparse point too (a cloud tag, not a link): it is read like any
+        // folder, or a redirected Documents would lose every subfolder.
+        assert_eq!(
+            visit("Proyek", DIRECTORY | REPARSE_POINT, false),
+            Visit::Enter
+        );
+        // One the provider has not listed yet: kept, not read (that would
+        // make it download the listing).
+        assert_eq!(
+            visit("Arsip", DIRECTORY | REPARSE_POINT | RECALL_ON_OPEN, false),
+            Visit::List
+        );
+        // A symlink or junction is never listed or followed, folder or file.
+        assert_eq!(visit("Link", DIRECTORY | REPARSE_POINT, true), Visit::Skip);
+        assert_eq!(visit("link.txt", REPARSE_POINT, true), Visit::Skip);
+        // An online-only file (a cloud reparse point) is listed.
+        assert_eq!(visit("laporan.pdf", REPARSE_POINT, false), Visit::List);
+        // Plain folders and files, and the usual skips.
+        assert_eq!(visit("Docs", DIRECTORY, false), Visit::Enter);
+        assert_eq!(visit("a.txt", 0, false), Visit::List);
+        assert_eq!(visit(".git", DIRECTORY, false), Visit::Skip);
+        assert_eq!(visit("h.txt", HIDDEN, false), Visit::Skip);
     }
 
     #[test]

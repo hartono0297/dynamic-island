@@ -33,9 +33,14 @@ sizes, folder counts and app install sizes filled in from a background worker.
 - **Skipped:** hidden or system entries, names starting with `.`,
   `node_modules`, `__pycache__`, `$RECYCLE.BIN`, `.lnk` files (apps come from
   the Start Menu).
-- **Cloud and links:** a directory that is a reparse point (symlink, junction)
-  is skipped and never followed; a folder with `FILE_ATTRIBUTE_RECALL_ON_OPEN`
-  (listing it would make the provider download it) is listed but not entered.
+- **Cloud and links:** a link (a name-surrogate reparse point: symlink or
+  junction, `FileType::is_symlink` on Windows) is skipped, file or folder, and
+  never followed. Other reparse points are **not** links: OneDrive marks its
+  folders with a cloud reparse tag, so "skip every reparse folder" (the first
+  cut) dropped every subfolder of a OneDrive Desktop/Documents (fixed in the
+  v3.3 review, `visit`, test `cloud_folders_are_walked_but_links_are_not`). A
+  folder with `FILE_ATTRIBUTE_RECALL_ON_OPEN` (listing it would make the
+  provider download the listing) is listed but not entered.
   A file that is a cloud placeholder is just a name in the listing. Files are
   never opened, so nothing is hydrated; the icon is `SIIGBF_ICONONLY`, never a
   content thumbnail.
