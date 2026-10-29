@@ -4239,7 +4239,7 @@ impl OutsidePress {
 
 /// The outside-click poll's slow pace, once no input has come for
 /// `OUTSIDE_IDLE_MS`.
-const OUTSIDE_SLOW_MS: u32 = 250;
+const OUTSIDE_SLOW_MS: u32 = 120;
 const OUTSIDE_IDLE_MS: u32 = 1_000;
 
 /// The outside-click poll's interval: quick while the user is at the mouse

@@ -65,7 +65,7 @@ calling `sync_pointer_polls`).
 | Timer | Before | Now |
 |---|---|---|
 | `TIMER_HALO` (30) | 50 ms whenever the island was up, not a panel | none at idle; after a trigger ([[shelf]]): 250 ms, 50 ms only with the left button down within 300 dip; stops after 3 s near without a press, or at once away |
-| `TIMER_OUTSIDE` (24) | 40 ms while a panel is kept open (can be hours) | 40 ms with input in the last second, else 250 ms (`outside_poll_ms`, `GetLastInputInfo`); a `WM_MOUSEMOVE` speeds it up at once |
+| `TIMER_OUTSIDE` (24) | 40 ms while a panel is kept open (can be hours) | 40 ms with input in the last second, else 120 ms (`outside_poll_ms`, `GetLastInputInfo`); a `WM_MOUSEMOVE` speeds it up at once |
 | `TIMER_BEHIND` (29) | 80 ms while "Di belakang jendela" is on | 80 ms near the top edge (150 dip) or while lowering is due, else 350 ms (`behind::poll_ms`) |
 
 So an idle island, pointer elsewhere, runs none of them (with stay-behind on:

@@ -47,7 +47,7 @@ It is outside unless the island took it itself: `WM_LBUTTONDOWN`,
 hit-tested at poll time (the pointer may have moved). A press already down
 when the polling starts is not an edge (`reset`, which also spends old
 `0x0001` bits); an inside mark the poll never used is dropped once the
-buttons are up. Pace: 40 ms, 250 ms after a second without input
+buttons are up. Pace: 40 ms, 120 ms after a second without input
 (`GetLastInputInfo`, `outside_poll_ms`), back to 40 ms on the next poll with
 input or a `WM_MOUSEMOVE` over the island; `SetCoalescableTimer` slack ≤ 30
 ms. Rejected: `SetCapture` (swallows the click and fights `TME_LEAVE`), a
@@ -91,4 +91,4 @@ from any other app); it stays inside the CLI and search inputs.
 
 **Not verified live:** the `0x0001` bit is shared with other processes that
 call `GetAsyncKeyState`; a quick click whose bit another app spent is missed
-at the 250 ms pace (the 40 ms pace usually still sees the edge).
+at the 120 ms pace (the 40 ms pace usually still sees the edge).
