@@ -255,15 +255,31 @@ impl Parser {
         self.peek();
         let mut text = String::new();
         let mut dot = false;
+        // Digits since the start or the last thousands mark.
+        let mut run = 0;
+        let mut grouped = false;
         while let Some(&c) = self.chars.get(self.at) {
             match c {
                 '0'..='9' => {
                     text.push(c);
+                    run += 1;
                     self.at += 1;
                 }
-                // A thousands mark: after a digit, before any decimal mark,
-                // with exactly three digits after it. It adds nothing.
-                c if c == self.group && !dot && !text.is_empty() && self.three_digits_follow() => {
+                // A thousands mark: after one to three digits that do not
+                // start with 0 ("0.001" is a decimal, "1234.567" is not
+                // grouped), before any decimal mark, with exactly three
+                // digits after it. It adds nothing.
+                c if c == self.group
+                    && !dot
+                    && (if grouped {
+                        run == 3
+                    } else {
+                        (1..=3).contains(&run) && !text.starts_with('0')
+                    })
+                    && self.three_digits_follow() =>
+                {
+                    grouped = true;
+                    run = 0;
                     self.at += 1;
                 }
                 '.' | ',' if !dot => {
@@ -639,6 +655,11 @@ mod tests {
         // The search row shows the Indonesian sum.
         let r = search("1.000 + 500", &[], Lang::Id, &labels());
         assert_eq!(r[0].title, "= 1500");
+        // A leading 0 or more than three digits before the mark: a decimal.
+        assert_eq!(calc_in("0.001 * 5", Lang::Id), Some(0.005));
+        assert_eq!(calc_in("0.125 + 1", Lang::Id), Some(1.125));
+        assert_eq!(calc_in("0,001 * 5", Lang::En), Some(0.005));
+        assert_eq!(calc_in("1234.567", Lang::Id), Some(1234.567));
     }
 
     #[test]

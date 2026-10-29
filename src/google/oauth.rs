@@ -495,8 +495,11 @@ fn read_redirect(stream: &TcpStream, expected_state: &str) -> Option<Result<Stri
             "login error: {}",
             e.chars().take(64).collect::<String>()
         ))),
+        // A code with another login's state is not ours either: ignored,
+        // so a page probing the port cannot end the real login.
         Ok((_, state)) if state != expected_state => {
-            Err(AuthError::Network("login state mismatch".into()))
+            respond(stream, "404 Not Found", "");
+            return None;
         }
         Ok((code, _)) => Ok(code),
     })
@@ -803,16 +806,20 @@ mod tests {
     }
 
     #[test]
-    fn loopback_rejects_a_mismatched_state() {
-        let (outcome, responses) =
-            loopback_run(&["GET /?state=evil&code=c HTTP/1.1\r\n\r\n"], |_| {
-                panic!("no exchange for a forged redirect")
-            });
-        assert_eq!(
-            outcome,
-            Err(AuthError::Network("login state mismatch".into()))
+    fn loopback_ignores_a_code_with_another_state() {
+        // The forged code is never exchanged; the real redirect still works.
+        let (outcome, responses) = loopback_run(
+            &[
+                "GET /?state=evil&code=bad HTTP/1.1\r\n\r\n",
+                "GET /?state=s1&code=good HTTP/1.1\r\n\r\n",
+            ],
+            |code| {
+                assert_eq!(code, "good", "only this login's code is exchanged");
+                Ok(format!("tokens for {code}"))
+            },
         );
-        assert!(responses[0].0.contains("Gagal terhubung"));
+        assert_eq!(outcome, Ok("tokens for good".to_string()));
+        assert!(responses[0].0.starts_with("HTTP/1.1 404"));
     }
 
     #[test]

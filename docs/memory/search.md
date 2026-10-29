@@ -101,3 +101,13 @@ Related: [[shortcut-tiles]], [[gestures]].
   Settings opens (`retry_hotkeys`).
 - No search EDIT (creation failed at start): `FocusSearch` closes it again.
 
+
+## Round 2 review (2026-10-29)
+
+Calculator: a thousands mark only follows one to three digits that do not
+start with 0, then groups of exactly three ("0.001" is a decimal, "1234.567"
+is not grouped, "1.000.000" is). Custom tile paths also accept `C:/Tools/a.exe`
+(a drive letter then `\` or `/`). The OAuth loopback ignores a code or error
+whose state is not this login's (404, keeps waiting). Hapus no longer leaves
+the screenshot's own file in `taken` while it waits for it. The System CPU
+figure eases with its own 0.5-point step (it is in percent).

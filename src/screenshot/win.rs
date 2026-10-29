@@ -276,10 +276,17 @@ pub fn spawn_delete(job: DeleteJob, tx: Sender<Event>, wake: impl Fn() + Send + 
         .name("shot-delete".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
+            // The screenshot's own file is in `taken` (it was matched): left
+            // there, the wait could never find it again if its hash was
+            // unreadable a moment ago.
+            let mut taken = job.taken;
+            if let Some(own) = &job.file {
+                taken.retain(|p| p != own);
+            }
             let file = job
                 .file
                 .filter(|p| confirmed(job.clip.hash, file_hash(p)))
-                .or_else(|| wait_for_file(job.clip, &job.taken, &job.arrivals));
+                .or_else(|| wait_for_file(job.clip, &taken, &job.arrivals));
             let outcome = match file {
                 None => FileOutcome::NoFile,
                 Some(path) => delete_outcome(path.exists(), || {

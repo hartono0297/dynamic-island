@@ -271,6 +271,8 @@ pub struct Eased {
     from: f32,
     to: f32,
     start: Option<Instant>,
+    /// The smallest change worth a glide, in the figure's own unit.
+    min_step: f32,
 }
 
 impl Eased {
@@ -280,6 +282,16 @@ impl Eased {
             from: value,
             to: value,
             start: None,
+            min_step: EASE_MIN_STEP,
+        }
+    }
+
+    /// `at`, with another smallest worthwhile change (CPU is in percent, so
+    /// its step is 0.5, not the 0..1 figures' 0.002).
+    pub fn at_with_step(value: f32, min_step: f32) -> Self {
+        Eased {
+            min_step,
+            ..Self::at(value)
         }
     }
 
@@ -291,7 +303,7 @@ impl Eased {
         if !self.running(now) {
             self.start = None;
         }
-        if (to - self.to).abs() < EASE_MIN_STEP {
+        if (to - self.to).abs() < self.min_step {
             return;
         }
         self.from = self.value(now);
@@ -334,11 +346,18 @@ pub struct SysEase {
 }
 
 fn retarget(slot: &mut Option<Eased>, to: f32, now: Instant) {
+    retarget_with(slot, to, EASE_MIN_STEP, now);
+}
+
+fn retarget_with(slot: &mut Option<Eased>, to: f32, min_step: f32, now: Instant) {
     match slot {
         Some(e) => e.retarget(to, now),
-        None => *slot = Some(Eased::at(to)),
+        None => *slot = Some(Eased::at_with_step(to, min_step)),
     }
 }
+
+/// CPU is in percent: under half a point is not worth a glide.
+const CPU_MIN_STEP: f32 = 0.5;
 
 impl SysEase {
     /// Takes a reading in. A cheap one moves the CPU and RAM only (it
@@ -347,7 +366,7 @@ impl SysEase {
         if s.kind == SampleKind::Warn {
             return;
         }
-        retarget(&mut self.cpu, s.cpu, now);
+        retarget_with(&mut self.cpu, s.cpu, CPU_MIN_STEP, now);
         if let Some(p) = s.ram_percent() {
             retarget(&mut self.ram, f32::from(p) / 100.0, now);
         }
@@ -1261,5 +1280,17 @@ mod tests {
                 .all(|p| !SKIPPED_PIDS.contains(&p.pid) && !p.name.is_empty())
         );
         assert!(procs.iter().any(|p| p.pid == std::process::id()));
+    }
+
+    #[test]
+    fn a_cpu_figure_under_half_a_point_off_does_not_glide() {
+        let t0 = Instant::now();
+        let mut ease = SysEase::default();
+        let at = |cpu: f32| reading(SampleKind::Live, cpu, 40, Vec::new());
+        ease.update(&at(3.4567), t0);
+        ease.update(&at(3.4601), t0 + Duration::from_secs(1));
+        assert!(!ease.running(t0 + Duration::from_secs(1)), "3.46 is 3.46");
+        ease.update(&at(4.2), t0 + Duration::from_secs(2));
+        assert!(ease.running(t0 + Duration::from_secs(2)), "a real change glides");
     }
 }

@@ -113,7 +113,7 @@ fn local_path(target: &str) -> bool {
     b.len() >= 3
         && b[0].is_ascii_alphabetic()
         && b[1] == b':'
-        && b[2] == b'\\'
+        && (b[2] == b'\\' || b[2] == b'/')
         && !target[2..].contains(':')
 }
 
@@ -440,7 +440,7 @@ mod tests {
                 r"\\server\share\a.exe",
                 r"\\?\C:\a.exe",
                 "C:a.exe",
-                "C:/Tools/a.exe",
+                "//server/share/a.exe",
                 r"C:\a.txt:stream.exe",
                 r"C:\x\https://evil",
                 "file:///C:/a.exe",
