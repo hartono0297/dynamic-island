@@ -3488,8 +3488,14 @@ mod tests {
         open_on(&mut s, Page::Shortcuts, t0);
         for page in [Page::Shelf, Page::Calendar, Page::Cli, Page::Mixer] {
             let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Go(page))), t0);
-            assert_eq!(effects, vec![], "no collapse, no effect");
-            assert_eq!(s.view(), View::Panel(page));
+            // The new page's own refresh may come; never a shortcut run.
+            assert!(
+                effects
+                    .iter()
+                    .all(|e| matches!(e, Effect::RefreshCalendar { .. })),
+                "{page:?}: {effects:?}"
+            );
+            assert_eq!(s.view(), View::Panel(page), "no collapse");
         }
     }
 
@@ -3502,7 +3508,7 @@ mod tests {
         s.apply(Event::PanelPages(pages), t0);
         open_on(&mut s, Page::Shortcuts, t0);
         let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Go(Page::Notes))), t0);
-        assert_eq!(effects, vec![]);
+        assert!(effects.is_empty(), "{effects:?}");
         assert_eq!(s.view(), View::Panel(Page::Notes));
         // The panel closes: the next visit starts on a page that is on.
         s.apply(Event::Hover(false), t0);
@@ -5025,8 +5031,8 @@ mod tests {
         tiles.toggle(0);
         tiles.add(own.clone());
         s.apply(Event::ShortcutTiles(tiles), t0);
-        // Shown: the built-in tiles but one, then Gmail right after them.
-        let own_at = Shortcut::ALL.len() - 1;
+        // Shown: the default tiles but one, then Gmail right after them.
+        let own_at = ShortcutTiles::default().shown() - 1;
         assert_eq!(s.tiles().len(), own_at + 1);
         open_on(&mut s, Page::Shortcuts, t0);
         let effects = s.apply(Event::Click(Hit::CustomTile(own_at)), t0);

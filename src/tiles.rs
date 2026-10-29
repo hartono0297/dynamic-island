@@ -1009,7 +1009,7 @@ mod tests {
         assert_eq!(t.entries()[..Shortcut::ALL.len()], *defaults.entries());
         assert_eq!(
             &names(&t)[Shortcut::ALL.len()..],
-            ["+Gmail", "+Proyek"],
+            ["+Gmail", "(+Proyek)"],
             "own tiles in their order, after the built-ins"
         );
         // 11 built-ins on: only one own tile fits.
@@ -1045,10 +1045,10 @@ mod tests {
         // The list of own tiles has a limit too.
         let mut t = ShortcutTiles::default();
         for i in 0..MAX_CUSTOM {
-            assert!(t.add_own(custom(&format!("T{i}"), CustomKind::App, r"C:.exe")).is_some());
+            assert!(t.add_own(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe")).is_some());
         }
         assert_eq!(
-            t.add_own(custom("Lebih", CustomKind::App, r"C:.exe")),
+            t.add_own(custom("Lebih", CustomKind::App, r"C:\a.exe")),
             None
         );
     }
@@ -1107,7 +1107,9 @@ mod tests {
             },
         ];
         let t = ShortcutTiles::from_saved(&saved);
-        assert_eq!(&names(&t)[..2], ["(Lock)", "(Screenshot)"]);
+        let all = names(&t);
+        assert_eq!(all[0], "(Lock)", "the first one named stays first");
+        assert!(all.contains(&"(Screenshot)".to_owned()));
         assert_eq!(t.customs(), 1);
         assert!(names(&t).contains(&"+Gmail".to_owned()));
         // Each built-in still once, however it was written.

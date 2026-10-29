@@ -1367,6 +1367,12 @@ impl Builder<'_> {
         );
     }
 
+    /// A button for a list row: the label with a little padding, narrower
+    /// than a button of the cards' rows (which keep `BUTTON_MIN_W`).
+    fn compact_w(&self, label: &str) -> f32 {
+        (self.w(label, Font::Control) + 24.0).max(56.0)
+    }
+
     fn button_w(&self, labels: &[&str], kind: ButtonKind) -> f32 {
         let widest = labels
             .iter()
@@ -1882,7 +1888,7 @@ fn tiles_card(b: &mut Builder, s: &State) {
         let (label, desc) = match &entries[i].0 {
             Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), note),
             Tile::Custom(c) => {
-                let w = b.button_w(&[&delete], ButtonKind::Secondary);
+                let w = b.compact_w(&delete);
                 let item = (
                     Hit::TileRemove(i),
                     delete.clone(),
@@ -1965,7 +1971,7 @@ fn available_card(b: &mut Builder, s: &State) {
     let card = b.card(list_h + tail_h);
     let (add, delete) = (b.t(Key::TileAdd), b.t(Key::Delete));
     let add_w = b.button_w(&[&add], ButtonKind::Secondary);
-    let delete_w = b.button_w(&[&delete], ButtonKind::Secondary);
+    let delete_w = b.compact_w(&delete);
     let mut y = card.y;
     for (g, items) in groups {
         let key = match g {
@@ -3035,18 +3041,33 @@ mod tests {
                 for list in [List::Pages, List::Tiles] {
                     out.push(State {
                         lang,
-                        drag: Some(DragView {
-                            list,
-                            from: 1,
-                            to: 3,
-                            top: FIRST_CARD_Y + 600.0,
-                        }),
+                        drag: Some(held_row(&State { lang, ..base.clone() }, list, 1, 3)),
                         ..base.clone()
                     });
                 }
             }
         }
         out
+    }
+
+    /// A drag of the row at place `from` of `list`, with the pointer a little
+    /// into the place `to` (the layout's own rows say where they are).
+    fn held_row(s: &State, list: List, from: usize, to: usize) -> DragView {
+        let l = layout(Section::Appearance, s, &Estimate);
+        let tops: Vec<f32> = l
+            .rows
+            .iter()
+            .filter(|r| r.list == list)
+            .map(|r| r.rect.y)
+            .collect();
+        let top = tops[to] + 8.0;
+        assert_eq!(drop_index(top + ROW_H / 2.0, &tops), to);
+        DragView {
+            list,
+            from,
+            to,
+            top,
+        }
     }
 
     /// Every section and state, each scrolled to the top and to the bottom.
@@ -3939,74 +3960,393 @@ mod tests {
         card_top - view.y
     }
 
-    /// A page toggle (page, on, enabled) and an order stepper (−, +).
-    type PageToggle = (Page, bool, bool);
-    type OrderStepper = (Option<Hit>, Option<Hit>);
-
-    /// The "Halaman panel" toggles and order steppers, in card order.
-    fn page_controls(l: &Layout) -> (Vec<PageToggle>, Vec<OrderStepper>) {
-        let mut toggles = Vec::new();
-        let mut steppers = Vec::new();
-        for c in &l.controls {
-            match c {
-                Control::Toggle {
-                    hit: Hit::PageOn(p),
-                    on,
-                    enabled,
-                    ..
-                } => toggles.push((*p, *on, *enabled)),
-                Control::Stepper { minus, plus, .. }
-                    if matches!(minus.1.or(plus.1), Some(Hit::PageMove(..))) =>
-                {
-                    steppers.push((minus.1, plus.1));
+    /// Every button and handle of a layout: its hit, its label (empty for an
+    /// icon) and whether it takes clicks, in drawing order.
+    fn buttons_of(l: &Layout) -> Vec<(Hit, String, bool)> {
+        l.controls
+            .iter()
+            .filter_map(|c| match c {
+                Control::Button(b) => Some((b.hit, b.label.clone(), b.enabled)),
+                Control::IconButton { hit, enabled, .. } => {
+                    Some((*hit, String::new(), *enabled))
                 }
-                _ => {}
-            }
-        }
-        (toggles, steppers)
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn button(all: &[(Hit, String, bool)], hit: Hit) -> &(Hit, String, bool) {
+        all.iter()
+            .find(|b| b.0 == hit)
+            .unwrap_or_else(|| panic!("no {hit:?}"))
     }
 
     #[test]
-    fn panel_pages_card_lists_every_page_with_a_toggle_and_an_order_stepper() {
+    fn panel_pages_card_lists_the_shown_pages_first_with_a_handle_and_buttons() {
         for s in states().iter().take(8) {
             let l = layout(Section::Appearance, s, &Estimate);
-            let (toggles, steppers) = page_controls(&l);
-            let expected: Vec<(Page, bool, bool)> = s
+            let all = buttons_of(&l);
+            let shown = s.pages.visible();
+            let hidden: Vec<Page> = s
                 .pages
                 .entries()
                 .iter()
-                .map(|(p, on)| (*p, *on, true))
+                .filter(|(_, on)| !on)
+                .map(|(p, _)| *p)
                 .collect();
-            assert_eq!(toggles, expected);
-            let order: Vec<Page> = s.pages.entries().iter().map(|e| e.0).collect();
-            assert_eq!(steppers.len(), order.len());
-            // "−" moves a page earlier, "+" later; none past the ends.
-            assert_eq!(steppers[0], (None, Some(Hit::PageMove(order[0], 1))));
-            assert_eq!(
-                steppers[4],
-                (
-                    Some(Hit::PageMove(order[4], -1)),
-                    Some(Hit::PageMove(order[4], 1))
-                )
+            // A handle per shown page, in its order, and the rows follow it.
+            let grips: Vec<Hit> = all
+                .iter()
+                .map(|b| b.0)
+                .filter(|h| matches!(h, Hit::PageGrip(_)))
+                .collect();
+            let want: Vec<Hit> = shown.iter().map(|p| Hit::PageGrip(*p)).collect();
+            assert_eq!(grips, want);
+            let rows: Vec<Hit> = l
+                .rows
+                .iter()
+                .filter(|r| r.list == List::Pages)
+                .map(|r| r.grip)
+                .collect();
+            assert_eq!(rows, want);
+            // Up (−1) and down (+1) among the pages shown: none past the ends.
+            for (i, p) in shown.iter().enumerate() {
+                assert_eq!(button(&all, Hit::PageMove(*p, -1)).2, i > 0, "{p:?}");
+                assert_eq!(
+                    button(&all, Hit::PageMove(*p, 1)).2,
+                    i + 1 < shown.len(),
+                    "{p:?}"
+                );
+            }
+            // "Sembunyikan" on the shown pages (the last one cannot), then
+            // "Tampilkan" on the hidden ones.
+            let toggles: Vec<(Hit, bool)> = all
+                .iter()
+                .filter(|b| matches!(b.0, Hit::PageOn(_)))
+                .map(|b| (b.0, b.2))
+                .collect();
+            let want: Vec<(Hit, bool)> = shown
+                .iter()
+                .map(|p| (Hit::PageOn(*p), shown.len() > 1))
+                .chain(hidden.iter().map(|p| (Hit::PageOn(*p), true)))
+                .collect();
+            assert_eq!(toggles, want);
+            for b in &all {
+                if let Hit::PageOn(p) = b.0 {
+                    let key = if shown.contains(&p) {
+                        Key::ListHide
+                    } else {
+                        Key::ListShow
+                    };
+                    assert_eq!(b.1, text(s.lang, key), "{p:?}");
+                }
+            }
+            // "Kembalikan bawaan" is on only when something differs.
+            let reset = button(&all, Hit::PageReset);
+            assert_eq!(reset.1, text(s.lang, Key::ListRestore));
+            assert_eq!(reset.2, s.pages != PanelPages::default());
+            // The count, and "Tersembunyi" only with hidden pages.
+            let count = format!(
+                "{}: {}/{}",
+                text(s.lang, Key::PagesShown),
+                shown.len(),
+                s.pages.entries().len()
             );
-            assert_eq!(steppers[10], (Some(Hit::PageMove(order[10], -1)), None));
+            assert!(l.texts.iter().any(|t| t.text == count), "{count}");
+            let title = text(s.lang, Key::PagesHidden).to_uppercase();
+            assert_eq!(
+                l.texts.iter().any(|t| t.text == title),
+                !hidden.is_empty()
+            );
         }
     }
 
     #[test]
-    fn the_last_page_still_shown_cannot_be_switched_off() {
+    fn the_last_page_still_shown_cannot_be_hidden() {
         let mut pages = PanelPages::default();
         for p in &Page::ALL[1..] {
             pages.toggle(*p);
         }
+        for lang in [Lang::Id, Lang::En] {
+            let s = State {
+                pages: pages.clone(),
+                lang,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let all = buttons_of(&l);
+            assert!(!button(&all, Hit::PageOn(Page::Calendar)).2, "locked on");
+            for p in &Page::ALL[1..] {
+                assert!(button(&all, Hit::PageOn(*p)).2, "{p:?} can come back");
+            }
+            // The reason sits under its name, and nothing can move.
+            let why = text(lang, Key::PagesLastShown);
+            assert!(l.texts.iter().any(|t| t.text == why));
+            assert!(!button(&all, Hit::PageMove(Page::Calendar, 1)).2);
+            assert!(!button(&all, Hit::PageMove(Page::Calendar, -1)).2);
+        }
+    }
+
+    #[test]
+    fn pintasan_card_lists_the_shown_tiles_then_the_rest_under_available() {
+        for s in states().iter().take(8) {
+            let l = layout(Section::Appearance, s, &Estimate);
+            let all = buttons_of(&l);
+            let entries = s.tiles.entries();
+            let on: Vec<usize> = (0..entries.len()).filter(|i| entries[*i].1).collect();
+            let off: Vec<usize> = (0..entries.len()).filter(|i| !entries[*i].1).collect();
+            let grips: Vec<Hit> = all
+                .iter()
+                .map(|b| b.0)
+                .filter(|h| matches!(h, Hit::TileGrip(_)))
+                .collect();
+            let want: Vec<Hit> = on.iter().map(|i| Hit::TileGrip(*i)).collect();
+            assert_eq!(grips, want);
+            // "Hapus" on every own tile, shown or not, and on no other.
+            let mut removes: Vec<Hit> = all
+                .iter()
+                .map(|b| b.0)
+                .filter(|h| matches!(h, Hit::TileRemove(_)))
+                .collect();
+            removes.sort_by_key(|h| match h {
+                Hit::TileRemove(i) => *i,
+                _ => 0,
+            });
+            let own: Vec<Hit> = (0..entries.len())
+                .filter(|i| matches!(entries[*i].0, Tile::Custom(_)))
+                .map(Hit::TileRemove)
+                .collect();
+            assert_eq!(removes, own);
+            // Shown: "Sembunyikan", but not the last one. Off: "+ Tambah",
+            // not while twelve show.
+            for i in &on {
+                let b = button(&all, Hit::TileOn(*i));
+                assert_eq!(b.1, text(s.lang, Key::ListHide));
+                assert_eq!(b.2, on.len() > 1);
+            }
+            for i in &off {
+                let b = button(&all, Hit::TileOn(*i));
+                assert_eq!(b.1, text(s.lang, Key::TileAdd));
+                assert_eq!(b.2, !s.tiles.full(), "{i}");
+            }
+            if s.tiles.full() {
+                let full = text(s.lang, Key::TilePageFull);
+                assert!(l.texts.iter().any(|t| t.text == full));
+            }
+            // The count against the twelve the page takes.
+            let count = format!(
+                "{}: {}/12",
+                text(s.lang, Key::TilesShown),
+                on.len().min(12)
+            );
+            assert!(l.texts.iter().any(|t| t.text == count), "{count}");
+            // "Kembalikan bawaan" only when it would change something.
+            let mut reset = s.tiles.clone();
+            reset.reset();
+            assert_eq!(button(&all, Hit::TileReset).2, reset != s.tiles);
+            // The form opens while there is room for another own tile.
+            let open = button(&all, Hit::TileFormOpen);
+            assert_eq!(open.1, text(s.lang, Key::TileAddOwn));
+            assert_eq!(open.2, s.tiles.customs() < MAX_CUSTOM);
+            // Each group of the available tiles has its title.
+            for g in TileGroup::ALL {
+                let has = off.iter().any(|i| group(&entries[*i].0) == g);
+                let key = match g {
+                    TileGroup::Pages => Key::TileGroupPages,
+                    TileGroup::Windows => Key::TileGroupWindows,
+                    TileGroup::Vale => Key::TileGroupVale,
+                    TileGroup::Own => Key::TileGroupOwn,
+                };
+                let title = text(s.lang, key).to_uppercase();
+                let drawn = l.texts.iter().any(|t| t.text == title && t.font == Font::Eyebrow);
+                assert_eq!(drawn, has, "{g:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_own_shortcut_form_asks_for_a_path_only_for_an_app_or_a_folder() {
+        for lang in [Lang::Id, Lang::En] {
+            for kind in CustomKind::ALL {
+                let s = State {
+                    lang,
+                    tile_form: Some(TileForm { kind, error: None }),
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Appearance, &s, &Estimate);
+                let all = buttons_of(&l);
+                let field = |f: Field| {
+                    l.fields
+                        .iter()
+                        .find(|(x, _)| *x == f)
+                        .map(|(_, r)| *r)
+                        .unwrap_or_else(|| panic!("{f:?}"))
+                };
+                let (name, target) = (field(Field::TileName), field(Field::TileTarget));
+                assert!(target.y > name.y);
+                assert!(target.x == name.x);
+                // "Pilih…" takes room from the Target field, not for a web
+                // address.
+                let browse = all.iter().any(|b| b.0 == Hit::TileBrowse);
+                assert_eq!(browse, kind != CustomKind::Url, "{kind:?}");
+                if browse {
+                    assert!(target.right() < name.right());
+                } else {
+                    assert_eq!(target.right(), name.right());
+                }
+                // Jenis: Aplikasi | Folder | Web, the kind chosen selected.
+                let (_, items, selected) = l.segmented(Group::TileKind).expect("Jenis");
+                let hits: Vec<Hit> = items.iter().map(|i| i.hit).collect();
+                let want: Vec<Hit> = CustomKind::ALL
+                    .iter()
+                    .map(|k| Hit::TileFormKind(*k))
+                    .collect();
+                assert_eq!(hits, want);
+                assert_eq!(items[selected].hit, Hit::TileFormKind(kind));
+                assert_eq!(items[2].label, text(lang, Key::TileKindWeb));
+                // "Batal" and "Tambah", and no "+ Pintasan sendiri" meanwhile.
+                assert_eq!(button(&all, Hit::TileFormCancel).1, text(lang, Key::Cancel));
+                assert_eq!(button(&all, Hit::TileFormAdd).1, text(lang, Key::TileFormAdd));
+                assert!(all.iter().all(|b| b.0 != Hit::TileFormOpen));
+            }
+            // Closed: no fields, the button to open it.
+            let s = State {
+                lang,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            assert!(l.fields.is_empty());
+            assert!(buttons_of(&l).iter().any(|b| b.0 == Hit::TileFormOpen));
+        }
+    }
+
+    #[test]
+    fn the_form_says_what_is_wrong_under_its_fields_in_red() {
+        for lang in [Lang::Id, Lang::En] {
+            let keys = [
+                Key::TileErrName,
+                Key::TileErrPath,
+                Key::TileErrUrl,
+                Key::TileOwnFull,
+            ];
+            for key in keys {
+                let ok = State {
+                    lang,
+                    tile_form: Some(TileForm {
+                        kind: CustomKind::App,
+                        error: None,
+                    }),
+                    ..states()[0].clone()
+                };
+                let bad = State {
+                    tile_form: Some(TileForm {
+                        kind: CustomKind::App,
+                        error: Some(key),
+                    }),
+                    ..ok.clone()
+                };
+                let (l0, l1) = (
+                    layout(Section::Appearance, &ok, &Estimate),
+                    layout(Section::Appearance, &bad, &Estimate),
+                );
+                let red: Vec<&Text> = l1.texts.iter().filter(|t| t.tone == Tone::Bad).collect();
+                assert!(!red.is_empty(), "{key:?}");
+                let joined: Vec<&str> = red.iter().map(|t| t.text.as_str()).collect();
+                assert_eq!(joined.join(" "), text(lang, key));
+                assert!(l0.texts.iter().all(|t| t.tone != Tone::Bad));
+                // The card grows by the message; the fields stay put.
+                let (c0, c1) = (l0.cards.last().unwrap(), l1.cards.last().unwrap());
+                assert!(c1.h > c0.h);
+                assert_eq!(l0.fields, l1.fields);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tile_added_off_says_why_beside_its_button() {
+        let base = states()[0].clone();
+        let l0 = layout(Section::Appearance, &base, &Estimate);
         let s = State {
-            pages,
-            ..states()[0].clone()
+            tile_note: Some(Key::TileAddedOff),
+            ..base
         };
         let l = layout(Section::Appearance, &s, &Estimate);
-        let (toggles, _) = page_controls(&l);
-        assert_eq!(toggles[0], (Page::Calendar, true, false), "locked on");
-        assert!(toggles[1..].iter().all(|(_, on, enabled)| !on && *enabled));
+        let note = text(s.lang, Key::TileAddedOff);
+        let lines: Vec<&str> = l
+            .texts
+            .iter()
+            .map(|t| t.text.as_str())
+            .filter(|t| t.chars().count() > 4 && note.contains(t))
+            .collect();
+        assert_eq!(lines.join(" "), note);
+        assert!(l.cards.last().unwrap().h > l0.cards.last().unwrap().h);
+    }
+
+    #[test]
+    fn a_drag_follows_the_pointer_while_the_other_rows_make_room() {
+        for list in [List::Pages, List::Tiles] {
+            let base = states()[0].clone();
+            let l0 = layout(Section::Appearance, &base, &Estimate);
+            let rows0: Vec<&ReorderRow> = l0.rows.iter().filter(|r| r.list == list).collect();
+            let tops: Vec<f32> = rows0.iter().map(|r| r.rect.y).collect();
+            assert!(tops.windows(2).all(|w| w[1] - w[0] == ROW_H));
+            assert!(l0.lifted.is_none());
+
+            let drag = held_row(&base, list, 1, 3);
+            let l = layout(
+                Section::Appearance,
+                &State {
+                    drag: Some(drag),
+                    ..base.clone()
+                },
+                &Estimate,
+            );
+            let rows: Vec<&ReorderRow> = l.rows.iter().filter(|r| r.list == list).collect();
+            assert_eq!(rows.len(), rows0.len());
+            let y_of = |hit: Hit| rows.iter().find(|r| r.grip == hit).unwrap().rect.y;
+            // The row in hand is under the pointer; the ones it passed move
+            // up a place; the rest stay.
+            assert_eq!(y_of(rows0[1].grip), drag.top);
+            assert_eq!(y_of(rows0[0].grip), tops[0]);
+            assert_eq!(y_of(rows0[2].grip), tops[1]);
+            assert_eq!(y_of(rows0[3].grip), tops[2]);
+            assert_eq!(y_of(rows0[4].grip), tops[4]);
+            let lifted = l.lifted.expect("the held row is raised");
+            assert_eq!(lifted.y, drag.top);
+            assert_eq!(lifted.h, ROW_H);
+            // Nothing grows or shrinks.
+            assert_eq!(l.cards, l0.cards);
+            assert!(buttons_of(&l).len() == buttons_of(&l0).len());
+        }
+    }
+
+    #[test]
+    fn drop_index_takes_the_row_the_pointer_is_in() {
+        let tops = [100.0, 152.0, 204.0, 256.0];
+        assert_eq!(drop_index(0.0, &tops), 0, "above the list");
+        assert_eq!(drop_index(100.0, &tops), 0);
+        assert_eq!(drop_index(151.9, &tops), 0);
+        assert_eq!(drop_index(152.0, &tops), 1);
+        assert_eq!(drop_index(230.0, &tops), 2);
+        assert_eq!(drop_index(256.0, &tops), 3);
+        assert_eq!(drop_index(900.0, &tops), 3, "below the list");
+        assert_eq!(drop_index(10.0, &[]), 0);
+    }
+
+    #[test]
+    fn display_order_moves_the_row_held_to_where_it_would_drop() {
+        let drag = |from, to| DragView {
+            list: List::Pages,
+            from,
+            to,
+            top: 0.0,
+        };
+        assert_eq!(display_order(5, None), [0, 1, 2, 3, 4]);
+        assert_eq!(display_order(5, Some(&drag(1, 3))), [0, 2, 3, 1, 4]);
+        assert_eq!(display_order(5, Some(&drag(3, 0))), [3, 0, 1, 2, 4]);
+        assert_eq!(display_order(5, Some(&drag(2, 2))), [0, 1, 2, 3, 4]);
+        assert_eq!(display_order(5, Some(&drag(0, 9))), [1, 2, 3, 4, 0], "clamped");
+        assert_eq!(display_order(3, Some(&drag(7, 0))), [0, 1, 2], "no such row");
     }
 
     #[test]

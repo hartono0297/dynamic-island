@@ -4167,17 +4167,21 @@ mod tests {
         assert_eq!(r[1], region(explorer.chips[1], Hit::CliFolder));
         assert_eq!(r.len(), 4);
 
-        let tiles = sample_tiles(Shortcut::ALL.len());
+        let tiles = sample_tiles(ORIGINAL_NINE);
         let r = regions(
             s,
             &PageLayout::Shortcuts(shortcuts_layout(s, false, &tiles)),
             false,
         );
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
-        let want: Vec<Hit> = Shortcut::ALL.into_iter().map(Hit::Shortcut).collect();
+        let want: Vec<Hit> = Shortcut::ALL[..ORIGINAL_NINE]
+            .iter()
+            .copied()
+            .map(Hit::Shortcut)
+            .collect();
         assert_eq!(hits, want);
         // A custom tile answers with its place among the tiles shown.
-        let builtin = Shortcut::ALL.len();
+        let builtin = ORIGINAL_NINE;
         let mixed = sample_tiles(builtin + 2);
         let r = regions(
             s,
@@ -4206,11 +4210,14 @@ mod tests {
         }
     }
 
-    /// `n` tiles: the eight built-in ones first, then custom ones.
+    /// The built-in tiles of the first versions, ahead of the page tiles.
+    const ORIGINAL_NINE: usize = 9;
+
+    /// `n` tiles: the nine original built-in ones first, then custom ones.
     fn sample_tiles(n: usize) -> Vec<Tile> {
         use crate::tiles::{CustomKind, CustomTile};
         (0..n)
-            .map(|i| match Shortcut::ALL.get(i) {
+            .map(|i| match Shortcut::ALL[..ORIGINAL_NINE].get(i) {
                 Some(s) => Tile::Builtin(*s),
                 None => Tile::Custom(
                     CustomTile::new(&format!("T{i}"), CustomKind::App, r"C:\a.exe").expect("valid"),
@@ -4220,13 +4227,40 @@ mod tests {
     }
 
     #[test]
+    fn page_and_settings_tiles_go_through_the_built_in_path() {
+        use crate::model::Page;
+        let go = [
+            Shortcut::ValeSettings,
+            Shortcut::Go(Page::Shelf),
+            Shortcut::Go(Page::Calendar),
+            Shortcut::Go(Page::Cli),
+        ];
+        let tiles: Vec<Tile> = go.iter().map(|s| Tile::Builtin(*s)).collect();
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            let l = shortcuts_layout(s, false, &tiles);
+            let order: Vec<Option<Shortcut>> = l.tiles.iter().map(|(t, _)| *t).collect();
+            assert_eq!(order, go.map(Some));
+            let r = regions(s, &PageLayout::Shortcuts(l), false);
+            let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
+            let want: Vec<Hit> = go.into_iter().map(Hit::Shortcut).collect();
+            assert_eq!(hits, want);
+        }
+    }
+
+    #[test]
     fn shortcut_tiles_four_to_a_row_in_order() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
             for strip in [false, true] {
-                let l = shortcuts_layout(s, strip, &sample_tiles(Shortcut::ALL.len()));
+                let l = shortcuts_layout(s, strip, &sample_tiles(ORIGINAL_NINE));
                 let order: Vec<Option<Shortcut>> = l.tiles.iter().map(|(t, _)| *t).collect();
-                assert_eq!(order, Shortcut::ALL.map(Some));
+                let want: Vec<Option<Shortcut>> = Shortcut::ALL[..ORIGINAL_NINE]
+                    .iter()
+                    .copied()
+                    .map(Some)
+                    .collect();
+                assert_eq!(order, want);
                 let first = l.tiles[0].1;
                 assert!(first.h >= 60.0, "{style:?} strip={strip}: {first:?}");
                 assert!(first.y >= l.header.bottom());
