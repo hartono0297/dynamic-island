@@ -176,6 +176,8 @@ $shots = @(
     @{ name = 'shelf-drop'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf-drop' } }
     @{ name = 'shelf-drop-files'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shelf-drop-files' } }
     @{ name = 'search'; args = '--demo'; env = @{ DI_DEMO_STEP = 'search' } }
+    # Files and folders among the apps (made-up names, drawn icons).
+    @{ name = 'search-files'; args = '--demo'; env = @{ DI_DEMO_STEP = 'search-files' } }
     @{ name = 'shortcuts-custom'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts-custom' } }
     @{ name = 'shortcuts'; args = '--demo'; env = @{ DI_DEMO_STEP = 'shortcuts' } }
     # The Clipboard page (fixed data, never the real clipboard), a search,

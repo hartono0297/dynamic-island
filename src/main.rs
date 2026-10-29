@@ -27,6 +27,7 @@ mod pomodoro;
 mod reminders;
 mod screenshot;
 mod search;
+mod search_details;
 mod search_files;
 mod shelf;
 mod shelf_ole;

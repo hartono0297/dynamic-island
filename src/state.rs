@@ -508,6 +508,7 @@ impl IslandState {
             | Event::Audio(..)
             | Event::SearchIndex(_)
             | Event::SearchFiles(_)
+            | Event::SearchDetail { .. }
             | Event::ShelfDrop(_)
             | Event::ShelfDragOver(_)
             | Event::Clean(_)

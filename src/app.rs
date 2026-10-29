@@ -940,6 +940,14 @@ impl App {
                     self.on_search_files(files);
                     continue;
                 }
+                Event::SearchDetail {
+                    generation,
+                    key,
+                    detail,
+                } => {
+                    self.on_search_detail(generation, key, detail);
+                    continue;
+                }
                 Event::ShelfDragOver(on) => {
                     // A drag that entered the island is a halo trigger: if
                     // it strays above the island once the panel has gone,
@@ -4140,6 +4148,8 @@ impl App {
                 focused: search_open,
                 results: &self.search.results,
                 selected: self.search.selected,
+                details: self.search.details.known(),
+                indexing: self.search.walking && !self.search.walked,
             },
             progress: track_progress(state, now),
             robot,

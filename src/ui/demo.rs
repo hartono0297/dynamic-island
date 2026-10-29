@@ -120,7 +120,8 @@ struct Scene {
     custom_tiles: bool,
     /// The shelf with files being dragged over the island (its drop zone lit).
     shelf_drag: bool,
-    /// The quick search is open with the demo's made-up apps.
+    /// The quick search is open with the demo's made-up apps (and, in the
+    /// `search-files` scene, made-up files and folders).
     search: bool,
     /// What the CLI page's card shows.
     cli: CliDemo,
@@ -392,7 +393,7 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 89] = [
+const SCENES: [Scene; 90] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -526,6 +527,13 @@ const SCENES: [Scene; 89] = [
     Scene {
         search: true,
         ..panel("search", Page::Search)
+    },
+    // Files and folders among the apps, with icons, a folder's count and an
+    // app's size filled in (made-up names and drawn icons, never the real
+    // folders).
+    Scene {
+        search: true,
+        ..panel("search-files", Page::Search)
     },
     panel("system", Page::System),
     Scene {
@@ -1066,10 +1074,21 @@ fn run_scenes(scenes: &[Scene]) {
             });
             let mixer_rows = demo_mixer();
             let shelf_cards = demo_shelf(matches!(scene.name, "shelf" | "shelf-drop-files"));
+            let with_files = scene.name == "search-files";
+            let search_query = if with_files {
+                DEMO_FILES_QUERY
+            } else {
+                DEMO_SEARCH_QUERY
+            };
             let search_results = if scene.search {
-                demo_search_results()
+                demo_search_results(search_query, with_files)
             } else {
                 Vec::new()
+            };
+            let search_details = if with_files {
+                demo_search_details()
+            } else {
+                std::collections::HashMap::new()
             };
             let frame = Frame {
                 view: &view,
@@ -1128,11 +1147,13 @@ fn run_scenes(scenes: &[Scene]) {
                 cli: cli.view(),
                 clip: clip_view(&clips, scene.clip),
                 search: SearchView {
-                    query: DEMO_SEARCH_QUERY,
-                    selection: (DEMO_SEARCH_QUERY.len(), DEMO_SEARCH_QUERY.len()),
+                    query: search_query,
+                    selection: (search_query.len(), search_query.len()),
                     focused: scene.search,
                     results: &search_results,
                     selected: 0,
+                    details: &search_details,
+                    indexing: false,
                 },
                 progress: Some(DEMO_PROGRESS),
                 robot: scene.robot.map(|expr| RobotFrame {
@@ -2116,24 +2137,34 @@ fn demo_mixer() -> Vec<crate::audio::MixerRow> {
 /// What the quick search's demo scene has typed.
 const DEMO_SEARCH_QUERY: &str = "kal";
 
+/// What the `search-files` scene has typed.
+const DEMO_FILES_QUERY: &str = "gam";
+
 /// The demo's results, from a made-up list of apps (never the real Start
-/// Menu): what `search::search` makes of "kal".
-fn demo_search_results() -> Vec<crate::search::SearchResult> {
+/// Menu) and, with `files`, made-up files and folders (never the real Known
+/// Folders): what `search::search` makes of `query`.
+fn demo_search_results(query: &str, files: bool) -> Vec<crate::search::SearchResult> {
     use crate::search::{AppEntry, Labels};
-    let apps: Vec<AppEntry> = ["Kalender", "Kalkulator", "Kamera", "Notepad", "Visual Studio Code"]
+    let names: &[&str] = if files {
+        &["Game Bar", "Gaming Hub", "Kalender", "Notepad", "Visual Studio Code"]
+    } else {
+        &["Kalender", "Kalkulator", "Kamera", "Notepad", "Visual Studio Code"]
+    };
+    let apps: Vec<AppEntry> = names
         .iter()
         .map(|name| AppEntry {
             name: (*name).into(),
             path: format!(r"C:\Demo\{name}.lnk"),
         })
         .collect();
+    let found = if files { demo_search_files() } else { Vec::new() };
     let lang = crate::i18n::lang();
     let web_title = move |q: &str| crate::i18n::search_web_title(lang, q);
     let size = move |bytes: u64| crate::i18n::search_file_size(lang, bytes);
     crate::search::search(
-        DEMO_SEARCH_QUERY,
+        query,
         &apps,
-        &[],
+        &found,
         lang,
         &Labels {
             app: tr(Key::SearchKindApp),
@@ -2145,6 +2176,94 @@ fn demo_search_results() -> Vec<crate::search::SearchResult> {
             size: &size,
         },
     )
+}
+
+/// Made-up files and folders for the `search-files` scene, as the walk would
+/// have found them.
+fn demo_search_files() -> Vec<crate::search_files::FileEntry> {
+    use crate::search_files::{FileEntry, RootKind};
+    let at = |secs: u64| Some(std::time::UNIX_EPOCH + Duration::from_secs(1_760_000_000 + secs));
+    let entry = |name: &str, root, parent: Option<&str>, is_dir, size, modified| FileEntry {
+        name: name.into(),
+        lower: name.to_lowercase(),
+        path: std::path::PathBuf::from(match parent {
+            Some(p) => format!(r"C:\Demo\{p}\{name}"),
+            None => format!(r"C:\Demo\{name}"),
+        }),
+        root,
+        parent: parent.map(str::to_owned),
+        is_dir,
+        size,
+        modified,
+    };
+    vec![
+        entry("Gambar kerja", RootKind::Documents, Some("Ruko Melati"), true, 0, at(900)),
+        entry(
+            "gambar-fasad-utara.png",
+            RootKind::Pictures,
+            Some("Ruko Melati"),
+            false,
+            2_516_582,
+            at(800),
+        ),
+        entry(
+            "gambar-detail-tangga.dwg",
+            RootKind::Documents,
+            Some(r"Ruko Melati\Gambar kerja"),
+            false,
+            186_000_000,
+            at(700),
+        ),
+        entry("gambar-lama.dwg", RootKind::Downloads, None, false, 845_000, at(100)),
+    ]
+}
+
+/// What the details worker would have found for the demo's rows: drawn
+/// icons (a flat tile per kind), a folder's count and an app's size.
+fn demo_search_details() -> std::collections::HashMap<std::path::PathBuf, crate::search_details::Detail>
+{
+    use crate::search_details::Detail;
+    let tile = |rgb: [u8; 3]| -> Thumb {
+        let (w, h) = (32u32, 32u32);
+        let mut bgra = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                // A rounded square with a lighter top edge, clear outside.
+                let (dx, dy) = (x.abs_diff(16).max(1) as f32 - 0.5, y.abs_diff(16).max(1) as f32 - 0.5);
+                let inside = dx < 14.0 && dy < 14.0 && (dx * dx + dy * dy) < 17.0 * 17.0;
+                let lift = if y < 12 { 24 } else { 0 };
+                let px = |c: u8| c.saturating_add(lift);
+                if inside {
+                    bgra.extend([px(rgb[2]), px(rgb[1]), px(rgb[0]), 255]);
+                } else {
+                    bgra.extend([0, 0, 0, 0]);
+                }
+            }
+        }
+        Thumb { w, h, bgra }
+    };
+    let icon = |rgb| Some(tile(rgb));
+    let mut details = std::collections::HashMap::new();
+    let mut put = |path: &str, detail| {
+        details.insert(std::path::PathBuf::from(path), detail);
+    };
+    put(
+        r"C:\Demo\Game Bar.lnk",
+        Detail { icon: icon([70, 160, 90]), install: Some(142 * 1024 * 1024), ..Detail::default() },
+    );
+    put(
+        r"C:\Demo\Gaming Hub.lnk",
+        Detail { icon: icon([120, 90, 200]), ..Detail::default() },
+    );
+    put(
+        r"C:\Demo\Ruko Melati\Gambar kerja",
+        Detail { icon: icon([230, 190, 90]), count: Some(18), ..Detail::default() },
+    );
+    put(
+        r"C:\Demo\Ruko Melati\gambar-fasad-utara.png",
+        Detail { icon: icon([90, 150, 220]), ..Detail::default() },
+    );
+    details
 }
 
 /// Made-up files for the shelf scene (and an empty shelf elsewhere): never

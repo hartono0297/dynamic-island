@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
     D2D1_ELLIPSE, D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_ROUNDED_RECT,
     D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap, ID2D1Brush, ID2D1Geometry,
 };
@@ -1887,7 +1887,9 @@ impl Renderer {
 
     /// The quick search: its field, then a row per result (icon, name, what
     /// it is), the highlighted one ringed in the accent. With nothing
-    /// typed, a line of what to try.
+    /// typed, a line of what to try. A row shows the shell's icon once the
+    /// details worker has it (its glyph until then), and adds a folder's
+    /// count or an app's size to its subtitle.
     fn paint_search(&self, l: &SearchLayout, view: &SearchView) {
         let lang = i18n::lang();
         let p = self.palette;
@@ -1899,20 +1901,39 @@ impl Renderer {
         if let Some(area) = l.empty {
             let mid = area.y + area.h / 2.0 - 12.0;
             let line = |y: f32| Rect { y, h: 18.0, ..area };
-            let (title, sub) = if view.query.trim().is_empty() {
-                (Key::SearchEmpty, Key::SearchEmptyHint)
+            let typed = view.query.trim().chars().count();
+            if view.indexing && typed >= crate::search::FILE_MIN_CHARS {
+                // The first walk of the user's folders is still running and
+                // nothing else matched: say so, quietly.
+                self.text_colored(
+                    text(lang, Key::SearchIndexing),
+                    &self.fonts.small_center,
+                    line(mid + 10.0),
+                    p.secondary,
+                    1.0,
+                );
             } else {
-                (Key::SearchNone, Key::SearchNoneHint)
-            };
-            self.text(text(lang, title), &self.fonts.body_center, line(mid), 1.0);
-            self.text_colored(
-                text(lang, sub),
-                &self.fonts.small_center,
-                line(mid + 20.0),
-                p.secondary,
-                1.0,
-            );
+                let (title, sub) = if typed == 0 {
+                    (Key::SearchEmpty, Key::SearchEmptyHint)
+                } else {
+                    (Key::SearchNone, Key::SearchNoneHint)
+                };
+                self.text(text(lang, title), &self.fonts.body_center, line(mid), 1.0);
+                self.text_colored(
+                    text(lang, sub),
+                    &self.fonts.small_center,
+                    line(mid + 20.0),
+                    p.secondary,
+                    1.0,
+                );
+            }
         }
+        // Icons of rows no longer shown go.
+        self.search_icons.borrow_mut().retain(|(path, _)| {
+            view.results
+                .iter()
+                .any(|r| r.path.as_deref() == Some(path.as_path()))
+        });
         for (i, (row, res)) in l.rows.iter().zip(view.results).enumerate() {
             let on = i == view.selected;
             if on {
@@ -1934,17 +1955,57 @@ impl Renderer {
                 SearchKind::File => Icon::Note,
             };
             let ink = if on { p.accent } else { p.secondary };
-            self.icon_colored(glyph, icon, 16.0, ink, 1.0, None);
-            // What it is, small and quiet at the right; the name takes the
-            // rest.
-            let sub_w = self.text_width(&res.subtitle, &self.fonts.small).ceil() + 2.0;
+            let detail = res.path.as_ref().and_then(|path| view.details.get(path));
+            let shell_icon = res
+                .path
+                .as_deref()
+                .zip(detail.and_then(|d| d.icon.as_ref()))
+                .and_then(|(path, thumb)| self.search_icon(path, thumb));
+            match shell_icon {
+                Some(bitmap) => {
+                    let side = 16.0;
+                    let at = Rect {
+                        x: icon.x,
+                        y: row.y + (row.h - side) / 2.0,
+                        w: side,
+                        h: side,
+                    };
+                    let target = self.target.as_ref().expect("target ensured by paint");
+                    unsafe {
+                        target.rt.DrawBitmap(
+                            &bitmap,
+                            Some(&d2d_rect(at)),
+                            1.0,
+                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                            None,
+                        );
+                    }
+                }
+                None => {
+                    let glyph = match (res.kind, res.path.as_deref()) {
+                        (SearchKind::File, Some(path)) => {
+                            crate::shelf::icon(crate::shelf::kind_of(path, false))
+                        }
+                        _ => glyph,
+                    };
+                    self.icon_colored(glyph, icon, 16.0, ink, 1.0, None);
+                }
+            }
+            // What it is (or where, for a file), small and quiet at the
+            // right, with a folder's count or an app's size once known; the
+            // name takes the rest.
+            let note = detail
+                .and_then(|d| crate::search_details::row_note(res.kind, d, lang))
+                .map(|note| format!("{} \u{b7} {note}", res.subtitle));
+            let subtitle = note.as_deref().unwrap_or(&res.subtitle);
+            let sub_w = self.text_width(subtitle, &self.fonts.small).ceil() + 2.0;
             let sub_w = sub_w.min(row.w * 0.4);
             let sub = Rect {
                 x: row.right() - 10.0 - sub_w,
                 w: sub_w,
                 ..*row
             };
-            self.text_colored(&res.subtitle, &self.fonts.small, sub, p.secondary, 1.0);
+            self.text_colored(subtitle, &self.fonts.small, sub, p.secondary, 1.0);
             let name = Rect {
                 x: icon.right() + 10.0,
                 w: (sub.x - 10.0 - icon.right() - 10.0).max(0.0),
@@ -1952,6 +2013,20 @@ impl Renderer {
             };
             self.text(&res.title, &self.fonts.body_medium, name, 1.0);
         }
+    }
+
+    /// The shell icon of `path` as a bitmap of this target, made once. A
+    /// failure (or a lost target, which the frame's end reports) shows the
+    /// glyph instead.
+    fn search_icon(&self, path: &std::path::Path, thumb: &Thumb) -> Option<ID2D1Bitmap> {
+        if let Some((_, b)) = self.search_icons.borrow().iter().find(|(p, _)| p == path) {
+            return Some(b.clone());
+        }
+        let bitmap = self.thumb_bitmap(thumb).ok().flatten()?;
+        self.search_icons
+            .borrow_mut()
+            .push((path.to_path_buf(), bitmap.clone()));
+        Some(bitmap)
     }
 
     /// A rounded text field drawn like the Clipboard's: the hint while it is

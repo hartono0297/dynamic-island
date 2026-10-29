@@ -378,10 +378,10 @@ mod tests {
         t.file("Docs/A/B/low.txt", 1);
         t.file("Docs/A/B/C/deep.txt", 1);
         // Two folders are read (the root and A): B is listed, not entered.
-        let found = walk(&[root.clone()], limits(2, 100, 100));
+        let found = walk(std::slice::from_ref(&root), limits(2, 100, 100));
         assert_eq!(names(&found), ["A", "top.txt", "B", "mid.txt"]);
         // One more level reads B too, after everything above it.
-        let found = walk(&[root.clone()], limits(3, 100, 100));
+        let found = walk(std::slice::from_ref(&root), limits(3, 100, 100));
         assert_eq!(
             names(&found),
             ["A", "top.txt", "B", "mid.txt", "C", "low.txt"]
@@ -496,7 +496,7 @@ mod tests {
         // Whatever the order, and for an exact repeat too.
         assert_eq!(
             dedupe_roots(&[pics.clone(), docs.clone(), docs.clone()]),
-            [docs.clone()]
+            std::slice::from_ref(&docs)
         );
         let found = walk(&both, Limits::DEFAULT);
         assert_eq!(sorted(&found), ["Pictures", "a.txt", "p.png", "s.mp3"]);

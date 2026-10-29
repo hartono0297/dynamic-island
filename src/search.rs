@@ -554,8 +554,7 @@ fn rank_files(files: &[FileEntry], query: &str) -> Vec<usize> {
 }
 
 /// The row for a file or folder: it opens its own path. The subtitle names
-/// where it is (the root, and the folder it is in, cut to the last two
-/// levels), a file's size after it.
+/// where it is (the root, and the folder it is in), a file's size after it.
 fn file_result(f: &FileEntry, labels: &Labels) -> SearchResult {
     let place = location((labels.root)(f.root), f.parent.as_deref());
     let (kind, subtitle) = if f.is_dir {
@@ -572,17 +571,18 @@ fn file_result(f: &FileEntry, labels: &Labels) -> SearchResult {
     }
 }
 
-/// "Dokumen", "Dokumen \u{203a} Proyek", "Dokumen \u{203a} \u{2026} \u{203a} B \u{203a} C": the root, then
-/// the last two folders of `parent` (backslash separated) when it has
-/// more.
+/// "Dokumen", "Dokumen › Proyek", "Dokumen › … › Sub": the root, then the
+/// folder `parent` (backslash separated) ends in, with an ellipsis when
+/// folders were left out. The row gives its subtitle 40 % of its width, so
+/// the nearest folder is the one worth keeping.
 fn location(root: &str, parent: Option<&str>) -> String {
     let parts: Vec<&str> = parent
         .map(|p| p.split('\\').filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
-    match parts.len() {
-        0 => root.to_owned(),
-        1 | 2 => format!("{root} \u{203a} {}", parts.join(" \u{203a} ")),
-        n => format!("{root} \u{203a} \u{2026} \u{203a} {}", parts[n - 2..].join(" \u{203a} ")),
+    match parts.as_slice() {
+        [] => root.to_owned(),
+        [only] => format!("{root} \u{203a} {only}"),
+        [.., last] => format!("{root} \u{203a} \u{2026} \u{203a} {last}"),
     }
 }
 
@@ -1025,12 +1025,9 @@ mod tests {
         assert_eq!(r[0].kind, Kind::Folder);
         assert_eq!(r[0].action, Action::OpenPath(top.path.clone()));
         assert_eq!(r[0].subtitle, "Dokumen");
-        // A deep folder is cut to its last two levels.
+        // A deep folder is cut to the nearest one.
         let r = search("c.txt", &[], &files, Lang::Id, &labels());
-        assert_eq!(
-            r[0].subtitle,
-            "Dokumen \u{203a} \u{2026} \u{203a} C \u{203a} D \u{b7} 2048 B"
-        );
+        assert_eq!(r[0].subtitle, "Dokumen \u{203a} \u{2026} \u{203a} D \u{b7} 2048 B");
         // An app and a settings row carry what the details need, or nothing.
         let apps = [app("Laporan Studio")];
         let r = search("laporan", &apps, &[], Lang::Id, &labels());

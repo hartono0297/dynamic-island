@@ -15,6 +15,7 @@ use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::search::AppEntry;
+use crate::search_details::Detail;
 use crate::search_files::FileEntry;
 use crate::system::SystemSample;
 
@@ -166,6 +167,14 @@ pub enum Event {
     /// Videos and Music, walked on a background thread. `App` keeps them; the
     /// reducer has no use for them.
     SearchFiles(Vec<FileEntry>),
+    /// What the details worker found for one result row (its icon, a
+    /// folder's count, an app's size). `generation` is the request's; `App`
+    /// keeps it, the reducer has no use for it.
+    SearchDetail {
+        generation: u64,
+        key: PathBuf,
+        detail: Detail,
+    },
     /// Enter in the search field copied an entry: the panel closes like
     /// after a shortcut, and the keyboard goes back.
     ClipCommit,

@@ -7,6 +7,7 @@
 //! Power: nothing runs while the search is closed. The Start Menu is read
 //! once, on the first time it opens, on its own thread.
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -29,6 +30,7 @@ use crate::config::SearchHotkey;
 use crate::i18n::{self, Key, tr};
 use crate::model::{Event, Hit, Notice, NoticeKind, Page, View};
 use crate::search::{self, Action, AppEntry, Labels, SearchResult};
+use crate::search_details::{self, Detail, Details};
 use crate::search_files::{self, FileEntry, Limits};
 use crate::shelf::{self, Probe};
 use crate::shortcuts;
@@ -55,6 +57,10 @@ pub(super) struct SearchState {
     pub walk_started: Option<Instant>,
     /// At least one walk has finished (the "reading files" hint ends).
     pub walked: bool,
+    /// Icons, folder counts and app sizes of the rows shown, and the
+    /// worker that reads them (started the first time the search opens).
+    pub details: Details,
+    pub details_tx: Option<Sender<search_details::Request>>,
     /// The field's text as last searched.
     pub query: String,
     pub results: Vec<SearchResult>,
@@ -231,6 +237,37 @@ impl App {
         }
     }
 
+    /// Starts the details worker the first time the search opens; it then
+    /// sleeps on its channel until a request comes.
+    fn start_search_details(&mut self) {
+        if self.search.details_tx.is_none() {
+            let wake = poster(self.hwnd, WM_APP_EVENT);
+            self.search.details_tx = search_details::spawn(self.tx.clone(), wake);
+        }
+    }
+
+    /// Asks the worker for the icon, count or size of the rows shown that
+    /// have none yet. The rows are already on screen; answers redraw them.
+    fn request_search_details(&mut self) {
+        let Some(tx) = &self.search.details_tx else {
+            return;
+        };
+        if let Some(request) = self.search.details.request(&self.search.results)
+            && tx.send(request).is_err()
+        {
+            // The worker is gone: rows keep their glyphs.
+            self.search.details_tx = None;
+        }
+    }
+
+    /// An answer from the details worker: kept (and drawn) unless it is for
+    /// an older request. Never changes the order of the rows.
+    pub(super) fn on_search_detail(&mut self, generation: u64, key: std::path::PathBuf, detail: Detail) {
+        if self.search.details.accept(generation, key, detail) {
+            self.redraw_search();
+        }
+    }
+
     /// The index arrived: what is typed is searched again, the highlight
     /// staying on the same result.
     pub(super) fn on_search_index(&mut self, apps: Vec<AppEntry>) {
@@ -257,6 +294,7 @@ impl App {
         // looks at the user's folders again when the last look is old.
         self.start_search_index();
         self.start_search_files();
+        self.start_search_details();
         if editor::focus_open_editor() {
             return Some(Event::SearchClose);
         }
@@ -368,6 +406,7 @@ impl App {
             0
         };
         self.search.results = results;
+        self.request_search_details();
     }
 
     fn redraw_search(&mut self) {
