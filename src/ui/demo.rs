@@ -16,9 +16,10 @@
 //! - `DI_DEMO_SLIDE=0.4` draws the panel mid page-slide.
 //! - `DI_DEMO_REVEAL=0.5` freezes a sub-view `Reveal` (the new content
 //!   fading in over 160 ms, 8 px from where it rests) at that progress, in
-//!   the scenes `cal-week-to-day` (from below), `cleaner-open` (from below)
-//!   and `search-open` (a plain fade). Without it they play once from the
-//!   step's start. While a scene morphs in from a panel, a compact view or
+//!   the scenes `cal-week-to-day` (from below) and `cleaner-open` (from
+//!   below), and the page cross-fade (`PageFade`, 160 ms) in `search-open`
+//!   (the search over the Music page, as the island opens it). Without it
+//!   they play once from the step's start. While a scene morphs in from a panel, a compact view or
 //!   notice fades in with the morph (`DI_DEMO_T=0.5` shows it halfway), and
 //!   the panel it replaces fades out with the shrinking shape.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
@@ -60,7 +61,9 @@ use super::geometry::{
     ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
     lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
 };
-use super::motion::{REVEAL_MS, RevealDir, Transit, content_alpha, reveal_frame};
+use super::motion::{
+    PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame, reveal_frame,
+};
 use super::render::{
     CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
     RobotFrame, SearchView, ShotView, SystemView,
@@ -149,6 +152,9 @@ struct Scene {
     clip: ClipDemo,
     /// The page content is a sub-view `Reveal` in this direction.
     reveal: Option<RevealDir>,
+    /// The page cross-fades in over this one (`PageFade`), as the search
+    /// opens over a page.
+    fade_from: Option<Page>,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -319,6 +325,7 @@ const BASE: Scene = Scene {
     clean: None,
     clip: ClipDemo::Design,
     reveal: None,
+    fade_from: None,
 };
 
 const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
@@ -713,8 +720,8 @@ const SCENES: [Scene; 93] = [
         Expr::Sad,
     ),
     // Sub-view reveals (`DI_DEMO_REVEAL`): the new content fades in from
-    // 8 px away. The week became the day; the cleaner just opened; the
-    // search came over a page (a plain fade).
+    // 8 px away. The week became the day; the cleaner just opened. The
+    // search came over the Music page: the two pages cross-fade.
     Scene {
         cal_view: CalView::Day,
         reveal: Some(RevealDir::Open),
@@ -726,7 +733,7 @@ const SCENES: [Scene; 93] = [
     },
     Scene {
         search: true,
-        reveal: Some(RevealDir::Fade),
+        fade_from: Some(Page::Media),
         ..panel("search-open", Page::Search)
     },
 ];
@@ -1014,9 +1021,9 @@ fn run_scenes(scenes: &[Scene]) {
         };
         // The equalizer and a scrolling line animate; everything else redraws
         // only while morphing.
-        let reveal_playing = scene.reveal.is_some()
+        let reveal_playing = (scene.reveal.is_some() || scene.fade_from.is_some())
             && frozen_reveal.is_none()
-            && into < (ANIM_MS + REVEAL_MS) as u128 + 50;
+            && into < (ANIM_MS + REVEAL_MS.max(PAGE_FADE_MS)) as u128 + 50;
         let animated = scene.view == View0::MediaCompact
             || (scene.view == View0::MediaLyric && lyric_scroll.is_none() && scroll > 0.0)
             || reveal_playing;
@@ -1153,7 +1160,7 @@ fn run_scenes(scenes: &[Scene]) {
                 day_page: scene.day_page,
                 page_slide: slide,
                 // The demo slides between neighbours in the default order.
-                page_from: {
+                page_trail: {
                     let i = Page::ALL.iter().position(|p| *p == page).unwrap_or(0);
                     let from = if slide > 0.0 {
                         i.checked_sub(1)
@@ -1162,8 +1169,14 @@ fn run_scenes(scenes: &[Scene]) {
                     } else {
                         None
                     };
-                    from.map(|j| Page::ALL[j])
+                    let x = slide - slide.signum();
+                    [
+                        from.map(|j| (Page::ALL[j], x))
+                            .filter(|(_, x)| x.abs() < 1.0),
+                        None,
+                    ]
                 },
+                page_from: scene.fade_from,
                 pages: Page::ALL.to_vec(),
                 tiles: scene_tiles(&scene),
                 palette,
@@ -1212,7 +1225,11 @@ fn run_scenes(scenes: &[Scene]) {
                     let morphing = t < 1.0;
                     Transit {
                         reveal: scene.reveal.map(|dir| reveal_frame(dir, 0.0, reveal_at)),
-                        page_fade: None,
+                        page_fade: scene.fade_from.and_then(|_| {
+                            let at = frozen_reveal
+                                .unwrap_or((into as f32 / PAGE_FADE_MS as f32).min(1.0));
+                            page_fade_frame(at)
+                        }),
                         // The morph's content: a compact view or notice
                         // fades in, the panel before it fades out.
                         content_alpha: if compact && morphing {

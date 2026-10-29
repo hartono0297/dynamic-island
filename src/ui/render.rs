@@ -126,12 +126,15 @@ pub struct Frame<'a> {
     pub reminders_page: usize,
     /// Day view: chunk of the day's events ("+N lagi" clicks).
     pub day_page: usize,
-    /// -1..1 during a page transition, 0 at rest: the page is drawn shifted
-    /// right by `page_slide × panel width`, with the neighbouring page it
-    /// came from beside it. Positive = it came in from the right (scrolled to
-    /// a later page).
+    /// Non-zero during a page slide, 0 at rest: the page is drawn shifted
+    /// right by `page_slide × panel width` (panel widths, at most
+    /// `motion::SLIDE_MAX` away). Positive = it came in from the right
+    /// (scrolled to a later page).
     pub page_slide: f32,
-    /// The page a slide comes from, drawn beside the new one.
+    /// The pages a slide moves out that show this frame, each with its x in
+    /// panel widths (`motion::SlideStrip::visible`).
+    pub page_trail: [Option<(Page, f32)>; 2],
+    /// The page a cross-fade comes from, drawn under the new one.
     pub page_from: Option<Page>,
     /// The pages the dots show ("Halaman panel"), in order.
     pub pages: Vec<Page>,

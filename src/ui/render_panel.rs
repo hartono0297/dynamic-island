@@ -393,7 +393,11 @@ impl Renderer {
         frame: &Frame,
         page: Page,
     ) -> Result<()> {
-        let rest = shape_for(style, panel_kind(page, false, false));
+        // Sized as it showed (`frame` carries what it showed, not the reset).
+        let rest = shape_for(
+            style,
+            panel_kind(page, frame.cli.tall, frame.cleaner.is_some()),
+        );
         let fade = panel_fade(shape.h, rest.h, COMPACT_H);
         if fade <= 0.0 {
             return Ok(());
@@ -445,7 +449,7 @@ impl Renderer {
             (0.0, None, None)
         } else {
             (
-                frame.page_slide.clamp(-2.0, 2.0),
+                frame.page_slide,
                 // A cross-fade at its end is a settled page (`t >= 1`).
                 frame.transit.page_fade.and_then(page_fade_frame),
                 frame.transit.reveal,
@@ -462,11 +466,11 @@ impl Renderer {
             }
             _ => {
                 if slide != 0.0 {
-                    // The page it came from sits one panel width further on.
-                    if let Some(from) = from {
-                        let old = self.page_layout(s, frame, from, strip);
-                        let dx = (slide - slide.signum()) * s.w;
-                        self.paint_page_at(frame, &old, (dx, 0.0), 1.0)?;
+                    // The pages going out, each a whole panel width from
+                    // the one coming in, moving with it.
+                    for (out, x) in frame.page_trail.into_iter().flatten() {
+                        let old = self.page_layout(s, frame, out, strip);
+                        self.paint_page_at(frame, &old, (x * s.w, 0.0), 1.0)?;
                     }
                 }
                 // A sub-view switch: the new content fades in, a few px
@@ -474,7 +478,10 @@ impl Renderer {
                 // (The CLI's folder menu reveals itself, not the terminal.)
                 let reveal = reveal.filter(|_| !matches!(layout, PageLayout::Cli(_)));
                 let (alpha, dx, dy) = reveal.map_or((1.0, 0.0, 0.0), |r| (r.alpha, r.dx, r.dy));
-                self.paint_page_at(frame, &layout, (slide * s.w + dx, dy), alpha)?;
+                // Off screen early in a long spin: only the pages going out show.
+                if slide.abs() < 1.0 {
+                    self.paint_page_at(frame, &layout, (slide * s.w + dx, dy), alpha)?;
+                }
             }
         }
 

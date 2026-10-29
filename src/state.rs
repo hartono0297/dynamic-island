@@ -81,6 +81,24 @@ pub const MEDIA_HOVER_GUARD: Duration = Duration::from_millis(ANIM_MS + 300);
 /// second click before it turns back.
 pub const CLEAN_CONFIRM: Duration = Duration::from_secs(4);
 
+/// What the open panel shows that closing it resets: the cleaner, the CLI's
+/// size and folder menu, the notes, reminders and day pages, the strip.
+/// `App` keeps it from before the event that closed the panel, so the
+/// closing panel fades out as it was, not as the reset left it
+/// (`docs/memory/panel-linger-and-motion.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShownPanel {
+    pub page: Page,
+    pub cleaner: Option<CleanerUi>,
+    pub mole: MolePhase,
+    pub cli_tall: bool,
+    pub cli_menu: bool,
+    pub notes_page: usize,
+    pub reminders_page: usize,
+    pub day_page: usize,
+    pub strip: Option<Notice>,
+}
+
 /// The cleaner over the System page: its mode, which rows are ticked and
 /// whether its button is armed. Opened by "Bersihkan"; gone when the panel
 /// closes, the page changes or its back button is clicked.
@@ -1790,6 +1808,24 @@ impl IslandState {
         self.tiles.visible()
     }
 
+    /// What the panel shows now, `None` while the view is not the panel.
+    pub fn shown_panel(&self) -> Option<ShownPanel> {
+        let View::Panel(page) = self.view() else {
+            return None;
+        };
+        Some(ShownPanel {
+            page,
+            cleaner: self.cleaner,
+            mole: self.mole,
+            cli_tall: self.cli_tall,
+            cli_menu: self.cli_menu,
+            notes_page: self.notes_page,
+            reminders_page: self.reminders_page,
+            day_page: self.day_page,
+            strip: self.sticky.last().cloned(),
+        })
+    }
+
     /// The sticky notice (Claude waiting or a due reminder) to show at the top
     /// of the open panel.
     pub fn waiting_strip(&self) -> Option<&Notice> {
@@ -3148,6 +3184,36 @@ mod tests {
             CleanCat::BrowserCache,
             CleanCat::AppCache,
         ]
+    }
+
+    #[test]
+    fn the_shown_panel_keeps_what_closing_it_resets() {
+        use crate::ui::geometry::{ShapeKind, panel_kind};
+        let t0 = Instant::now();
+        // The cleaner: gone from the state once the panel closes, still in
+        // what it showed, so the closing panel keeps the cleaner's size.
+        let mut s = cleaner_open(t0);
+        let shown = s.shown_panel().expect("the panel shows");
+        assert_eq!(shown.page, Page::System);
+        assert!(shown.cleaner.is_some());
+        leave(&mut s, t0);
+        assert!(s.shown_panel().is_none());
+        assert!(s.cleaner().is_none());
+        assert_eq!(
+            panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+            ShapeKind::PanelClean
+        );
+        // The tall CLI: back to small in the state, tall in what it showed.
+        let mut s = st();
+        open_on(&mut s, Page::Cli, t0);
+        s.apply(Event::Click(Hit::CliExpand), t0);
+        let shown = s.shown_panel().expect("the panel shows");
+        leave(&mut s, t0);
+        assert!(!s.cli_tall() && shown.cli_tall);
+        assert_eq!(
+            panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+            ShapeKind::PanelTall
+        );
     }
 
     #[test]

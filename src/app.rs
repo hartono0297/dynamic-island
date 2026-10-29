@@ -84,7 +84,7 @@ use crate::sources::battery::{
 };
 use crate::sources::fullscreen::is_fullscreen;
 use crate::sources::{explorer, media, notifications};
-use crate::state::{IslandState, is_media_hit};
+use crate::state::{IslandState, ShownPanel, is_media_hit};
 use crate::system::{
     CpuHistory, SampleKind, Sampler, SysEase, SystemSample, WarnMonitor, alert_notice,
 };
@@ -100,8 +100,8 @@ use crate::ui::geometry::{
     lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
 use crate::ui::motion::{
-    PAGE_FADE_MS, Reveal, Snap, SubView, Transit, Transition, content_alpha, mole_code, morph_ease,
-    page_fade_frame, slide_start, transition,
+    PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition, content_alpha, mole_code,
+    morph_ease, page_fade_frame, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -338,6 +338,7 @@ pub fn run(media_log_flag: bool) {
             page_fade: None,
             reveal: None,
             leaving: None,
+            closed_panel: None,
             animations: client_animations_on(),
             clock: None,
             frame_log: FrameLog::from_env(),
@@ -544,9 +545,13 @@ struct App {
     /// A sub-view switch fading in (`ui::motion`): the calendar's range, the
     /// cleaner opening, Mole's stages, the CLI's folder menu.
     reveal: Option<Reveal>,
-    /// The page of the panel that is closing, while its content fades with
-    /// the shrinking shape; set at the morph's start, gone at its end.
-    leaving: Option<Page>,
+    /// The panel that is closing, as it showed, while its content fades
+    /// with the shrinking shape; set at the morph's start, gone at its end.
+    leaving: Option<ShownPanel>,
+    /// The panel as it showed before the event that took it off screen
+    /// (its close resets the cleaner, the CLI's size, the page indices);
+    /// `leaving` takes it when the closing morph starts.
+    closed_panel: Option<ShownPanel>,
     /// Windows' "Animation effects" (`SPI_GETCLIENTAREAANIMATION`) is on.
     /// Off: no slides, no reveals, and the morph eases without overshoot.
     animations: bool,
@@ -1012,6 +1017,7 @@ impl App {
             };
             let page = self.state.page();
             let before = self.panel_snap();
+            let shown_before = self.state.shown_panel();
             let cli_was = (
                 self.state.view() == View::Panel(Page::Cli),
                 self.state.cli_menu(),
@@ -1041,6 +1047,7 @@ impl App {
                 media_log::log_command(&click, media_log::Outcome::Ignored(why), &self.media_app());
             }
             self.follow_transition(before, now);
+            self.follow_closed_panel(shown_before);
             self.follow_cli_page(cli_was);
             self.follow_clip_page(cli_was.2);
             self.follow_shot();
@@ -1629,10 +1636,13 @@ impl App {
             Transition::Slide => {
                 // A later page in the owner's order comes in from the right.
                 let dir = slide_from(self.state.pages(), before.page, after.page);
-                let offset = self.slide.map_or(0.0, |s| s.offset(now));
+                // One that runs goes on as the same strip: the pages on
+                // screen keep their places.
+                let running = self.slide.filter(|s| s.progress(now) < 1.0);
+                let offset = running.map_or(0.0, |s| s.offset(now));
+                let strip = running.map(|s| s.strip);
                 self.slide = Some(Slide {
-                    from: slide_start(offset, dir),
-                    from_page: before.page,
+                    strip: SlideStrip::next(strip.as_ref(), offset, before.page, dir),
                     start: now,
                 });
                 self.page_fade = None;
@@ -1657,6 +1667,17 @@ impl App {
                 self.reveal = Some(Reveal::new(now, dir, from_alpha));
                 self.ensure_clock();
             }
+        }
+    }
+
+    /// After any applied event: the panel that showed before it and does not
+    /// now is kept as it was, for its fade-out (`refresh` hands it to
+    /// `leaving`). Its close already reset what it showed.
+    fn follow_closed_panel(&mut self, shown_before: Option<ShownPanel>) {
+        if matches!(self.state.view(), View::Panel(_)) {
+            self.closed_panel = None;
+        } else if shown_before.is_some() {
+            self.closed_panel = shown_before;
         }
     }
 
@@ -2799,8 +2820,14 @@ impl App {
             };
             if is_panel {
                 self.leaving = None;
+                self.closed_panel = None;
             } else if compact_swap && was_panel.is_some() {
-                self.leaving = was_panel;
+                // As it showed before its close reset it; without that, no
+                // fade-out rather than content that is not what was there.
+                self.leaving = self
+                    .closed_panel
+                    .take()
+                    .filter(|shown| Some(shown.page) == was_panel);
             }
             // The enlarged panel needs the taller canvas before it grows.
             self.sync_window_height(now);
@@ -4190,6 +4217,8 @@ impl App {
         let (shape, opacity) = self.anim.frame(now);
         let (shape, opacity) = rise_frame(shape, opacity, self.rise.as_ref(), now);
         let morphing = self.anim.running;
+        // The closing panel draws what it showed, not what its close reset.
+        let leaving = self.leaving.as_ref().filter(|_| morphing);
         let transit = Transit {
             reveal: self.reveal.map(|r| r.frame(now)),
             // Its last frame (t = 1) is drawn settled, with click regions.
@@ -4201,7 +4230,7 @@ impl App {
             } else {
                 1.0
             },
-            leaving: self.leaving.filter(|_| morphing),
+            leaving: leaving.map(|shown| shown.page),
         };
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
@@ -4224,7 +4253,11 @@ impl App {
             disk_warn_gb: self.config.disk_warn_gb,
             ram_warn_percent: self.config.ram_warn_percent,
         };
-        let cleaner = state.cleaner().map(|c| CleanerView {
+        let (cleaner_ui, mole_phase) = match leaving {
+            Some(shown) => (shown.cleaner, shown.mole),
+            None => (state.cleaner().copied(), state.mole_phase()),
+        };
+        let cleaner = cleaner_ui.map(|c| CleanerView {
             mode: c.mode,
             checked: c.checked,
             armed: c.armed(),
@@ -4232,7 +4265,7 @@ impl App {
             scanning: self.clean.scanning,
             busy: state.clean_busy(),
             mole: MoleView {
-                phase: state.mole_phase(),
+                phase: mole_phase,
                 opts: state.mole_opts(),
                 show_log: c.mole_log,
                 version: self
@@ -4271,8 +4304,11 @@ impl App {
             pomodoro: state.pomodoro(),
             now,
             today: state.today(),
-            page: state.page(),
-            strip: state.waiting_strip(),
+            page: leaving.map_or(state.page(), |shown| shown.page),
+            strip: match leaving {
+                Some(shown) => shown.strip.as_ref(),
+                None => state.waiting_strip(),
+            },
             cal_view: state.cal_view(),
             cal_anchor: state.cal_anchor(),
             cal_selected: state.cal_selected(),
@@ -4282,14 +4318,14 @@ impl App {
             shelf_drag: self.shelf.dragging,
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
-            reminders_page: state.reminders_page(),
-            notes_page: state.notes_page(),
-            day_page: state.day_page(),
+            reminders_page: leaving.map_or(state.reminders_page(), |shown| shown.reminders_page),
+            notes_page: leaving.map_or(state.notes_page(), |shown| shown.notes_page),
+            day_page: leaving.map_or(state.day_page(), |shown| shown.day_page),
             page_slide: self.slide.map_or(0.0, |s| s.offset(now)),
-            page_from: self
+            page_trail: self
                 .slide
-                .map(|s| s.from_page)
-                .or(self.page_fade.map(|f| f.from_page)),
+                .map_or([None; 2], |s| s.strip.visible(s.offset(now))),
+            page_from: self.page_fade.map(|f| f.from_page),
             pages: state.pages().visible(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
@@ -4317,9 +4353,11 @@ impl App {
                 focused,
                 suggestions,
                 selected: self.cli_pick,
-                tall: state.cli_tall(),
+                tall: leaving.map_or(state.cli_tall(), |shown| shown.cli_tall),
                 from_explorer: self.cli_from_explorer,
-                menu: state.cli_menu().then_some(&self.cli_menu_view),
+                menu: leaving
+                    .map_or(state.cli_menu(), |shown| shown.cli_menu)
+                    .then_some(&self.cli_menu_view),
             },
             clip,
             search: SearchView {
@@ -4703,12 +4741,11 @@ impl LyricFit {
     }
 }
 
-/// A panel page switch: `page_slide` eases from `from` (±1) to 0 over `SLIDE_MS`.
+/// A panel page switch: `page_slide` eases from `strip.from` to 0 over
+/// `SLIDE_MS`, the pages going out moving with it.
 #[derive(Clone, Copy)]
 struct Slide {
-    from: f32,
-    /// The page it slides away from, drawn beside the new one.
-    from_page: Page,
+    strip: SlideStrip,
     start: Instant,
 }
 
@@ -4747,7 +4784,7 @@ impl Slide {
     fn offset(&self, now: Instant) -> f32 {
         let t = self.progress(now);
         // Cubic ease-out: fast start, gentle landing, no overshoot past the page.
-        self.from * (1.0 - t).powi(3)
+        self.strip.from * (1.0 - t).powi(3)
     }
 }
 
@@ -6688,8 +6725,7 @@ mod tests {
         let t0 = Instant::now();
         let ms = |n| t0 + Duration::from_millis(n);
         let right = Slide {
-            from: 1.0,
-            from_page: Page::Calendar,
+            strip: SlideStrip::next(None, 0.0, Page::Calendar, 1.0),
             start: t0,
         };
         assert_eq!(right.offset(t0), 1.0);
@@ -6700,8 +6736,7 @@ mod tests {
         assert_eq!(right.offset(ms(220)), 0.0);
         assert_eq!(right.offset(ms(500)), 0.0);
         let left = Slide {
-            from: -1.0,
-            from_page: Page::Pomodoro,
+            strip: SlideStrip::next(None, 0.0, Page::Pomodoro, -1.0),
             start: t0,
         };
         assert_eq!(left.offset(t0), -1.0);
@@ -6735,33 +6770,48 @@ mod tests {
     }
 
     #[test]
-    fn a_slide_started_mid_slide_keeps_the_page_where_it_is() {
+    fn a_slide_started_mid_slide_keeps_the_pages_where_they_are() {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);
+        // Calendar to Media; a fast spin turns again 20 ms in, while the
+        // Calendar still covers most of the panel.
         let first = Slide {
-            from: 1.0,
-            from_page: Page::Calendar,
+            strip: SlideStrip::next(None, 0.0, Page::Calendar, 1.0),
             start: t0,
         };
-        // Another page turned 60 ms in: the page on screen is at `offset`.
-        let offset = first.offset(ms(60));
-        assert!(offset > 0.0 && offset < 1.0);
-        for dir in [1.0, -1.0] {
+        let offset = first.offset(ms(20));
+        assert!(offset > 0.5 && offset < 1.0, "{offset}");
+        // Where each page is drawn at `now`: the page coming in at the
+        // offset, the pages going out from the strip.
+        let drawn = |slide: &Slide, coming: Page, now: Instant| {
+            let at = slide.offset(now);
+            let mut pages: Vec<(Page, f32)> =
+                slide.strip.visible(at).into_iter().flatten().collect();
+            if at.abs() < 1.0 {
+                pages.push((coming, at));
+            }
+            pages
+        };
+        let before = drawn(&first, Page::Media, ms(20));
+        assert_eq!(before.len(), 2);
+        for (dir, coming) in [(1.0, Page::Notes), (-1.0, Page::Calendar)] {
             let next = Slide {
-                from: slide_start(offset, dir),
-                from_page: Page::Pomodoro,
-                start: ms(60),
+                strip: SlideStrip::next(Some(&first.strip), offset, Page::Media, dir),
+                start: ms(20),
             };
-            // The page that was sliding is drawn at `slide - signum(slide)`
-            // panel widths: its place at the new slide's first frame is
-            // where it was at the last frame of the old one.
-            let at = next.offset(ms(60));
-            assert!(
-                (at - at.signum() - offset).abs() < 1e-5,
-                "dir {dir}: {at} against {offset}"
-            );
+            // Every page on screen at the old slide's last frame is drawn at
+            // the same place at the new slide's first.
+            let after = drawn(&next, coming, ms(20));
+            for (page, x) in &before {
+                assert!(
+                    after
+                        .iter()
+                        .any(|(p, at)| p == page && (at - x).abs() < 1e-5),
+                    "dir {dir}: {page:?} at {x} is gone or moved: {after:?}"
+                );
+            }
             // And it ends at rest like any slide.
-            assert_eq!(next.offset(ms(60 + SLIDE_MS as u64)), 0.0);
+            assert_eq!(next.offset(ms(20 + SLIDE_MS as u64)), 0.0);
         }
     }
 

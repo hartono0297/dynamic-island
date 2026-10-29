@@ -71,12 +71,74 @@ pub fn panel_fade(h: f32, rest_h: f32, compact_h: f32) -> f32 {
     ((h - compact_h) / span / 0.7).clamp(0.0, 1.0)
 }
 
-/// Where a slide that starts now begins. A slide that runs still has its page
-/// `offset` (in panel widths) away from rest; the page on screen keeps that
-/// place and the new one comes from `dir` (+1: it follows on the right) beyond
-/// it, so nothing jumps. At rest (`offset` 0) it is the plain ±1.
-pub fn slide_start(offset: f32, dir: f32) -> f32 {
-    (offset + dir).clamp(-2.0, 2.0)
+/// The most pages a slide keeps on their way out.
+pub const SLIDE_TRAIL: usize = 5;
+/// The farthest the page coming in starts, in panel widths. Only a long
+/// fast spin compounds past it; the strip then jumps by the excess.
+pub const SLIDE_MAX: f32 = 4.0;
+
+/// The pages of a slide as one strip: the page coming in starts `from`
+/// panel widths away from rest and eases to 0, and the pages going out sit
+/// a whole number of widths from it (`trail`), so they move with it. A slide
+/// that starts during another continues the same strip: nothing on screen
+/// moves or disappears, whichever way the new page comes from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlideStrip {
+    /// Where the page coming in starts, in panel widths (+: on the right).
+    pub from: f32,
+    /// The pages going out, each with its place in panel widths from the
+    /// page coming in. Only those that show at some point of the slide.
+    pub trail: [Option<(Page, i8)>; SLIDE_TRAIL],
+}
+
+impl SlideStrip {
+    /// A slide to a page that comes from `dir` (+1: it follows on the right),
+    /// starting while the page on screen (`current`, the one the last slide
+    /// brought in) is `offset` widths from rest; `prev` is the slide that
+    /// runs, `None` at rest. The new page sits one width beyond `current`,
+    /// so `current` and the pages still going out keep their places.
+    pub fn next(prev: Option<&SlideStrip>, offset: f32, current: Page, dir: f32) -> Self {
+        let step: i8 = if dir < 0.0 { -1 } else { 1 };
+        let raw = offset + f32::from(step);
+        let from = raw.clamp(-SLIDE_MAX, SLIDE_MAX);
+        // Shown at some point while the page coming in eases from `from` to 0.
+        let (lo, hi) = if from < 0.0 { (from, 0.0) } else { (0.0, from) };
+        let shows = |rel: i8| {
+            let rel = f32::from(rel);
+            rel + lo < 1.0 && rel + hi > -1.0
+        };
+        let older = prev
+            .into_iter()
+            .flat_map(|p| p.trail.into_iter().flatten())
+            .map(|(page, rel)| (page, rel.saturating_sub(step)));
+        let mut trail = [None; SLIDE_TRAIL];
+        // The new page takes slot 0; a page going out there is covered by it.
+        for (slot, entry) in trail.iter_mut().zip(
+            std::iter::once((current, -step))
+                .chain(older)
+                .filter(|&(_, rel)| rel != 0 && shows(rel)),
+        ) {
+            *slot = Some(entry);
+        }
+        Self { from, trail }
+    }
+
+    /// The pages going out that show while the page coming in is `offset`
+    /// widths from rest, each with its x in panel widths. Never more than
+    /// two: the pages are a whole width apart.
+    pub fn visible(&self, offset: f32) -> [Option<(Page, f32)>; 2] {
+        let mut out = [None; 2];
+        let shown = self
+            .trail
+            .into_iter()
+            .flatten()
+            .map(|(page, rel)| (page, offset + f32::from(rel)))
+            .filter(|&(_, x)| x.abs() < 1.0);
+        for (slot, entry) in out.iter_mut().zip(shown) {
+            *slot = Some(entry);
+        }
+        out
+    }
 }
 
 /// What a page change looks like.
@@ -433,23 +495,85 @@ mod tests {
         assert!(!panel_regions_wanted(false, false, 0.0, None));
     }
 
+    /// Where `page` is drawn at `offset`, `None` when it is not.
+    fn drawn_at(strip: &SlideStrip, offset: f32, page: Page) -> Option<f32> {
+        strip
+            .visible(offset)
+            .into_iter()
+            .flatten()
+            .find(|(p, _)| *p == page)
+            .map(|(_, x)| x)
+    }
+
     #[test]
-    fn a_slide_that_starts_mid_slide_continues_from_the_offset() {
-        // At rest it is the plain ±1.
-        assert_eq!(slide_start(0.0, 1.0), 1.0);
-        assert_eq!(slide_start(0.0, -1.0), -1.0);
-        // Mid-slide (the page on screen 0.4 panel widths to the right): the
-        // page that was drawn at `offset` keeps its place, wherever the next
-        // one comes from. The renderer draws the old page at `start - dir`.
-        for (offset, dir) in [(0.4, 1.0), (0.4, -1.0), (-0.7, 1.0), (-0.7, -1.0)] {
-            let start = slide_start(offset, dir);
-            assert!(
-                (start - dir - offset).abs() < 1e-6,
-                "offset {offset} dir {dir}: the old page jumped"
-            );
+    fn a_slide_from_rest_brings_the_page_in_beside_the_old_one() {
+        let s = SlideStrip::next(None, 0.0, Page::Calendar, 1.0);
+        assert_eq!(s.from, 1.0);
+        // The old page sits one width to the left of the new one.
+        assert_eq!(drawn_at(&s, 1.0, Page::Calendar), Some(0.0));
+        assert_eq!(drawn_at(&s, 0.4, Page::Calendar), Some(-0.6));
+        // At rest it is gone.
+        assert_eq!(drawn_at(&s, 0.0, Page::Calendar), None);
+        let back = SlideStrip::next(None, 0.0, Page::Media, -1.0);
+        assert_eq!(back.from, -1.0);
+        assert_eq!(drawn_at(&back, -0.4, Page::Media), Some(0.6));
+    }
+
+    #[test]
+    fn a_slide_that_starts_mid_slide_keeps_every_page_on_screen_in_place() {
+        // A to B, two notches 20 ms apart: B is 0.75 in, A still covers
+        // three quarters of the panel at -0.25.
+        let (a, b) = (Page::Calendar, Page::Media);
+        let first = SlideStrip::next(None, 0.0, a, 1.0);
+        let offset = 0.75;
+        assert_eq!(drawn_at(&first, offset, a), Some(-0.25));
+        // The next notch, the same way: C comes in beyond B. Neither A nor B
+        // moves or disappears.
+        let second = SlideStrip::next(Some(&first), offset, b, 1.0);
+        assert_eq!(second.from, 1.75);
+        assert_eq!(drawn_at(&second, second.from, a), Some(-0.25));
+        assert_eq!(drawn_at(&second, second.from, b), Some(0.75));
+        // Halfway, B covers the middle and C comes in after it.
+        let mid = drawn_at(&second, 0.9, b).expect("B shows");
+        assert!((mid + 0.1).abs() < 1e-5, "{mid}");
+        assert_eq!(drawn_at(&second, 0.9, a), None);
+        // A notch back instead: A comes back where it is, B stays beside it.
+        let back = SlideStrip::next(Some(&first), offset, b, -1.0);
+        assert_eq!(back.from, -0.25);
+        assert_eq!(drawn_at(&back, back.from, b), Some(0.75));
+        // A is the page coming in now (drawn as the page itself, not twice).
+        assert_eq!(drawn_at(&back, back.from, a), None);
+    }
+
+    #[test]
+    fn a_reversal_after_two_notches_comes_back_on_the_right_side() {
+        // Two quick notches: C is 1.5 away on the right, B at 0.5.
+        let (a, b, c) = (Page::Calendar, Page::Media, Page::Notes);
+        let first = SlideStrip::next(None, 0.0, a, 1.0);
+        let second = SlideStrip::next(Some(&first), 0.5, b, 1.0);
+        assert_eq!(drawn_at(&second, 1.5, b), Some(0.5));
+        // Back again: B comes in from where it is (0.5), not from the left;
+        // C, off screen at 1.5, is not drawn.
+        let back = SlideStrip::next(Some(&second), 1.5, c, -1.0);
+        assert_eq!(back.from, 0.5);
+        assert_eq!(drawn_at(&back, 0.5, c), None);
+        // A, beyond B on the left, slides on with it.
+        assert_eq!(drawn_at(&back, 0.5, a), Some(-0.5));
+    }
+
+    #[test]
+    fn a_long_spin_stays_bounded() {
+        let pages = [Page::Calendar, Page::Media, Page::Notes, Page::Reminders];
+        let mut strip: Option<SlideStrip> = None;
+        let mut offset = 0.0;
+        for i in 0..20 {
+            let next = SlideStrip::next(strip.as_ref(), offset, pages[i % pages.len()], 1.0);
+            assert!(next.from <= SLIDE_MAX);
+            // Never more than two pages going out on screen.
+            assert!(next.visible(next.from).into_iter().flatten().count() <= 2);
+            offset = next.from * 0.9;
+            strip = Some(next);
         }
-        // Never further than two panel widths.
-        assert_eq!(slide_start(1.0, 1.0), 2.0);
     }
 
     #[test]

@@ -64,10 +64,10 @@ outside into `Dismiss`). It stops when the linger ends.
 | Notices (including the screenshot preview) | same | same fade in with the morph |
 | The strip (sticky notice in the panel) | pops with the page | unchanged: part of the page's content, fades with the panel |
 | Panel opens | content faded in with the height | same, now via `motion::panel_fade` (shared) |
-| Panel closes | content gone on the first frame (the drawn view became the compact one) | the panel's content stays and fades out with the shape's height, the compact view fades in (`Transit::leaving`, `paint_leaving_panel`); no clicks while it closes |
+| Panel closes | content gone on the first frame (the drawn view became the compact one) | the panel's content stays and fades out with the shape's height, the compact view fades in (`Transit::leaving`, `paint_leaving_panel`); no clicks while it closes. It draws what it showed (`ShownPanel`, below), not what the close reset |
 | Page change by the wheel | slides | slides |
 | Other page changes (Clipboard tile, page tiles, a disk warning's "Buka", the Mole notice, hotkeys over an open panel, a page switched off while it shows) | `follow_page` already ran after every applied event, but only looked at the view afterwards: a change at the same moment as the panel opening slid from nothing, a change under a notice slid unseen | `follow_transition` compares the panel before and after the event (`motion::transition`): slide only when it showed both before and after |
-| A slide that starts during a slide | restarted from +-1: the page on screen jumped | continues from the current offset (`slide_start`) |
+| A slide that starts during a slide | restarted from +-1: the page on screen jumped | continues the same strip (`SlideStrip`): every page on screen keeps its place, either way |
 | Search over a page, and back | instant (no slide to or from it) | cross-fade of the two pages, 160 ms (`PageFade`, `PAGE_FADE_MS`) |
 | Calendar Month/Week/Day | instant | `Reveal`: finer range from below, coarser from above |
 | Calendar prev/next, "+N lagi" day paging | instant | `Reveal`: later from the right, earlier from the left; paging from the right |
@@ -96,11 +96,28 @@ outside into `Dismiss`). It stops when the linger ends.
   (`motion::page_fade_frame`); passing `Some(1.0)` left the search, the
   Clipboard or the Shelf page with no click regions until something else
   redrew.
-- **Known pop:** a slide that starts mid-slide keeps the page on screen where
-  it is, but the page the first slide was moving out (`from_page`) is not
-  drawn any more: on a fast wheel spin its remaining part (about 40 % of the
-  width 60 ms into a slide) vanishes in one frame. Accepted; drawing it would
-  need a second outgoing page in `Slide`.
+- **Slides are one strip** (`motion::SlideStrip`): the page coming in
+  starts `from` widths away and eases to 0; the pages going out sit a whole
+  number of widths from it (`trail`, up to `SLIDE_TRAIL` = 5) and move with
+  it. A new notch puts the next page one width beyond the page that was
+  coming in, so nothing on screen moves or vanishes (before, the page going
+  out vanished: two notches 20 ms apart left it covering 75 % of the panel,
+  and a reversal after two quick notches drew the page on the wrong side).
+  A page that lands in the new page's slot (going back) is dropped, so is
+  one that never shows during the new slide. `from` is capped at
+  `SLIDE_MAX` = 4 widths: only a long fast spin reaches it, and then the
+  strip jumps by the excess. The renderer gets at most two trail pages
+  (`Frame::page_trail`, those with |x| < 1).
+- **Gotcha, the closing panel's content:** by the time `refresh` starts the
+  closing morph, `apply` has already reset what the panel showed (the
+  cleaner, `cli_tall`, `cli_menu`, the notes, reminders and day pages; the
+  strip is `None` once the view is not the panel). `App` takes
+  `IslandState::shown_panel()` before each event and keeps it
+  (`closed_panel`) when the event takes the panel off screen; `refresh` hands
+  it to `leaving`, and `draw` builds the leaving frame from it (page, strip,
+  page indices, CLI size and menu, cleaner and Mole stage), and
+  `paint_leaving_panel` sizes it with the same `panel_kind`. Without a
+  snapshot for that page there is no fade-out, never a reset page.
 - The CLI folder menu's reveal uses `layer2` too, so it is skipped (the menu
   shows at once) while a page cross-fade is running: D2D cannot push one
   layer twice, and `EndDraw` would fail.
@@ -115,8 +132,9 @@ outside into `Dismiss`). It stops when the linger ends.
   broadcast). Off: no slide, no cross-fade, no reveal (instant), and the morph
   eases with plain ease-out cubic instead of `ease_out_back` (`Anim::plain`,
   `motion::morph_ease`). The morph itself and the content fades remain.
-- Demo: `DI_DEMO_REVEAL=0.5` freezes a reveal; scenes `cal-week-to-day`,
-  `cleaner-open`, `search-open`; `DI_DEMO_T=0.5` on a compact scene shows the
+- Demo: `DI_DEMO_REVEAL=0.5` freezes a reveal (`cal-week-to-day`,
+  `cleaner-open`) or the search's page cross-fade (`search-open`, over the
+  Music page, as the island does it); `DI_DEMO_T=0.5` on a compact scene shows the
   morph's content fade and the panel fading out.
 
 ### Budget
