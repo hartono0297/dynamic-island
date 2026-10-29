@@ -1930,6 +1930,8 @@ impl Renderer {
                 SearchKind::Setting => Icon::Gear,
                 SearchKind::Calc => Icon::Calc,
                 SearchKind::Web => Icon::Globe,
+                SearchKind::Folder => Icon::Folder,
+                SearchKind::File => Icon::Note,
             };
             let ink = if on { p.accent } else { p.secondary };
             self.icon_colored(glyph, icon, 16.0, ink, 1.0, None);

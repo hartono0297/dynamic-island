@@ -26,6 +26,7 @@ use crate::config::SearchHotkey;
 use crate::i18n::{self, Key, tr};
 use crate::model::{Event, Hit, Notice, NoticeKind, Page, View};
 use crate::search::{self, Action, AppEntry, Labels, SearchResult};
+use crate::shelf::{self, Probe};
 use crate::shortcuts;
 use crate::ui::cli_input::{CliInput, Key as InputKey};
 use crate::ui::editor;
@@ -61,12 +62,15 @@ fn text_formats(text: &str) -> Vec<(u32, Vec<u8>)> {
 fn with_labels<T>(f: impl FnOnce(&Labels) -> T) -> T {
     let lang = i18n::lang();
     let web_title = move |q: &str| i18n::search_web_title(lang, q);
+    let size = move |bytes: u64| i18n::search_file_size(lang, bytes);
     f(&Labels {
         app: tr(Key::SearchKindApp),
         setting: tr(Key::SearchKindSetting),
         copy: tr(Key::SearchCopy),
         web: tr(Key::SearchKindWeb),
         web_title: &web_title,
+        root: &i18n::search_root,
+        size: &size,
     })
 }
 
@@ -281,7 +285,8 @@ impl App {
     fn search_again(&mut self) {
         let lang = i18n::lang();
         let apps = self.search.apps.as_deref().unwrap_or(&[]);
-        self.search.results = with_labels(|labels| search::search(&self.search.query, apps, lang, labels));
+        self.search.results =
+            with_labels(|labels| search::search(&self.search.query, apps, &[], lang, labels));
         self.search.selected = 0;
     }
 
@@ -311,6 +316,20 @@ impl App {
             Action::OpenWeb(url) if search::is_web_url(&url) => url,
             Action::OpenWeb(_) => return None,
             Action::Copy(text) => return self.copy_search_result(text),
+            Action::OpenPath(path) => {
+                // Gone since the walk (or a drive that went): nothing to open.
+                if shelf::probe(&path) == Probe::Missing {
+                    return None;
+                }
+                self.cli_prev = None;
+                unsafe {
+                    if GetForegroundWindow() == self.hwnd {
+                        let _ = AllowSetForegroundWindow(ASFW_ANY);
+                    }
+                }
+                self.queue_shortcut(shortcuts::Action::OpenPath(path));
+                return None;
+            }
         };
         self.cli_prev = None;
         unsafe {
@@ -456,7 +475,7 @@ mod tests {
                 name: "Kalkulator".into(),
                 path: "x.lnk".into(),
             }];
-            let found = with_labels(|l| search::search("kal", &apps, lang, l));
+            let found = with_labels(|l| search::search("kal", &apps, &[], lang, l));
             assert_eq!(found[0].subtitle, tr(Key::SearchKindApp));
             assert_eq!(found.last().unwrap().subtitle, tr(Key::SearchKindWeb));
             assert!(found.last().unwrap().title.contains("kal"));

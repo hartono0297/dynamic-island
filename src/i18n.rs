@@ -605,14 +605,23 @@ keys! {
 
     // Quick search.
     SearchTitle => "Pencarian", "Search";
-    SearchHint => "Cari aplikasi, hitung, atau ketik ? untuk web",
-        "Search apps, calculate, or type ? for the web";
+    SearchHint => "Cari aplikasi, berkas, hitung, atau ketik ? untuk web",
+        "Search apps, files, calculate, or type ? for the web";
     SearchEmpty => "Ketik untuk mencari", "Type to search";
-    SearchEmptyHint => "Contoh: kalkulator · 2*(3+4) · ? kopi susu",
-        "Try: calculator · 2*(3+4) · ? coffee";
+    SearchEmptyHint => "Contoh: kalkulator · laporan · 2*(3+4) · ? kopi susu",
+        "Try: calculator · report · 2*(3+4) · ? coffee";
     SearchNone => "Tidak ada hasil", "No results";
     SearchNoneHint => "Setelah ? tulis yang dicari di web", "After ? type what to look up on the web";
     SearchKindApp => "Aplikasi", "App";
+    SearchKindFile => "Berkas", "File";
+    SearchKindFolder => "Folder", "Folder";
+    SearchIndexing => "Membaca berkas…", "Reading files…";
+    SearchRootDesktop => "Desktop", "Desktop";
+    SearchRootDocuments => "Dokumen", "Documents";
+    SearchRootDownloads => "Unduhan", "Downloads";
+    SearchRootPictures => "Gambar", "Pictures";
+    SearchRootVideos => "Video", "Videos";
+    SearchRootMusic => "Musik", "Music";
     SearchKindSetting => "Pengaturan Windows", "Windows Settings";
     SearchCopy => "Enter untuk menyalin", "Enter to copy";
     SearchKindWeb => "Cari di web", "Search the web";
@@ -1262,6 +1271,47 @@ pub fn clip_search_in(lang: Lang, n: usize) -> String {
         Lang::Id => format!("Cari di {n} item…"),
         Lang::En if n == 1 => "Search 1 item…".to_owned(),
         Lang::En => format!("Search {n} items…"),
+    }
+}
+
+/// A search root's name in a result row ("Unduhan").
+pub fn search_root(kind: crate::search_files::RootKind) -> &'static str {
+    use crate::search_files::RootKind;
+    tr(match kind {
+        RootKind::Desktop => Key::SearchRootDesktop,
+        RootKind::Documents => Key::SearchRootDocuments,
+        RootKind::Downloads => Key::SearchRootDownloads,
+        RootKind::Pictures => Key::SearchRootPictures,
+        RootKind::Videos => Key::SearchRootVideos,
+        RootKind::Music => Key::SearchRootMusic,
+    })
+}
+
+/// A file's size as a search row says it: "1 KB" at the least, "245 KB",
+/// then "2,4 MB" up to 10 MB, then `format_size` ("245 MB", "1,2 GB").
+pub fn search_file_size(lang: Lang, bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    let kb = ((bytes + KIB / 2) / KIB).max(1);
+    if kb < 1024 {
+        format!("{kb} KB")
+    } else if bytes < 10 * MIB {
+        format!("{} MB", one_decimal(lang, bytes as f64 / MIB as f64))
+    } else {
+        format_size(lang, bytes)
+    }
+}
+
+/// A folder's item count in a search row: "1 item", "12 item" ("12
+/// items"), "999+ item" for a folder with more than 999.
+pub fn search_folder_items(lang: Lang, n: usize) -> String {
+    let shown = if n > 999 {
+        "999+".to_owned()
+    } else {
+        n.to_string()
+    };
+    match lang {
+        Lang::En if n != 1 => format!("{shown} items"),
+        Lang::Id | Lang::En => format!("{shown} item"),
     }
 }
 
@@ -2333,6 +2383,36 @@ mod tests {
         );
         assert_eq!(seconds_short(Lang::Id, 8), "8 dtk");
         assert_eq!(seconds_short(Lang::En, 8), "8 s");
+    }
+
+    #[test]
+    fn file_sizes_and_counts_read_well_in_both_languages() {
+        let kb = 1024;
+        for lang in [Lang::Id, Lang::En] {
+            assert_eq!(search_file_size(lang, 0), "1 KB", "one at the least");
+            assert_eq!(search_file_size(lang, 1), "1 KB");
+            assert_eq!(search_file_size(lang, 245 * kb), "245 KB");
+            assert_eq!(search_file_size(lang, 245 * kb + 100), "245 KB", "rounded");
+            assert_eq!(search_file_size(lang, 1023 * kb), "1023 KB");
+            assert_eq!(search_file_size(lang, 512 * MIB), "512 MB");
+            assert_eq!(search_file_size(lang, 3 * GIB), format_size(lang, 3 * GIB));
+        }
+        // From a megabyte one decimal, in the language's mark.
+        assert_eq!(search_file_size(Lang::Id, MIB), "1,0 MB");
+        assert_eq!(search_file_size(Lang::En, MIB * 5 / 2), "2.5 MB");
+        assert_eq!(search_file_size(Lang::Id, MIB * 5 / 2), "2,5 MB");
+        assert_eq!(search_file_size(Lang::En, 1024 * kb - 10), "1.0 MB", "no 1024 KB");
+        assert_eq!(search_file_size(Lang::En, 9 * MIB), "9.0 MB");
+        assert_eq!(search_file_size(Lang::En, 10 * MIB), "10 MB");
+
+        assert_eq!(search_folder_items(Lang::Id, 1), "1 item");
+        assert_eq!(search_folder_items(Lang::Id, 12), "12 item");
+        assert_eq!(search_folder_items(Lang::En, 1), "1 item");
+        assert_eq!(search_folder_items(Lang::En, 12), "12 items");
+        assert_eq!(search_folder_items(Lang::En, 0), "0 items");
+        assert_eq!(search_folder_items(Lang::En, 999), "999 items");
+        assert_eq!(search_folder_items(Lang::En, 1000), "999+ items");
+        assert_eq!(search_folder_items(Lang::Id, 5000), "999+ item");
     }
 
     #[test]

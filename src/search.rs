@@ -3,15 +3,25 @@
 //! pages and a web search. Everything here is pure except `index_start_menu`,
 //! which reads the Start Menu folders; `App` runs the chosen result.
 //!
-//! No file search yet (a later run): it would need Windows Search on a
-//! background thread with a time limit.
+//! Files and folders (names under the user's Desktop, Documents, Downloads,
+//! Pictures, Videos and Music) come from `search_files`; they are matched
+//! from two typed characters and share the rows with the apps.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::i18n::Lang;
+use crate::search_files::{FileEntry, RootKind};
 
 /// Results the list shows at most.
 pub const MAX_RESULTS: usize = 6;
+/// Typed characters (after trimming) before files and folders are searched;
+/// apps and settings pages match from the first one.
+pub const FILE_MIN_CHARS: usize = 2;
+/// File and folder rows at most while apps still have hits to show.
+pub const FILE_ROWS_MAX: usize = 3;
+/// App rows kept when apps match, however many files do.
+pub const APP_ROWS_MIN: usize = 2;
 /// The query's longest length, in characters.
 pub const QUERY_MAX: usize = 120;
 /// The Start Menu folders are read this many levels down.
@@ -36,6 +46,8 @@ pub enum Kind {
     Setting,
     Calc,
     Web,
+    File,
+    Folder,
 }
 
 /// What Enter does.
@@ -49,6 +61,9 @@ pub enum Action {
     Copy(String),
     /// `ShellExecute` "open" on an https address built here.
     OpenWeb(String),
+    /// `ShellExecute` "open" on a file or folder found under the user's own
+    /// folders (a double-click's effect).
+    OpenPath(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +72,9 @@ pub struct SearchResult {
     pub title: String,
     pub subtitle: String,
     pub action: Action,
+    /// What the details (icon, folder count, install size) are looked up by:
+    /// an app's shortcut, a file's or folder's own path.
+    pub path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------
@@ -360,19 +378,24 @@ pub fn is_web_url(url: &str) -> bool {
 /// How well `name` matches `query` (both compared case-insensitively):
 /// 3 starts with it, 2 a word starts with it, 1 contains it, 0 no match.
 pub fn match_score(name: &str, query: &str) -> u8 {
-    let (name, query) = (name.to_lowercase(), query.trim().to_lowercase());
+    score_lower(&name.to_lowercase(), &query.trim().to_lowercase())
+}
+
+/// `match_score` for a name and a query that are lower case already (the
+/// file index keeps lower-case names, so a keystroke lowers none of them).
+fn score_lower(name: &str, query: &str) -> u8 {
     if query.is_empty() {
         return 0;
     }
-    if name.starts_with(&query) {
+    if name.starts_with(query) {
         return 3;
     }
     let word_start = name
-        .match_indices(&query)
+        .match_indices(query)
         .any(|(i, _)| name[..i].chars().next_back().is_some_and(|c| !c.is_alphanumeric()));
     if word_start {
         2
-    } else if name.contains(&query) {
+    } else if name.contains(query) {
         1
     } else {
         0
@@ -402,14 +425,25 @@ pub struct Labels<'a> {
     pub web: &'a str,
     /// `Cari "…" di web`, already filled in for the query.
     pub web_title: &'a dyn Fn(&str) -> String,
+    /// A root's name ("Unduhan").
+    pub root: &'a dyn Fn(RootKind) -> &'static str,
+    /// A file's size as a row says it ("2,4 MB").
+    pub size: &'a dyn Fn(u64) -> String,
 }
 
 /// What `line` finds, at most `MAX_RESULTS` rows. A line starting with `?`
 /// is a web search and nothing else. Otherwise: the calculation (when it is
-/// one), then apps and settings pages by match quality, and the web search
-/// last (always, so Enter always does something). An empty line finds
-/// nothing.
-pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec<SearchResult> {
+/// one), then apps and settings pages by match quality, then files and
+/// folders (from `FILE_MIN_CHARS` typed characters; `split_room` shares the
+/// rows), and the web search last (always, so Enter always does something).
+/// An empty line finds nothing.
+pub fn search(
+    line: &str,
+    apps: &[AppEntry],
+    files: &[FileEntry],
+    lang: Lang,
+    labels: &Labels,
+) -> Vec<SearchResult> {
     let line = line.trim();
     if line.is_empty() {
         return Vec::new();
@@ -427,6 +461,7 @@ pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec
             title: format!("= {shown}"),
             subtitle: labels.copy.to_owned(),
             action: Action::Copy(shown),
+            path: None,
         });
     }
     let web = web_url(line).map(|url| web_result(line, url, labels));
@@ -444,6 +479,7 @@ pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec
                 title: a.name.clone(),
                 subtitle: labels.app.to_owned(),
                 action: Action::Launch(a.path.clone()),
+                path: Some(PathBuf::from(&a.path)),
             },
         ));
     }
@@ -457,13 +493,98 @@ pub fn search(line: &str, apps: &[AppEntry], lang: Lang, labels: &Labels) -> Vec
                 title: p.name(lang).to_owned(),
                 subtitle: labels.setting.to_owned(),
                 action: Action::OpenSetting(p.uri),
+                path: None,
             },
         ));
     }
     found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    out.extend(found.into_iter().take(room).map(|(_, _, r)| r));
+
+    let file_hits = if line.chars().count() >= FILE_MIN_CHARS {
+        rank_files(files, line)
+    } else {
+        Vec::new()
+    };
+    let (app_rows, file_rows) = split_room(room, found.len(), file_hits.len());
+    out.extend(found.into_iter().take(app_rows).map(|(_, _, r)| r));
+    out.extend(
+        file_hits
+            .into_iter()
+            .take(file_rows)
+            .map(|i| file_result(&files[i], labels)),
+    );
     out.extend(web);
     out
+}
+
+/// How `room` rows go to `apps` app/settings hits and `files` file hits:
+/// files take at most `FILE_ROWS_MAX` and never so many that fewer than
+/// `APP_ROWS_MIN` app rows are left when apps match; apps take the rest;
+/// room still left over goes to the files that have not shown yet. Returns
+/// `(app rows, file rows)`.
+fn split_room(room: usize, apps: usize, files: usize) -> (usize, usize) {
+    let files_now = files
+        .min(FILE_ROWS_MAX)
+        .min(room.saturating_sub(apps.min(APP_ROWS_MIN)));
+    let apps_now = apps.min(room - files_now);
+    let spare = room - files_now - apps_now;
+    (apps_now, files_now + spare.min(files - files_now))
+}
+
+/// Indices into `files` that match `query`, best first: by score, then
+/// folders before files, then the newest, then the shortest name, then the
+/// walk's own order.
+fn rank_files(files: &[FileEntry], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    let mut hits: Vec<(u8, usize)> = files
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| match score_lower(&f.lower, &query) {
+            0 => None,
+            s => Some((s, i)),
+        })
+        .collect();
+    hits.sort_by(|a, b| {
+        let (fa, fb) = (&files[a.1], &files[b.1]);
+        b.0.cmp(&a.0)
+            .then(fb.is_dir.cmp(&fa.is_dir))
+            .then(fb.modified.cmp(&fa.modified))
+            .then(fa.name.chars().count().cmp(&fb.name.chars().count()))
+            .then(a.1.cmp(&b.1))
+    });
+    hits.into_iter().map(|(_, i)| i).collect()
+}
+
+/// The row for a file or folder: it opens its own path. The subtitle names
+/// where it is (the root, and the folder it is in, cut to the last two
+/// levels), a file's size after it.
+fn file_result(f: &FileEntry, labels: &Labels) -> SearchResult {
+    let place = location((labels.root)(f.root), f.parent.as_deref());
+    let (kind, subtitle) = if f.is_dir {
+        (Kind::Folder, place)
+    } else {
+        (Kind::File, format!("{place} \u{b7} {}", (labels.size)(f.size)))
+    };
+    SearchResult {
+        kind,
+        title: f.name.clone(),
+        subtitle,
+        action: Action::OpenPath(f.path.clone()),
+        path: Some(f.path.clone()),
+    }
+}
+
+/// "Dokumen", "Dokumen \u{203a} Proyek", "Dokumen \u{203a} \u{2026} \u{203a} B \u{203a} C": the root, then
+/// the last two folders of `parent` (backslash separated) when it has
+/// more.
+fn location(root: &str, parent: Option<&str>) -> String {
+    let parts: Vec<&str> = parent
+        .map(|p| p.split('\\').filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    match parts.len() {
+        0 => root.to_owned(),
+        1 | 2 => format!("{root} \u{203a} {}", parts.join(" \u{203a} ")),
+        n => format!("{root} \u{203a} \u{2026} \u{203a} {}", parts[n - 2..].join(" \u{203a} ")),
+    }
 }
 
 fn web_result(shown: &str, url: String, labels: &Labels) -> SearchResult {
@@ -472,6 +593,7 @@ fn web_result(shown: &str, url: String, labels: &Labels) -> SearchResult {
         title: (labels.web_title)(shown),
         subtitle: labels.web.to_owned(),
         action: Action::OpenWeb(url),
+        path: None,
     }
 }
 
@@ -554,7 +676,47 @@ mod tests {
             copy: "Enter untuk menyalin",
             web: "Cari di web",
             web_title: &|q| format!("Cari \"{q}\" di web"),
+            root: &|kind| match kind {
+                RootKind::Desktop => "Desktop",
+                RootKind::Documents => "Dokumen",
+                RootKind::Downloads => "Unduhan",
+                RootKind::Pictures => "Gambar",
+                RootKind::Videos => "Video",
+                RootKind::Music => "Musik",
+            },
+            size: &|bytes| format!("{bytes} B"),
         }
+    }
+
+    /// A file or folder as the walk would have found it.
+    fn entry(
+        name: &str,
+        root: RootKind,
+        parent: Option<&str>,
+        is_dir: bool,
+        age: u64,
+    ) -> FileEntry {
+        let path = match parent {
+            Some(p) => format!(r"C:\Home\{p}\{name}"),
+            None => format!(r"C:\Home\{name}"),
+        };
+        FileEntry {
+            name: name.into(),
+            lower: name.to_lowercase(),
+            path: PathBuf::from(path),
+            root,
+            parent: parent.map(str::to_owned),
+            is_dir,
+            size: 2048,
+            // A smaller `age` is newer.
+            modified: Some(
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 - age),
+            ),
+        }
+    }
+
+    fn file(name: &str) -> FileEntry {
+        entry(name, RootKind::Documents, None, false, 10)
     }
 
     fn app(name: &str) -> AppEntry {
@@ -653,7 +815,7 @@ mod tests {
         assert_eq!(calc_in("1.5,000 + 1", Lang::En), None);
         assert_eq!(calc_in("1..000", Lang::Id), None);
         // The search row shows the Indonesian sum.
-        let r = search("1.000 + 500", &[], Lang::Id, &labels());
+        let r = search("1.000 + 500", &[], &[], Lang::Id, &labels());
         assert_eq!(r[0].title, "= 1500");
         // A leading 0 or more than three digits before the mark: a decimal.
         assert_eq!(calc_in("0.001 * 5", Lang::Id), Some(0.005));
@@ -733,10 +895,164 @@ mod tests {
         assert!(!is_web_url("javascript:alert(1)"));
     }
 
+
+    #[test]
+    fn files_start_at_two_characters_apps_at_one() {
+        let apps = [app("Kalender")];
+        let files = [file("kartu.txt")];
+        // (Settings pages match short lines too; they are not the point.)
+        let kinds = |line: &str| -> Vec<Kind> {
+            search(line, &apps, &files, Lang::Id, &labels())
+                .iter()
+                .map(|r| r.kind)
+                .filter(|k| *k != Kind::Setting)
+                .collect()
+        };
+        // One character: the app only (and the web).
+        assert_eq!(kinds("k"), [Kind::App, Kind::Web]);
+        assert_eq!(kinds("  k  "), [Kind::App, Kind::Web], "trimmed first");
+        // Two: the file is found too, after the app and before the web.
+        assert_eq!(kinds("ka"), [Kind::App, Kind::File, Kind::Web]);
+        assert_eq!(kinds(" ka "), [Kind::App, Kind::File, Kind::Web]);
+        // Two characters, not two bytes.
+        let accented = [file("\u{e9}a.txt")];
+        let r = search("\u{e9}a", &[], &accented, Lang::Id, &labels());
+        assert_eq!(r[0].kind, Kind::File);
+        let r = search("\u{e9}", &[], &accented, Lang::Id, &labels());
+        assert!(r.iter().all(|r| r.kind != Kind::File));
+    }
+
+    #[test]
+    fn files_rank_by_score_then_folders_then_newest() {
+        let docs = RootKind::Documents;
+        let files = [
+            entry("old report.txt", docs, None, false, 500),
+            entry("my report.txt", docs, None, false, 1),
+            entry("report b.txt", docs, None, false, 100),
+            entry("report a.txt", docs, None, false, 5),
+            entry("Report", docs, None, true, 900),
+            entry("reporting-tool-notes.txt", docs, None, false, 1),
+        ];
+        let names = |line: &str, files: &[FileEntry]| -> Vec<String> {
+            search(line, &[], files, Lang::Id, &labels())
+                .into_iter()
+                .filter(|r| matches!(r.kind, Kind::File | Kind::Folder))
+                .map(|r| r.title)
+                .collect()
+        };
+        // Prefix matches first: the folder before the files, then the newest
+        // file (a newer than b). Only so many rows show: the rest is cut.
+        assert_eq!(
+            names("report", &files),
+            ["Report", "reporting-tool-notes.txt", "report a.txt", "report b.txt", "my report.txt"]
+        );
+        // A word start (2) ranks under a prefix (3).
+        assert_eq!(names("report", &files[..2]), ["my report.txt", "old report.txt"]);
+        // Equal everything but the length: the shorter name first.
+        let same = [
+            entry("notes-long-name.txt", docs, None, false, 3),
+            entry("notes.txt", docs, None, false, 3),
+        ];
+        assert_eq!(names("notes", &same), ["notes.txt", "notes-long-name.txt"]);
+        // The score still beats a folder: a prefix file over a substring folder.
+        let mixed = [
+            entry("xxreportxx", docs, None, true, 1),
+            entry("report.txt", docs, None, false, 900),
+        ];
+        assert_eq!(names("report", &mixed), ["report.txt", "xxreportxx"]);
+    }
+
+    #[test]
+    fn rows_are_shared_between_apps_and_files() {
+        let apps: Vec<AppEntry> = (0..5).map(|i| app(&format!("Tool {i}"))).collect();
+        let files: Vec<FileEntry> = (0..5)
+            .map(|i| file(&format!("tool file {i}.txt")))
+            .collect();
+        let count = |r: &[SearchResult], kind: Kind| r.iter().filter(|r| r.kind == kind).count();
+        let order = |r: &[SearchResult]| -> Vec<Kind> { r.iter().map(|r| r.kind).collect() };
+
+        // 5 apps and 5 files: 3 files and 2 apps (room for 5 with the web).
+        let r = search("tool", &apps, &files, Lang::Id, &labels());
+        assert_eq!((count(&r, Kind::App), count(&r, Kind::File)), (2, 3));
+        assert_eq!(r.len(), MAX_RESULTS);
+        // Grouped, not interleaved: apps, then files, then the web.
+        assert_eq!(
+            order(&r),
+            [Kind::App, Kind::App, Kind::File, Kind::File, Kind::File, Kind::Web]
+        );
+
+        // Files only: up to 5.
+        let r = search("tool", &[], &files, Lang::Id, &labels());
+        assert_eq!((count(&r, Kind::App), count(&r, Kind::File)), (0, 5));
+        // Apps only: up to 5.
+        let r = search("tool", &apps, &[], Lang::Id, &labels());
+        assert_eq!((count(&r, Kind::App), count(&r, Kind::File)), (5, 0));
+        // One app and many files: the leftover room goes to the files.
+        let r = search("tool", &apps[..1], &files, Lang::Id, &labels());
+        assert_eq!((count(&r, Kind::App), count(&r, Kind::File)), (1, 4));
+        // Many apps, one file: the file keeps its row, apps take the rest.
+        let r = search("tool", &apps, &files[..1], Lang::Id, &labels());
+        assert_eq!((count(&r, Kind::App), count(&r, Kind::File)), (4, 1));
+
+        // With a calculation and the web: still six, in order.
+        let apps: Vec<AppEntry> = (0..5).map(|i| app(&format!("1+1 App {i}"))).collect();
+        let files: Vec<FileEntry> = (0..5)
+            .map(|i| file(&format!("1+1 file {i}.txt")))
+            .collect();
+        let r = search("1+1", &apps, &files, Lang::Id, &labels());
+        assert_eq!(r.len(), MAX_RESULTS);
+        assert_eq!(
+            order(&r),
+            [Kind::Calc, Kind::App, Kind::App, Kind::File, Kind::File, Kind::Web]
+        );
+    }
+
+    #[test]
+    fn a_file_row_opens_its_path_and_names_its_folder() {
+        let nested = entry("laporan.pdf", RootKind::Downloads, Some("Kantor"), false, 1);
+        let top = entry("Gambar kerja", RootKind::Documents, None, true, 1);
+        let deep = entry("c.txt", RootKind::Documents, Some(r"A\B\C\D"), false, 1);
+        let files = [nested.clone(), top.clone(), deep.clone()];
+        let r = search("laporan", &[], &files, Lang::Id, &labels());
+        assert_eq!(r[0].kind, Kind::File);
+        assert_eq!(r[0].title, "laporan.pdf");
+        assert_eq!(r[0].action, Action::OpenPath(nested.path.clone()));
+        assert_eq!(r[0].path, Some(nested.path.clone()));
+        // Root, its folder, then the size.
+        assert_eq!(r[0].subtitle, "Unduhan \u{203a} Kantor \u{b7} 2048 B");
+        // A folder: where it is, no size.
+        let r = search("gambar", &[], &files, Lang::Id, &labels());
+        assert_eq!(r[0].kind, Kind::Folder);
+        assert_eq!(r[0].action, Action::OpenPath(top.path.clone()));
+        assert_eq!(r[0].subtitle, "Dokumen");
+        // A deep folder is cut to its last two levels.
+        let r = search("c.txt", &[], &files, Lang::Id, &labels());
+        assert_eq!(
+            r[0].subtitle,
+            "Dokumen \u{203a} \u{2026} \u{203a} C \u{203a} D \u{b7} 2048 B"
+        );
+        // An app and a settings row carry what the details need, or nothing.
+        let apps = [app("Laporan Studio")];
+        let r = search("laporan", &apps, &[], Lang::Id, &labels());
+        assert_eq!(r[0].path, Some(PathBuf::from(r"C:\Menu\Laporan Studio.lnk")));
+        let r = search("layar", &apps, &[], Lang::Id, &labels());
+        assert_eq!((r[0].kind, r[0].path.clone()), (Kind::Setting, None));
+    }
+
+    #[test]
+    fn a_question_mark_line_still_finds_only_the_web_with_files_present() {
+        let apps = [app("Kopi")];
+        let files = [file("kopi susu.txt")];
+        let r = search("? kopi", &apps, &files, Lang::Id, &labels());
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].kind, Kind::Web);
+        assert!(search("?", &apps, &files, Lang::Id, &labels()).is_empty());
+    }
+
     #[test]
     fn a_question_mark_line_is_only_a_web_search() {
         let apps = [app("Kalkulator")];
-        let r = search("? kopi susu", &apps, Lang::Id, &labels());
+        let r = search("? kopi susu", &apps, &[], Lang::Id, &labels());
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].kind, Kind::Web);
         assert_eq!(r[0].title, "Cari \"kopi susu\" di web");
@@ -744,14 +1060,14 @@ mod tests {
             r[0].action,
             Action::OpenWeb("https://www.google.com/search?q=kopi+susu".into())
         );
-        assert!(search("?", &apps, Lang::Id, &labels()).is_empty());
-        assert!(search("?   ", &apps, Lang::Id, &labels()).is_empty());
+        assert!(search("?", &apps, &[], Lang::Id, &labels()).is_empty());
+        assert!(search("?   ", &apps, &[], Lang::Id, &labels()).is_empty());
     }
 
     #[test]
     fn a_line_finds_the_calculation_apps_settings_and_the_web_in_order() {
         let apps = [app("Kalender"), app("Kalkulator"), app("Notepad")];
-        let r = search("kal", &apps, Lang::Id, &labels());
+        let r = search("kal", &apps, &[], Lang::Id, &labels());
         let kinds: Vec<Kind> = r.iter().map(|r| r.kind).collect();
         // Two apps, then the web; "kal" matches no settings page.
         assert_eq!(kinds, [Kind::App, Kind::App, Kind::Web]);
@@ -759,50 +1075,50 @@ mod tests {
         assert_eq!(r[1].action, Action::Launch(r"C:\Menu\Kalkulator.lnk".into()));
 
         // A calculation comes first, and is what Enter copies.
-        let r = search("2+2*3", &apps, Lang::Id, &labels());
+        let r = search("2+2*3", &apps, &[], Lang::Id, &labels());
         assert_eq!(r[0].kind, Kind::Calc);
         assert_eq!(r[0].title, "= 8");
         assert_eq!(r[0].action, Action::Copy("8".into()));
         assert_eq!(r.last().unwrap().kind, Kind::Web);
         // A lone number is not one.
-        assert!(search("42", &apps, Lang::Id, &labels()).iter().all(|r| r.kind != Kind::Calc));
+        assert!(search("42", &apps, &[], Lang::Id, &labels()).iter().all(|r| r.kind != Kind::Calc));
         // The decimal mark follows the language.
-        let r = search("1/4", &apps, Lang::Id, &labels());
+        let r = search("1/4", &apps, &[], Lang::Id, &labels());
         assert_eq!(r[0].title, "= 0,25");
         // A settings page, in the language.
-        let r = search("layar", &apps, Lang::Id, &labels());
+        let r = search("layar", &apps, &[], Lang::Id, &labels());
         assert_eq!(r[0].kind, Kind::Setting);
         assert_eq!(r[0].action, Action::OpenSetting("ms-settings:display"));
-        let r = search("display", &apps, Lang::En, &labels());
+        let r = search("display", &apps, &[], Lang::En, &labels());
         assert_eq!(r[0].title, "Display");
         // Nothing typed, nothing found.
-        assert!(search("  ", &apps, Lang::Id, &labels()).is_empty());
+        assert!(search("  ", &apps, &[], Lang::Id, &labels()).is_empty());
     }
 
     #[test]
     fn the_list_is_capped_and_always_ends_with_the_web() {
         let apps: Vec<AppEntry> = (0..30).map(|i| app(&format!("App {i:02}"))).collect();
-        let r = search("app", &apps, Lang::En, &labels());
+        let r = search("app", &apps, &[], Lang::En, &labels());
         assert_eq!(r.len(), MAX_RESULTS);
         assert_eq!(r.last().unwrap().kind, Kind::Web);
         assert_eq!(r[0].title, "App 00");
         // With a calculation too: still six.
-        let r = search("1+1", &apps, Lang::En, &labels());
+        let r = search("1+1", &apps, &[], Lang::En, &labels());
         assert!(r.len() <= MAX_RESULTS);
         let many: Vec<AppEntry> = (0..30).map(|i| app(&format!("1+1 App {i}"))).collect();
-        let r = search("1+1", &many, Lang::En, &labels());
+        let r = search("1+1", &many, &[], Lang::En, &labels());
         assert_eq!(r.len(), MAX_RESULTS);
         assert_eq!(r[0].kind, Kind::Calc);
         assert_eq!(r.last().unwrap().kind, Kind::Web);
         // A line the web cannot take (control character) loses only that row.
-        let r = search("app\u{7}", &apps, Lang::En, &labels());
+        let r = search("app\u{7}", &apps, &[], Lang::En, &labels());
         assert!(r.iter().all(|r| r.kind != Kind::Web));
     }
 
     #[test]
     fn an_app_wins_a_tie_with_a_settings_page() {
         let apps = [app("Display Fusion")];
-        let r = search("display", &apps, Lang::En, &labels());
+        let r = search("display", &apps, &[], Lang::En, &labels());
         assert_eq!((r[0].kind, r[1].kind), (Kind::App, Kind::Setting));
     }
 

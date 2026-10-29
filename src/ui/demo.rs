@@ -2129,9 +2129,11 @@ fn demo_search_results() -> Vec<crate::search::SearchResult> {
         .collect();
     let lang = crate::i18n::lang();
     let web_title = move |q: &str| crate::i18n::search_web_title(lang, q);
+    let size = move |bytes: u64| crate::i18n::search_file_size(lang, bytes);
     crate::search::search(
         DEMO_SEARCH_QUERY,
         &apps,
+        &[],
         lang,
         &Labels {
             app: tr(Key::SearchKindApp),
@@ -2139,6 +2141,8 @@ fn demo_search_results() -> Vec<crate::search::SearchResult> {
             copy: tr(Key::SearchCopy),
             web: tr(Key::SearchKindWeb),
             web_title: &web_title,
+            root: &crate::i18n::search_root,
+            size: &size,
         },
     )
 }
