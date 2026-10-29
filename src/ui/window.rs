@@ -37,6 +37,7 @@ pub struct IslandWindow {
 
 impl IslandWindow {
     pub fn create(wnd_proc: WNDPROC) -> Result<Self> {
+        // Also named in `capture::win::KEPT_OUT` (kept out of screenshots).
         let class_name = w!("ValeWindow");
         unsafe {
             let instance = GetModuleHandleW(None)?.into();

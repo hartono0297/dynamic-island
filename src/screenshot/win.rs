@@ -119,7 +119,7 @@ pub fn spawn_check(
 
 /// `bgra` (top-down, `w` x `h`, opaque) as PNG bytes, encoded by WIC into a
 /// memory stream: no file is touched. Needs COM on the calling thread.
-fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
     unsafe {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -158,7 +158,7 @@ fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
 
 /// Writes `bytes` to a new file at `path` (create new: an existing file is
 /// never opened). A file this made and could not fill is removed.
-fn write_at(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
+pub(crate) fn write_at(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

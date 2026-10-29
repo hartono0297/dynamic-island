@@ -14,7 +14,7 @@ use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
     ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
-    ScreenshotSettings, SearchHotkey, ShotIgnore, Style,
+    ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
@@ -320,6 +320,8 @@ pub enum Hit {
     ShotPreview,
     ShotIgnore(ShotIgnore),
     ShotSecs(i32),
+    /// "Alat screenshot" (Vale / Snipping Tool).
+    ShotTool(ShotTool),
     Battery(i32),
     /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
     DiskWarn(i32),
@@ -405,6 +407,7 @@ pub enum Group {
     ShotIgnore,
     /// The own-shortcut form's Jenis.
     TileKind,
+    ShotTool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2497,37 +2500,48 @@ pub fn shot_secs_step(n: u32, dir: i32) -> u32 {
 fn screenshot_card(b: &mut Builder, s: &State) {
     let c = s.shot;
     b.eyebrow(Key::SecScreenshot, CONTENT_W);
-    let card = b.card(3.0 * ROW_H);
-    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
+    let card = b.card(4.0 * ROW_H);
+    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
     let on = c.preview;
 
-    let x = b.toggle(Hit::ShotPreview, RIGHT, cy(rows[0]), on);
-    b.row_text(card, rows[0], b.t(Key::ShotPreviewSetting), None, false, x);
+    // The tool comes first and never fades: it decides how a screenshot is
+    // taken, the preview only what the notch does with a new one.
+    let items = vec![
+        (Hit::ShotTool(ShotTool::Vale), b.t(Key::ShotToolVale)),
+        (Hit::ShotTool(ShotTool::Windows), b.t(Key::ShotToolWindows)),
+    ];
+    let selected = index_of(ShotTool::ALL, &c.tool);
+    let x = b.segmented(Group::ShotTool, RIGHT, cy(rows[0]), items, selected);
+    b.row_text(card, rows[0], b.t(Key::ShotToolSetting), None, false, x);
+
+    let x = b.toggle(Hit::ShotPreview, RIGHT, cy(rows[1]), on);
+    b.row_text(card, rows[1], b.t(Key::ShotPreviewSetting), None, false, x);
+    b.divider(card, rows[1]);
 
     let items = vec![
         (Hit::ShotIgnore(ShotIgnore::Keep), b.t(Key::ShotKeep)),
         (Hit::ShotIgnore(ShotIgnore::Delete), b.t(Key::ShotDelete)),
     ];
     let selected = index_of(ShotIgnore::ALL, &c.on_ignore);
-    let x = b.segmented_if(Group::ShotIgnore, RIGHT, cy(rows[1]), items, selected, on);
+    let x = b.segmented_if(Group::ShotIgnore, RIGHT, cy(rows[2]), items, selected, on);
     let desc = Some((b.t(Key::ShotIgnoreDesc), Tone::Secondary));
-    b.row_text(card, rows[1], b.t(Key::ShotIgnoreSetting), desc, false, x);
-    b.divider(card, rows[1]);
+    b.row_text(card, rows[2], b.t(Key::ShotIgnoreSetting), desc, false, x);
+    b.divider(card, rows[2]);
 
     let (min, max, _) = SHOT_SECS_RANGE;
     let n = c.show_secs;
     let x = b.stepper(
         RIGHT,
-        cy(rows[2]),
+        cy(rows[3]),
         crate::i18n::seconds_short(b.lang, n),
         Hit::ShotSecs(-1),
         Hit::ShotSecs(1),
         (n > min, n < max),
         on,
     );
-    b.row_text(card, rows[2], b.t(Key::ShotShowFor), None, false, x);
-    b.divider(card, rows[2]);
+    b.row_text(card, rows[3], b.t(Key::ShotShowFor), None, false, x);
+    b.divider(card, rows[3]);
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -2948,6 +2962,11 @@ mod tests {
                                 ShotIgnore::Keep
                             },
                             show_secs: if locked { 30 } else { 4 },
+                            tool: if locked {
+                                ShotTool::Windows
+                            } else {
+                                ShotTool::Vale
+                            },
                         },
                         pages: if locked {
                             let mut p = PanelPages::default();

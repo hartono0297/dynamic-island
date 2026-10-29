@@ -32,6 +32,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[mole-mode]]
 - [[clipboard-history]]
 - [[screenshot-preview]]
+- [[screenshot-snap]]: own region capture that snaps to windows and boxes, the editor after it, UIA budget, own-copy skip
 - [[panel-pages]]
 - [[vale-rename]]
 - [[google-built-in-client]]

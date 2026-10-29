@@ -41,6 +41,9 @@ pub enum Action {
     /// A shelf card: `ShellExecute` "open" on a file or folder path, passed
     /// as it is (no lossy text conversion on the way).
     OpenPath(std::path::PathBuf),
+    /// Vale's own region capture (Settings → Clipboard → "Alat screenshot"):
+    /// the Screenshot tile with the Vale tool.
+    Capture,
 }
 
 /// A drive's root as Explorer takes it: "C:\".
@@ -145,7 +148,7 @@ pub fn icon(s: Shortcut) -> Icon {
 /// the panel's collapse to finish so it is not in the picture.
 pub fn delay_ms(action: &Action) -> u32 {
     match action {
-        Action::Open("ms-screenclip:") => ANIM_MS as u32 + 60,
+        Action::Open("ms-screenclip:") | Action::Capture => ANIM_MS as u32 + 60,
         _ => 120,
     }
 }
@@ -262,6 +265,7 @@ pub fn run(action: Action) {
         Action::Lock => unsafe {
             let _ = windows::Win32::System::Shutdown::LockWorkStation();
         },
+        Action::Capture => crate::capture::overlay::start(),
     }
 }
 
@@ -335,6 +339,16 @@ mod tests {
                 assert_ne!(icon(*a), icon(*b));
             }
         }
+    }
+
+    #[test]
+    fn vales_own_capture_waits_for_the_collapse_like_the_screen_clip() {
+        let clip = shortcut_action(Shortcut::Screenshot).expect("the tile's action");
+        assert_eq!(delay_ms(&Action::Capture), delay_ms(&clip));
+        assert!(
+            u64::from(delay_ms(&Action::Capture)) > ANIM_MS,
+            "after the morph"
+        );
     }
 
     #[test]

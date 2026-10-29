@@ -7,8 +7,8 @@ date: 2026-10-28
 
 Run 8 of the v3.1 plan (keputusan #6). Code: `src/screenshot/` (pure:
 matching, PNG/JPEG headers, folder listing; Win32: `win`) and
-`src/app_shot.rs` (the island's side). The Pintasan Screenshot tile stays
-`ms-screenclip:`.
+`src/app_shot.rs` (the island's side). The Pintasan Screenshot tile ran
+`ms-screenclip:` (now Vale's own capture by default, see [[screenshot-snap]]).
 
 - **Detection.** A new clipboard image from the history's listener
   ([[clipboard-history]], `clip_image_arrived`) becomes a candidate. With
@@ -161,3 +161,5 @@ move to the Recycle Bin). The app cannot ask for the exception; the owner
 allows `vale.exe` once. A failed save now says "mungkin diblokir Controlled
 folder access" (`Key::ShotMaybeBlocked`); README Troubleshooting has the steps.
 A new release may need the exception again (the file is replaced).
+
+See also: [[screenshot-snap]] (the Screenshot tile's own capture and editor).
