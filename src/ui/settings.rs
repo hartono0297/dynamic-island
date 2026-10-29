@@ -74,7 +74,7 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
     ClipHotkey, ClipboardSettings, Config, OpenMode, ScreenshotSettings, SearchHotkey, ShotIgnore,
-    Style,
+    ShotTool, Style,
 };
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};
@@ -123,6 +123,7 @@ pub enum Action {
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
     /// Settings → Clipboard → Screenshot.
+    ShotTool(ShotTool),
     ShotPreview(bool),
     ShotOnIgnore(ShotIgnore),
     ShotSecs(u32),
@@ -1104,6 +1105,7 @@ impl Settings {
                     .position(|v| *v == m.search_hotkey)
                     .unwrap_or(0) as f32,
                 Group::ShotIgnore => usize::from(m.shot.on_ignore == ShotIgnore::Delete) as f32,
+                Group::ShotTool => usize::from(m.shot.tool == ShotTool::Windows) as f32,
             }
         };
         for group in [
@@ -1118,6 +1120,7 @@ impl Settings {
             Group::ClipHotkey,
             Group::SearchHotkey,
             Group::ShotIgnore,
+            Group::ShotTool,
         ] {
             let (from, to) = (index(group, &old), index(group, new));
             if from != to {
@@ -1356,6 +1359,7 @@ impl Settings {
                 Vec::new()
             }
             Hit::ShotPreview => post(Action::ShotPreview(!m.shot.preview)),
+            Hit::ShotTool(v) if v != m.shot.tool => post(Action::ShotTool(v)),
             Hit::ShotIgnore(v) if v != m.shot.on_ignore => post(Action::ShotOnIgnore(v)),
             Hit::ShotSecs(dir) => {
                 let n = shot_secs_step(m.shot.show_secs, dir);
@@ -1479,7 +1483,8 @@ impl Settings {
             | Hit::Motion(_)
             | Hit::ClipHotkey(_)
             | Hit::SearchHotkey(_)
-            | Hit::ShotIgnore(_) => Vec::new(),
+            | Hit::ShotIgnore(_)
+            | Hit::ShotTool(_) => Vec::new(),
         };
         self.relayout();
         after
@@ -2016,6 +2021,7 @@ pub fn run_demo(args: &[String]) {
             Action::SearchHotkey(v) => m.search_hotkey = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
+            Action::ShotTool(v) => m.shot.tool = v,
             Action::ShotPreview(v) => m.shot.preview = v,
             Action::ShotOnIgnore(v) => m.shot.on_ignore = v,
             Action::ShotSecs(v) => m.shot.show_secs = v,

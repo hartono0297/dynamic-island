@@ -658,6 +658,37 @@ keys! {
     ShotIgnoreSetting => "Jika diabaikan", "If ignored";
     ShotIgnoreDesc => "Setelah waktu tampil habis", "Once its time on screen runs out";
     ShotShowFor => "Lama tampil", "Show for";
+    // Vale's own region capture and screenshot editor.
+    ShotToolSetting => "Alat screenshot", "Screenshot tool";
+    ShotToolVale => "Vale", "Vale";
+    ShotToolWindows => "Snipping Tool", "Snipping Tool";
+    SnapHint => "Klik atau seret · Enter ambil · Esc batal",
+        "Click or drag · Enter to capture · Esc to cancel";
+    EditTitle => "Vale · Screenshot", "Vale · Screenshot";
+    EditSelect => "Pilih", "Select";
+    EditText => "Teks", "Text";
+    EditRect => "Kotak", "Rectangle";
+    EditArrow => "Panah", "Arrow";
+    EditPen => "Pena", "Pen";
+    EditMarker => "Stabilo", "Marker";
+    EditPixelate => "Sensor", "Pixelate";
+    EditUndo => "Urungkan", "Undo";
+    EditRedo => "Ulangi", "Redo";
+    EditCopy => "Salin", "Copy";
+    EditSave => "Simpan", "Save";
+    EditClose => "Tutup", "Close";
+    EditDiscardAsk => "Buang perubahan?", "Discard changes?";
+    EditDiscard => "Buang", "Discard";
+    EditKeep => "Batal", "Cancel";
+    EditCopied => "Disalin ke clipboard", "Copied to the clipboard";
+    EditCopyFailed => "Gagal menyalin", "Couldn't copy";
+    EditSaving => "Menyimpan…", "Saving…";
+    EditDemoNoClipboard => "Mode demo: clipboard tidak disentuh",
+        "Demo mode: the clipboard is not touched";
+    EditHint => "Seret untuk menggambar · Del untuk hapus · Ctrl+Z urungkan",
+        "Drag to draw · Delete removes · Ctrl+Z undoes";
+    EditStroke => "Tebal garis", "Stroke width";
+    EditColor => "Warna", "Colour";
     SecondsShort => "dtk", "s";
 
     // The demo's Claude notices (debug builds).

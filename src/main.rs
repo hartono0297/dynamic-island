@@ -4,6 +4,7 @@ mod app;
 mod audio;
 mod behind;
 mod calendar;
+mod capture;
 mod claude;
 mod clean;
 mod cli;
@@ -29,6 +30,7 @@ mod screenshot;
 mod search;
 mod search_details;
 mod search_files;
+mod shot_edit;
 mod shelf;
 mod shelf_ole;
 mod shortcuts;
@@ -64,7 +66,10 @@ fn opens_windows(arg: Option<&str>) -> bool {
         None => true,
         Some(media_log::FLAG) => true,
         #[cfg(debug_assertions)]
-        Some("--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--settings") => true,
+        Some(
+            "--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--demo-snap"
+            | "--demo-shot-editor" | "--settings",
+        ) => true,
         Some(_) => false,
     }
 }
@@ -126,6 +131,22 @@ fn main() {
             attach_parent_console();
             demo_lang_from_env();
             ui::demo::run_robot();
+        }
+        // The capture overlay on a desktop drawn in code: no screen grab, no
+        // window list, no UI Automation.
+        #[cfg(debug_assertions)]
+        Some("--demo-snap") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            capture::demo::run_snap();
+        }
+        // The screenshot editor on a made-up picture ("empty": no annotations).
+        #[cfg(debug_assertions)]
+        Some("--demo-shot-editor") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            let empty = std::env::args().nth(2).as_deref() == Some("empty");
+            shot_edit::window::run_demo(empty);
         }
         #[cfg(debug_assertions)]
         Some("--settings") => {
