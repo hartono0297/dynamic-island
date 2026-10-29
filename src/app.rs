@@ -3527,6 +3527,9 @@ impl App {
         self.bata.brain.hover(false, Instant::now());
         match self.hover.on_leave() {
             Some(event) => self.apply_now(event),
+            // A leave before the dwell sends nothing, but it still ends the
+            // visit a drop was made in.
+            None if self.state.shelf_drop_here() => self.apply_now(Event::ShelfDropLeft),
             None => self.refresh(Instant::now()),
         }
     }

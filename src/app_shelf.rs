@@ -20,10 +20,9 @@ use super::{App, Event, Page, View, client_xy};
 use crate::shelf::{self, Probe, Shelf, ShelfCard};
 use crate::shortcuts;
 
-/// One-shot: how long the panel stays open after a drop that left the
-/// pointer where hover never arrives (it ends at once when hover does).
+/// One-shot: the drag has left the island; when it fires, the drag's hold on
+/// the panel ends (a drop kills it, the drop latches the panel itself).
 pub(super) const TIMER_SHELF_HOLD: usize = 27;
-const SHELF_HOLD_MS: u32 = 2_500;
 /// A drag that leaves the island keeps the panel this long, so one that
 /// strays off the edge and back does not flicker it away.
 const SHELF_LEAVE_MS: u32 = 600;
@@ -80,20 +79,22 @@ impl App {
         self.shelf.shown = wanted;
     }
 
-    /// Files dropped on the island: they go on the shelf, the panel stays
-    /// on it a moment longer so the cards are seen arriving.
+    /// Files dropped on the island: they go on the shelf and the panel stays
+    /// on it, latched like a click (`ShelfDropped`), so the cards are seen
+    /// arriving whatever the pointer does next.
     pub(super) fn on_shelf_drop(&mut self, paths: Vec<PathBuf>, now: Instant) {
         self.shelf.dragging = false;
         self.shelf.shelf.add(paths);
         self.shelf_look();
-        self.apply(Event::ShelfDrag(true), now);
+        // The drag is over: a pending 600 ms leave must not end anything.
         unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SHELF_HOLD, SHELF_HOLD_MS, None);
+            let _ = KillTimer(Some(self.hwnd), TIMER_SHELF_HOLD);
         }
+        self.apply(Event::ShelfDropped, now);
         self.refresh(now);
     }
 
-    /// `TIMER_SHELF_HOLD`: the drop's hold on the panel ends.
+    /// `TIMER_SHELF_HOLD`: the drag stayed away; its hold on the panel ends.
     pub(super) fn on_shelf_hold_timer(&mut self) {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SHELF_HOLD);

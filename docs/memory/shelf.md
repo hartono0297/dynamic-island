@@ -1,6 +1,6 @@
 ---
-tags: [decision, shelf, ole, drag-drop, v3.2]
-date: 2026-10-28
+tags: [decision, shelf, ole, drag-drop, v3.2, v3.3]
+date: 2026-10-29
 ---
 
 # File shelf (v3.2 Run 11)
@@ -27,8 +27,8 @@ date: 2026-10-28
 - **Reducer**: `ShelfDrag(true)` opens the panel on the shelf and holds it
   (`shelf_held`, like `clip_held`: hover takes over, it ends with
   `ShelfDrag(false)`, a page change or a collapse); not in fullscreen. A
-  drop makes `App` add the paths and hold 2.5 s (`TIMER_SHELF_HOLD` 27) so
-  the cards are seen arriving. Clicks (`Hit::ShelfCard/ShelfRemove/
+  drop makes `App` add the paths and apply `ShelfDropped` (v3.3: the drop
+  latch, see the last section; the old 2.5 s hold is gone). Clicks (`Hit::ShelfCard/ShelfRemove/
   ShelfClear`) only count while the page is open; a card collapses the panel
   then opens its file (`Action::Shell`), a missing file is only marked.
 - **Drag out**: a left press on a card whose file is there, then a move of
@@ -50,7 +50,7 @@ window (and where: layered windows ignore fully transparent pixels, so only
 the drawn island takes a drop), that the idle island is big enough to aim at,
 that a drag hovering opens the panel in time, `DoDragDrop` out to Explorer and
 other apps (and the effect each app picks), a mouse that stays still after a
-drop (the 2.5 s hold is the fallback), and stale detection for network or
+drop (the drop latch is the fallback), and stale detection for network or
 removable paths.
 
 ## v3.2.1: opening on a drag, and a tidier page (2026-10-29)
@@ -146,5 +146,40 @@ starts from a cheap trigger and stops by itself (`halo.rs`):
 
 **Not verified live:** the trigger path with a real Explorer drag, and the
 swapped-buttons case.
+
+## v3.3: a drop opens the shelf and keeps it (2026-10-29)
+
+**Cause of the collapse:** during the OLE drag the island gets no mouse
+messages, so after the drop `hover` was false; the 2.5 s hold ended, or the
+first pointer move began a visit whose leave closed the panel.
+
+**Fix (`state.rs`, `Event::ShelfDropped`):** `App::on_shelf_drop` adds the
+paths, kills a pending `TIMER_SHELF_HOLD` (it stays only for the 600 ms
+drag-leave of `on_shelf_drag`; `SHELF_HOLD_MS` is gone) and applies
+`ShelfDropped`. Not in fullscreen, the reducer sets page Shelf,
+`collapsed = No`, `shelf_held = false` (the drag is over) and
+**`latched = true`**: the panel then follows the ordinary latched rules (it
+survives the pointer leaving, `TIMER_OUTSIDE` runs, `Event::Dismiss` closes
+it, a card click collapses it, fullscreen or a mode change clear it).
+`ShelfDrag(false)` only clears `shelf_held`, never the latch.
+
+- **HoverStay and Click:** nothing more; "stays until a click outside" is
+  their normal rule.
+- **Hover mode, `shelf_drop: DropVisit { No, Here, Left }`:** the drop's own
+  visit must not end the panel. `Here` is set by the drop; `Hover(false)` or
+  `ShelfDropLeft` turn it into `Left`; the next `Hover(true)` with `Left`
+  hands over (`latched = false`, `No`) so hover holds the panel and leaving
+  closes it as usual. A page change by the wheel with hover on hands over
+  too (without hover the dwell has not fired yet, so the latch is kept for
+  it). Post-process invariant: `!latched` => `shelf_drop = No`.
+- **`ShelfDropLeft`:** `HoverTracker::on_leave` returns `None` when the dwell
+  never fired, so `App::on_mouse_leave` sends `ShelfDropLeft` itself when
+  `state.shelf_drop_here()`. A stale tracker `Hover(false)` right after a drop
+  is absorbed by the same `Here -> Left` step.
+- **Gotcha:** in Hover mode a user who drops and walks away leaves the panel
+  open until their next click anywhere. That is the requested "stays".
+
+**Not verified live:** a real Explorer drop followed by moving away at once,
+and the Hover-mode hand-over on the next visit.
 
 Related: [[mixer]], [[open-mode]].

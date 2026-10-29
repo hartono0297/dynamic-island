@@ -209,6 +209,10 @@ pub struct IslandState {
     /// shelf for them. Hover takes over like it does from `clip_held`;
     /// `ShelfDrag(false)` ends it.
     shelf_held: bool,
+    /// Hover mode only: files were dropped and the panel was latched for
+    /// them (`ShelfDropped`). The visit they were dropped in does not end it;
+    /// the next one hands the panel to hover. Always `No` unless `latched`.
+    shelf_drop: DropVisit,
     /// The quick search is open (over `search_prev`'s page); it holds the
     /// panel open like the CLI input does.
     search_open: bool,
@@ -280,6 +284,7 @@ impl IslandState {
             clip_focused: false,
             clip_held: false,
             shelf_held: false,
+            shelf_drop: DropVisit::No,
             search_open: false,
             search_prev: Page::Calendar,
             collapsed: Collapse::No,
@@ -419,6 +424,16 @@ impl IslandState {
                     self.visit_on_notice = false;
                 }
                 self.hover = on;
+                // The drop's own visit ends when the pointer leaves it; a
+                // later visit hands the panel to hover, as for any panel.
+                match (self.shelf_drop, on) {
+                    (DropVisit::Here, false) => self.shelf_drop = DropVisit::Left,
+                    (DropVisit::Left, true) => {
+                        self.shelf_drop = DropVisit::No;
+                        self.latched = false;
+                    }
+                    _ => {}
+                }
                 // The pointer arrived: hover holds the hotkey's panel now,
                 // and leaving closes it as usual.
                 if on {
@@ -527,7 +542,32 @@ impl IslandState {
                 self.collapsed = Collapse::No;
                 self.shelf_held = true;
             }
+            // Never touches a drop's latch: the 600 ms leave timer and an
+            // empty drop end only the drag's own hold.
             Event::ShelfDrag(false) => self.shelf_held = false,
+            // Dropped and put on the shelf: the panel opens on it and stays,
+            // latched like a click. In Hover mode the drop's own visit does
+            // not end it (see `DropVisit`); HoverStay and Click already
+            // keep a latched panel until a click outside.
+            Event::ShelfDropped => {
+                if !self.fullscreen {
+                    self.page = Page::Shelf;
+                    self.collapsed = Collapse::No;
+                    self.shelf_held = false;
+                    self.latched = true;
+                    self.shelf_drop = if self.open_mode == OpenMode::Hover {
+                        DropVisit::Here
+                    } else {
+                        DropVisit::No
+                    };
+                }
+            }
+            // The pointer left before the dwell, so no `Hover(false)` comes.
+            Event::ShelfDropLeft => {
+                if self.shelf_drop == DropVisit::Here {
+                    self.shelf_drop = DropVisit::Left;
+                }
+            }
             // Only the open Mixer page takes a level.
             Event::MixerLevel(i, level) => {
                 if self.view() == View::Panel(Page::Mixer) {
@@ -604,6 +644,11 @@ impl IslandState {
         // outside, once it is what shows (not while a notice covers it).
         if self.hover_stay_latches() {
             self.latched = true;
+        }
+        // Whatever unlatched the panel (a click outside, a card, fullscreen,
+        // a mode change) ends the drop's hold with it.
+        if !self.latched {
+            self.shelf_drop = DropVisit::No;
         }
         if hover_on && !panel_was_open && self.panel_open() {
             self.hover_opened = Some(now);
@@ -1053,6 +1098,13 @@ impl IslandState {
         self.hover_opened = Some(now);
     }
 
+    /// A drop is holding the panel and its own visit is not over: a leave
+    /// that sends no `Hover(false)` (the dwell never fired) must say so with
+    /// `ShelfDropLeft`.
+    pub fn shelf_drop_here(&self) -> bool {
+        self.shelf_drop == DropVisit::Here
+    }
+
     /// The Clipboard search field has the keyboard.
     pub fn clip_focused(&self) -> bool {
         self.clip_focused
@@ -1423,7 +1475,15 @@ impl IslandState {
         let steps = self.wheel / WHEEL_STEP;
         self.wheel -= steps * WHEEL_STEP;
         // Steps count up the wheel; later pages are down it.
+        let from = self.page;
         self.page = self.pages.step(self.page, -i64::from(steps));
+        // A page turned with the pointer on a dropped shelf: the panel is
+        // the pointer's now (and closes when it leaves). Without hover the
+        // dwell has not fired yet, so the latch stays for it.
+        if self.page != from && self.hover && self.shelf_drop != DropVisit::No {
+            self.shelf_drop = DropVisit::No;
+            self.latched = false;
+        }
     }
 
     /// "Halaman panel" changed: a page just turned off is left for the next
@@ -1731,6 +1791,19 @@ enum Collapse {
     /// Shut, the pointer still on this visit.
     Shut,
     /// Shut, and the pointer has left; the next hover opens it again.
+    Left,
+}
+
+/// Where the visit of a drop stands, in Hover mode (the other modes keep
+/// the dropped panel by their own rules, and stay `No`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DropVisit {
+    /// No drop is holding the panel.
+    No,
+    /// The drop's own visit: the pointer is on the island, or has not been
+    /// seen to leave it. Its leaving does not close the panel.
+    Here,
+    /// That visit is over; the next hover hands the panel to hover.
     Left,
 }
 
@@ -4915,6 +4988,142 @@ mod tests {
         g.apply(Event::Fullscreen(true), t0);
         g.apply(Event::ShelfDrag(true), t0);
         assert!(!matches!(g.view(), View::Panel(_)));
+    }
+
+    // ---- v3.3: a drop opens the shelf and keeps it ----
+
+    #[test]
+    fn a_drop_keeps_the_shelf_open_after_the_drag_ends() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::ShelfDrag(true), t0);
+        s.apply(Event::ShelfDropped, t0);
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // The drag's own end (an empty drop, the 600 ms leave) and a long
+        // wait change nothing: the drop latched the panel.
+        s.apply(Event::ShelfDrag(false), t0);
+        s.apply(Event::Tick, t0 + secs(60));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        assert!(s.outside_click_wanted());
+    }
+
+    #[test]
+    fn the_drop_visit_leaving_does_not_close_it() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        assert!(s.outside_click_wanted());
+    }
+
+    #[test]
+    fn a_leave_before_the_dwell_also_ends_the_drop_visit() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Hover, t0);
+        assert!(!s.shelf_drop_here());
+        s.apply(Event::ShelfDropped, t0);
+        assert!(s.shelf_drop_here());
+        // The pointer left before the dwell: no Hover(false) will come.
+        s.apply(Event::ShelfDropLeft, t0 + secs(1));
+        assert!(!s.shelf_drop_here());
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // The next visit is an ordinary one: hover holds it, leaving closes it.
+        s.apply(Event::Hover(true), t0 + secs(2));
+        s.apply(Event::Hover(false), t0 + secs(3));
+        assert!(!matches!(s.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn after_a_drop_a_new_visit_hands_the_panel_to_hover() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        // Back over the panel: hover holds it now, no click outside needed.
+        s.apply(Event::Hover(true), t0 + secs(3));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        assert!(!s.outside_click_wanted());
+        s.apply(Event::Hover(false), t0 + secs(4));
+        assert!(!matches!(s.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn a_click_outside_closes_the_dropped_shelf() {
+        let t0 = Instant::now();
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        s.apply(Event::Dismiss, t0 + secs(1));
+        assert!(!matches!(s.view(), View::Panel(_)));
+        assert!(!s.outside_click_wanted());
+        // Under the pointer it stays shut until the pointer comes back.
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Dismiss, t0 + secs(1));
+        assert!(!matches!(s.view(), View::Panel(_)));
+        s.apply(Event::Hover(false), t0 + secs(2));
+        assert!(!matches!(s.view(), View::Panel(_)));
+        s.apply(Event::Hover(true), t0 + secs(3));
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+    }
+
+    #[test]
+    fn a_drop_in_click_or_hover_stay_mode_stays_until_a_click_outside() {
+        let t0 = Instant::now();
+        for m in [OpenMode::HoverStay, OpenMode::Click] {
+            let mut s = mode(m, t0);
+            s.apply(Event::ShelfDropped, t0);
+            assert_eq!(s.view(), View::Panel(Page::Shelf), "{m:?}");
+            for i in 1..=3u64 {
+                s.apply(Event::Hover(true), t0 + secs(2 * i));
+                s.apply(Event::Hover(false), t0 + secs(2 * i + 1));
+                assert_eq!(s.view(), View::Panel(Page::Shelf), "{m:?}");
+                assert!(s.outside_click_wanted(), "{m:?}");
+            }
+            s.apply(Event::Dismiss, t0 + secs(20));
+            assert!(!matches!(s.view(), View::Panel(_)), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn a_card_click_or_page_change_ends_the_drop_hold() {
+        let t0 = Instant::now();
+        // A card opens its file and collapses the panel, latch and all.
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::ShelfCard(0)), t0 + secs(1)),
+            vec![Effect::ShelfOpen(0)]
+        );
+        assert!(!matches!(s.view(), View::Panel(_)));
+        assert!(!s.latched);
+        // A page turned with the pointer on it hands the panel to hover.
+        let mut s = mode(OpenMode::Hover, t0);
+        s.apply(Event::ShelfDropped, t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        s.apply(Event::Wheel(-120), t0 + secs(2));
+        assert_ne!(s.page(), Page::Shelf);
+        assert!(!s.latched);
+        assert!(!s.shelf_drop_here());
+        s.apply(Event::Hover(false), t0 + secs(3));
+        assert!(!matches!(s.view(), View::Panel(_)));
+    }
+
+    #[test]
+    fn a_drop_during_fullscreen_opens_nothing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::ShelfDropped, t0);
+        assert!(!matches!(s.view(), View::Panel(_)));
+        // Nothing was latched behind the game.
+        s.apply(Event::Fullscreen(false), t0 + secs(1));
+        assert!(!matches!(s.view(), View::Panel(_)));
+        assert!(!s.outside_click_wanted());
     }
 
     #[test]
