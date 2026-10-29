@@ -133,6 +133,70 @@ pub fn on_strip(top: i32, span: (i32, i32), pt: (i32, i32)) -> bool {
     pt.1 >= top && pt.1 < top + STRIP_PX && pt.0 >= span.0 && pt.0 < span.1
 }
 
+/// How long a rise takes with Motion on: a fade and a slide. Short enough to
+/// feel like a reply to the touch, long enough to be seen as movement and not
+/// a flicker (the morphs take 240 ms).
+pub const RISE_MS: u64 = 180;
+/// How long it takes with Motion not Full (Saver, Off, Energy Saver): a fade
+/// only, so quicker, since nothing else shows that it is coming.
+pub const RISE_SAVER_MS: u64 = 120;
+/// How far above its place the island starts a sliding rise, in logical
+/// pixels: it comes down out of the screen's top edge. Small, so the slide
+/// reads as a settle and not as a drop.
+pub const RISE_DROP_DIP: f32 = 8.0;
+
+/// A rise from the bottom of the window order: the island, covered until now,
+/// fades in (and slides down into its place) instead of popping up in one
+/// frame. Pure; `App` draws it through `rise_frame` while it runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rise {
+    start: Instant,
+    ms: u64,
+    drop_dip: f32,
+}
+
+impl Rise {
+    /// A rise that starts at `now`; with `moves` false (Motion not Full) it
+    /// only fades, and quicker.
+    pub fn new(now: Instant, moves: bool) -> Self {
+        Rise {
+            start: now,
+            ms: if moves { RISE_MS } else { RISE_SAVER_MS },
+            drop_dip: if moves { RISE_DROP_DIP } else { 0.0 },
+        }
+    }
+
+    /// How far along it is, 0 to 1.
+    fn progress(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
+        (elapsed * 1000.0 / self.ms as f32).clamp(0.0, 1.0)
+    }
+
+    /// The opacity factor (0 to 1) and the offset down in logical pixels
+    /// (`-drop_dip` to 0) at `now`: ease-out cubic, so most of the change is
+    /// early and the island settles gently.
+    pub fn at(&self, now: Instant) -> (f32, f32) {
+        let t = self.progress(now);
+        if t >= 1.0 {
+            return (1.0, 0.0);
+        }
+        let ease = 1.0 - (1.0 - t).powi(3);
+        (ease, -self.drop_dip * (1.0 - ease))
+    }
+
+    /// It has not finished at `now`.
+    pub fn running(&self, now: Instant) -> bool {
+        self.progress(now) < 1.0
+    }
+}
+
+/// The island rises smoothly only when it goes from the bottom to the top
+/// and something covered it: one that was already visible (nothing over it)
+/// must not blink out and back, and lowering stays instant.
+pub fn rise_wanted(was: Z, now: Z, covered: bool) -> bool {
+    was == Z::Bottom && now == Z::Top && covered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +354,64 @@ mod tests {
         assert!(!on_strip(0, span, (600, 0)));
         assert!(!on_strip(0, span, (200, 0)), "beside the island, over the window");
         assert!(!on_strip(0, span, (500, -1)));
+    }
+
+    #[test]
+    fn a_covered_island_rises_only_from_the_bottom() {
+        assert!(rise_wanted(Z::Bottom, Z::Top, true));
+        assert!(!rise_wanted(Z::Bottom, Z::Top, false), "nothing covers it");
+        assert!(!rise_wanted(Z::Top, Z::Top, true), "already up");
+        assert!(
+            !rise_wanted(Z::Top, Z::Bottom, true),
+            "lowering stays instant"
+        );
+        assert!(!rise_wanted(Z::Bottom, Z::Bottom, true), "still down");
+    }
+
+    #[test]
+    fn a_rise_fades_in_and_slides_down_over_its_time() {
+        let t0 = Instant::now();
+        let rise = Rise::new(t0, true);
+        assert_eq!(rise.at(t0), (0.0, -RISE_DROP_DIP));
+        let (opacity, dy) = rise.at(t0 + ms(90));
+        assert!(opacity > 0.0 && opacity < 1.0, "{opacity}");
+        assert!(dy > -RISE_DROP_DIP && dy < 0.0, "{dy}");
+        assert!(opacity > 0.5, "ease-out: more than half done at half time");
+        assert_eq!(rise.at(t0 + ms(180)), (1.0, 0.0));
+        assert_eq!(rise.at(t0 + ms(500)), (1.0, 0.0));
+        assert!(rise.running(t0));
+        assert!(rise.running(t0 + ms(179)));
+        assert!(!rise.running(t0 + ms(180)));
+        assert!(!rise.running(t0 + ms(500)));
+    }
+
+    #[test]
+    fn a_rise_without_motion_only_fades_and_is_quicker() {
+        let t0 = Instant::now();
+        let rise = Rise::new(t0, false);
+        for t in (0..=200).step_by(10) {
+            assert_eq!(rise.at(t0 + ms(t)).1, 0.0, "no slide at {t} ms");
+        }
+        assert_eq!(rise.at(t0).0, 0.0);
+        let mid = rise.at(t0 + ms(60)).0;
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
+        assert!(rise.running(t0 + ms(119)));
+        assert!(!rise.running(t0 + ms(120)));
+        assert_eq!(rise.at(t0 + ms(120)), (1.0, 0.0));
+    }
+
+    #[test]
+    fn a_rise_never_goes_backwards() {
+        let t0 = Instant::now();
+        for moves in [true, false] {
+            let rise = Rise::new(t0, moves);
+            let (mut opacity, mut dy) = rise.at(t0);
+            for t in 0..=200 {
+                let (o, d) = rise.at(t0 + ms(t));
+                assert!(o >= opacity, "opacity fell at {t} ms");
+                assert!(d >= dy && d <= 0.0, "dy moved away from 0 at {t} ms");
+                (opacity, dy) = (o, d);
+            }
+        }
     }
 }

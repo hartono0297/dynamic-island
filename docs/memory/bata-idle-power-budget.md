@@ -1,6 +1,6 @@
 ---
 tags: [decision, robot, power, timers]
-date: 2026-10-27
+date: 2026-10-29
 ---
 
 # The notch assistant's idle power budget
@@ -18,6 +18,8 @@ Bata adds only one-shots (`app.rs`, planned by `robot::plan_timers`):
 - Hover lift (140 ms) and the alert's two bounces (2 × 260 ms) run the
   existing `FrameClock` only while they last (`App::animating_at`), and
   the blink re-plans when the clock stops.
+- The stay-behind rise ([[stay-behind]]: 180 ms, or a 120 ms fade with
+  Motion not Full) runs the same `FrameClock` only while it lasts; no timer.
 
 Motion policy (`Motion`, config `robot_animation`):
 
