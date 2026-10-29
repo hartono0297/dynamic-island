@@ -22,6 +22,21 @@ pub const REVEAL_OFFSET: f32 = 8.0;
 /// A page change that is not a slide: the two pages cross-fade this long.
 pub const PAGE_FADE_MS: u64 = 160;
 
+/// A cross-fade at `progress` (0..1) as the renderer gets it: `None` once it
+/// has reached its end, so its last frame is drawn settled and registers the
+/// page's click regions (the frame clock stops right after it).
+pub fn page_fade_frame(progress: f32) -> Option<f32> {
+    (progress < 1.0).then_some(progress)
+}
+
+/// Whether a panel frame registers its click regions: only the open panel's
+/// settled frame, with no slide or cross-fade running (the controls are not
+/// where the regions say yet, and the old page's are still under the pointer).
+/// A cross-fade at its end (`t >= 1`) counts as none.
+pub fn panel_regions_wanted(settled: bool, closing: bool, slide: f32, fade: Option<f32>) -> bool {
+    settled && !closing && slide == 0.0 && fade.and_then(page_fade_frame).is_none()
+}
+
 /// Cubic ease-out: fast start, gentle landing, no overshoot.
 pub fn ease_out_cubic(t: f32) -> f32 {
     let u = 1.0 - t.clamp(0.0, 1.0);
@@ -402,6 +417,20 @@ mod tests {
     fn no_transition_is_longer_than_the_morph() {
         assert!(REVEAL_MS <= crate::ui::geometry::ANIM_MS);
         assert!(PAGE_FADE_MS <= crate::ui::geometry::ANIM_MS);
+    }
+
+    #[test]
+    fn the_last_cross_fade_frame_is_settled() {
+        assert_eq!(page_fade_frame(0.0), Some(0.0));
+        assert_eq!(page_fade_frame(0.5), Some(0.5));
+        assert_eq!(page_fade_frame(1.0), None);
+        // Its end frame registers the page's regions, a frame inside it not.
+        assert!(panel_regions_wanted(true, false, 0.0, Some(1.0)));
+        assert!(panel_regions_wanted(true, false, 0.0, None));
+        assert!(!panel_regions_wanted(true, false, 0.0, Some(0.99)));
+        assert!(!panel_regions_wanted(true, false, 0.2, None));
+        assert!(!panel_regions_wanted(true, true, 0.0, None));
+        assert!(!panel_regions_wanted(false, false, 0.0, None));
     }
 
     #[test]

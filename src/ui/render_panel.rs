@@ -52,7 +52,7 @@ use crate::tiles::Tile;
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
-use crate::ui::motion::{ease_out_cubic, panel_fade};
+use crate::ui::motion::{ease_out_cubic, page_fade_frame, panel_fade, panel_regions_wanted};
 use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
     CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
@@ -446,7 +446,8 @@ impl Renderer {
         } else {
             (
                 frame.page_slide.clamp(-2.0, 2.0),
-                frame.transit.page_fade,
+                // A cross-fade at its end is a settled page (`t >= 1`).
+                frame.transit.page_fade.and_then(page_fade_frame),
                 frame.transit.reveal,
             )
         };
@@ -502,7 +503,7 @@ impl Renderer {
         }
         // No clicks on a page still sliding in: its controls are not where
         // the regions say yet, and the old page's are still under the pointer.
-        if settled && !closing && slide == 0.0 && fade.is_none() {
+        if panel_regions_wanted(settled, closing, slide, fade) {
             let mut hits = regions(s, &layout, strip);
             if matches!(layout, PageLayout::Media(_)) && frame.media.is_none() {
                 hits.retain(|r| !matches!(r.hit, Hit::Prev | Hit::PlayPause | Hit::Next));
@@ -1375,7 +1376,10 @@ impl Renderer {
         if let (Some(m), Some(menu)) = (&l.menu, cli.menu) {
             // The menu opens with a reveal of its own: the terminal behind
             // it keeps showing (`paint_panel_content` leaves this page out).
-            match frame.transit.reveal {
+            // Not inside a page cross-fade: that already holds `layer2`
+            // (`paint_page_at`), and one layer cannot be pushed twice.
+            let fading = frame.transit.page_fade.and_then(page_fade_frame).is_some();
+            match frame.transit.reveal.filter(|_| !fading) {
                 Some(r) => {
                     let target = self.target.as_ref().expect("target ensured by paint");
                     let mut at = Matrix3x2::identity();

@@ -101,7 +101,7 @@ use crate::ui::geometry::{
 };
 use crate::ui::motion::{
     PAGE_FADE_MS, Reveal, Snap, SubView, Transit, Transition, content_alpha, mole_code, morph_ease,
-    slide_start, transition,
+    page_fade_frame, slide_start, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -4192,7 +4192,10 @@ impl App {
         let morphing = self.anim.running;
         let transit = Transit {
             reveal: self.reveal.map(|r| r.frame(now)),
-            page_fade: self.page_fade.map(|f| f.progress(now)),
+            // Its last frame (t = 1) is drawn settled, with click regions.
+            page_fade: self
+                .page_fade
+                .and_then(|f| page_fade_frame(f.progress(now))),
             content_alpha: if morphing && self.anim.fade_in {
                 content_alpha(self.anim.progress(now))
             } else {
@@ -6703,6 +6706,32 @@ mod tests {
         };
         assert_eq!(left.offset(t0), -1.0);
         assert!(left.offset(ms(110)) < 0.0);
+    }
+
+    #[test]
+    fn the_last_page_fade_frame_registers_regions() {
+        let t0 = Instant::now();
+        let fade = PageFade {
+            from_page: Page::Calendar,
+            start: t0,
+        };
+        let at = |ms: u64| page_fade_frame(fade.progress(t0 + Duration::from_millis(ms)));
+        assert!(at(PAGE_FADE_MS / 2).is_some());
+        // The frame drawn when `animate` sees the fade done is a settled one:
+        // the renderer gets no fade and registers the page's regions.
+        assert_eq!(at(PAGE_FADE_MS), None);
+        assert!(crate::ui::motion::panel_regions_wanted(
+            true,
+            false,
+            0.0,
+            at(PAGE_FADE_MS)
+        ));
+        assert!(!crate::ui::motion::panel_regions_wanted(
+            true,
+            false,
+            0.0,
+            at(PAGE_FADE_MS / 2)
+        ));
     }
 
     #[test]

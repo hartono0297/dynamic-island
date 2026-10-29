@@ -89,7 +89,21 @@ outside into `Dismiss`). It stops when the linger ends.
   cut short by another starts from the opacity it had. Hit regions follow
   today's `settled` rule: they are registered on the first settled frame of
   the new content (a reveal moves it 8 px at most); only a slide or a page
-  cross-fade holds them back.
+  cross-fade holds them back (`motion::panel_regions_wanted`).
+- **Gotcha, regions after a cross-fade:** `animate` draws the frame at the
+  fade's end and then stops the clock, so that frame must register the
+  regions. The renderer gets the fade only while `t < 1`
+  (`motion::page_fade_frame`); passing `Some(1.0)` left the search, the
+  Clipboard or the Shelf page with no click regions until something else
+  redrew.
+- **Known pop:** a slide that starts mid-slide keeps the page on screen where
+  it is, but the page the first slide was moving out (`from_page`) is not
+  drawn any more: on a fast wheel spin its remaining part (about 40 % of the
+  width 60 ms into a slide) vanishes in one frame. Accepted; drawing it would
+  need a second outgoing page in `Slide`.
+- The CLI folder menu's reveal uses `layer2` too, so it is skipped (the menu
+  shows at once) while a page cross-fade is running: D2D cannot push one
+  layer twice, and `EndDraw` would fail.
 - Nothing is longer than the morph (`ANIM_MS` 240 ms): slide 220, reveal 160,
   page fade 160.
 - A sub-view switch is detected by comparing `SubView` snapshots before and
