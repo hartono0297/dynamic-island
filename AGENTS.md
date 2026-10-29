@@ -7,6 +7,21 @@
 > `.claude/workflows/build.js` and delete this note; the section below then
 > applies again.
 
+## Models per phase (applies now, with or without the workflow)
+
+| Phase | Model |
+|---|---|
+| Plan | Opus 5.5 (`claude-opus-5-5`) |
+| Execute (write the code) | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Review, fix and check | Opus 5.5 (`claude-opus-5-5`) |
+
+- Spawning subagents (Agent tool) is allowed whenever it helps: parallel
+  reading, independent tasks, blind reviewers, fixers. Set each agent's model
+  from the table above for the phase it works in.
+- Review, fix and check loop until the review comes back clean.
+- If a model cannot be selected (for example `model_not_found`), say so and
+  ask before falling back to another model.
+
 ## Every code change goes through the `build` workflow (disabled, see above)
 
 I opt in to multi-agent orchestration for this project. Whenever I ask for a code
