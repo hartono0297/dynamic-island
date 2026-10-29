@@ -389,9 +389,12 @@ fn score_lower(name: &str, query: &str) -> u8 {
     if name.starts_with(query) {
         return 3;
     }
-    let word_start = name
-        .match_indices(query)
-        .any(|(i, _)| name[..i].chars().next_back().is_some_and(|c| !c.is_alphanumeric()));
+    let word_start = name.match_indices(query).any(|(i, _)| {
+        name[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| !c.is_alphanumeric())
+    });
     if word_start {
         2
     } else if name.contains(query) {
@@ -560,7 +563,10 @@ fn file_result(f: &FileEntry, labels: &Labels) -> SearchResult {
     let (kind, subtitle) = if f.is_dir {
         (Kind::Folder, place)
     } else {
-        (Kind::File, format!("{place} \u{b7} {}", (labels.size)(f.size)))
+        (
+            Kind::File,
+            format!("{place} \u{b7} {}", (labels.size)(f.size)),
+        )
     };
     SearchResult {
         kind,
@@ -895,7 +901,6 @@ mod tests {
         assert!(!is_web_url("javascript:alert(1)"));
     }
 
-
     #[test]
     fn files_start_at_two_characters_apps_at_one() {
         let apps = [app("Kalender")];
@@ -944,10 +949,19 @@ mod tests {
         // file (a newer than b). Only so many rows show: the rest is cut.
         assert_eq!(
             names("report", &files),
-            ["Report", "reporting-tool-notes.txt", "report a.txt", "report b.txt", "my report.txt"]
+            [
+                "Report",
+                "reporting-tool-notes.txt",
+                "report a.txt",
+                "report b.txt",
+                "my report.txt"
+            ]
         );
         // A word start (2) ranks under a prefix (3).
-        assert_eq!(names("report", &files[..2]), ["my report.txt", "old report.txt"]);
+        assert_eq!(
+            names("report", &files[..2]),
+            ["my report.txt", "old report.txt"]
+        );
         // Equal everything but the length: the shorter name first.
         let same = [
             entry("notes-long-name.txt", docs, None, false, 3),
@@ -978,7 +992,14 @@ mod tests {
         // Grouped, not interleaved: apps, then files, then the web.
         assert_eq!(
             order(&r),
-            [Kind::App, Kind::App, Kind::File, Kind::File, Kind::File, Kind::Web]
+            [
+                Kind::App,
+                Kind::App,
+                Kind::File,
+                Kind::File,
+                Kind::File,
+                Kind::Web
+            ]
         );
 
         // Files only: up to 5.
@@ -996,14 +1017,19 @@ mod tests {
 
         // With a calculation and the web: still six, in order.
         let apps: Vec<AppEntry> = (0..5).map(|i| app(&format!("1+1 App {i}"))).collect();
-        let files: Vec<FileEntry> = (0..5)
-            .map(|i| file(&format!("1+1 file {i}.txt")))
-            .collect();
+        let files: Vec<FileEntry> = (0..5).map(|i| file(&format!("1+1 file {i}.txt"))).collect();
         let r = search("1+1", &apps, &files, Lang::Id, &labels());
         assert_eq!(r.len(), MAX_RESULTS);
         assert_eq!(
             order(&r),
-            [Kind::Calc, Kind::App, Kind::App, Kind::File, Kind::File, Kind::Web]
+            [
+                Kind::Calc,
+                Kind::App,
+                Kind::App,
+                Kind::File,
+                Kind::File,
+                Kind::Web
+            ]
         );
     }
 
@@ -1027,11 +1053,17 @@ mod tests {
         assert_eq!(r[0].subtitle, "Dokumen");
         // A deep folder is cut to the nearest one.
         let r = search("c.txt", &[], &files, Lang::Id, &labels());
-        assert_eq!(r[0].subtitle, "Dokumen \u{203a} \u{2026} \u{203a} D \u{b7} 2048 B");
+        assert_eq!(
+            r[0].subtitle,
+            "Dokumen \u{203a} \u{2026} \u{203a} D \u{b7} 2048 B"
+        );
         // An app and a settings row carry what the details need, or nothing.
         let apps = [app("Laporan Studio")];
         let r = search("laporan", &apps, &[], Lang::Id, &labels());
-        assert_eq!(r[0].path, Some(PathBuf::from(r"C:\Menu\Laporan Studio.lnk")));
+        assert_eq!(
+            r[0].path,
+            Some(PathBuf::from(r"C:\Menu\Laporan Studio.lnk"))
+        );
         let r = search("layar", &apps, &[], Lang::Id, &labels());
         assert_eq!((r[0].kind, r[0].path.clone()), (Kind::Setting, None));
     }
@@ -1078,7 +1110,11 @@ mod tests {
         assert_eq!(r[0].action, Action::Copy("8".into()));
         assert_eq!(r.last().unwrap().kind, Kind::Web);
         // A lone number is not one.
-        assert!(search("42", &apps, &[], Lang::Id, &labels()).iter().all(|r| r.kind != Kind::Calc));
+        assert!(
+            search("42", &apps, &[], Lang::Id, &labels())
+                .iter()
+                .all(|r| r.kind != Kind::Calc)
+        );
         // The decimal mark follows the language.
         let r = search("1/4", &apps, &[], Lang::Id, &labels());
         assert_eq!(r[0].title, "= 0,25");

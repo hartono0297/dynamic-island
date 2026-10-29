@@ -2146,9 +2146,21 @@ const DEMO_FILES_QUERY: &str = "gam";
 fn demo_search_results(query: &str, files: bool) -> Vec<crate::search::SearchResult> {
     use crate::search::{AppEntry, Labels};
     let names: &[&str] = if files {
-        &["Game Bar", "Gaming Hub", "Kalender", "Notepad", "Visual Studio Code"]
+        &[
+            "Game Bar",
+            "Gaming Hub",
+            "Kalender",
+            "Notepad",
+            "Visual Studio Code",
+        ]
     } else {
-        &["Kalender", "Kalkulator", "Kamera", "Notepad", "Visual Studio Code"]
+        &[
+            "Kalender",
+            "Kalkulator",
+            "Kamera",
+            "Notepad",
+            "Visual Studio Code",
+        ]
     };
     let apps: Vec<AppEntry> = names
         .iter()
@@ -2157,7 +2169,11 @@ fn demo_search_results(query: &str, files: bool) -> Vec<crate::search::SearchRes
             path: format!(r"C:\Demo\{name}.lnk"),
         })
         .collect();
-    let found = if files { demo_search_files() } else { Vec::new() };
+    let found = if files {
+        demo_search_files()
+    } else {
+        Vec::new()
+    };
     let lang = crate::i18n::lang();
     let web_title = move |q: &str| crate::i18n::search_web_title(lang, q);
     let size = move |bytes: u64| crate::i18n::search_file_size(lang, bytes);
@@ -2197,7 +2213,14 @@ fn demo_search_files() -> Vec<crate::search_files::FileEntry> {
         modified,
     };
     vec![
-        entry("Gambar kerja", RootKind::Documents, Some("Ruko Melati"), true, 0, at(900)),
+        entry(
+            "Gambar kerja",
+            RootKind::Documents,
+            Some("Ruko Melati"),
+            true,
+            0,
+            at(900),
+        ),
         entry(
             "gambar-fasad-utara.png",
             RootKind::Pictures,
@@ -2214,14 +2237,21 @@ fn demo_search_files() -> Vec<crate::search_files::FileEntry> {
             186_000_000,
             at(700),
         ),
-        entry("gambar-lama.dwg", RootKind::Downloads, None, false, 845_000, at(100)),
+        entry(
+            "gambar-lama.dwg",
+            RootKind::Downloads,
+            None,
+            false,
+            845_000,
+            at(100),
+        ),
     ]
 }
 
 /// What the details worker would have found for the demo's rows: drawn
 /// icons (a flat tile per kind), a folder's count and an app's size.
-fn demo_search_details() -> std::collections::HashMap<std::path::PathBuf, crate::search_details::Detail>
-{
+fn demo_search_details()
+-> std::collections::HashMap<std::path::PathBuf, crate::search_details::Detail> {
     use crate::search_details::Detail;
     let tile = |rgb: [u8; 3]| -> Thumb {
         let (w, h) = (32u32, 32u32);
@@ -2229,7 +2259,10 @@ fn demo_search_details() -> std::collections::HashMap<std::path::PathBuf, crate:
         for y in 0..h {
             for x in 0..w {
                 // A rounded square with a lighter top edge, clear outside.
-                let (dx, dy) = (x.abs_diff(16).max(1) as f32 - 0.5, y.abs_diff(16).max(1) as f32 - 0.5);
+                let (dx, dy) = (
+                    x.abs_diff(16).max(1) as f32 - 0.5,
+                    y.abs_diff(16).max(1) as f32 - 0.5,
+                );
                 let inside = dx < 14.0 && dy < 14.0 && (dx * dx + dy * dy) < 17.0 * 17.0;
                 let lift = if y < 12 { 24 } else { 0 };
                 let px = |c: u8| c.saturating_add(lift);
@@ -2249,19 +2282,33 @@ fn demo_search_details() -> std::collections::HashMap<std::path::PathBuf, crate:
     };
     put(
         r"C:\Demo\Game Bar.lnk",
-        Detail { icon: icon([70, 160, 90]), install: Some(142 * 1024 * 1024), ..Detail::default() },
+        Detail {
+            icon: icon([70, 160, 90]),
+            install: Some(142 * 1024 * 1024),
+            ..Detail::default()
+        },
     );
     put(
         r"C:\Demo\Gaming Hub.lnk",
-        Detail { icon: icon([120, 90, 200]), ..Detail::default() },
+        Detail {
+            icon: icon([120, 90, 200]),
+            ..Detail::default()
+        },
     );
     put(
         r"C:\Demo\Ruko Melati\Gambar kerja",
-        Detail { icon: icon([230, 190, 90]), count: Some(18), ..Detail::default() },
+        Detail {
+            icon: icon([230, 190, 90]),
+            count: Some(18),
+            ..Detail::default()
+        },
     );
     put(
         r"C:\Demo\Ruko Melati\gambar-fasad-utara.png",
-        Detail { icon: icon([90, 150, 220]), ..Detail::default() },
+        Detail {
+            icon: icon([90, 150, 220]),
+            ..Detail::default()
+        },
     );
     details
 }

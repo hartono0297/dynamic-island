@@ -14,10 +14,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey, VK_SPACE,
 };
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
 };
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW,
     GetForegroundWindow, GetTopWindow, GetWindow, GetWindowLongW, IsIconic, IsWindowVisible,
@@ -262,7 +262,12 @@ impl App {
 
     /// An answer from the details worker: kept (and drawn) unless it is for
     /// an older request. Never changes the order of the rows.
-    pub(super) fn on_search_detail(&mut self, generation: u64, key: std::path::PathBuf, detail: Detail) {
+    pub(super) fn on_search_detail(
+        &mut self,
+        generation: u64,
+        key: std::path::PathBuf,
+        detail: Detail,
+    ) {
         if self.search.details.accept(generation, key, detail) {
             self.redraw_search();
         }
@@ -397,9 +402,8 @@ impl App {
         let lang = i18n::lang();
         let apps = self.search.apps.as_deref().unwrap_or(&[]);
         let files = &self.search.files;
-        let results = with_labels(|labels| {
-            search::search(&self.search.query, apps, files, lang, labels)
-        });
+        let results =
+            with_labels(|labels| search::search(&self.search.query, apps, files, lang, labels));
         self.search.selected = if keep {
             keep_selection(&self.search.results, self.search.selected, &results)
         } else {
@@ -570,7 +574,8 @@ mod tests {
 
     #[test]
     fn the_highlight_stays_on_the_same_result_when_more_arrive() {
-        let names = |list: &[&str]| -> Vec<SearchResult> { list.iter().map(|n| result(n)).collect() };
+        let names =
+            |list: &[&str]| -> Vec<SearchResult> { list.iter().map(|n| result(n)).collect() };
         let old = names(&["a", "b", "c"]);
         // More results came in above and below: "b" moved down.
         let more = names(&["x", "a", "y", "b", "c", "z"]);

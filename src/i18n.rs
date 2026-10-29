@@ -2401,7 +2401,11 @@ mod tests {
         assert_eq!(search_file_size(Lang::Id, MIB), "1,0 MB");
         assert_eq!(search_file_size(Lang::En, MIB * 5 / 2), "2.5 MB");
         assert_eq!(search_file_size(Lang::Id, MIB * 5 / 2), "2,5 MB");
-        assert_eq!(search_file_size(Lang::En, 1024 * kb - 10), "1.0 MB", "no 1024 KB");
+        assert_eq!(
+            search_file_size(Lang::En, 1024 * kb - 10),
+            "1.0 MB",
+            "no 1024 KB"
+        );
         assert_eq!(search_file_size(Lang::En, 9 * MIB), "9.0 MB");
         assert_eq!(search_file_size(Lang::En, 10 * MIB), "10 MB");
 
