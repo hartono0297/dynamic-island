@@ -32,8 +32,10 @@ TOURS = {
         "steps": 4,
     },
     "notices": {
+        # Notices only: the `notch` shot is a whole panel (290 px) and showed
+        # cropped in this 160 px canvas.
         "files": [
-            "notch", "greeting", "clipboard-copied", "screenshot", "system-warning",
+            "greeting", "clipboard-copied", "screenshot", "system-warning",
             "lyric-long",
         ],
         "canvas": (584, 160),

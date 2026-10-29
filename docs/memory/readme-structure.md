@@ -18,7 +18,9 @@ the guide, and update the README table only for a new page or headline feature.
   built from the demo screenshots by `scripts/make-apng.py` (standard-library
   Python, cross-fades between shots): run `capture-screenshots.ps1` first when
   the pages changed, then `python scripts/make-apng.py tour assets/screenshots/tour.png`
-  and `... notices ...`. The shot lists are in `TOURS` in the script. No video:
+  and `... notices ...`. The shot lists are in `TOURS` in the script. `notices`
+  holds notices only: a whole-panel shot (`notch`) shows cropped in its 160 px
+  canvas. No video:
   a repo README cannot embed an mp4 without uploading it elsewhere.
 - **Stars badge** is shields.io (`github/stars`), live; it reads 0 until the
   repo is starred.

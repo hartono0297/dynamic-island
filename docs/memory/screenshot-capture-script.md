@@ -25,3 +25,7 @@ date: 2026-10-27
   capture, clipboard or folder, see [[screenshot-preview]].
 - The capture copies the screen behind the window too when the backdrop
   does not cover it: look at the PNGs and delete any that show your desktop.
+- **Quit the installed Vale first** (`Stop-Process -Name vale`, start it again
+  after): while it runs, every island shot came out 620 × 460 with the
+  wallpaper in it (2026-10-29). Right sizes are 560 × 290 for a page,
+  384 × 76 for a notice.
