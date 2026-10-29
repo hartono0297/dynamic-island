@@ -96,7 +96,10 @@ fn safe_url(target: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| lower.strip_prefix("http://"));
     match host {
-        Some(rest) => rest.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()),
+        Some(rest) => rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric()),
         None => lower
             .strip_prefix("mailto:")
             .is_some_and(|rest| !rest.is_empty() && !rest.contains('?')),
@@ -377,7 +380,11 @@ mod tests {
 
     #[test]
     fn a_saved_list_keeps_its_order_and_gets_the_missing_built_ins_back() {
-        let saved = [entry("Lock", true), entry("Emoji", false), entry("Bogus", true)];
+        let saved = [
+            entry("Lock", true),
+            entry("Emoji", false),
+            entry("Bogus", true),
+        ];
         let t = ShortcutTiles::from_saved(&saved);
         // Each missing one lands right after the one before it in the
         // default order (Screenshot has none before it: the front).
@@ -400,12 +407,21 @@ mod tests {
     #[test]
     fn repeats_and_a_list_with_everything_off_are_made_whole() {
         let t = ShortcutTiles::from_saved(&[entry("Lock", true), entry("Lock", false)]);
-        assert_eq!(t.entries().iter().filter(|(x, _)| *x == Tile::Builtin(Shortcut::Lock)).count(), 1);
+        assert_eq!(
+            t.entries()
+                .iter()
+                .filter(|(x, _)| *x == Tile::Builtin(Shortcut::Lock))
+                .count(),
+            1
+        );
         let all_off: Vec<TileEntry> = Shortcut::ALL
             .iter()
             .map(|s| entry(shortcut_name(*s), false))
             .collect();
-        assert_eq!(ShortcutTiles::from_saved(&all_off).shown(), Shortcut::ALL.len());
+        assert_eq!(
+            ShortcutTiles::from_saved(&all_off).shown(),
+            Shortcut::ALL.len()
+        );
     }
 
     #[test]
@@ -414,7 +430,11 @@ mod tests {
         assert!(ok("Gmail", CustomKind::Url, "https://mail.google.com"));
         assert!(ok("Surel", CustomKind::Url, "mailto:a@b.co"));
         assert!(ok("Proyek", CustomKind::Folder, r"D:\Proyek"));
-        assert!(ok("Editor", CustomKind::App, r"C:\Program Files\Editor\editor.exe"));
+        assert!(ok(
+            "Editor",
+            CustomKind::App,
+            r"C:\Program Files\Editor\editor.exe"
+        ));
         // Not a link this page launches.
         for bad in [
             "javascript:alert(1)",
@@ -457,12 +477,19 @@ mod tests {
         assert!(!ok("  ", CustomKind::App, r"C:\a.exe"));
         assert!(!ok("X", CustomKind::App, ""));
         assert!(!ok("X\n", CustomKind::App, "C:\\a.exe\0"));
-        assert!(!ok("Ini label terlalu panjang", CustomKind::App, r"C:\a.exe"));
+        assert!(!ok(
+            "Ini label terlalu panjang",
+            CustomKind::App,
+            r"C:\a.exe"
+        ));
         let long = format!(r"C:\{}", "a".repeat(TARGET_MAX));
         assert!(!ok("X", CustomKind::App, &long));
         // Trimmed.
         let t = CustomTile::new("  Gmail ", CustomKind::Url, " https://x.co ").unwrap();
-        assert_eq!((t.label.as_str(), t.target.as_str()), ("Gmail", "https://x.co"));
+        assert_eq!(
+            (t.label.as_str(), t.target.as_str()),
+            ("Gmail", "https://x.co")
+        );
     }
 
     #[test]
@@ -503,7 +530,10 @@ mod tests {
         for i in 0..MAX_CUSTOM {
             assert!(t.add(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe")));
         }
-        assert!(!t.add(custom("Lebih", CustomKind::App, r"C:\a.exe")), "full");
+        assert!(
+            !t.add(custom("Lebih", CustomKind::App, r"C:\a.exe")),
+            "full"
+        );
         // Nine built-in + 8 own, all on: only the first twelve show.
         assert_eq!(t.entries().len(), Shortcut::ALL.len() + MAX_CUSTOM);
         assert_eq!(t.visible().len(), MAX_SHOWN);
@@ -542,12 +572,24 @@ mod tests {
         assert_eq!(t.entries().len(), 13);
         assert_eq!(t.visible().len(), MAX_SHOWN);
         assert!(
-            t.visible().iter().filter(|x| matches!(x, Tile::Custom(_))).count() == 4,
+            t.visible()
+                .iter()
+                .filter(|x| matches!(x, Tile::Custom(_)))
+                .count()
+                == 4,
             "every own tile still shows"
         );
-        assert!(t.entries().iter().any(|(x, on)| *x == Tile::Builtin(Shortcut::Search) && !on));
+        assert!(
+            t.entries()
+                .iter()
+                .any(|(x, on)| *x == Tile::Builtin(Shortcut::Search) && !on)
+        );
         // With room, it comes in shown; a fresh install shows all.
-        assert_eq!(ShortcutTiles::from_saved(&saved[..9]).shown(), 10, "8 + 1 own + the new one");
+        assert_eq!(
+            ShortcutTiles::from_saved(&saved[..9]).shown(),
+            10,
+            "8 + 1 own + the new one"
+        );
         assert_eq!(ShortcutTiles::default().shown(), Shortcut::ALL.len());
     }
 
@@ -614,7 +656,9 @@ mod tests {
         // Hand-added: 9 + 5 on, two past the limit.
         let t = with_own(5);
         assert_eq!(t.shown(), 14);
-        let beyond: Vec<usize> = (0..t.entries().len()).filter(|i| t.beyond_limit(*i)).collect();
+        let beyond: Vec<usize> = (0..t.entries().len())
+            .filter(|i| t.beyond_limit(*i))
+            .collect();
         assert_eq!(beyond, [12, 13]);
         assert_eq!(t.visible().len(), MAX_SHOWN);
         // An entry that is off is never "beyond"; neither is one that shows.

@@ -26,8 +26,7 @@ use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, STREAM_SEEK_END, STREAM_SEEK_SET,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Screenshots, KF_FLAG_DEFAULT, SHCreateMemStream, SHGetKnownFolderPath,
-    ShellExecuteW,
+    FOLDERID_Screenshots, KF_FLAG_DEFAULT, SHCreateMemStream, SHGetKnownFolderPath, ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
@@ -146,7 +145,11 @@ fn encode_png(w: u32, h: u32, bgra: &[u8]) -> Option<Vec<u8>> {
         let mut bytes = vec![0u8; usize::try_from(len).ok()?];
         let mut read = 0u32;
         stream
-            .Read(bytes.as_mut_ptr().cast(), u32::try_from(len).ok()?, Some(&mut read))
+            .Read(
+                bytes.as_mut_ptr().cast(),
+                u32::try_from(len).ok()?,
+                Some(&mut read),
+            )
             .ok()
             .ok()?;
         (read as usize == bytes.len()).then_some(bytes)
@@ -356,7 +359,11 @@ mod tests {
         // The UI thread named it, a file took the name since: it is never
         // opened, and the save fails instead.
         assert_eq!(write_at(&first, b"ours"), None);
-        assert_eq!(std::fs::read(&first).expect("theirs"), b"theirs", "untouched");
+        assert_eq!(
+            std::fs::read(&first).expect("theirs"),
+            b"theirs",
+            "untouched"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -56,7 +56,11 @@ pub struct MixerRow {
 
 /// A level kept in 0.0..=1.0; anything that is not a number is 0.
 pub fn clamp_level(level: f32) -> f32 {
-    if level.is_nan() { 0.0 } else { level.clamp(0.0, 1.0) }
+    if level.is_nan() {
+        0.0
+    } else {
+        level.clamp(0.0, 1.0)
+    }
 }
 
 /// The level as the whole percent the page shows.
@@ -350,7 +354,9 @@ fn default_device() -> Option<IMMDevice> {
     unsafe {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
-        enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia).ok()
+        enumerator
+            .GetDefaultAudioEndpoint(eRender, eMultimedia)
+            .ok()
     }
 }
 
@@ -432,7 +438,9 @@ fn sessions(device: &IMMDevice, names: &mut Names) -> Vec<(IAudioSessionControl,
 fn read(names: &mut Names) -> Option<Vec<MixerRow>> {
     let device = default_device()?;
     let master = unsafe {
-        let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None).ok()?;
+        let volume = device
+            .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+            .ok()?;
         (
             volume.GetMasterVolumeLevelScalar().unwrap_or(0.0),
             volume.GetMute().is_ok_and(|m| m.as_bool()),
@@ -571,8 +579,14 @@ mod tests {
 
     #[test]
     fn programs_are_named_by_their_exe() {
-        assert_eq!(exe_key(r"C:\Users\x\AppData\Roaming\Spotify\Spotify.exe"), "spotify");
-        assert_eq!(exe_key("C:/Program Files/Google/Chrome/chrome.exe"), "chrome");
+        assert_eq!(
+            exe_key(r"C:\Users\x\AppData\Roaming\Spotify\Spotify.exe"),
+            "spotify"
+        );
+        assert_eq!(
+            exe_key("C:/Program Files/Google/Chrome/chrome.exe"),
+            "chrome"
+        );
         assert_eq!(exe_key("msedge"), "msedge");
         assert_eq!(exe_key(""), "");
         assert_eq!(display_name("spotify"), "Spotify");
@@ -723,7 +737,11 @@ mod tests {
         assert_eq!(got[1].level, 0.1);
         assert_eq!(got[2].level, 0.9);
         // Nothing shown yet: the reading's own order.
-        let fresh = vec![row(Target::Master, 0.5), row(app("b"), 0.5), row(app("a"), 0.5)];
+        let fresh = vec![
+            row(Target::Master, 0.5),
+            row(app("b"), 0.5),
+            row(app("a"), 0.5),
+        ];
         assert_eq!(keep_order(&[], fresh.clone()), fresh);
     }
 
@@ -743,7 +761,11 @@ mod tests {
         let mut reads = 0;
         let mut read = |pid: u32| {
             reads += 1;
-            if pid == 7 { String::new() } else { format!("app{pid}") }
+            if pid == 7 {
+                String::new()
+            } else {
+                format!("app{pid}")
+            }
         };
         assert_eq!(names.key(10, &mut read), "app10");
         assert_eq!(names.key(10, &mut read), "app10");

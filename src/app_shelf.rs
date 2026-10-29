@@ -130,7 +130,11 @@ impl App {
     }
 
     /// A left press: on a card whose file is there, it may become a drag.
-    pub(super) fn shelf_press(&mut self, on_card: Option<usize>, lparam: windows::Win32::Foundation::LPARAM) {
+    pub(super) fn shelf_press(
+        &mut self,
+        on_card: Option<usize>,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) {
         self.shelf.press = on_card
             .filter(|&i| self.shelf.cards.get(i).is_some_and(|c| !c.stale))
             .map(|i| {

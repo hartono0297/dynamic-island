@@ -440,18 +440,32 @@ mod picture_tests {
         assert!(picture_only(&[CF_DIB, CF_DIBV5], &names(&["PNG"])));
         assert!(picture_only(
             &[CF_BITMAP, CF_DIB, CF_DIBV5],
-            &names(&["PNG", "image/png", "Preferred DropEffect", "MSDEVColumnSelect"])
+            &names(&[
+                "PNG",
+                "image/png",
+                "Preferred DropEffect",
+                "MSDEVColumnSelect"
+            ])
         ));
         assert!(picture_only(&[CF_DIB], &[]));
     }
 
     #[test]
     fn a_browsers_or_offices_copy_is_not_a_screenshot() {
-        assert!(!picture_only(&[CF_DIB, CF_DIBV5], &names(&["PNG", "HTML Format"])));
-        assert!(!picture_only(&[CF_DIB], &names(&["text/HTML"])), "case-insensitive");
+        assert!(!picture_only(
+            &[CF_DIB, CF_DIBV5],
+            &names(&["PNG", "HTML Format"])
+        ));
+        assert!(
+            !picture_only(&[CF_DIB], &names(&["text/HTML"])),
+            "case-insensitive"
+        );
         assert!(!picture_only(&[CF_DIB], &names(&["Rich Text Format"])));
         assert!(!picture_only(&[CF_DIB, CF_ENHMETAFILE], &[]));
-        assert!(!picture_only(&[CF_DIB, CF_UNICODETEXT], &[]), "a picture with text");
+        assert!(
+            !picture_only(&[CF_DIB, CF_UNICODETEXT], &[]),
+            "a picture with text"
+        );
         assert!(!picture_only(&[CF_DIB, CF_HDROP], &[]), "files");
         assert!(!picture_only(&[CF_DIB], &names(&["Embed Source", "Link"])));
     }

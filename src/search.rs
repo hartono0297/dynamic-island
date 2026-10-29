@@ -96,22 +96,86 @@ impl SettingsPage {
 }
 
 pub const SETTINGS_PAGES: [SettingsPage; 16] = [
-    SettingsPage { id: "Layar", en: "Display", uri: "ms-settings:display" },
-    SettingsPage { id: "Suara", en: "Sound", uri: "ms-settings:sound" },
-    SettingsPage { id: "Notifikasi", en: "Notifications", uri: "ms-settings:notifications" },
-    SettingsPage { id: "Baterai", en: "Battery", uri: "ms-settings:batterysaver" },
-    SettingsPage { id: "Penyimpanan", en: "Storage", uri: "ms-settings:storagesense" },
-    SettingsPage { id: "Wi-Fi", en: "Wi-Fi", uri: "ms-settings:network-wifi" },
-    SettingsPage { id: "Bluetooth", en: "Bluetooth", uri: "ms-settings:bluetooth" },
-    SettingsPage { id: "Printer dan pemindai", en: "Printers & scanners", uri: "ms-settings:printers" },
-    SettingsPage { id: "Aplikasi terpasang", en: "Installed apps", uri: "ms-settings:appsfeatures" },
-    SettingsPage { id: "Aplikasi bawaan", en: "Default apps", uri: "ms-settings:defaultapps" },
-    SettingsPage { id: "Personalisasi", en: "Personalization", uri: "ms-settings:personalization" },
-    SettingsPage { id: "Tanggal dan waktu", en: "Date & time", uri: "ms-settings:dateandtime" },
-    SettingsPage { id: "Bahasa dan wilayah", en: "Language & region", uri: "ms-settings:regionlanguage" },
-    SettingsPage { id: "Privasi dan keamanan", en: "Privacy & security", uri: "ms-settings:privacy" },
-    SettingsPage { id: "Pembaruan Windows", en: "Windows Update", uri: "ms-settings:windowsupdate" },
-    SettingsPage { id: "Tentang perangkat", en: "About", uri: "ms-settings:about" },
+    SettingsPage {
+        id: "Layar",
+        en: "Display",
+        uri: "ms-settings:display",
+    },
+    SettingsPage {
+        id: "Suara",
+        en: "Sound",
+        uri: "ms-settings:sound",
+    },
+    SettingsPage {
+        id: "Notifikasi",
+        en: "Notifications",
+        uri: "ms-settings:notifications",
+    },
+    SettingsPage {
+        id: "Baterai",
+        en: "Battery",
+        uri: "ms-settings:batterysaver",
+    },
+    SettingsPage {
+        id: "Penyimpanan",
+        en: "Storage",
+        uri: "ms-settings:storagesense",
+    },
+    SettingsPage {
+        id: "Wi-Fi",
+        en: "Wi-Fi",
+        uri: "ms-settings:network-wifi",
+    },
+    SettingsPage {
+        id: "Bluetooth",
+        en: "Bluetooth",
+        uri: "ms-settings:bluetooth",
+    },
+    SettingsPage {
+        id: "Printer dan pemindai",
+        en: "Printers & scanners",
+        uri: "ms-settings:printers",
+    },
+    SettingsPage {
+        id: "Aplikasi terpasang",
+        en: "Installed apps",
+        uri: "ms-settings:appsfeatures",
+    },
+    SettingsPage {
+        id: "Aplikasi bawaan",
+        en: "Default apps",
+        uri: "ms-settings:defaultapps",
+    },
+    SettingsPage {
+        id: "Personalisasi",
+        en: "Personalization",
+        uri: "ms-settings:personalization",
+    },
+    SettingsPage {
+        id: "Tanggal dan waktu",
+        en: "Date & time",
+        uri: "ms-settings:dateandtime",
+    },
+    SettingsPage {
+        id: "Bahasa dan wilayah",
+        en: "Language & region",
+        uri: "ms-settings:regionlanguage",
+    },
+    SettingsPage {
+        id: "Privasi dan keamanan",
+        en: "Privacy & security",
+        uri: "ms-settings:privacy",
+    },
+    SettingsPage {
+        id: "Pembaruan Windows",
+        en: "Windows Update",
+        uri: "ms-settings:windowsupdate",
+    },
+    SettingsPage {
+        id: "Tentang perangkat",
+        en: "About",
+        uri: "ms-settings:about",
+    },
 ];
 
 // ---------------------------------------------------------------------
@@ -315,7 +379,11 @@ impl Parser {
 
     /// Exactly three digits follow the mark at `at`, and no fourth.
     fn three_digits_follow(&self) -> bool {
-        let digit = |k: usize| self.chars.get(self.at + k).is_some_and(|c| c.is_ascii_digit());
+        let digit = |k: usize| {
+            self.chars
+                .get(self.at + k)
+                .is_some_and(|c| c.is_ascii_digit())
+        };
         (1..=3).all(digit) && !digit(4)
     }
 }
@@ -652,7 +720,15 @@ fn app_entry(path: &Path) -> Option<AppEntry> {
     }
     let name = path.file_stem()?.to_str()?.trim().to_owned();
     let lower = name.to_lowercase();
-    let skip = ["uninstall", "copot", "hapus ", "readme", "help", "bantuan", "release notes"];
+    let skip = [
+        "uninstall",
+        "copot",
+        "hapus ",
+        "readme",
+        "help",
+        "bantuan",
+        "release notes",
+    ];
     if name.is_empty() || skip.iter().any(|s| lower.contains(s)) {
         return None;
     }
@@ -764,9 +840,32 @@ mod tests {
     #[test]
     fn the_calculator_refuses_what_is_not_arithmetic() {
         for bad in [
-            "", "   ", "abc", "1+", "+", "(", ")", "()", "(1+2", "1+2)", "1..2", "1.2.3", "2 3",
-            "sqrt(4)", "1+a", "0x10", "1e3", "5!", "1/0", "1%0", "-", "^2", "2^", "1;2",
-            "javascript:alert(1)", "C:\\Windows",
+            "",
+            "   ",
+            "abc",
+            "1+",
+            "+",
+            "(",
+            ")",
+            "()",
+            "(1+2",
+            "1+2)",
+            "1..2",
+            "1.2.3",
+            "2 3",
+            "sqrt(4)",
+            "1+a",
+            "0x10",
+            "1e3",
+            "5!",
+            "1/0",
+            "1%0",
+            "-",
+            "^2",
+            "2^",
+            "1;2",
+            "javascript:alert(1)",
+            "C:\\Windows",
         ] {
             assert_eq!(calc(bad), None, "{bad:?}");
         }
@@ -784,7 +883,10 @@ mod tests {
         assert_eq!(calc(&deep), None, "too deep");
         let signs = format!("{}1", "-".repeat(100));
         assert_eq!(calc(&signs), None, "too many signs");
-        assert_eq!(calc("999999999999*999999999999").map(|v| v > 9e23), Some(true));
+        assert_eq!(
+            calc("999999999999*999999999999").map(|v| v > 9e23),
+            Some(true)
+        );
     }
 
     #[test]
@@ -804,7 +906,11 @@ mod tests {
         assert_eq!(calc_in("1.000.000 / 1.000", Lang::Id), Some(1000.0));
         assert_eq!(calc_in("1.000,5 * 2", Lang::Id), Some(2001.0));
         assert_eq!(calc_in("2,5 * 2", Lang::Id), Some(5.0));
-        assert_eq!(calc_in("1,000 + 1", Lang::Id), Some(2.0), "a comma is decimal");
+        assert_eq!(
+            calc_in("1,000 + 1", Lang::Id),
+            Some(2.0),
+            "a comma is decimal"
+        );
         // Not exactly three digits after it: a decimal point after all.
         assert_eq!(calc_in("1.5 + 1", Lang::Id), Some(2.5));
         assert_eq!(calc_in("1.25 + 1", Lang::Id), Some(2.25));
@@ -814,7 +920,11 @@ mod tests {
         assert_eq!(calc_in("1,000 + 500", Lang::En), Some(1500.0));
         assert_eq!(calc_in("1,000,000 / 1,000", Lang::En), Some(1000.0));
         assert_eq!(calc_in("1,000.5 * 2", Lang::En), Some(2001.0));
-        assert_eq!(calc_in("1.000 + 500", Lang::En), Some(501.0), "a point is decimal");
+        assert_eq!(
+            calc_in("1.000 + 500", Lang::En),
+            Some(501.0),
+            "a point is decimal"
+        );
         assert_eq!(calc_in("1,5 + 1", Lang::En), Some(2.5));
         // No thousands mark after the decimal one.
         assert_eq!(calc_in("1,5.000 + 1", Lang::Id), None);
@@ -1101,7 +1211,10 @@ mod tests {
         // Two apps, then the web; "kal" matches no settings page.
         assert_eq!(kinds, [Kind::App, Kind::App, Kind::Web]);
         assert_eq!(r[0].title, "Kalender");
-        assert_eq!(r[1].action, Action::Launch(r"C:\Menu\Kalkulator.lnk".into()));
+        assert_eq!(
+            r[1].action,
+            Action::Launch(r"C:\Menu\Kalkulator.lnk".into())
+        );
 
         // A calculation comes first, and is what Enter copies.
         let r = search("2+2*3", &apps, &[], Lang::Id, &labels());
@@ -1176,9 +1289,18 @@ mod tests {
         assert!(app_entry(Path::new(r"C:\M\notes.txt")).is_none());
         assert!(app_entry(Path::new(r"C:\M\.lnk")).is_none());
         let apps = dedupe(vec![
-            AppEntry { name: "b app".into(), path: "1".into() },
-            AppEntry { name: "A App".into(), path: "2".into() },
-            AppEntry { name: "B App".into(), path: "3".into() },
+            AppEntry {
+                name: "b app".into(),
+                path: "1".into(),
+            },
+            AppEntry {
+                name: "A App".into(),
+                path: "2".into(),
+            },
+            AppEntry {
+                name: "B App".into(),
+                path: "3".into(),
+            },
         ]);
         let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(names, ["A App", "b app"], "first kept, by name");

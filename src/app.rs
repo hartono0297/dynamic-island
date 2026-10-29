@@ -22,38 +22,39 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+use windows::Win32::System::Power::{
+    HPOWERNOTIFY, POWERBROADCAST_SETTING, RegisterPowerSettingNotification,
+    UnregisterPowerSettingNotification,
+};
 use windows::Win32::System::RemoteDesktop::{
     NOTIFY_FOR_THIS_SESSION, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK,
     WTS_SESSIONSTATE_UNLOCK, WTSFreeMemory, WTSINFOEXW, WTSQuerySessionInformationW,
     WTSRegisterSessionNotification, WTSSessionInfoEx, WTSUnRegisterSessionNotification,
 };
+use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, ReleaseCapture, SetCapture, SetFocus,
     TME_HOVER, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VIRTUAL_KEY, VK_LBUTTON, VK_MBUTTON,
     VK_RBUTTON,
 };
-use windows::Win32::System::Power::{
-    HPOWERNOTIFY, POWERBROADCAST_SETTING, RegisterPowerSettingNotification,
-    UnregisterPowerSettingNotification,
-};
-use windows::Win32::System::SystemInformation::GetTickCount;
-use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GA_ROOT, GetAncestor, GetCursorPos,
-    GetForegroundWindow, GetMessageW, WindowFromPoint, GetSystemMetrics, SM_SWAPBUTTON, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
-    DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, SetCoalescableTimer,
-    IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
-    PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
-    WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
-    WM_WTSSESSION_CHANGE,
+    DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE,
+    GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics,
+    IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PBT_POWERSETTINGCHANGE, PM_REMOVE,
+    PeekMessageW, PostMessageW, PostQuitMessage, SM_SWAPBUTTON, SW_SHOWNORMAL, SetCoalescableTimer,
+    SetForegroundWindow, SetTimer, TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_APP,
+    WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WindowFromPoint,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
+use crate::audio;
+use crate::behind;
 use crate::calendar::sync::{SyncHandle, SyncRequest, post_status, save_failed_notice, spawn_sync};
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, draft_from, new_draft};
 use crate::claude::pipe_server::spawn_pipe_server;
@@ -63,22 +64,19 @@ use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::data_dir;
+use crate::gestures;
 use crate::google::client::{self, Client};
+use crate::halo;
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
 use crate::media_log;
 use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
-use crate::audio;
-use crate::behind;
-use crate::gestures;
-use crate::halo;
 use crate::pages::PanelPages;
-use crate::shelf_ole;
-use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
+use crate::shelf_ole;
 use crate::shortcuts;
 use crate::sources::battery::{
     BatteryMonitor, battery_low_now, battery_notice, energy_saver_on, read_battery,
@@ -90,6 +88,7 @@ use crate::system::{
     CpuHistory, SampleKind, Sampler, SysEase, SystemSample, WarnMonitor, alert_notice,
 };
 use crate::theme::{self, Theme};
+use crate::tiles::ShortcutTiles;
 use crate::ui::app_icon;
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
@@ -101,8 +100,8 @@ use crate::ui::geometry::{
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
-    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame, SearchView,
-    SystemView,
+    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
+    SearchView, SystemView,
 };
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
@@ -291,14 +290,10 @@ pub fn run(media_log_flag: bool) {
     )
     .inspect_err(|e| eprintln!("vale: no Clipboard search: {e}"))
     .ok();
-    let search_input = CliInput::create_with(
-        hwnd,
-        cli_input::ID_SEARCH,
-        QUERY_LIMIT,
-        deliver_search_key,
-    )
-    .inspect_err(|e| eprintln!("vale: no quick search: {e}"))
-    .ok();
+    let search_input =
+        CliInput::create_with(hwnd, cli_input::ID_SEARCH, QUERY_LIMIT, deliver_search_key)
+            .inspect_err(|e| eprintln!("vale: no quick search: {e}"))
+            .ok();
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
@@ -3178,7 +3173,10 @@ impl App {
         }
         self.set_front(z == behind::Z::Top);
         if self.behind_ms != 0 {
-            self.pace(TIMER_BEHIND, behind::poll_ms(self.behind.lower_pending(), near_top));
+            self.pace(
+                TIMER_BEHIND,
+                behind::poll_ms(self.behind.lower_pending(), near_top),
+            );
         }
     }
 
@@ -3191,7 +3189,10 @@ impl App {
         };
         let (ox, oy) = win.screen_origin();
         let margin = behind::STRIP_MARGIN_DIP * win.scale();
-        let span = ((ox as f32 + left - margin) as i32, (ox as f32 + right + margin) as i32);
+        let span = (
+            (ox as f32 + left - margin) as i32,
+            (ox as f32 + right + margin) as i32,
+        );
         behind::on_strip(oy, span, (pt.x, pt.y))
     }
 
@@ -3722,7 +3723,12 @@ impl App {
         };
         let client = unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool();
         // Not on the faint margin round a small island.
-        if client && !matches!(self.renderer.under(pt.x as f32, pt.y as f32), Under::Island(_)) {
+        if client
+            && !matches!(
+                self.renderer.under(pt.x as f32, pt.y as f32),
+                Under::Island(_)
+            )
+        {
             return;
         }
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
@@ -6320,8 +6326,20 @@ mod tests {
         // A paused song (the caller passes `m.playing`, not that a song is
         // there) or nothing at all: the wheel turns pages. So does the
         // setting off.
-        assert!(!volume_wheel_applies(true, false, &View::MediaCompact, false, false));
-        assert!(!volume_wheel_applies(false, true, &View::MediaCompact, false, false));
+        assert!(!volume_wheel_applies(
+            true,
+            false,
+            &View::MediaCompact,
+            false,
+            false
+        ));
+        assert!(!volume_wheel_applies(
+            false,
+            true,
+            &View::MediaCompact,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -6337,7 +6355,13 @@ mod tests {
         // A moment later the cover turns the volume again.
         assert!(volume_wheel_applies(true, true, &media, true, false));
         // The compact notch is the volume's whatever the pages did.
-        assert!(volume_wheel_applies(true, true, &View::MediaCompact, false, true));
+        assert!(volume_wheel_applies(
+            true,
+            true,
+            &View::MediaCompact,
+            false,
+            true
+        ));
     }
 
     #[test]

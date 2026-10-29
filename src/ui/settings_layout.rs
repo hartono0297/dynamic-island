@@ -14,15 +14,14 @@ use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
     ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
-    SearchHotkey,
-    ScreenshotSettings, ShotIgnore, Style,
+    ScreenshotSettings, SearchHotkey, ShotIgnore, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
 use crate::pages::PanelPages;
-use crate::tiles::{CustomKind, ShortcutTiles, Tile};
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
+use crate::tiles::{CustomKind, ShortcutTiles, Tile};
 use crate::ui::icons::Icon;
 use crate::ui::robot::{Motion, SLEEP_MAX, SLEEP_MIN};
 
@@ -1590,7 +1589,10 @@ fn tiles_card(b: &mut Builder, s: &State) {
                 // Why it does not show matters more than where it points.
                 let desc = limit_note.unwrap_or_else(|| {
                     let max_w = row_text_w(card, x);
-                    (tile_target(b, s.lang, c.kind, &c.target, max_w), Tone::Secondary)
+                    (
+                        tile_target(b, s.lang, c.kind, &c.target, max_w),
+                        Tone::Secondary,
+                    )
                 });
                 (c.label.clone(), Some(desc))
             }
@@ -1777,12 +1779,18 @@ fn general(b: &mut Builder, s: &State) {
     b.divider(card, rows[7]);
 
     let items = vec![
-        (Hit::SearchHotkey(SearchHotkey::Off), b.t(Key::ClipHotkeyNone)),
+        (
+            Hit::SearchHotkey(SearchHotkey::Off),
+            b.t(Key::ClipHotkeyNone),
+        ),
         (
             Hit::SearchHotkey(SearchHotkey::CtrlAltSpace),
             "Ctrl+Alt+Space".to_owned(),
         ),
-        (Hit::SearchHotkey(SearchHotkey::WinAltS), "Win+Alt+S".to_owned()),
+        (
+            Hit::SearchHotkey(SearchHotkey::WinAltS),
+            "Win+Alt+S".to_owned(),
+        ),
     ];
     let selected = index_of(SearchHotkey::ALL, &s.search_hotkey);
     let x = b.segmented(Group::SearchHotkey, RIGHT, cy(rows[8]), items, selected);
@@ -1791,7 +1799,14 @@ fn general(b: &mut Builder, s: &State) {
     } else {
         (b.t(Key::SearchHotkeyDesc), Tone::Secondary)
     };
-    b.row_text(card, rows[8], b.t(Key::SearchHotkeySetting), Some(desc), false, x);
+    b.row_text(
+        card,
+        rows[8],
+        b.t(Key::SearchHotkeySetting),
+        Some(desc),
+        false,
+        x,
+    );
     b.divider(card, rows[8]);
 
     let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[9]), s.stay_behind);
@@ -3662,9 +3677,15 @@ mod tests {
             ..base.google
         };
         assert_eq!(google_status_key(&bare).0, Key::StatusNeedsClientId);
-        let with_id = GoogleState { has_id: true, ..bare };
+        let with_id = GoogleState {
+            has_id: true,
+            ..bare
+        };
         assert_eq!(google_status_key(&with_id).0, Key::StatusNotConfigured);
-        let built_in = GoogleState { built_in: true, ..bare };
+        let built_in = GoogleState {
+            built_in: true,
+            ..bare
+        };
         assert_eq!(google_status_key(&built_in).0, Key::StatusNotConfigured);
         // Each card has its uppercase name above it.
         let l = layout(Section::Integrations, &base, &Estimate);

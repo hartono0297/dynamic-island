@@ -23,9 +23,10 @@ use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, ClipView, FolderMenuView, SearchView, Frame, GroupShown, Progress, Renderer,
-    RobotFrame, RowSize, SystemView, color, d2d_rect, mix,
+    CleanerView, CliView, ClipView, FolderMenuView, Frame, GroupShown, Progress, Renderer,
+    RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
 };
+use crate::audio::{self, MixerRow, Target};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, RowNote, Section};
@@ -37,34 +38,33 @@ use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
-use crate::audio::{self, MixerRow, Target};
-use crate::shelf::ShelfCard;
-use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
+use crate::search::Kind as SearchKind;
+use crate::shelf::ShelfCard;
 use crate::shortcuts;
 use crate::state::MolePhase;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
+use crate::tiles::Tile;
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
 use crate::ui::panel_layout::{
-    VOLUME_HUD_H, volume_hud_layout,
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
-    CLIP_THUMB_W,
-    CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout, ClipButton,
-    ClipLayout, SearchLayout, search_layout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MOLE_LOG_LINE_H,
-    MOLE_LOG_PAD, MenuLayout, MeterLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout,
-    RING_STROKE, SEG_PAD, SYS_RING_STROKE, ShortcutsLayout, SystemHead, SystemLayout, WEEK_HEAD_H, MIXER_TRACK_H, MixerLayout, ShelfLayout, mixer_layout, shelf_layout,
-    calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
-    clipboard_layout, media_panel_layout, media_progress_layout, mole_layout, notes_layout,
-    page_dots, pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
-    reminders_layout, shortcuts_layout, system_layout, tile_parts, waiting_strip,
+    CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
+    ClipButton, ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MIXER_TRACK_H,
+    MOLE_LOG_LINE_H, MOLE_LOG_PAD, MenuLayout, MeterLayout, MixerLayout, MoleFoot, MoleLayout,
+    PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE, SearchLayout, ShelfLayout,
+    ShortcutsLayout, SystemHead, SystemLayout, VOLUME_HUD_H, WEEK_HEAD_H, calendar_layout,
+    cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions, clipboard_layout,
+    media_panel_layout, media_progress_layout, mixer_layout, mole_layout, notes_layout, page_dots,
+    pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
+    reminders_layout, search_layout, shelf_layout, shortcuts_layout, system_layout, tile_parts,
+    volume_hud_layout, waiting_strip,
 };
-use crate::search::Kind as SearchKind;
 use crate::ui::robot::{Expr, Pose};
 
 /// Height of the compact shapes the panel grows from.
@@ -577,16 +577,14 @@ impl Renderer {
                 self.paint_notes(l, frame.notes, frame.today);
                 Ok(())
             }
-            PageLayout::Media(l) => {
-                self.paint_media(
-                    l,
-                    frame.media,
-                    frame.lyrics_on,
-                    frame.lyric_offset_ms,
-                    frame.progress,
-                    frame.volume,
-                )
-            }
+            PageLayout::Media(l) => self.paint_media(
+                l,
+                frame.media,
+                frame.lyrics_on,
+                frame.lyric_offset_ms,
+                frame.progress,
+                frame.volume,
+            ),
             PageLayout::System(l) => self.paint_system(l, frame.system),
             PageLayout::Cleaner(l) => {
                 if let Some(view) = frame.cleaner {
@@ -693,9 +691,7 @@ impl Renderer {
         let (value, fraction, warn) = match ram {
             Some((s, pct)) => (
                 i18n::ram_usage(lang, s.ram_used, s.ram_total, pct),
-                figures
-                    .and_then(|f| f.ram)
-                    .or(Some(f32::from(pct) / 100.0)),
+                figures.and_then(|f| f.ram).or(Some(f32::from(pct) / 100.0)),
                 system::ram_high(pct, ram_limit),
             ),
             None => (DASH.to_owned(), None, false),
@@ -1879,8 +1875,7 @@ impl Renderer {
     /// text with its selection and caret, and the accent ring while focused.
     fn paint_clip_search(&self, r: Rect, clip: &ClipView) {
         let hint = i18n::clip_search_in(i18n::lang(), clip.total);
-        let caret =
-            self.paint_text_field(r, clip.query, clip.selection, clip.focused, &hint);
+        let caret = self.paint_text_field(r, clip.query, clip.selection, clip.focused, &hint);
         if caret.is_some() {
             self.clip_caret.set(caret);
         }
@@ -2308,7 +2303,14 @@ impl Renderer {
             );
             let ink = if dragging { p.accent } else { p.secondary };
             self.icon_colored(Icon::Download, icon_area, 26.0, ink, 1.0, None);
-            let hint = text(lang, if dragging { Key::ShelfDropHere } else { Key::ShelfEmpty });
+            let hint = text(
+                lang,
+                if dragging {
+                    Key::ShelfDropHere
+                } else {
+                    Key::ShelfEmpty
+                },
+            );
             self.text_colored(hint, &self.fonts.eleven_center, text_area, ink, 1.0);
         }
         let per_line = ((l.cards.first().map_or(100.0, |c| c.label.w)) / 6.4) as usize;
@@ -2333,7 +2335,12 @@ impl Renderer {
             if card.stale {
                 self.set_color(p.track, 1.0);
                 self.fill_round(lay.missing, lay.missing.h / 2.0);
-                self.text(text(lang, Key::ShelfMissing), &self.fonts.micro_center, lay.missing, 1.0);
+                self.text(
+                    text(lang, Key::ShelfMissing),
+                    &self.fonts.micro_center,
+                    lay.missing,
+                    1.0,
+                );
             }
         }
         // The outline last, so cards never cut it.
@@ -2367,12 +2374,20 @@ impl Renderer {
         let p = self.palette;
         self.heading(text(lang, Key::PageMixer), l.header);
         let Some(rows) = rows else {
-            self.text2(text(lang, Key::MixerUnavailable), &self.fonts.eleven, l.rows[0].name);
+            self.text2(
+                text(lang, Key::MixerUnavailable),
+                &self.fonts.eleven,
+                l.rows[0].name,
+            );
             return;
         };
         for (row, lay) in rows.iter().zip(&l.rows) {
             let dim = if row.muted { 0.45 } else { 1.0 };
-            let icon = if row.muted { Icon::VolumeMute } else { Icon::Volume };
+            let icon = if row.muted {
+                Icon::VolumeMute
+            } else {
+                Icon::Volume
+            };
             let ink = if row.muted { p.secondary } else { p.text };
             self.icon_colored(icon, lay.icon, 18.0, ink, 1.0, None);
             let name = match row.target {
@@ -2413,10 +2428,20 @@ impl Renderer {
                 knob / 2.0,
             );
             let value = format!("{}%", audio::percent(row.level));
-            self.text_colored(&value, &self.fonts.track_time_right, lay.value, p.secondary, dim);
+            self.text_colored(
+                &value,
+                &self.fonts.track_time_right,
+                lay.value,
+                p.secondary,
+                dim,
+            );
         }
         if rows.len() < 2 {
-            self.text2(text(lang, Key::MixerEmpty), &self.fonts.eleven, l.rows[1].name);
+            self.text2(
+                text(lang, Key::MixerEmpty),
+                &self.fonts.eleven,
+                l.rows[1].name,
+            );
         }
     }
 
@@ -3099,7 +3124,11 @@ impl Renderer {
         let l = volume_hud_layout(area);
         self.set_color(0x000000, plate);
         self.fill_round(area, area.h / 2.0);
-        let icon = if level <= 0.0 { Icon::VolumeMute } else { Icon::Volume };
+        let icon = if level <= 0.0 {
+            Icon::VolumeMute
+        } else {
+            Icon::Volume
+        };
         self.icon_colored(icon, l.icon, 16.0, 0xFFFFFF, 1.0, None);
         self.set_color(0xFFFFFF, 0.25);
         self.fill_round(l.track, l.track.h / 2.0);
@@ -3156,7 +3185,11 @@ impl Renderer {
             self.fill_round(r, r.h / 2.0);
             self.text_colored(symbol, &self.fonts.small_center, r, p.secondary, 1.0);
         }
-        let ink = if offset_ms == 0 { p.secondary } else { p.accent };
+        let ink = if offset_ms == 0 {
+            p.secondary
+        } else {
+            p.accent
+        };
         let value = i18n::lyric_offset(i18n::lang(), offset_ms);
         self.text_colored(&value, &self.fonts.small_center, adj[1], ink, 1.0);
     }

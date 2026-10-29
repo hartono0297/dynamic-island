@@ -319,8 +319,9 @@ impl Default for Config {
 fn lyrics_offset<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
     let (min, max, _) = crate::lyrics::OFFSET_RANGE;
-    Ok(v.as_f64()
-        .map_or(0, |n| n.clamp(f64::from(min), f64::from(max)).round() as i32))
+    Ok(v.as_f64().map_or(0, |n| {
+        n.clamp(f64::from(min), f64::from(max)).round() as i32
+    }))
 }
 
 /// `panel_pages` read entry by entry: anything that is not a list, and any
@@ -1093,7 +1094,8 @@ mod tests {
             parse(r#"{"quick_search_hotkey":"Off"}"#).search_hotkey,
             SearchHotkey::Off
         );
-        let named = |name: &str| parse(&format!(r#"{{"quick_search_hotkey":"{name}"}}"#)).search_hotkey;
+        let named =
+            |name: &str| parse(&format!(r#"{{"quick_search_hotkey":"{name}"}}"#)).search_hotkey;
         assert_eq!(named("CtrlAltSpace"), SearchHotkey::CtrlAltSpace);
         assert_eq!(named("WinAltS"), SearchHotkey::WinAltS);
         // Alt+Space is the window menu: never a choice.
@@ -1115,7 +1117,10 @@ mod tests {
             SearchHotkey::Off
         );
         let odd = parse(r#"{"quick_search_hotkey":"Nope","style":"Notch"}"#);
-        assert_eq!((odd.search_hotkey, odd.style), (SearchHotkey::Off, Style::Notch));
+        assert_eq!(
+            (odd.search_hotkey, odd.style),
+            (SearchHotkey::Off, Style::Notch)
+        );
     }
 
     #[test]
@@ -1148,7 +1153,11 @@ mod tests {
     fn shortcut_tiles_default_empty_lenient_and_belong_to_the_island() {
         assert!(Config::default().shortcut_tiles.is_empty());
         assert!(parse(r#"{"style":"Notch"}"#).shortcut_tiles.is_empty());
-        assert!(parse(r#"{"shortcut_tiles":"semua"}"#).shortcut_tiles.is_empty());
+        assert!(
+            parse(r#"{"shortcut_tiles":"semua"}"#)
+                .shortcut_tiles
+                .is_empty()
+        );
         let mixed = parse(
             r#"{"shortcut_tiles":[{"tile":"Lock","on":false},7,{"tile":"Custom","label":"Gmail","kind":"Url","target":"https://mail.google.com"}]}"#,
         );
@@ -1172,8 +1181,14 @@ mod tests {
         assert_eq!(parse(r#"{"style":"Notch"}"#).lyrics_offset_ms, 0);
         assert_eq!(parse(r#"{"lyrics_offset_ms":-300}"#).lyrics_offset_ms, -300);
         // Out of range is kept in range, a non-number is none.
-        assert_eq!(parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms, 5_000);
-        assert_eq!(parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms, -5_000);
+        assert_eq!(
+            parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms,
+            5_000
+        );
+        assert_eq!(
+            parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms,
+            -5_000
+        );
         assert_eq!(parse(r#"{"lyrics_offset_ms":"x"}"#).lyrics_offset_ms, 0);
         // The island's own setting: the file's stale value does not win.
         let mem = Config {
@@ -1205,7 +1220,10 @@ mod tests {
         assert!(json.contains(r#""open_mode":"HoverStay""#), "{json}");
         // A typo keeps the rest of the file.
         let typo = parse(r#"{"style":"Notch","open_mode":"klik"}"#);
-        assert_eq!((typo.style, typo.open_mode), (Style::Notch, OpenMode::Hover));
+        assert_eq!(
+            (typo.style, typo.open_mode),
+            (Style::Notch, OpenMode::Hover)
+        );
         // The island's own setting: the file's stale value does not win.
         let disk = Config::default();
         let mem = Config {

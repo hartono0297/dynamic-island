@@ -49,11 +49,7 @@ pub enum Z {
 pub fn view_needs_front(view: &View) -> bool {
     !matches!(
         view,
-        View::Hidden
-            | View::Idle
-            | View::MediaCompact
-            | View::MediaLyric
-            | View::PomodoroCompact
+        View::Hidden | View::Idle | View::MediaCompact | View::MediaLyric | View::PomodoroCompact
     )
 }
 
@@ -104,9 +100,8 @@ impl Behind {
     /// on the strip, or the pointer still on the island while it is up, keeps
     /// it up; once none of those holds for `LOWER_AFTER` it goes down.
     pub fn decide(&mut self, inputs: Inputs, now: Instant) -> Z {
-        let hold = inputs.needs_front
-            || inputs.on_strip
-            || (inputs.over_island && self.z == Z::Top);
+        let hold =
+            inputs.needs_front || inputs.on_strip || (inputs.over_island && self.z == Z::Top);
         if hold {
             self.z = Z::Top;
             self.idle_since = None;
@@ -352,7 +347,10 @@ mod tests {
         assert!(!on_strip(0, span, (399, 0)));
         assert!(on_strip(0, span, (400, 0)));
         assert!(!on_strip(0, span, (600, 0)));
-        assert!(!on_strip(0, span, (200, 0)), "beside the island, over the window");
+        assert!(
+            !on_strip(0, span, (200, 0)),
+            "beside the island, over the window"
+        );
         assert!(!on_strip(0, span, (500, -1)));
     }
 

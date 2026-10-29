@@ -80,10 +80,10 @@ use crate::google::client;
 use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pages::PanelPages;
-use crate::tiles::ShortcutTiles;
 use crate::pomodoro::PomoSettings;
 use crate::sources::battery::read_battery;
 use crate::theme::{self, Accent, Surface, WindowPalette, WindowTheme};
+use crate::tiles::ShortcutTiles;
 
 /// Posted to the owner for each change: `lparam` is a `Box<Action>` raw
 /// pointer the owner frees (`take_action`). WM_APP + 1..7 are taken.

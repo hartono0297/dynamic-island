@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 
 use windows::Foundation::Uri;
 use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions, UnicodeEncoding};
-use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT};
 use windows::Web::Http::Filters::{
     HttpBaseProtocolFilter, HttpCacheReadBehavior, HttpCacheWriteBehavior,
 };
@@ -15,6 +14,7 @@ use windows::Web::Http::{
     HttpClient, HttpCompletionOption, HttpMethod, HttpRequestMessage, HttpResponseMessage,
     HttpStringContent,
 };
+use windows::Win32::Foundation::{E_FAIL, ERROR_TIMEOUT};
 use windows::core::{Error, HSTRING, Result};
 
 /// Waits on a WinRT async operation until `deadline` (an `Option<Instant>`;
@@ -234,11 +234,17 @@ mod timeout_tests {
 
     #[test]
     fn a_stalled_request_fails_at_the_deadline_and_a_quick_one_answers() {
-        let http = Http::new().unwrap().with_timeout(Duration::from_millis(400));
+        let http = Http::new()
+            .unwrap()
+            .with_timeout(Duration::from_millis(400));
         let url = serve_once(Duration::from_secs(8), "");
         let start = Instant::now();
         assert!(http.get_json(&url, None).is_err());
-        assert!(start.elapsed() < Duration::from_secs(4), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
 
         let url = serve_once(
             Duration::ZERO,

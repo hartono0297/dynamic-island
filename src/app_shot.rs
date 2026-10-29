@@ -738,7 +738,10 @@ mod tests {
     fn the_file_looks_cover_the_whole_match_window() {
         // Snipping Tool may write its file seconds after the clipboard.
         let total: u32 = RETRY_MS.iter().sum();
-        assert!(i64::from(total) >= crate::screenshot::AFTER_MS, "{total} ms");
+        assert!(
+            i64::from(total) >= crate::screenshot::AFTER_MS,
+            "{total} ms"
+        );
         assert!(RETRY_MS.iter().all(|&ms| ms >= 500), "no busy looping");
     }
 

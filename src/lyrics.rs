@@ -135,7 +135,12 @@ pub fn parse_lrc(text: &str) -> Vec<LrcLine> {
             None => text,
         };
         let room = MAX_LINES - lines.len();
-        lines.extend(times.into_iter().take(room).map(|at_ms| (at_ms, text.to_owned())));
+        lines.extend(
+            times
+                .into_iter()
+                .take(room)
+                .map(|at_ms| (at_ms, text.to_owned())),
+        );
     }
     let mut out: Vec<LrcLine> = lines
         .into_iter()
@@ -223,7 +228,11 @@ pub fn position_at(t: &Timeline, playing: bool, now: Instant) -> u64 {
 /// next-line timer fire every millisecond).
 fn usable_rate(rate: f32) -> f64 {
     let rate = f64::from(rate);
-    if rate.is_finite() { rate.clamp(0.1, 4.0) } else { 1.0 }
+    if rate.is_finite() {
+        rate.clamp(0.1, 4.0)
+    } else {
+        1.0
+    }
 }
 
 /// The farthest lyric position this track can reach: `position_at` stops at
@@ -285,8 +294,7 @@ pub fn timeline_moved(
         (Some(a), Some(b)) => {
             a.end_ms != b.end_ms
                 || a.rate != b.rate
-                || position_at(a, playing, now).abs_diff(position_at(b, playing, now))
-                    > RESYNC_MS
+                || position_at(a, playing, now).abs_diff(position_at(b, playing, now)) > RESYNC_MS
         }
         _ => true,
     }
@@ -346,8 +354,22 @@ pub fn lrclib_url(q: &Query) -> String {
 /// and the like. Returns `title` itself when nothing is to cut.
 pub fn clean_title(title: &str) -> String {
     const NOISE: &[&str] = &[
-        "official", "video", "music video", "lyric", "lyrics", "audio", "hd", "hq", "4k", "mv",
-        "visualizer", "visualiser", "remaster", "remastered", "live", "version",
+        "official",
+        "video",
+        "music video",
+        "lyric",
+        "lyrics",
+        "audio",
+        "hd",
+        "hq",
+        "4k",
+        "mv",
+        "visualizer",
+        "visualiser",
+        "remaster",
+        "remastered",
+        "live",
+        "version",
     ];
     let mut out = title.trim().to_owned();
     loop {
@@ -371,7 +393,11 @@ pub fn clean_title(title: &str) -> String {
             break;
         }
     }
-    if out.is_empty() { title.trim().to_owned() } else { out }
+    if out.is_empty() {
+        title.trim().to_owned()
+    } else {
+        out
+    }
 }
 
 /// An artist without YouTube Music's " - Topic" suffix and a trailing
@@ -385,7 +411,11 @@ pub fn clean_artist(artist: &str) -> String {
     } else {
         a
     };
-    if a.is_empty() { artist.trim().to_owned() } else { a.to_owned() }
+    if a.is_empty() {
+        artist.trim().to_owned()
+    } else {
+        a.to_owned()
+    }
 }
 
 /// The LRCLIB lookup URL for an explicit title and artist.
@@ -894,7 +924,9 @@ fn lookup(
     }
     if answer == Answer::None {
         answer = match get(&lrclib_search_url(&title, &artist)) {
-            Ok((200, body)) => pick_search(&body, q.duration_ms).map_or(Answer::None, Answer::Synced),
+            Ok((200, body)) => {
+                pick_search(&body, q.duration_ms).map_or(Answer::None, Answer::Synced)
+            }
             Ok((404, _)) => Answer::None,
             _ => Answer::Failed,
         };
@@ -1064,7 +1096,11 @@ mod tests {
         let flood = format!("{} x", "[00:01.00]".repeat(100_000));
         let start = Instant::now();
         let lines = parse_lrc(&flood);
-        assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
         assert_eq!(lines.len(), MAX_TAGS_PER_LINE);
         assert!(lines.iter().all(|line| line.text == "x"));
         // A long text is cut by characters, not bytes.
@@ -1084,7 +1120,8 @@ mod tests {
         let pad = "x".repeat(MAX_BODY_BYTES);
         let big = format!(r#"{{"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}"#);
         assert_eq!(read_answer(200, &big), Answer::Failed);
-        let list = format!(r#"[{{"duration":180.0,"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}]"#);
+        let list =
+            format!(r#"[{{"duration":180.0,"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}]"#);
         assert_eq!(pick_search(&list, 180_000), None);
         assert!(storable("[00:01.00] hi"));
         assert!(!storable(&format!("[00:01.00] {pad}")));
@@ -1267,7 +1304,11 @@ mod tests {
         let mut st = LyricsState::default();
         let a = query("a");
         st.want(Some(&a), true);
-        st.found(found(&a.key, Some(vec![l(1_000, "a"), l(5_000, "b")]), false));
+        st.found(found(
+            &a.key,
+            Some(vec![l(1_000, "a"), l(5_000, "b")]),
+            false,
+        ));
         assert_eq!(st.wait_ms(2_000, 1.0, None), Some(3_001));
         assert_eq!(st.wait_ms(2_000, 2.0, None), Some(1_501), "twice as fast");
         assert_eq!(st.wait_ms(2_000, 0.5, None), Some(6_001), "half speed");
@@ -1340,7 +1381,10 @@ mod tests {
 
     #[test]
     fn streaming_decoration_is_cut_from_titles_and_artists() {
-        assert_eq!(clean_title("Blinding Lights (Official Video)"), "Blinding Lights");
+        assert_eq!(
+            clean_title("Blinding Lights (Official Video)"),
+            "Blinding Lights"
+        );
         assert_eq!(clean_title("Song [Lyrics] (Audio)"), "Song");
         assert_eq!(clean_title("Yesterday - Remastered 2009"), "Yesterday");
         // A real part of the name stays.
@@ -1362,13 +1406,19 @@ mod tests {
             {"duration": 181.0, "syncedLyrics": "[00:01.00] near"},
             {"duration": 181.5, "syncedLyrics": "not a lrc"}
         ]"#;
-        assert_eq!(pick_search(body, 180_000).as_deref(), Some("[00:01.00] near"));
+        assert_eq!(
+            pick_search(body, 180_000).as_deref(),
+            Some("[00:01.00] near")
+        );
         // Nothing within the tolerance, a non-list, junk: none.
         assert_eq!(pick_search(body, 400_000), None);
         assert_eq!(pick_search("{}", 180_000), None);
         assert_eq!(pick_search("junk", 180_000), None);
         let url = lrclib_search_url("Hello World", "A&B");
-        assert!(url.starts_with(SEARCH_API) && !url.contains("duration"), "{url}");
+        assert!(
+            url.starts_with(SEARCH_API) && !url.contains("duration"),
+            "{url}"
+        );
     }
 
     #[test]
@@ -1922,7 +1972,11 @@ mod tests {
         };
         let http = Http::new().unwrap();
         let (status, body) = http
-            .get_with_headers_capped(&lrclib_url(&q), &[("User-Agent", USER_AGENT)], MAX_BODY_BYTES)
+            .get_with_headers_capped(
+                &lrclib_url(&q),
+                &[("User-Agent", USER_AGENT)],
+                MAX_BODY_BYTES,
+            )
             .unwrap();
         println!("status {status}, {} bytes", body.len());
         let Answer::Synced(lrc) = read_answer(status, &body) else {

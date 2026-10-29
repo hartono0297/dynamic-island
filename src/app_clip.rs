@@ -518,9 +518,9 @@ impl App {
         // Every mouse move comes here: only a card or one of its buttons
         // that is not the chosen card needs the list looked at.
         let id = match hit {
-            Some(Hit::ClipCard(id) | Hit::ClipPin(id) | Hit::ClipPlain(id) | Hit::ClipDelete(id)) => {
-                *id
-            }
+            Some(
+                Hit::ClipCard(id) | Hit::ClipPin(id) | Hit::ClipPlain(id) | Hit::ClipDelete(id),
+            ) => *id,
             _ => return,
         };
         if self.clip.selected == Some(id) {
@@ -752,11 +752,17 @@ mod tests {
         assert_eq!(hover_target(&ids, None, Some(&Hit::ClipCard(10))), None);
         assert_eq!(hover_target(&ids, None, Some(&Hit::ClipCard(30))), Some(30));
         // On a button of another card, the same.
-        assert_eq!(hover_target(&ids, Some(10), Some(&Hit::ClipDelete(20))), Some(20));
+        assert_eq!(
+            hover_target(&ids, Some(10), Some(&Hit::ClipDelete(20))),
+            Some(20)
+        );
         assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipPin(20))), None);
         // A chosen card that is no longer listed counts as the first.
         assert_eq!(hover_target(&ids, Some(99), Some(&Hit::ClipCard(10))), None);
-        assert_eq!(hover_target(&ids, Some(99), Some(&Hit::ClipCard(40))), Some(40));
+        assert_eq!(
+            hover_target(&ids, Some(99), Some(&Hit::ClipCard(40))),
+            Some(40)
+        );
         // Other targets, a card not listed, and no target keep the selection.
         assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipSearch)), None);
         assert_eq!(hover_target(&ids, Some(20), Some(&Hit::ClipCard(77))), None);

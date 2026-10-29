@@ -298,7 +298,10 @@ mod tests {
     #[test]
     fn actions_wait_for_the_collapse() {
         let screenshot = shortcut_action(Shortcut::Screenshot).expect("an action");
-        assert!(u64::from(delay_ms(&screenshot)) > ANIM_MS, "after the morph");
+        assert!(
+            u64::from(delay_ms(&screenshot)) > ANIM_MS,
+            "after the morph"
+        );
         for s in Shortcut::ALL {
             let Some(action) = shortcut_action(s) else {
                 continue;

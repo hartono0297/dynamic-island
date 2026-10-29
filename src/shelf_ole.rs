@@ -20,12 +20,12 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Com::{
     DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject, TYMED_HGLOBAL,
 };
+use windows::Win32::System::Memory::GlobalSize;
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_NONE, DoDragDrop,
-    IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize,
-    RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
+    IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize, RegisterDragDrop,
+    ReleaseStgMedium, RevokeDragDrop,
 };
-use windows::Win32::System::Memory::GlobalSize;
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::{
     BHID_DataObject, DROPFILES, DragQueryFileW, HDROP, IShellItem, SHCreateItemFromParsingName,
@@ -105,8 +105,8 @@ fn read_paths(data: &IDataObject) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     unsafe {
         let hglobal = (medium.tymed == TYMED_HGLOBAL.0 as u32).then(|| medium.u.hGlobal);
-        let readable = hglobal
-            .is_some_and(|h| !h.is_invalid() && GlobalSize(h) >= size_of::<DROPFILES>());
+        let readable =
+            hglobal.is_some_and(|h| !h.is_invalid() && GlobalSize(h) >= size_of::<DROPFILES>());
         if !readable {
             ReleaseStgMedium(&mut medium);
             return paths;

@@ -877,9 +877,15 @@ mod save_tests {
 
     #[test]
     fn the_name_follows_windows_and_never_overwrites() {
-        assert_eq!(save_name(at(), |_| false), "Screenshot 2026-10-28 143012.png");
+        assert_eq!(
+            save_name(at(), |_| false),
+            "Screenshot 2026-10-28 143012.png"
+        );
         let taken = |n: &str| n == "Screenshot 2026-10-28 143012.png";
-        assert_eq!(save_name(at(), taken), "Screenshot 2026-10-28 143012 (2).png");
+        assert_eq!(
+            save_name(at(), taken),
+            "Screenshot 2026-10-28 143012 (2).png"
+        );
         let two = |n: &str| {
             n == "Screenshot 2026-10-28 143012.png" || n == "Screenshot 2026-10-28 143012 (2).png"
         };

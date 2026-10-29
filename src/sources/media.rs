@@ -455,7 +455,11 @@ fn read_timeline(session: &Session) -> Result<Option<Timeline>> {
         .and_then(|info| info.PlaybackRate())
         .and_then(|r| r.Value())
         .map_or(1.0, |r| r as f32);
-    let rate = if rate.is_finite() && rate > 0.0 { rate } else { 1.0 };
+    let rate = if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
+    };
     Ok(Some(Timeline {
         position_ms,
         end_ms,

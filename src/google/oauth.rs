@@ -794,8 +794,14 @@ mod tests {
         // Everything else reads the same for both clients.
         for own in [true, false] {
             assert_eq!(page_key(&Ok(()), own), Key::OauthConnected);
-            assert_eq!(page_key::<()>(&Err(AuthError::MissingScopes), own), Key::OauthScopes);
-            assert_eq!(page_key::<()>(&Err(AuthError::NeedsLogin), own), Key::OauthCancelled);
+            assert_eq!(
+                page_key::<()>(&Err(AuthError::MissingScopes), own),
+                Key::OauthScopes
+            );
+            assert_eq!(
+                page_key::<()>(&Err(AuthError::NeedsLogin), own),
+                Key::OauthCancelled
+            );
             let other = Err(AuthError::Google("invalid_request".into()));
             assert_eq!(page_key::<()>(&other, own), Key::OauthFailed);
         }

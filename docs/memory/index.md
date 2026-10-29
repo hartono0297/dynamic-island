@@ -42,6 +42,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
 - [[gestures]]: middle click, swipe and sideways wheel on the music views
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
+- [[v3-3-handoff]]: v3.3 (icon refresh, stay-behind rise, shelf drop, file search), owner checks, minors left
 - [[readme-structure]]: README with gallery, install and uninstall, credits in THIRD-PARTY-NOTICES.md; long guide in docs/guide.md; APNG tours
 - [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge with a short fade and slide (v3.3)
 - [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory); a drop latches the panel (v3.3)

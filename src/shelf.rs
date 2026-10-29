@@ -35,8 +35,8 @@ pub fn kind_of(path: &Path, is_dir: bool) -> ShelfKind {
     match ext.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "tif" | "tiff" | "ico"
         | "heic" | "avif" => ShelfKind::Image,
-        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "mp4" | "mkv" | "mov" | "avi"
-        | "webm" | "wmv" => ShelfKind::Media,
+        "mp3" | "wav" | "flac" | "m4a" | "aac" | "ogg" | "mp4" | "mkv" | "mov" | "avi" | "webm"
+        | "wmv" => ShelfKind::Media,
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "h" | "cs" | "java" | "go"
         | "html" | "css" | "json" | "xml" | "yaml" | "yml" | "toml" | "ps1" | "sh" | "bat"
         | "sql" => ShelfKind::Code,
@@ -245,7 +245,9 @@ impl Shelf {
 
 /// How two paths are compared: Windows ignores letter case.
 fn key_of(path: &Path) -> String {
-    path.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()
+    path.to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -259,7 +261,10 @@ mod tests {
     #[test]
     fn paths_are_added_once_in_any_letter_case_and_up_to_the_cap() {
         let mut s = Shelf::default();
-        assert_eq!(s.add([p(r"C:\a\Denah.pdf"), p(r"c:\A\denah.PDF"), p(r"C:\b")]), 2);
+        assert_eq!(
+            s.add([p(r"C:\a\Denah.pdf"), p(r"c:\A\denah.PDF"), p(r"C:\b")]),
+            2
+        );
         // A trailing slash is the same folder.
         assert_eq!(s.add([p(r"C:\b\")]), 0);
         assert_eq!(s.len(), 2);
@@ -287,7 +292,12 @@ mod tests {
     #[test]
     fn cards_mark_a_missing_path_stale_through_the_injected_probe() {
         let mut s = Shelf::default();
-        s.add([p(r"C:\x\denah.pdf"), p(r"C:\x\foto.PNG"), p(r"C:\x\Proyek"), p(r"C:\x\hilang.zip")]);
+        s.add([
+            p(r"C:\x\denah.pdf"),
+            p(r"C:\x\foto.PNG"),
+            p(r"C:\x\Proyek"),
+            p(r"C:\x\hilang.zip"),
+        ]);
         let probe = |path: &Path| match path.file_name().unwrap().to_str().unwrap() {
             "Proyek" => Probe::Folder,
             "hilang.zip" => Probe::Missing,
@@ -321,8 +331,14 @@ mod tests {
         assert!(!on_network(Path::new(r"\proyek"), mapped));
         assert!(!on_network(Path::new(""), mapped));
         // Taken as there; a folder when it has no extension.
-        assert_eq!(probe(Path::new(r"\\vale-test-nowhere\share\a.txt")), Probe::File);
-        assert_eq!(probe(Path::new(r"\\vale-test-nowhere\share\Proyek")), Probe::Folder);
+        assert_eq!(
+            probe(Path::new(r"\\vale-test-nowhere\share\a.txt")),
+            Probe::File
+        );
+        assert_eq!(
+            probe(Path::new(r"\\vale-test-nowhere\share\Proyek")),
+            Probe::Folder
+        );
     }
 
     #[test]
@@ -352,9 +368,15 @@ mod tests {
         assert_eq!(long[1].chars().count(), 16);
         assert!(long[1].ends_with(".pdf") && long[1].contains('…'));
         // A separator too early in the line is not worth a break.
-        assert_eq!(wrap_name("a-bcdefghijklmnopqrstuvwxyz", 16, 2)[0], "a-bcdefghijklmno");
+        assert_eq!(
+            wrap_name("a-bcdefghijklmnopqrstuvwxyz", 16, 2)[0],
+            "a-bcdefghijklmno"
+        );
         // One line only: cut like `short_name`.
-        assert_eq!(wrap_name("kemang-denah-lantai-dua.pdf", 14, 1), ["kemang-de….pdf"]);
+        assert_eq!(
+            wrap_name("kemang-denah-lantai-dua.pdf", 14, 1),
+            ["kemang-de….pdf"]
+        );
         // Never more than two lines, whatever the name.
         assert!(wrap_name(&"x ".repeat(80), 12, 2).len() <= 2);
     }
@@ -369,7 +391,10 @@ mod tests {
         let odd = short_name("arsip.sangatpanjangekstensi", 14);
         assert_eq!(odd.chars().count(), 14);
         assert!(odd.ends_with('…'));
-        assert_eq!(short_name("abcdefghijklmnopqrstuvwxyz", 14), "abcdefghijklm…");
+        assert_eq!(
+            short_name("abcdefghijklmnopqrstuvwxyz", 14),
+            "abcdefghijklm…"
+        );
         // Multi-byte characters count as one.
         assert_eq!(short_name("ééééééééééééééééé", 14).chars().count(), 14);
         // A drive root has no file name: its path shows.

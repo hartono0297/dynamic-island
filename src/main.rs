@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod audio;
 mod behind;
 mod calendar;
 mod claude;
@@ -8,7 +9,6 @@ mod clean;
 mod cli;
 mod cli_folders;
 mod cli_panel;
-mod audio;
 mod clipboard;
 mod config;
 mod data_dir;

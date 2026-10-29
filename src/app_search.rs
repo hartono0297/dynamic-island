@@ -10,13 +10,13 @@
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey, VK_SPACE,
-};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW,
@@ -138,10 +138,10 @@ impl App {
             SearchHotkey::WinAltS => Some((MOD_WIN | MOD_ALT, u32::from(b'S'))),
         };
         self.search.hotkey_failed = match reg {
-            Some((mods, key)) => unsafe {
-                RegisterHotKey(Some(self.hwnd), HOTKEY_SEARCH, mods | MOD_NOREPEAT, key)
+            Some((mods, key)) => {
+                unsafe { RegisterHotKey(Some(self.hwnd), HOTKEY_SEARCH, mods | MOD_NOREPEAT, key) }
+                    .is_err()
             }
-            .is_err(),
             None => false,
         };
         self.search.hotkey = Some(want);
@@ -510,7 +510,10 @@ fn window_to_return_to(before: HWND, island: HWND) -> Option<HWND> {
             return false;
         }
         let ex = WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32);
-        if ex.contains(WS_EX_TOOLWINDOW) || ex.contains(WS_EX_TOPMOST) || ex.contains(WS_EX_NOACTIVATE) {
+        if ex.contains(WS_EX_TOOLWINDOW)
+            || ex.contains(WS_EX_TOPMOST)
+            || ex.contains(WS_EX_NOACTIVATE)
+        {
             return false;
         }
         let mut cloaked = 0u32;
@@ -616,7 +619,13 @@ mod tests {
         ] {
             assert!(is_shell_class(class), "{class}");
         }
-        for class in ["Chrome_WidgetWin_1", "Notepad", "CabinetWClass", "", "Shell_Tray"] {
+        for class in [
+            "Chrome_WidgetWin_1",
+            "Notepad",
+            "CabinetWClass",
+            "",
+            "Shell_Tray",
+        ] {
             assert!(!is_shell_class(class), "{class}");
         }
         // The island, or nothing, before the menu: nothing new to remember.

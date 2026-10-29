@@ -1355,7 +1355,10 @@ mod tests {
 
     #[test]
     fn ears_are_triangles_that_rise_and_turn_outward() {
-        assert_eq!(ear(Side::Left, 0.0), [(9.0, 37.0), (12.0, 10.0), (27.0, 26.0)]);
+        assert_eq!(
+            ear(Side::Left, 0.0),
+            [(9.0, 37.0), (12.0, 10.0), (27.0, 26.0)]
+        );
         assert_eq!(
             ear(Side::Right, 3.0),
             [(55.0, 37.0), (52.0, 7.0), (37.0, 26.0)]

@@ -371,7 +371,8 @@ impl SysEase {
             retarget(&mut self.ram, f32::from(p) / 100.0, now);
         }
         if s.kind == SampleKind::Page {
-            self.drives.retain(|(l, _)| s.drives.iter().any(|d| d.letter == *l));
+            self.drives
+                .retain(|(l, _)| s.drives.iter().any(|d| d.letter == *l));
             for d in &s.drives {
                 let to = f32::from(d.used_percent()) / 100.0;
                 match self.drives.iter_mut().find(|(l, _)| *l == d.letter) {
@@ -393,7 +394,11 @@ impl SysEase {
         Some(Figures {
             cpu: self.cpu?.value(now),
             ram: self.ram.map(|e| e.value(now)),
-            drives: self.drives.iter().map(|(l, e)| (*l, e.value(now))).collect(),
+            drives: self
+                .drives
+                .iter()
+                .map(|(l, e)| (*l, e.value(now)))
+                .collect(),
         })
     }
 }
@@ -975,7 +980,10 @@ mod tests {
     fn one_request_in_four_is_a_full_reading() {
         let kinds: Vec<SampleKind> = (0..9).map(kind_for_request).collect();
         use SampleKind::{Live, Page};
-        assert_eq!(kinds, [Page, Live, Live, Live, Page, Live, Live, Live, Page]);
+        assert_eq!(
+            kinds,
+            [Page, Live, Live, Live, Page, Live, Live, Live, Page]
+        );
         // Cheap readings are a quarter of the way to a process walk.
         assert!(LIVE_MS * FULL_EVERY <= 4_000);
     }
@@ -1291,6 +1299,9 @@ mod tests {
         ease.update(&at(3.4601), t0 + Duration::from_secs(1));
         assert!(!ease.running(t0 + Duration::from_secs(1)), "3.46 is 3.46");
         ease.update(&at(4.2), t0 + Duration::from_secs(2));
-        assert!(ease.running(t0 + Duration::from_secs(2)), "a real change glides");
+        assert!(
+            ease.running(t0 + Duration::from_secs(2)),
+            "a real change glides"
+        );
     }
 }

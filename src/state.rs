@@ -14,8 +14,8 @@ use crate::model::{
 };
 use crate::mole::MoleOpts;
 use crate::pages::PanelPages;
-use crate::tiles::{ShortcutTiles, Tile};
 use crate::pomodoro::{Phase, PhaseDone, PomoSettings, PomoStatus, Pomodoro};
+use crate::tiles::{ShortcutTiles, Tile};
 use crate::ui::geometry::ANIM_MS;
 
 /// How long each temporary notice stays on screen, counted from when it becomes current.
@@ -404,7 +404,10 @@ impl IslandState {
             }
             Event::Hover(on) => {
                 // The pointer left the notice it held: at least the grace more.
-                let held = self.current.as_ref().is_some_and(|(n, _)| self.notice_held(n));
+                let held = self
+                    .current
+                    .as_ref()
+                    .is_some_and(|(n, _)| self.notice_held(n));
                 if !on
                     && held
                     && let Some((_, expires)) = &mut self.current
@@ -2506,7 +2509,11 @@ mod tests {
             assert_eq!(s.view(), View::Notice(app_notice("k1")), "{m:?}");
             assert_eq!(s.next_deadline(), Some(t0 + secs(6)), "{m:?}");
             s.apply(Event::Tick, t0 + secs(6));
-            assert_eq!(s.view(), View::Panel(Page::Calendar), "{m:?}: the panel is back");
+            assert_eq!(
+                s.view(),
+                View::Panel(Page::Calendar),
+                "{m:?}: the panel is back"
+            );
         }
         // A visit that begins on it still holds it.
         let mut s = st();
@@ -2541,13 +2548,16 @@ mod tests {
         let t0 = Instant::now();
         for m in [OpenMode::HoverStay, OpenMode::Click] {
             let mut s = mode(m, t0);
-            s.apply(Event::Notice(Notice {
-                key: "sys".into(),
-                source: "Vale".into(),
-                title: "Disk".into(),
-                body: "9 GB".into(),
-                kind: NoticeKind::SystemLow,
-            }), t0);
+            s.apply(
+                Event::Notice(Notice {
+                    key: "sys".into(),
+                    source: "Vale".into(),
+                    title: "Disk".into(),
+                    body: "9 GB".into(),
+                    kind: NoticeKind::SystemLow,
+                }),
+                t0,
+            );
             s.apply(Event::Hover(true), t0);
             s.apply(Event::Click(Hit::Body), t0);
             assert_eq!(s.view(), View::Panel(Page::System), "{m:?}");
@@ -2712,7 +2722,10 @@ mod tests {
         assert_eq!(s.view(), View::Notice(reminder("r1")));
         // The click opens the panel; the reminder is not marked done.
         let effects = s.apply(Event::Click(Hit::Body), t0);
-        assert!(!effects.contains(&Effect::ReminderDone("r1".into())), "{effects:?}");
+        assert!(
+            !effects.contains(&Effect::ReminderDone("r1".into())),
+            "{effects:?}"
+        );
         assert_eq!(s.view(), View::Panel(Page::Calendar));
         assert_eq!(s.waiting_strip(), Some(&reminder("r1")));
         // The strip's own click is Selesai.
@@ -4832,7 +4845,10 @@ mod tests {
         assert!(s.apply(Event::Click(Hit::SearchResult(0)), t0).is_empty());
         s.apply(Event::SearchHotkey, t0);
         let effects = s.apply(Event::Click(Hit::SearchResult(2)), t0);
-        assert_eq!(effects, vec![Effect::SearchRun(2), Effect::ReleaseSearchFocus]);
+        assert_eq!(
+            effects,
+            vec![Effect::SearchRun(2), Effect::ReleaseSearchFocus]
+        );
         assert!(!s.search_open());
         assert_ne!(s.view(), View::Panel(Page::Search));
     }
@@ -4866,7 +4882,10 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::Clipboard), "the new page stays");
         // Opened again, it comes back to the Clipboard page.
         s.apply(Event::SearchHotkey, t0);
-        assert_eq!(s.apply(Event::SearchClose, t0), vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(
+            s.apply(Event::SearchClose, t0),
+            vec![Effect::ReleaseSearchFocus]
+        );
         assert_eq!(s.page(), Page::Clipboard);
     }
 
@@ -4913,7 +4932,10 @@ mod tests {
         let effects = s.apply(Event::SearchHotkey, t0);
         assert_eq!(effects, vec![Effect::FocusSearch]);
         assert!(s.search_open() && !s.cli_focused());
-        assert_eq!(s.apply(Event::SearchClose, t0), vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(
+            s.apply(Event::SearchClose, t0),
+            vec![Effect::ReleaseSearchFocus]
+        );
         assert_eq!(s.page(), Page::Cli);
 
         let mut s = st();
@@ -5133,7 +5155,10 @@ mod tests {
         let t0 = Instant::now();
         let mut s = st();
         assert!(s.apply(Event::ShelfDragOver(true), t0).is_empty());
-        assert!(!matches!(s.view(), View::Panel(_)), "App turns it into ShelfDrag");
+        assert!(
+            !matches!(s.view(), View::Panel(_)),
+            "App turns it into ShelfDrag"
+        );
     }
 
     #[test]

@@ -3,21 +3,21 @@ use std::time::Instant;
 
 use chrono::NaiveDate;
 
+use crate::audio::MixerRow;
 use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanEvent, CleanMode};
-use crate::config::OpenMode;
 use crate::cli::CliEvent;
+use crate::config::OpenMode;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pages::PanelPages;
-use crate::audio::MixerRow;
-use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::search::AppEntry;
 use crate::search_details::Detail;
 use crate::search_files::FileEntry;
 use crate::system::SystemSample;
+use crate::tiles::{CustomTile, ShortcutTiles};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {

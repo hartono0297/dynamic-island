@@ -2326,7 +2326,11 @@ fn demo_shelf(filled: bool) -> Vec<crate::shelf::ShelfCard> {
         stale,
     };
     vec![
-        card("denah-lantai-2-revisi-final.pdf", ShelfKind::Document, false),
+        card(
+            "denah-lantai-2-revisi-final.pdf",
+            ShelfKind::Document,
+            false,
+        ),
         card("foto-lokasi.png", ShelfKind::Image, false),
         card("Gambar kerja", ShelfKind::Folder, false),
         card("rab-v3.xlsx", ShelfKind::Document, false),

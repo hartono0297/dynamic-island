@@ -46,7 +46,11 @@ pub fn keep_polling(button_down: bool, near: bool, since_trigger: Duration) -> b
 /// The poll's pace: fast only while the left button is down and the pointer
 /// is within `FAST_REACH` × `NEAR_DIP` (`close`); slow otherwise.
 pub fn poll_ms(button_down: bool, close: bool) -> u32 {
-    if button_down && close { FAST_MS } else { SLOW_MS }
+    if button_down && close {
+        FAST_MS
+    } else {
+        SLOW_MS
+    }
 }
 
 #[cfg(test)]

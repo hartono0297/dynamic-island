@@ -10,10 +10,10 @@ use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, Section};
 use crate::model::{CalView, Hit, Page, Shortcut};
-use crate::tiles::Tile;
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
 use crate::reminders::{Reminder, local_time};
+use crate::tiles::Tile;
 
 /// A clickable rect and what clicking it means.
 #[derive(Clone, Debug, PartialEq)]
@@ -2060,12 +2060,7 @@ pub fn shelf_layout(s: ShapeRect, strip: bool, n: usize) -> ShelfLayout {
     let cards = (0..n)
         .map(|i| {
             let (row, col) = ((i / 4) as f32, (i % 4) as f32);
-            let card = rect(
-                l + col * (w + TILE_GAP),
-                body + row * (h + TILE_GAP),
-                w,
-                h,
-            );
+            let card = rect(l + col * (w + TILE_GAP), body + row * (h + TILE_GAP), w, h);
             let remove = rect(card.right() - SHELF_X - 4.0, card.y + 4.0, SHELF_X, SHELF_X);
             let top = card.y + (card.h - group) / 2.0;
             let glyph = rect(card.x, top, card.w, SHELF_GLYPH_H);
@@ -2112,12 +2107,7 @@ pub fn mixer_layout(s: ShapeRect, strip: bool, n: usize) -> MixerLayout {
             let y = body + i as f32 * pitch;
             let cy = y + pitch / 2.0;
             let icon = rect(l, cy - MIXER_ICON / 2.0, MIXER_ICON, MIXER_ICON);
-            let name = rect(
-                icon.right() + MIXER_GAP,
-                cy - 10.0,
-                MIXER_NAME_W,
-                20.0,
-            );
+            let name = rect(icon.right() + MIXER_GAP, cy - 10.0, MIXER_NAME_W, 20.0);
             let value = rect(r - MIXER_VALUE_W, cy - 10.0, MIXER_VALUE_W, 20.0);
             let track_x = name.right() + MIXER_GAP;
             let track = rect(
@@ -2950,13 +2940,22 @@ mod tests {
             out.push((format!("clipboard {n} s{scroll}"), PageLayout::Clipboard(l)));
         }
         for n in [1, 2, 5, 6] {
-            out.push((format!("mixer {n}"), PageLayout::Mixer(mixer_layout(s, strip, n))));
+            out.push((
+                format!("mixer {n}"),
+                PageLayout::Mixer(mixer_layout(s, strip, n)),
+            ));
         }
         for n in [0, 1, 5, 9, 12] {
-            out.push((format!("shelf {n}"), PageLayout::Shelf(shelf_layout(s, strip, n))));
+            out.push((
+                format!("shelf {n}"),
+                PageLayout::Shelf(shelf_layout(s, strip, n)),
+            ));
         }
         for n in [0, 1, 3, crate::search::MAX_RESULTS] {
-            out.push((format!("search {n}"), PageLayout::Search(search_layout(s, strip, n))));
+            out.push((
+                format!("search {n}"),
+                PageLayout::Search(search_layout(s, strip, n)),
+            ));
         }
         for n in [1, 5, 8, 12] {
             out.push((
@@ -4169,14 +4168,22 @@ mod tests {
         assert_eq!(r.len(), 4);
 
         let tiles = sample_tiles(Shortcut::ALL.len());
-        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &tiles)), false);
+        let r = regions(
+            s,
+            &PageLayout::Shortcuts(shortcuts_layout(s, false, &tiles)),
+            false,
+        );
         let hits: Vec<Hit> = r.iter().map(|r| r.hit.clone()).collect();
         let want: Vec<Hit> = Shortcut::ALL.into_iter().map(Hit::Shortcut).collect();
         assert_eq!(hits, want);
         // A custom tile answers with its place among the tiles shown.
         let builtin = Shortcut::ALL.len();
         let mixed = sample_tiles(builtin + 2);
-        let r = regions(s, &PageLayout::Shortcuts(shortcuts_layout(s, false, &mixed)), false);
+        let r = regions(
+            s,
+            &PageLayout::Shortcuts(shortcuts_layout(s, false, &mixed)),
+            false,
+        );
         assert_eq!(r[builtin - 1].hit, Hit::Shortcut(Shortcut::Lock));
         assert_eq!(r[builtin].hit, Hit::CustomTile(builtin));
         assert_eq!(r[builtin + 1].hit, Hit::CustomTile(builtin + 1));
@@ -4185,7 +4192,10 @@ mod tests {
     #[test]
     fn the_volume_plate_fits_the_cover_strip_and_the_compact_island() {
         // The strip over the cover, and a compact island's height.
-        for area in [rect(20.0, 100.0, 134.0, VOLUME_HUD_H), rect(6.0, 4.0, 188.0, 28.0)] {
+        for area in [
+            rect(20.0, 100.0, 134.0, VOLUME_HUD_H),
+            rect(6.0, 4.0, 188.0, 28.0),
+        ] {
             let l = volume_hud_layout(area);
             for r in [l.icon, l.track, l.value] {
                 assert!(r.x >= area.x && r.right() <= area.right() + 0.01, "{r:?}");
@@ -5026,21 +5036,29 @@ mod media_tests {
             let rows = clip_rows(s, false);
             // Everything fits: no bar.
             let few: Vec<u64> = (1..=2 * rows as u64).collect();
-            assert!(clipboard_layout(s, false, &few, None, 0, |_| false)
-                .scrollbar
-                .is_none());
+            assert!(
+                clipboard_layout(s, false, &few, None, 0, |_| false)
+                    .scrollbar
+                    .is_none()
+            );
             // 50 cards: a bar in the right margin, inside the list's height.
             let ids: Vec<u64> = (1..=50).collect();
             let top = clipboard_layout(s, false, &ids, None, 0, |_| false);
             let bar = top.scrollbar.expect("a scrollbar");
-            assert!(bar.x > top.list.right() && bar.right() <= s.x + s.w - 4.0, "{bar:?}");
+            assert!(
+                bar.x > top.list.right() && bar.right() <= s.x + s.w - 4.0,
+                "{bar:?}"
+            );
             assert_eq!(bar.y, top.list.y, "at the top");
             assert!(bar.h >= 24.0 && bar.h < top.list.h);
             let max = clip_max_scroll(50, rows);
             let end = clipboard_layout(s, false, &ids, None, max, |_| false)
                 .scrollbar
                 .unwrap();
-            assert!((end.bottom() - top.list.bottom()).abs() < 0.01, "at the end");
+            assert!(
+                (end.bottom() - top.list.bottom()).abs() < 0.01,
+                "at the end"
+            );
             let mid = clipboard_layout(s, false, &ids, None, max / 2, |_| false)
                 .scrollbar
                 .unwrap();

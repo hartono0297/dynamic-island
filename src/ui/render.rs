@@ -5,15 +5,15 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
-    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
-    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND,
-    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
-    D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
-    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush,
-    ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry, ID2D1Layer, ID2D1PathGeometry,
-    ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_LAYER_OPTIONS_NONE,
+    D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
+    D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+    D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
+    ID2D1Bitmap, ID2D1Brush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry, ID2D1Layer,
+    ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_MEDIUM,
@@ -48,19 +48,19 @@ use chrono::{NaiveDate, NaiveDateTime};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, SHOULDER,
-    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot, corner_radius,
-    equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot, lyric_overflow,
-    notice_action, notice_action_w, notice_layout, shot_fit, shot_layout, shot_regions,
+    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
+    corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
+    lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
+    shot_regions,
 };
 use super::icons::{Icon, IconSet};
 use super::robot::{Expr, Pose, RobotPainter};
 use super::window::IslandWindow;
+use crate::audio::MixerRow;
 use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
-use crate::audio::MixerRow;
-use crate::shelf::ShelfCard;
 use crate::clipboard::Clip;
 use crate::clipboard::image::Thumb;
 use crate::config::Style;
@@ -73,6 +73,7 @@ use crate::pomodoro::{PomoStatus, Pomodoro};
 use crate::reminders::Reminder;
 use crate::search::SearchResult;
 use crate::search_details::Detail;
+use crate::shelf::ShelfCard;
 use crate::state::MolePhase;
 use crate::system::SystemSample;
 use crate::theme::{self, Accent, Palette, radius};
@@ -1226,7 +1227,9 @@ impl Renderer {
         };
         if let (Some(level), View::MediaCompact | View::MediaLyric) = (frame.volume, view) {
             let r = shape_rect(shape);
-            let h = crate::ui::panel_layout::VOLUME_HUD_H.min(r.h - 8.0).max(16.0);
+            let h = crate::ui::panel_layout::VOLUME_HUD_H
+                .min(r.h - 8.0)
+                .max(16.0);
             self.paint_volume(
                 Rect {
                     x: r.x + 6.0,

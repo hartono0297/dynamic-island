@@ -48,9 +48,8 @@ impl Swipe {
         let (x0, y0, t0) = self.down.take()?;
         let (dx, dy) = (x - x0, y - y0);
         let quick = now.saturating_duration_since(t0) <= SWIPE_MAX;
-        (quick && dx.abs() >= min_px && dx.abs() >= 2 * dy.abs()).then(|| {
-            if dx < 0 { Dir::Next } else { Dir::Prev }
-        })
+        (quick && dx.abs() >= min_px && dx.abs() >= 2 * dy.abs())
+            .then(|| if dx < 0 { Dir::Next } else { Dir::Prev })
     }
 }
 
@@ -74,7 +73,10 @@ impl HWheel {
             self.quiet_until = Some(now + HWHEEL_COOLDOWN);
             return None;
         }
-        if self.last.is_none_or(|t| now.saturating_duration_since(t) > HWHEEL_GAP) {
+        if self
+            .last
+            .is_none_or(|t| now.saturating_duration_since(t) > HWHEEL_GAP)
+        {
             self.sum = 0;
         }
         self.last = Some(now);

@@ -1293,11 +1293,17 @@ mod tests {
         assert_eq!(regions.hit(n.x - 2.0, n.y + 1.0), Some(Hit::Body));
         assert_eq!(regions.hit(n.x + n.w + 2.0, n.y + 1.0), Some(Hit::Body));
         // Inside the shoulder's curve is not drawn.
-        assert_eq!(regions.hit(n.x - SHOULDER + 1.0, n.y + SHOULDER - 1.0), None);
+        assert_eq!(
+            regions.hit(n.x - SHOULDER + 1.0, n.y + SHOULDER - 1.0),
+            None
+        );
         // The anti-aliased pixel just past the side and the bottom.
         assert_eq!(regions.hit(n.x - 0.5, n.y + 15.0), Some(Hit::Body));
         assert_eq!(regions.hit(n.x - 3.0, n.y + 15.0), None);
-        assert_eq!(regions.hit(n.x + n.w / 2.0, n.y + n.h + 0.5), Some(Hit::Body));
+        assert_eq!(
+            regions.hit(n.x + n.w / 2.0, n.y + n.h + 0.5),
+            Some(Hit::Body)
+        );
         assert_eq!(regions.hit(n.x + n.w / 2.0, n.y + n.h + 3.0), None);
         // A Pill has no shoulders.
         let p = shape_for(Style::Pill, ShapeKind::Idle);
