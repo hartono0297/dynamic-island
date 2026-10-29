@@ -1,5 +1,5 @@
 ---
-tags: [decision, window, experimental, v3.2.1]
+tags: [decision, window, experimental, v3.2.1, v3.3, animation]
 date: 2026-10-29
 ---
 
@@ -30,6 +30,36 @@ Settings → Umum → **Di belakang jendela** (`config.stay_behind`, default
   otherwise (`behind::poll_ms`, coalescable). Fullscreen, a lock or turning it
   off puts the island back on top and stops the poll. A view change raises it
   at once (`sync_timers`), not at the next poll.
+
+## The rise (v3.3)
+
+Raising used to be one `SetWindowPos(HWND_TOPMOST)`: a covered island popped
+in at full opacity in a single frame. Now (`behind::Rise`, `rise_wanted`,
+pure and tested; `App::rise`, `rise_frame`):
+
+- **When**: the order goes Bottom → Top **and** the island was covered
+  (`App::island_covered`: `WindowFromPoint` at the centre of the drawn island,
+  `GetAncestor(GA_ROOT)` is not the island's own window). Read once, at the
+  raise, while it is still down. An island that was already visible (nothing
+  over it) is raised without a fade, so it never blinks out. Half covered with
+  a free centre counts as not covered (its edges pop; accepted).
+- **How**: opacity 0 → 1 and 8 dip above its place (`RISE_DROP_DIP`) → 0 over
+  180 ms (`RISE_MS`), ease-out cubic. With Motion not Full
+  (`self.motion().moves()` false: Saver, Off or Energy Saver) only the fade,
+  120 ms (`RISE_SAVER_MS`). `draw` applies it with `rise_frame` (multiplies
+  the morph's own opacity, adds the offset to `shape.y`).
+- **The first frame** (opacity 0) is drawn *before* `set_front(true)`, so the
+  raised window never shows one frame at full opacity.
+- **Cost**: no new timer and no poll change. `animating_at` is true only while
+  the rise runs, so the frame clock runs for those 180 ms (or 120 ms) and
+  stops; `animate` clears the rise after its settled frame. Lowering again,
+  or the setting turning off / fullscreen (`sync_behind`), drops it. See
+  [[bata-idle-power-budget]].
+- **Lowering stays instant** (the window in front simply covers it). Fading
+  out first would need an occlusion walk over the z-order, not
+  `WindowFromPoint`; left out.
+- During the slide the hit regions move with the drawing (a click in those
+  frames lands as drawn).
 
 **Limits (not verified live):**
 - `HWND_BOTTOM` is the bottom of the *normal* order. Whether the island stays

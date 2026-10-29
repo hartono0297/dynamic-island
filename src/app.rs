@@ -41,8 +41,8 @@ use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GetCursorPos, GetForegroundWindow,
-    GetMessageW, GetSystemMetrics, SM_SWAPBUTTON, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, EN_CHANGE, GA_ROOT, GetAncestor, GetCursorPos,
+    GetForegroundWindow, GetMessageW, WindowFromPoint, GetSystemMetrics, SM_SWAPBUTTON, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
     DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, SetCoalescableTimer,
     IsWindow, IsWindowVisible, KillTimer, MA_NOACTIVATE, MSG, PM_REMOVE, PeekMessageW,
     PostMessageW, PostQuitMessage, SW_SHOWNORMAL, SetForegroundWindow, SetTimer, TranslateMessage,
@@ -348,6 +348,7 @@ pub fn run(media_log_flag: bool) {
             outside_ms: 0,
             behind: behind::Behind::default(),
             behind_ms: 0,
+            rise: None,
             halo_ms: 0,
             display_off: false,
             halo_on: false,
@@ -562,6 +563,9 @@ struct App {
     /// `TIMER_BEHIND`'s interval now (0: not running).
     behind: behind::Behind,
     behind_ms: u32,
+    /// The island is coming up from behind a window: drawn dimmer (and a few
+    /// dip higher) until it ends. Runs the frame clock only meanwhile.
+    rise: Option<behind::Rise>,
     /// `TIMER_HALO`'s interval now (0: not running), and the margin is drawn.
     halo_ms: u32,
     halo_on: bool,
@@ -2721,10 +2725,11 @@ impl App {
             && system_sample_wanted(&self.state.view(), self.state.cleaner().is_some())
     }
 
-    /// A morph, page slide, lyric crossfade or scroll, or robot lift/bounce
-    /// runs at `now`.
+    /// A morph, page slide, lyric crossfade or scroll, robot lift/bounce, or
+    /// the island's rise from behind a window runs at `now`.
     fn animating_at(&self, now: Instant) -> bool {
         self.anim.running
+            || self.rise.is_some_and(|r| r.running(now))
             || self.system_easing(now)
             || self.slide.is_some()
             || self.lyric_fading
@@ -2976,6 +2981,11 @@ impl App {
                 self.pace(TIMER_BEHIND, 0);
                 self.behind.reset();
                 self.set_front(true);
+                // No half-faded island is left behind (the clock, if it
+                // runs, draws the settled frame; else draw it here).
+                if self.rise.take().is_some() && !self.animating() {
+                    self.draw(now);
+                }
             }
             return;
         }
@@ -3135,7 +3145,21 @@ impl App {
             on_strip,
             over_island,
         };
+        let was = self.behind.z();
         let z = self.behind.decide(inputs, now);
+        // Coming up from the bottom behind a window: read "covered" now,
+        // while it is still down, and draw the first (invisible) frame
+        // before the island is raised so it does not pop for a frame.
+        // `rise_wanted` is cheap; the covered read only runs for a raise.
+        if was == behind::Z::Bottom && z == behind::Z::Top {
+            if behind::rise_wanted(was, z, self.island_covered()) {
+                self.rise = Some(behind::Rise::new(now, self.motion().moves()));
+                self.draw(now);
+                self.ensure_clock();
+            }
+        } else if z == behind::Z::Bottom {
+            self.rise = None;
+        }
         self.set_front(z == behind::Z::Top);
         if self.behind_ms != 0 {
             self.pace(TIMER_BEHIND, behind::poll_ms(self.behind.lower_pending(), near_top));
@@ -3153,6 +3177,25 @@ impl App {
         let margin = behind::STRIP_MARGIN_DIP * win.scale();
         let span = ((ox as f32 + left - margin) as i32, (ox as f32 + right + margin) as i32);
         behind::on_strip(oy, span, (pt.x, pt.y))
+    }
+
+    /// Another window is over the middle of the drawn island: the one at that
+    /// screen point is not the island's own. (Half-covered with a free centre
+    /// counts as not covered; the edges then pop.) A point over nothing, or
+    /// an island not drawn, is not covered.
+    fn island_covered(&self) -> bool {
+        let (Some(win), Some((left, top, right, bottom))) =
+            (self.win.as_ref(), self.renderer.island_px())
+        else {
+            return false;
+        };
+        let (ox, oy) = win.screen_origin();
+        let centre = POINT {
+            x: ox + ((left + right) / 2.0) as i32,
+            y: oy + ((top + bottom) / 2.0) as i32,
+        };
+        let hit = unsafe { WindowFromPoint(centre) };
+        !hit.is_invalid() && unsafe { GetAncestor(hit, GA_ROOT) } != self.hwnd
     }
 
     fn set_front(&mut self, front: bool) {
@@ -3419,6 +3462,10 @@ impl App {
         }
         if slide_done {
             self.slide = None;
+        }
+        // The rise ends on the frame drawn at its end: fully opaque, in place.
+        if self.rise.is_some_and(|r| !r.running(now)) {
+            self.rise = None;
         }
         // At the drawn frame's time, so a lift or bounce ends on its rest frame.
         if !self.animating_at(now) {
@@ -4014,6 +4061,7 @@ impl App {
     fn draw(&mut self, now: Instant) {
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
+        let (shape, opacity) = rise_frame(shape, opacity, self.rise.as_ref(), now);
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
         let input = self.cli_input.as_ref();
@@ -4777,6 +4825,31 @@ fn greeting_counts(
         .filter(|r| !r.done && reminders::local_time(r.due_unix).is_some_and(|t| t.date() == today))
         .count();
     (events, reminders)
+}
+
+/// The shape and opacity to draw at `now` with a rise in progress: the
+/// opacity multiplied by the rise's factor (a morph's own fade is kept), the
+/// shape moved down by its offset (up to 0, so it starts higher). No rise, or
+/// a finished one, leaves both as they are.
+fn rise_frame(
+    shape: ShapeRect,
+    opacity: f32,
+    rise: Option<&behind::Rise>,
+    now: Instant,
+) -> (ShapeRect, f32) {
+    match rise {
+        Some(rise) if rise.running(now) => {
+            let (factor, dy) = rise.at(now);
+            (
+                ShapeRect {
+                    y: shape.y + dy,
+                    ..shape
+                },
+                opacity * factor,
+            )
+        }
+        _ => (shape, opacity),
+    }
 }
 
 /// The idle clock's minute timer runs only while the idle island shows it.
@@ -5638,6 +5711,30 @@ mod tests {
         // Desktop or CI service session: whatever it answers, reading and
         // freeing Windows' buffer must not crash.
         let _ = query_session_locked();
+    }
+
+    #[test]
+    fn a_rising_island_is_drawn_dimmer_and_higher() {
+        let t0 = Instant::now();
+        let shape = shape_for(Style::Pill, ShapeKind::Idle);
+        let rise = behind::Rise::new(t0, true);
+        // At its start: invisible, 8 dip above its place; the rest is kept.
+        let (high, opacity) = rise_frame(shape, 1.0, Some(&rise), t0);
+        assert_eq!(opacity, 0.0);
+        assert_eq!(high.y, shape.y - behind::RISE_DROP_DIP);
+        assert_eq!(
+            (high.x, high.w, high.h, high.radius),
+            (shape.x, shape.w, shape.h, shape.radius)
+        );
+        // A morph's own opacity is multiplied, not replaced.
+        let later = t0 + Duration::from_millis(90);
+        let factor = rise.at(later).0;
+        let (_, opacity) = rise_frame(shape, 0.5, Some(&rise), later);
+        assert_eq!(opacity, 0.5 * factor);
+        // No rise, or a finished one: the input unchanged.
+        assert_eq!(rise_frame(shape, 0.5, None, t0), (shape, 0.5));
+        let done = t0 + Duration::from_millis(behind::RISE_MS);
+        assert_eq!(rise_frame(shape, 0.5, Some(&rise), done), (shape, 0.5));
     }
 
     fn morph(start: Instant) -> Anim {

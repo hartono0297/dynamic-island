@@ -361,7 +361,10 @@ mod tests {
         assert!(rise_wanted(Z::Bottom, Z::Top, true));
         assert!(!rise_wanted(Z::Bottom, Z::Top, false), "nothing covers it");
         assert!(!rise_wanted(Z::Top, Z::Top, true), "already up");
-        assert!(!rise_wanted(Z::Top, Z::Bottom, true), "lowering stays instant");
+        assert!(
+            !rise_wanted(Z::Top, Z::Bottom, true),
+            "lowering stays instant"
+        );
         assert!(!rise_wanted(Z::Bottom, Z::Bottom, true), "still down");
     }
 
