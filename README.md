@@ -81,7 +81,7 @@ Hover the notch to open it, scroll to change pages.
 | **Clipboard** | Searchable history of text, links, colours, files and images, with pins. Password managers' copies are never kept. |
 | **Screenshot** | A preview right after you capture, with Copy again, Keep or Delete. |
 | **File shelf** | Drop files on the notch, drag them out later. |
-| **Search** | `Ctrl+Alt+Space`: apps, calculator, Windows settings, web. |
+| **Search** | `Ctrl+Alt+Space`: apps, files and folders, calculator, Windows settings, web. |
 | **Calendar** | Google Calendar with day, week and month views; add and edit events. |
 | **Reminders, Notes, Pomodoro** | Quick ones, right in the panel. |
 | **Notifications** | Windows toasts and [Claude Code](https://claude.com/claude-code) prompts in the notch. |

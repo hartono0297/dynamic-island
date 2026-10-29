@@ -59,11 +59,12 @@ choice, Off included, sticks across saves (3.2.1 review fix). Registered as `Reg
   `AllowSetForegroundWindow(ASFW_ANY)` is called: the shell runs while the
   island still has the foreground, so the launched window comes to the
   front instead of opening behind. A copied calculation hands it back.
-- Demo scene `search` (a made-up list of apps, never the real Start Menu).
+- Demo scenes `search` (a made-up list of apps, never the real Start Menu) and
+  `search-files` (made-up files, folders and drawn icons).
 
-**Not done / later:** file search (Windows Search on a thread with a time
-limit), recent/frequent ranking, a "Run command" row (deliberately left out:
-only apps, settings pages, a calculation and the web are ever run).
+**Not done / later:** recent/frequent ranking, a "Run command" row
+(deliberately left out: only apps, settings pages, files and folders, a
+calculation and the web are ever run).
 
 **Not verified live:** the hotkeys' registration conflicts on other PCs,
 typing with an IME in the field, foreground/focus handling (Win+Alt+S while
@@ -111,3 +112,14 @@ is not grouped, "1.000.000" is). Custom tile paths also accept `C:/Tools/a.exe`
 whose state is not this login's (404, keeps waiting). Hapus no longer leaves
 the screenshot's own file in `taken` while it waits for it. The System CPU
 figure eases with its own 0.5-point step (it is in percent).
+
+## Files and folders (v3.3)
+
+File search: see [[search-files]]. What changed here: two more kinds
+(`Kind::File`, `Kind::Folder`, `Action::OpenPath`), `search(line, apps,
+files, lang, labels)` with files matched from two typed characters, the row
+order calculation, apps/settings, files/folders, web (at most 6 rows, 2 apps
+kept when apps match), a `path` on each result for the details worker (icon,
+folder count, app install size, filled in after the rows show) and the
+highlight staying on the same result when an index arrives (`keep_selection`).
+The hint now says "Cari aplikasi, berkas, hitung…".
