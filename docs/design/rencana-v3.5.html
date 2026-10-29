@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rencana v3.5</title>
+<style>
+  @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('../../assets/fonts/DMSans-400.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('../../assets/fonts/DMSans-500.ttf'); }
+  @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('../../assets/fonts/DMSans-600.ttf'); }
+  @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('../../assets/fonts/DMMono-400.ttf'); }
+  @font-face { font-family: 'DM Mono'; font-weight: 500; src: url('../../assets/fonts/DMMono-500.ttf'); }
+  :root {
+    --paper: #F1ECE4; --ink: #221A14; --ink2: #7A6B5D; --rule: #DDD3C6; --card: #FBF7F1;
+    --s: #17120F; --r: #241D18; --t: #332A23; --tx: #F4EDE4; --tx2: #A89A8B;
+    --a: #E2683C; --sage: #9DB59A; --ochre: #D9A441; --plum: #B07A9A; --red: #D9604F;
+    --body: 'DM Sans', sans-serif; --mono: 'DM Mono', monospace;
+  }
+  @page { size: 297mm 210mm; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #9a948c; }
+  body { font-family: var(--body); color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 297mm; height: 210mm; overflow: hidden; position: relative; margin: 0 auto 16px; padding: 28px 38px; background: var(--paper); break-after: page; }
+  .page.dark { background: var(--s); color: var(--tx); }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  svg { display: block; }
+  .folio { position: absolute; left: 38px; right: 38px; bottom: 14px; display: flex; justify-content: space-between; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; opacity: .5; }
+  .eyebrow { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; color: var(--ink2); }
+  .dark .eyebrow { color: var(--tx2); }
+  h1 { font-weight: 600; font-size: 27px; letter-spacing: -.025em; margin: 2px 0 10px; }
+  h2 { font-weight: 600; font-size: 15.5px; letter-spacing: -.02em; margin-bottom: 4px; }
+  .lbl { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+  p, li { font-size: 11px; line-height: 1.5; color: #3E3229; }
+  .dark p, .dark li { color: var(--tx2); }
+  code, .mono { font-family: var(--mono); font-size: 9.8px; }
+  code { background: #E8E0D4; padding: 0 4px; border-radius: 4px; }
+  b { font-weight: 600; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 16px; padding: 12px 14px; }
+  .card.d { background: var(--r); border-color: var(--t); color: var(--tx); }
+  .card.d p, .card.d li { color: var(--tx2); }
+  .card ul, .bul { margin: 4px 0 0; }
+  .card li, .bul li { list-style: none; position: relative; padding-left: 13px; margin-bottom: 3px; }
+  .card li::before, .bul li::before { content: ""; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--a); }
+  .tag { display: inline-block; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: #E6DCCF; color: #4A3D33; }
+  .tag.a { background: rgba(226,104,60,.18); color: #A8431F; } .tag.g { background: rgba(157,181,154,.3); color: #3F5A3C; } .tag.o { background: rgba(217,164,65,.25); color: #7A5A12; } .tag.r { background: rgba(217,96,79,.18); color: #9A3426; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink2); font-weight: 600; padding: 5px 7px; border-bottom: 1.5px solid var(--rule); }
+  td { font-size: 10.4px; line-height: 1.38; padding: 5px 7px; border-bottom: 1px solid var(--rule); vertical-align: top; color: #3E3229; }
+  .note { font-size: 10.3px; background: rgba(157,181,154,.2); border-radius: 10px; padding: 7px 10px; color: #3F5A3C; line-height: 1.45; }
+  .warn { font-size: 10.3px; background: rgba(217,164,65,.2); border-radius: 10px; padding: 7px 10px; color: #6B4E10; line-height: 1.45; }
+  .bad { font-size: 10.3px; background: rgba(217,96,79,.14); border-radius: 10px; padding: 7px 10px; color: #8A2F22; line-height: 1.45; }
+  .stage { position: relative; border-radius: 14px; overflow: hidden; background: linear-gradient(135deg, #3A3029, #5A4A3E 55%, #7C6552); display: flex; justify-content: center; align-items: flex-start; padding: 0 12px 14px; }
+  .island { background: var(--s); color: var(--tx); border-radius: 0 0 22px 22px; display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 12px; }
+  .t1 { font-size: 12px; font-weight: 600; color: var(--tx); line-height: 1.2; } .t2 { font-size: 10px; color: var(--tx2); }
+  .btn { font-size: 10.5px; font-weight: 600; padding: 5px 11px; border-radius: 9px; background: var(--t); color: var(--tx); display: inline-block; white-space: nowrap; }
+  .btn.pri { background: var(--a); color: #17120F; } .btn.del { background: var(--red); color: #1A1210; } .btn.ghost { background: transparent; border: 1px solid var(--t); color: var(--tx2); }
+  .panelm { background: var(--s); border-radius: 0 0 30px 30px; color: var(--tx); padding: 14px 16px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; padding: 3px 9px; border-radius: 99px; background: var(--t); color: var(--tx2); }
+  .chip.on { background: rgba(226,104,60,.25); color: #F3A184; }
+  .step { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 6px; }
+  .step i { flex: none; width: 21px; height: 21px; border-radius: 7px; background: var(--a); color: #17120F; font-style: normal; font-weight: 600; font-size: 10.5px; display: flex; align-items: center; justify-content: center; }
+  .step div { font-size: 10.4px; line-height: 1.42; color: #3E3229; }
+  .step .st { display: block; font-size: 11px; }
+  .hd { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+  .qs { font-size: 10.5px; padding: 3px 10px; border-radius: 99px; background: rgba(226,104,60,.14); color: #A8431F; font-weight: 600; white-space: nowrap; }
+  .bar { height: 5px; border-radius: 3px; background: var(--t); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--a); border-radius: 3px; }
+  .ok { color: #3F7A3A; font-weight: 600; } .no { color: #A8432F; font-weight: 600; } .mid { color: #8A6512; font-weight: 600; }
+  .path { font-family: var(--mono); font-size: 9.6px; color: #6B5A4B; }
+</style>
+</head>
+<body>
+<script>
+const pages = [];
+const add = (html, dark = false) => pages.push({ html, dark });
+const folio = (r) => `<div class="folio"><span>Vale · Rencana v3.5</span><span>${r}</span></div>`;
+const P = (d, w = 1.7, fill = 'none') => `<path d="${d}" fill="${fill}" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const ic = (name, s = 20, color = 'currentColor') => {
+  const m = {
+    usb: P('M9 3h6v5H9zM7 8h10v8a5 5 0 01-10 0zM11 5h0M13 5h0'),
+    hdd: P('M4 6h16v12H4zM4 13h16M16.5 15.5h.01M13.5 15.5h.01'),
+    sd: P('M7 3h8l3 3v15H7zM10 3v3M12.5 3v3M15 3v2'),
+    phone: P('M8 3h8a1 1 0 011 1v16a1 1 0 01-1 1H8a1 1 0 01-1-1V4a1 1 0 011-1zM11 18h2'),
+    eject: P('M12 5l7 8H5zM5 17h14'),
+    folder: P('M3 7a1 1 0 011-1h5l2 2h9a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1z'),
+    info: P('M12 21a9 9 0 100-18 9 9 0 000 18zM12 11v5M12 8h.01'),
+    gear: P('M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-1-3-2 .5-1.5-1.5.5-2-3-1-1 2h-2l-1-2-3 1 .5 2L6 8.5 4 8l-1 3 2 1v2l-2 1 1 3 2-.5L7.5 19l-.5 2 3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3-2-1z'),
+    chip: P('M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4'),
+    gpu: P('M3 7h18v10H3zM6 17v3M8 10.5a2 2 0 104 0 2 2 0 00-4 0zM14 10h4M14 13h4'),
+    therm: P('M10 14V5a2 2 0 014 0v9a4 4 0 11-4 0z'),
+    bolt: P('M13 3L5 14h6l-1 7 8-11h-6z'),
+    google: P('M20 12.2c0-.6 0-1.1-.1-1.7H12v3.3h4.5a3.9 3.9 0 01-1.7 2.5v2.1h2.7c1.6-1.5 2.5-3.6 2.5-6.2zM12 20.5c2.3 0 4.2-.8 5.5-2.1l-2.7-2.1a5 5 0 01-7.5-2.6H4.5v2.2A8.5 8.5 0 0012 20.5zM7.3 13.7a5 5 0 010-3.3V8.2H4.5a8.5 8.5 0 000 7.7zM12 6.9c1.3 0 2.4.4 3.3 1.3l2.4-2.4A8.4 8.4 0 0012 3.5a8.5 8.5 0 00-7.5 4.7l2.8 2.2A5 5 0 0112 6.9z'),
+    git: P('M6 4v10M6 14a2 2 0 100 4 2 2 0 000-4zM18 6a2 2 0 100 4 2 2 0 000-4zM18 10c0 4-6 3-12 4'),
+    check: P('M5 12.5l4.5 4.5L19 7.5'),
+    x: P('M6 6l12 12M18 6L6 18'),
+    bar: P('M4 19h16M7 15v-4M12 15V7M17 15v-6'),
+  };
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" style="color:${color}">${m[name] || ''}</svg>`;
+};
+// the current cat head (assets/logo.svg)
+const cat = (s = 20) => `<svg width="${s}" height="${s}" viewBox="0 0 256 256"><path d="M22 157L36 32.5L105 106Z" fill="#E2683C" stroke="#E2683C" stroke-width="23" stroke-linejoin="round"/><path d="M234 157L220 32.5L151 106Z" fill="#E2683C" stroke="#E2683C" stroke-width="23" stroke-linejoin="round"/><path d="M13 216.5V175Q13 97 128 97Q243 97 243 175V216.5Q243 235 224.6 235H31.4Q13 235 13 216.5Z" fill="#E2683C"/><rect x="78" y="147.5" width="26" height="46" rx="13" fill="#17120F"/><rect x="152" y="147.5" width="26" height="46" rx="13" fill="#17120F"/></svg>`;
+const steps = (list, start = 1) => list.map(([a, b], i) => `<div class="step"><i>${i + start}</i><div><b class="st">${a}</b>${b}</div></div>`).join('');
+
+// ============== COVER ==============
+const row = (n, nm, d, sz, k, st) => `<div style="display:grid;grid-template-columns:30px 1fr 92px 64px;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--t)"><i style="width:26px;height:26px;border-radius:9px;background:var(--a);color:#17120F;font-style:normal;font-weight:600;font-size:11px;display:flex;align-items:center;justify-content:center">${n}</i><div><div style="font-size:13px;font-weight:600;color:var(--tx)">${nm}</div><div style="font-size:10.4px;color:var(--tx2);line-height:1.4">${d}</div></div><span style="font-size:10px;color:var(--tx2)">${st}</span><span class="tag ${k}" style="justify-self:start">${sz}</span></div>`;
+add(`<div style="display:flex;align-items:center;gap:12px">${cat(34)}<div class="eyebrow">Vale · rencana sesudah 3.4.0 · 30 Oktober 2026</div></div>
+ <h1 style="font-size:38px;margin:14px 0 6px;color:var(--tx)">Lima permintaan,<br>dan seperti apa jadinya</h1>
+ <p style="max-width:560px;font-size:12px;margin-bottom:14px">Satu bug di editor screenshot, satu panduan untuk login Google, dan tiga fitur baru. Tiap halaman berikut menunjukkan tampilan yang diusulkan, apa yang mungkin dan tidak di Windows, dan keputusan yang perlu dari lu. Belum ada kode yang diubah.</p>
+ <div class="grid" style="grid-template-columns:1.55fr 1fr;gap:26px">
+  <div>
+   ${row(1, 'Editor screenshot tidak bisa ditutup', 'Tombol Buang dan Batal tertutup cat footer. Perbaikan kecil, dengan tes.', 'S', 'a', 'Bug, akar ketemu')}
+   ${row(2, 'Login Google tanpa Cloud Console', 'Langkah satu kali untuk lu: situs, project Cloud, klien Desktop, dua secret, rilis.', 'Pemilik', 'g', 'Panduan')}
+   ${row(3, 'Halaman Perangkat (lepas aman)', 'Daftar flashdisk dan disk eksternal: Eject, Buka, Detail, Eject semua, notice saat dicolok.', 'M–L', 'o', 'Bisa, tanpa admin')}
+   ${row(4, 'Taskbar transparan', 'Di Windows 11 butuh injeksi ke Explorer. Dua jalan: lewat TranslucentTB, atau bikin sendiri.', 'M / XL', 'r', 'Bisa, berisiko')}
+   ${row(5, 'Monitor performa dan game', 'FPS, GPU (pakai, watt, suhu, hotspot, VRAM), CPU (pakai, suhu).', 'L', 'o', 'Sebagian besar bisa')}
+  </div>
+  <div class="card d" style="padding:14px 16px">
+   <h2 style="color:var(--tx)">PC lu yang jadi acuan</h2>
+   <table style="margin-top:4px"><tr><td style="color:var(--tx2);border-color:var(--t)">GPU</td><td style="color:var(--tx);border-color:var(--t)">AMD Radeon RX 6700 XT, driver Adrenalin (ADLX ada)</td></tr>
+   <tr><td style="color:var(--tx2);border-color:var(--t)">CPU</td><td style="color:var(--tx);border-color:var(--t)">AMD Ryzen 5 5600X</td></tr>
+   <tr><td style="color:var(--tx2);border-color:var(--t)">Windows</td><td style="color:var(--tx);border-color:var(--t)">11 25H2, build 26200</td></tr>
+   <tr><td style="color:var(--tx2);border-color:var(--t)">Vale</td><td style="color:var(--tx);border-color:var(--t)">3.4.0 (rilis terakhir)</td></tr></table>
+   <p style="margin-top:9px;font-size:10.4px">Kelayakan di halaman 5 dan 6 dinilai untuk kartu AMD. Kartu NVIDIA dan Intel dicatat terpisah, karena tiap vendor punya API sendiri.</p>
+   <div class="warn" style="margin-top:9px">Beberapa jawaban "bisa" di sini berasal dari dokumentasi dan pengetahuan API, belum dari prototipe. Yang begitu ditandai "perlu prototipe".</div>
+  </div>
+ </div>${folio('Ringkasan')}`, true);
+
+// ============== 1. EDITOR CLOSE BUG ==============
+const edBar = (confirm, fixed) => `<div style="background:#1E1814;border-radius:12px;overflow:hidden;border:1px solid #2E2620">
+  <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #2E2620">
+   ${['▢', 'T', '▭', '↗'].map((g, i) => `<span style="width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--tx);${i === 3 ? 'background:rgba(226,104,60,.3)' : ''};opacity:${confirm ? .35 : 1}">${g}</span>`).join('')}
+   <span style="flex:1"></span>
+   <span class="btn" style="opacity:${confirm ? .35 : 1}">Salin</span><span class="btn pri" style="opacity:${confirm ? .35 : 1}">Simpan</span><span class="btn" style="opacity:${confirm ? .35 : 1}">Tutup</span>
+  </div>
+  <div style="height:70px;background:repeating-linear-gradient(45deg,#2A231E 0 8px,#26201B 8px 16px);position:relative"><div style="position:absolute;left:30%;top:18px;width:90px;height:3px;background:var(--red);transform:rotate(-28deg)"></div></div>
+  <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #2E2620;min-height:42px">
+   <span style="font-size:11px;color:var(--tx);font-weight:600;flex:1">${confirm ? 'Buang perubahan?' : '<span style="color:var(--tx2);font-weight:400">1240 × 680 · 100%</span>'}</span>
+   ${confirm && fixed ? '<span class="btn del">Buang</span><span class="btn">Batal</span>' : ''}
+   ${confirm && !fixed ? '<span style="font-size:9.5px;color:#F2A397;border:1px dashed #F2A397;border-radius:8px;padding:4px 8px">di sini ada Buang dan Batal, tapi tertimpa</span>' : ''}
+  </div></div>`;
+add(`<div class="hd"><div><div class="eyebrow">01 · Bug</div><h1>Editor screenshot tidak bisa ditutup kalau ada coretan</h1></div><span class="qs">S · sekitar 1 jam</span></div>
+ <div class="grid" style="grid-template-columns:1fr 1fr;gap:18px">
+  <div>
+   <div class="lbl">Sekarang (screenshot lu)</div>${edBar(true, false)}
+   <div class="lbl" style="margin-top:12px">Sesudah perbaikan</div>${edBar(true, true)}
+  </div>
+  <div>
+   <h2>Akar masalahnya</h2>
+   <p style="margin-bottom:7px">Tutup dengan perubahan memang sengaja bertanya dulu: <code>request_close</code> menyalakan bar "Buang perubahan?" dan menaruh dua tombol, <b>Buang</b> dan <b>Batal</b>, di footer (<span class="path">src/shot_edit/window.rs:211</span>). Selama bar itu tampil, tombol lain sengaja redup dan tidak bisa diklik.</p>
+   <p style="margin-bottom:7px">Masalahnya ada di urutan menggambar. Semua tombol, termasuk Buang dan Batal, digambar di baris <span class="path">1983</span>. Sesudah itu footer diisi warna latar di baris <span class="path">2113</span>, <b>di atas</b> kedua tombol tadi. Hasilnya cocok dengan screenshot lu: teks "Discard changes?" kelihatan, tombolnya tidak, dan semua tombol lain mati. Satu-satunya jalan keluar yang tersisa adalah Esc (menutup bar) lalu Salin atau Simpan.</p>
+   <h2 style="margin-top:10px">Perbaikannya</h2>
+   <div class="card" style="padding:9px 12px"><ul>
+    <li>Gambar latar footer <b>sebelum</b> tombol-tombolnya, jadi Buang dan Batal kelihatan dan bisa diklik.</li>
+    <li>Buang memakai warna bahaya (merah), Batal netral; Enter = Buang, Esc = Batal.</li>
+    <li>Tombol X di pojok jendela dan Alt+F4 lewat jalur yang sama, bukan menutup diam-diam.</li>
+    <li>Tes baru: urutan gambar menaruh tombol di atas footer, dan Tutup tanpa perubahan tetap langsung menutup.</li>
+   </ul></div>
+   <div class="note" style="margin-top:9px">Bug ini masuk lewat rilis 3.4.0 (editor langsung terbuka sesudah snap), jadi layak dirilis cepat sebagai 3.4.1 sebelum fitur lain.</div>
+  </div>
+ </div>${folio('01 · Editor screenshot')}`);
+
+// ============== 2. GOOGLE ==============
+add(`<div class="hd"><div><div class="eyebrow">02 · Login Google · bagian 1 dari 2</div><h1>Supaya "Masuk dengan Google" muncul untuk semua orang</h1></div><span class="qs">Langkah pemilik · 45–60 menit</span></div>
+ <div class="grid" style="grid-template-columns:1fr 1.15fr;gap:18px">
+  <div>
+   <h2>Kenapa langkah ini perlu</h2>
+   <p style="margin-bottom:7px">Kodenya sudah siap. Rilis dibangun oleh <span class="path">.github/workflows/release.yml</span>, yang membaca dua secret repo: <code>VALE_GOOGLE_CLIENT_ID</code> dan <code>VALE_GOOGLE_CLIENT_SECRET</code>. Selama keduanya kosong, exe tidak punya klien bawaan, jadi Settings → Integrasi meminta Client ID milik pengguna sendiri. Begitu terisi dan rilis baru dibuat, pengguna cukup klik <b>Masuk dengan Google</b>.</p>
+   <div style="display:flex;gap:6px;align-items:stretch;margin:8px 0">
+    ${[['A', 'Situs terbit', 'privasi + ketentuan'], ['B', 'Project Cloud', 'API + layar izin'], ['C', 'Klien Desktop', 'ID + secret'], ['D', 'Secret GitHub', 'dua nilai'], ['E', 'Rilis + tes', 'tag baru']].map(([n, a, b]) => `<div style="flex:1;background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:7px 8px;font-size:10px;line-height:1.3"><b style="color:var(--a)">${n}</b> <b>${a}</b><br><span style="color:var(--ink2)">${b}</span></div>`).join('')}
+   </div>
+   <h2 style="margin-top:8px">A. Terbitkan situs Vale (privasi dan ketentuan)</h2>
+   <p style="margin-bottom:6px">Google meminta URL beranda, kebijakan privasi, dan ketentuan layanan. Halamannya sudah ada di folder <span class="path">site/</span>, tapi <b>GitHub Pages belum aktif</b> di repo (API mengembalikan 404).</p>
+   ${steps([
+     ['Gw tambahkan workflow Pages', 'File kecil <span class="path">.github/workflows/pages.yml</span> yang menerbitkan folder <span class="path">site/</span>. Pages tidak bisa memakai folder bernama site/ secara langsung, hanya root atau docs/.'],
+     ['Lu aktifkan Pages', 'Repo di GitHub → <b>Settings</b> → <b>Pages</b> → Build and deployment → Source: <b>GitHub Actions</b>.'],
+     ['Cek tiga alamat', '<span class="path">https://hartono0297.github.io/dynamic-island/</span>, lalu <span class="path">…/privacy.html</span> dan <span class="path">…/terms.html</span>. Isi email kontak di kedua halaman itu.'],
+   ])}
+  </div>
+  <div>
+   <h2>B. Project Google Cloud dan layar izin</h2>
+   ${steps([
+     ['Buat project', 'Buka <span class="path">console.cloud.google.com</span>, login dengan akun Google yang akan jadi pemilik. Klik pemilih project di kiri atas → <b>New project</b> → nama <b>Vale</b> → <b>Create</b>. Pastikan project Vale yang terpilih.'],
+     ['Aktifkan Google Calendar API', 'Menu ☰ → <b>APIs &amp; Services</b> → <b>Library</b> → cari "Google Calendar API" → <b>Enable</b>.'],
+     ['Mulai Google Auth Platform', 'Menu ☰ → <b>Google Auth Platform</b> (dulu bernama "OAuth consent screen") → <b>Get started</b>. App name: <b>Vale</b>. User support email: email lu. Audience: <b>External</b>. Contact email: email lu. Centang persetujuan → <b>Create</b>.'],
+     ['Branding', 'Isi Application home page, Privacy policy link, Terms of service link dengan tiga URL dari langkah A. Authorized domains: <b>hartono0297.github.io</b>. Logo boleh dikosongkan dulu: logo membuat aplikasi wajib diverifikasi sebelum bisa dipakai.'],
+     ['Data Access (scope)', '<b>Add or remove scopes</b> → tempel dua scope ini di "Manually add scopes", lalu <b>Update</b> dan <b>Save</b>:<br><span class="path">https://www.googleapis.com/auth/calendar.calendarlist.readonly</span><br><span class="path">https://www.googleapis.com/auth/calendar.events</span><br>Harus persis dua ini: Vale menolak login yang scopenya kurang (<span class="path">src/google/oauth.rs:30</span>).'],
+     ['Audience', 'Tambahkan email lu di <b>Test users</b> untuk mencoba dulu. Sesudah tes berhasil (langkah E), klik <b>Publish app</b> → <b>In production</b>. Selama masih Testing, hanya test user yang bisa login dan token habis tiap 7 hari.'],
+   ], 4)}
+  </div>
+ </div>${folio('02 · Login Google, 1/2')}`);
+
+add(`<div class="hd"><div><div class="eyebrow">02 · Login Google · bagian 2 dari 2</div><h1>Klien Desktop, dua secret, lalu rilis</h1></div><span class="qs">Langkah pemilik</span></div>
+ <div class="grid" style="grid-template-columns:1fr 1fr;gap:18px">
+  <div>
+   <h2>C. Buat klien OAuth tipe Desktop</h2>
+   ${steps([
+     ['Clients → Create client', 'Masih di Google Auth Platform, buka <b>Clients</b> → <b>Create client</b>. Application type: <b>Desktop app</b>. Name: <b>Vale desktop</b> → <b>Create</b>.'],
+     ['Salin dua nilai', 'Jendela berikutnya menampilkan <b>Client ID</b> (berakhiran <span class="path">.apps.googleusercontent.com</span>) dan <b>Client secret</b> (berawalan <span class="path">GOCSPX-</span>). Klik <b>Download JSON</b> sebagai cadangan. Simpan di pengelola sandi, jangan di repo.'],
+     ['Tidak perlu redirect URI', 'Klien Desktop otomatis mengizinkan alamat loopback <span class="path">http://127.0.0.1:port</span>, yang dipakai Vale bersama PKCE.'],
+   ], 10)}
+   <div class="note" style="margin-top:4px">Untuk klien Desktop, Google menganggap secret-nya <b>bukan rahasia</b>, karena ikut di dalam exe yang bisa dibongkar siapa saja. Keamanan login dijaga PKCE dan loopback. Tetap simpan sebagai secret repo supaya tidak tercetak di log dan riwayat git.</div>
+   <h2 style="margin-top:10px">D. Isi dua secret di GitHub</h2>
+   ${steps([
+     ['Buka pengaturan secret', 'Repo <b>hartono0297/dynamic-island</b> → <b>Settings</b> → <b>Secrets and variables</b> → <b>Actions</b> → tab <b>Secrets</b> → <b>New repository secret</b>.'],
+     ['Secret pertama', 'Name: <code>VALE_GOOGLE_CLIENT_ID</code> · Secret: Client ID dari langkah 11 → <b>Add secret</b>.'],
+     ['Secret kedua', 'Name: <code>VALE_GOOGLE_CLIENT_SECRET</code> · Secret: Client secret → <b>Add secret</b>. Namanya harus persis sama, huruf besar semua.'],
+   ], 13)}
+  </div>
+  <div>
+   <h2>E. Coba lokal dulu, lalu rilis</h2>
+   ${steps([
+     ['Tes lokal (boleh gw yang jalankan)', 'Build dengan dua variabel itu di folder target terpisah, lalu buka Settings → Integrasi. Tombol <b>Masuk dengan Google</b> harus tampil, dan login dengan akun test user harus berhasil.'],
+     ['Rilis baru', 'Push tag versi berikutnya, misalnya <code>git tag v3.4.1; git push origin v3.4.1</code>. Workflow rilis membangun exe dengan klien bawaan. Ini tetap langkah lu.'],
+     ['Publish app', 'Kalau tes lancar, kembali ke Audience → <b>Publish app</b>. Siapa pun bisa login, tapi masih melihat layar "Google hasn’t verified this app" (klik <b>Advanced</b> → <b>Go to Vale</b>), dengan batas 100 pengguna baru.'],
+     ['Verifikasi (opsional, untuk menghapus peringatan)', '<b>Verification center</b> → Submit. Butuh: domain diverifikasi di Google Search Console (<span class="path">hartono0297.github.io</span>, lewat file HTML di site/), video demo YouTube (unlisted) yang menunjukkan layar izin dan cara Vale memakai kalender, dan alasan per scope. <code>calendar.events</code> termasuk sensitif, bukan terbatas, jadi tanpa audit keamanan berbayar. Prosesnya beberapa hari sampai beberapa minggu.'],
+   ], 16)}
+   <table style="margin-top:6px">
+    <tr><th>Status</th><th>Siapa bisa login</th><th>Yang terlihat</th></tr>
+    <tr><td><b>Testing</b></td><td>Maks. 100 test user</td><td>Token habis tiap 7 hari</td></tr>
+    <tr><td><b>Production, belum verifikasi</b></td><td>Siapa saja, 100 pengguna baru</td><td>Layar peringatan, bisa dilewati</td></tr>
+    <tr><td><b>Terverifikasi</b></td><td>Tanpa batas</td><td>Tanpa peringatan</td></tr>
+   </table>
+   <div class="warn" style="margin-top:7px">Label tombol di Google Cloud kadang berganti. Kalau ada yang beda dari panduan ini, kirim screenshot, gw sesuaikan langkahnya.</div>
+  </div>
+ </div>${folio('02 · Login Google, 2/2')}`);
+
+// ============== 3. DEVICES ==============
+const dev = (icon, name, sub, used, total, pct, open, extra = '') => `<div style="background:var(--r);border-radius:14px;padding:9px 11px;margin-bottom:7px">
+  <div style="display:flex;align-items:center;gap:10px">
+   <div style="width:34px;height:34px;border-radius:10px;background:var(--t);display:flex;align-items:center;justify-content:center;color:var(--a)">${ic(icon, 19)}</div>
+   <div style="flex:1;min-width:0"><div class="t1">${name}</div><div class="t2">${sub}</div></div>
+   <span class="btn ghost" style="padding:4px 8px">${ic('folder', 13, '#A89A8B')}</span>
+   <span class="btn ghost" style="padding:4px 8px">${ic('info', 13, '#A89A8B')}</span>
+   <span class="btn pri" style="display:inline-flex;align-items:center;gap:4px">${ic('eject', 12, '#17120F')} Eject</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-top:7px"><div class="bar" style="flex:1"><i style="width:${pct}%"></i></div><span class="t2 mono">${used} / ${total}</span></div>${extra}</div>`;
+add(`<div class="hd"><div><div class="eyebrow">03 · Fitur baru</div><h1>Halaman Perangkat: lepas aman yang lebih enak dari Windows</h1></div><span class="qs">M–L · tanpa admin</span></div>
+ <div class="grid" style="grid-template-columns:1.08fr 1fr;gap:18px">
+  <div>
+   <div class="stage" style="padding-bottom:16px"><div class="panelm" style="width:440px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">${cat(18)}<b style="font-size:13px">Perangkat</b><span class="chip">3 tersambung</span><span style="flex:1"></span><span class="btn" style="display:inline-flex;align-items:center;gap:4px">${ic('eject', 12)} Eject semua</span></div>
+    ${dev('usb', 'SanDisk Ultra · E:', 'Flashdisk USB 3.2 · exFAT', '18,4 GB', '57,3 GB', 32)}
+    ${dev('hdd', 'WD Elements · F:  G:', 'Disk eksternal USB · 2 partisi NTFS', '612 GB', '931 GB', 66, false, `<div style="margin-top:7px;background:rgba(217,96,79,.16);border-radius:9px;padding:6px 9px;font-size:10px;color:#F2A397;display:flex;align-items:center;gap:8px"><span style="flex:1"><b>Belum bisa dilepas.</b> Masih dipakai: <b>Excel</b> (Laporan.xlsx)</span><span class="btn" style="padding:3px 8px">Coba lagi</span></div>`)}
+    ${dev('sd', 'Kartu SD · H:', 'Pembaca kartu · FAT32', '3,1 GB', '29,7 GB', 10)}
+   </div></div>
+   <div class="grid g2" style="margin-top:10px;gap:10px">
+    <div class="stage" style="padding:0 10px 12px"><div class="island" style="padding:6px 13px">${ic('usb', 16, '#E2683C')}<div><div class="t1">SanDisk Ultra tersambung</div><div class="t2">E: · 38,9 GB kosong</div></div><span class="btn" style="padding:3px 8px">Buka</span></div></div>
+    <div class="stage" style="padding:0 10px 12px"><div class="island" style="padding:6px 13px">${ic('check', 16, '#9DB59A')}<div><div class="t1">Aman dicabut</div><div class="t2">SanDisk Ultra</div></div></div></div>
+   </div>
+  </div>
+  <div>
+   <h2>Yang ada di tiap kartu</h2>
+   <div class="card" style="padding:9px 12px"><ul>
+    <li><b>Eject</b>: lepas aman. Kalau gagal, kartu bilang alasannya, dan kalau Windows memberi tahu aplikasinya, nama aplikasi itu ditampilkan, dengan tombol <b>Coba lagi</b>.</li>
+    <li><b>Buka</b> (ikon folder): Explorer di drive itu, lalu panel tertutup.</li>
+    <li><b>Detail</b> (ikon i): kartu melebar menampilkan model, jalur (USB 2/3, kartu, Thunderbolt), sistem file, kapasitas per partisi, dan label volume.</li>
+    <li><b>Eject semua</b>: satu klik untuk semua yang bisa dilepas, laporan per perangkat.</li>
+    <li>Notice di notch saat perangkat dicolok (Buka) dan saat aman dicabut. Bisa dimatikan.</li>
+    <li>Tile shortcut <b>Perangkat</b> dan hotkey opsional.</li>
+   </ul></div>
+   <h2 style="margin-top:9px">Cara kerjanya</h2>
+   <table>
+    <tr><th>Bagian</th><th>API Windows</th><th>Admin?</th></tr>
+    <tr><td>Daftar perangkat</td><td><code>SetupDi*</code>, <code>CM_Get_DevNode_Status</code> (bisa dilepas), volume dan huruf drive</td><td class="ok">Tidak</td></tr>
+    <tr><td>Jenis jalur</td><td><code>IOCTL_STORAGE_QUERY_PROPERTY</code></td><td class="ok">Tidak</td></tr>
+    <tr><td>Eject</td><td><code>CM_Request_Device_EjectW</code>, alasan tolak dari <code>PNP_VETO_TYPE</code></td><td class="ok">Tidak</td></tr>
+    <tr><td>Colok dan cabut</td><td><code>WM_DEVICECHANGE</code>, tanpa polling</td><td class="ok">Tidak</td></tr>
+   </table>
+   <div class="warn" style="margin-top:7px">Nama aplikasi yang menahan drive tidak selalu tersedia: kadang Windows hanya bilang "sedang dipakai". Perlu prototipe untuk tahu seberapa sering namanya ada. Ponsel (MTP) dan drive jaringan tidak bisa di-eject dengan cara ini, jadi tidak masuk daftar.</div>
+   <div class="note" style="margin-top:7px">Biaya diam nol: daftar diperbarui hanya saat Windows mengabarkan colok atau cabut, dan kapasitas dibaca saat halaman terbuka.</div>
+  </div>
+ </div>${folio('03 · Perangkat')}`);
+
+// ============== 4. TASKBAR ==============
+const tb = (style, label) => `<div style="position:relative;height:74px;border-radius:12px;overflow:hidden;background:linear-gradient(120deg,#1F4D44,#2E6B5C 40%,#173A33 70%,#355E52)">
+  <div style="position:absolute;left:0;right:0;bottom:0;height:26px;${style};display:flex;align-items:center;justify-content:center;gap:7px">${['#3A86FF', '#E2683C', '#F4C430', '#5865F2', '#2A9D8F', '#C0392B', '#E2683C', '#4285F4'].map(c => `<span style="width:12px;height:12px;border-radius:3px;background:${c}"></span>`).join('')}</div>
+  <span style="position:absolute;left:9px;top:7px;font-size:9.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.35);padding:2px 7px;border-radius:99px">${label}</span></div>`;
+add(`<div class="hd"><div><div class="eyebrow">04 · Fitur baru</div><h1>Taskbar transparan</h1></div><span class="qs">Butuh keputusan</span></div>
+ <div class="grid" style="grid-template-columns:1fr 1.1fr;gap:18px">
+  <div>
+   <div class="grid g2" style="gap:8px">
+    ${tb('background:#1C1C1C', 'Windows bawaan')}
+    ${tb('background:transparent', 'Bening (screenshot lu)')}
+    ${tb('background:rgba(20,20,20,.35);backdrop-filter:blur(6px)', 'Blur')}
+    ${tb('background:rgba(23,18,15,.6)', 'Warna Vale, 60%')}
+   </div>
+   <div class="card d" style="margin-top:10px;padding:11px 13px">
+    <div class="lbl" style="color:var(--tx2)">Settings → Tampilan → Taskbar (usulan)</div>
+    ${[['Taskbar transparan', 'on'], ['Gaya', 'Bening · Blur · Akrilik · Warna'], ['Saat ada jendela dimaksimalkan', 'kembali normal'], ['Saat menu Start terbuka', 'kembali normal']].map(([a, b]) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--t);font-size:10.6px;color:var(--tx)"><span>${a}</span>${b === 'on' ? '<span style="width:30px;height:17px;border-radius:9px;background:var(--a);position:relative"><span style="position:absolute;right:2px;top:2px;width:13px;height:13px;border-radius:50%;background:#17120F"></span></span>' : `<span class="chip on">${b}</span>`}</div>`).join('')}
+   </div>
+  </div>
+  <div>
+   <h2>Kenapa ini tidak sesederhana kelihatannya</h2>
+   <p style="margin-bottom:7px">Di Windows 10, warna taskbar bisa diubah dari luar dengan satu panggilan (<code>SetWindowCompositionAttribute</code>). Taskbar Windows 11 sekarang digambar dengan XAML di dalam proses Explorer, dan cara lama itu tidak lagi berpengaruh. TranslucentTB, aplikasi di screenshot lu, mengatasinya dengan <b>memasukkan DLL ke Explorer</b> lewat XAML Diagnostics (API yang juga dipakai Visual Studio) lalu mengganti kuas latar taskbar dari dalam.</p>
+   <table>
+    <tr><th></th><th>A. Lewat TranslucentTB</th><th>B. Dibuat sendiri di Vale</th></tr>
+    <tr><td><b>Cara</b></td><td>Vale mendeteksi TranslucentTB, menawarkan pemasangan (winget), lalu menulis pengaturannya dari Settings Vale</td><td>DLL kecil Vale dimasukkan ke Explorer, dipasang ulang tiap Explorer restart</td></tr>
+    <tr><td><b>Ukuran</b></td><td><span class="tag g">M</span></td><td><span class="tag r">XL</span></td></tr>
+    <tr><td><b>Risiko</b></td><td class="ok">Rendah: Vale tidak menyentuh Explorer</td><td class="no">Tinggi: update Windows bisa membuat Explorer crash; antivirus bisa curiga pada injeksi</td></tr>
+    <tr><td><b>Lisensi</b></td><td>Program terpisah, aman</td><td>Kode TranslucentTB berlisensi GPL-3.0 dan tidak boleh disalin ke Vale (MIT); harus ditulis dari nol</td></tr>
+    <tr><td><b>Ukuran exe</b></td><td>Tetap</td><td>Tambah DLL kedua</td></tr>
+   </table>
+   <div class="note" style="margin-top:8px"><b>Saran: A.</b> Hasilnya sama di layar, tanpa risiko Explorer. B bisa jadi eksperimen terpisah nanti, mati bawaan.</div>
+   <div class="warn" style="margin-top:7px">Perlu prototipe: cara menulis pengaturan TranslucentTB versi Store (letak file dan formatnya) perlu dipastikan dulu. Kalau ternyata tidak stabil, A turun jadi "buka TranslucentTB dari Vale" saja.</div>
+  </div>
+ </div>${folio('04 · Taskbar')}`);
+
+// ============== 5. PERFORMANCE ==============
+const m = (lab, val, unit, icon) => `<div style="display:flex;align-items:center;gap:5px">${ic(icon, 13, '#E2683C')}<span style="font-size:9px;color:var(--tx2);letter-spacing:.06em">${lab}</span><b class="mono" style="font-size:11.5px;color:var(--tx)">${val}</b><span style="font-size:9px;color:var(--tx2)">${unit}</span></div>`;
+add(`<div class="hd"><div><div class="eyebrow">05 · Fitur baru · bagian 1 dari 2</div><h1>Monitor performa: seperti apa di notch</h1></div><span class="qs">L</span></div>
+ <div class="grid" style="grid-template-columns:1.15fr 1fr;gap:18px">
+  <div>
+   <div class="lbl">Mode game: strip kecil saat game berjalan</div>
+   <div class="stage" style="padding:0 12px 14px;background:linear-gradient(135deg,#1E2A3A,#3B4E66 55%,#5A6E85)"><div class="island" style="gap:12px;padding:6px 14px;border-radius:0 0 18px 18px">
+    <b class="mono" style="font-size:15px;color:#9DB59A">144</b><span style="font-size:9px;color:var(--tx2);margin-left:-8px">FPS</span>
+    ${m('GPU', '97', '%', 'gpu')}${m('', '186', 'W', 'bolt')}${m('', '71', '°', 'therm')}${m('HOT', '88', '°', 'therm')}${m('VRAM', '9,1', 'GB', 'chip')}${m('CPU', '34', '% · 62°', 'chip')}
+   </div></div>
+   <p style="margin:6px 0 10px;font-size:10.2px">Muncul sendiri saat aplikasi 3D di depan, hilang saat game ditutup. Isinya bisa dipilih di Settings (misalnya hanya FPS, GPU, CPU).</p>
+   <div class="lbl">Halaman Sistem: kartu GPU baru di bawah CPU dan RAM</div>
+   <div class="stage" style="padding:0 12px 14px"><div class="panelm" style="width:430px;padding:12px 14px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+     ${[['GPU · RX 6700 XT', '97%', 97, '186 W · 71 °C · hotspot 88 °C'], ['VRAM', '9,1 / 12 GB', 76, 'pemakaian memori GPU'], ['CPU · Ryzen 5 5600X', '34%', 34, '62 °C (dari HWiNFO)'], ['FPS · eldenring.exe', '144', 90, 'rata-rata 1 s · 1% low 118']].map(([a, b, p, c]) => `<div style="background:var(--r);border-radius:12px;padding:8px 10px"><div style="display:flex;justify-content:space-between"><span class="t2">${a}</span><b class="mono" style="font-size:12px">${b}</b></div><div class="bar" style="margin:6px 0 4px"><i style="width:${p}%"></i></div><span class="t2" style="font-size:9.2px">${c}</span></div>`).join('')}
+    </div></div></div>
+  </div>
+  <div>
+   <h2>Hal yang perlu lu tahu dulu</h2>
+   <div class="card" style="padding:9px 12px"><ul>
+    <li><b>Island sekarang sembunyi saat aplikasi layar penuh.</b> Mode game jadi pengecualian yang bisa dinyalakan: strip tetap tampil di atas game.</li>
+    <li>Strip hanya bisa tampil di atas game yang memakai <b>borderless/windowed fullscreen</b>, mode default kebanyakan game sekarang. Di <b>exclusive fullscreen</b> tidak ada jendela lain yang bisa tampil tanpa menyuntik ke game, dan itu tidak akan dilakukan Vale (rawan anti-cheat).</li>
+    <li>Pembacaan hanya berjalan saat strip atau halaman Sistem tampil, satu kali per detik. Saat tidak dipakai, biayanya nol, sesuai anggaran daya Vale.</li>
+    <li>Angka yang tidak bisa dibaca di PC tertentu disembunyikan, tidak diisi tebakan.</li>
+   </ul></div>
+   <div class="lbl" style="margin-top:10px">Pilihan tampilan lain (bila suka)</div>
+   <div class="grid g2" style="gap:8px">
+    <div class="card" style="padding:8px 10px"><b style="font-size:11px">Overlay pojok</b><p style="font-size:10px">Kotak kecil di pojok layar, seperti MSI Afterburner. Lebih banyak angka, tapi menutupi game.</p></div>
+    <div class="card" style="padding:8px 10px"><b style="font-size:11px">Hanya halaman Sistem</b><p style="font-size:10px">Paling ringan dan aman, tapi tidak terlihat saat main.</p></div>
+   </div>
+  </div>
+ </div>${folio('05 · Performa, 1/2')}`);
+
+const yes = '<span class="ok">Bisa</span>', no = '<span class="no">Tidak langsung</span>', mid = '<span class="mid">Bisa, dengan syarat</span>';
+add(`<div class="hd"><div><div class="eyebrow">05 · Fitur baru · bagian 2 dari 2</div><h1>Angka mana yang bisa dibaca, dan dari mana</h1></div><span class="qs">Jawaban: sebagian besar bisa</span></div>
+ <table>
+  <tr><th style="width:15%">Angka</th><th style="width:15%">RX 6700 XT (PC lu)</th><th style="width:33%">Sumber</th><th style="width:17%">NVIDIA</th><th>Catatan</th></tr>
+  <tr><td><b>GPU util %</b></td><td>${yes}</td><td>Penghitung kinerja Windows (<code>GPU Engine</code>, sama dengan Task Manager), atau ADLX</td><td>${yes}</td><td>Semua vendor, tanpa admin</td></tr>
+  <tr><td><b>GPU mem util</b></td><td>${yes}</td><td><code>GPU Adapter Memory</code> / <code>QueryVideoMemoryInfo</code>, atau ADLX</td><td>${yes}</td><td>Ditampilkan GB terpakai dan persen dari total</td></tr>
+  <tr><td><b>GPU power (W)</b></td><td>${yes}</td><td>AMD ADLX (<span class="path">amdadlx64.dll</span>, ada di driver Adrenalin lu)</td><td>${yes} lewat NVML</td><td>Intel: tidak ada API publik</td></tr>
+  <tr><td><b>GPU temp</b></td><td>${yes}</td><td>ADLX; cadangan: data adapter yang dipakai Task Manager (<code>D3DKMT</code>)</td><td>${yes} lewat NVML</td><td>Task Manager juga menampilkannya, jadi sumbernya ada</td></tr>
+  <tr><td><b>GPU hotspot</b></td><td>${yes}</td><td>ADLX (hotspot / junction temperature)</td><td>${no}</td><td>NVIDIA tidak membuka hotspot lewat API publik; disembunyikan di sana</td></tr>
+  <tr><td><b>FPS</b></td><td>${mid}</td><td>ADLX (metrik FPS Adrenalin) untuk AMD; untuk vendor lain: pelacakan present (ETW, cara PresentMon)</td><td>${mid}</td><td>ETW butuh admin <b>atau</b> akun lu masuk grup "Performance Log Users" sekali (perlu admin satu kali). Perlu prototipe untuk ADLX</td></tr>
+  <tr><td><b>CPU util %</b></td><td>${yes}</td><td>Sudah ada di halaman Sistem (<code>GetSystemTimes</code>)</td><td>${yes}</td><td>Tinggal dipakai ulang</td></tr>
+  <tr><td><b>CPU temp</b></td><td>${mid}</td><td>Windows tidak menyediakannya tanpa driver kernel. Usulan: baca dari <b>HWiNFO</b> (shared memory) atau <b>LibreHardwareMonitor</b> bila salah satunya berjalan</td><td>${mid}</td><td>Vale tidak memasang driver sendiri: driver baca-suhu lama (WinRing0) sekarang ditandai rentan oleh Windows Defender</td></tr>
+ </table>
+ <div class="grid g3" style="margin-top:12px;gap:12px">
+  <div class="card" style="padding:9px 12px"><b style="font-size:11px">Urutan pengerjaan</b><ul><li><b>5a</b>: GPU util, VRAM, CPU util (semua vendor), kartu di halaman Sistem. <span class="tag g">M</span></li><li><b>5b</b>: ADLX untuk AMD (watt, suhu, hotspot, FPS), lalu NVML untuk NVIDIA. <span class="tag o">L</span></li><li><b>5c</b>: strip mode game, suhu CPU dari HWiNFO/LHM. <span class="tag o">M</span></li></ul></div>
+  <div class="card" style="padding:9px 12px"><b style="font-size:11px">Biaya ke Vale</b><ul><li>ADLX dan NVML dimuat dinamis hanya kalau ada; exe tidak bergantung pada driver tertentu.</li><li>Pembacaan di thread pekerja, seperti halaman Sistem sekarang.</li><li>Ukuran exe naik sedikit (binding C ADLX).</li></ul></div>
+  <div class="card" style="padding:9px 12px"><b style="font-size:11px">Yang tidak dijanjikan</b><ul><li>Overlay di exclusive fullscreen.</li><li>Suhu CPU tanpa HWiNFO atau LHM.</li><li>Hotspot NVIDIA, angka GPU Intel selain pemakaian.</li></ul></div>
+ </div>${folio('05 · Performa, 2/2')}`);
+
+// ============== ROADMAP ==============
+const rr = (n, nm, d, sz, k, ver) => `<div style="display:grid;grid-template-columns:62px 30px 1fr 54px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--rule)"><span style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--ink2)">${ver}</span><i style="width:26px;height:26px;border-radius:9px;background:var(--a);color:#17120F;font-style:normal;font-weight:600;font-size:10.5px;display:flex;align-items:center;justify-content:center">${n}</i><div style="font-size:11.3px"><b>${nm}</b><div style="font-size:10px;color:var(--ink2);line-height:1.35">${d}</div></div><span class="tag ${k}" style="justify-self:start">${sz}</span></div>`;
+add(`<div class="hd"><div><div class="eyebrow">Peta jalan</div><h1>Urutan pengerjaan dan keputusan yang dibutuhkan</h1></div><span class="qs">Usulan</span></div>
+ <div class="grid" style="grid-template-columns:1.45fr 1fr;gap:20px">
+  <div>
+   ${rr(1, 'Perbaikan editor screenshot', 'Buang/Batal terlihat lagi, X dan Alt+F4 lewat jalur yang sama, tes', 'S', 'a', '3.4.1')}
+   ${rr(2, 'Workflow Pages untuk situs', 'Menerbitkan site/ supaya URL privasi dan ketentuan hidup (langkah A)', 'S', '', '3.4.1')}
+   ${rr('G', 'Langkah Google oleh lu', 'B sampai E di halaman 02; bisa paralel dengan semua yang lain', 'Lu', 'g', 'paralel')}
+   ${rr(3, 'Halaman Perangkat', 'Daftar, Eject, Buka, Detail, Eject semua, notice colok/cabut, tile', 'M–L', 'o', '3.5')}
+   ${rr(4, 'Performa 5a', 'GPU util, VRAM, CPU di halaman Sistem, semua vendor', 'M', 'o', '3.5')}
+   ${rr(5, 'Performa 5b + 5c', 'ADLX/NVML: watt, suhu, hotspot, FPS; strip mode game; suhu CPU dari HWiNFO/LHM', 'L', 'r', '3.6')}
+   ${rr(6, 'Taskbar transparan', 'Jalan A (TranslucentTB) sesudah prototipe; jalan B hanya kalau lu mau', 'M', 'o', '3.6')}
+   <div class="note" style="margin-top:10px">Semua pekerjaan kode lewat workflow <b>build</b> (Plan Opus, Build Sonnet, Review Opus, Check Sonnet). Fitur besar (3, 5, 6) diberi tanda heavy, jadi lewat review buta dan check. Yang tidak bisa diuji agen, seperti eject dengan flashdisk sungguhan, game sungguhan, dan Explorer sungguhan, masuk daftar cek manual untuk lu.</div>
+  </div>
+  <div>
+   <div class="card d" style="padding:13px 15px"><h2 style="color:var(--tx)">Keputusan dari lu</h2>
+    <ul>
+     <li><b>Perangkat:</b> halaman sendiri (usulan), atau bagian dari halaman Sistem?</li>
+     <li><b>Notice colok:</b> nyala bawaan, atau mati bawaan?</li>
+     <li><b>Taskbar:</b> jalan A (TranslucentTB, saran), B (bikin sendiri), atau tunda?</li>
+     <li><b>Performa saat main:</b> strip di notch (usulan), overlay pojok, atau hanya halaman Sistem?</li>
+     <li><b>FPS di luar AMD:</b> boleh minta akses admin satu kali untuk grup "Performance Log Users"?</li>
+     <li><b>Suhu CPU:</b> lu pakai HWiNFO atau LibreHardwareMonitor? Kalau tidak, suhu CPU disembunyikan.</li>
+     <li><b>Google:</b> email kontak untuk halaman privasi dan ketentuan.</li>
+    </ul></div>
+   <div class="warn" style="margin-top:10px">Sebelum 5b dan 6 dikerjakan, gw buat prototipe kecil dulu (ADLX dari Rust, cara menulis pengaturan TranslucentTB). Kalau hasilnya beda dari dokumen ini, gw kabari sebelum lanjut.</div>
+  </div>
+ </div>${folio('Peta jalan')}`);
+</script>
+<div id="out"></div>
+<script>
+const only = new URLSearchParams(location.search).get('p');
+pages.forEach((p, i) => {
+  if (only && +only !== i + 1) return;
+  const s = document.createElement('section');
+  s.className = 'page' + (p.dark ? ' dark' : '');
+  s.innerHTML = p.html;
+  document.getElementById('out').appendChild(s);
+});
+</script>
+</body>
+</html>
