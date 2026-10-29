@@ -54,3 +54,19 @@ wake-ups of that poll, `HWND_BOTTOM` above wallpaper and icons, master volume
 on a PC with sound, lyric timing on Spotify/YouTube Music, a refreshed tray
 icon (Windows caches icons; restart Vale, maybe Explorer).
 
+### 3.2.1 review rounds (2026-10-29)
+
+Two rounds of read-only reviews (window and pointer, clipboard/screenshot/shelf,
+audio/lyrics, search/tiles/settings, security, regressions in older features,
+idle CPU, System/logo/docs) found and fixed about 60 real issues; each fixer
+worked in its own worktree and was merged into `main` (conflicts resolved by
+hand in `screenshot/win.rs`, `google/http.rs`, `app.rs`). Highlights: idle
+main-thread wake-ups back near 3.1.0 (the halo poll starts only from a trigger),
+notices no longer hide an open panel, Simpan/Hapus wait for Snipping Tool's
+file and never overwrite or permanently delete, custom tiles need absolute
+local paths, lyric parsing and downloads are bounded, Mixer rows stay in
+place, the search cleans up after itself. The second round found only small
+things (calculator `0.001`, CPU ease step, Hapus own file, a forged OAuth code).
+Tests: 1049. Sub-agents ran on the default model: the `opus` alias failed in
+this environment ("model not found").
+

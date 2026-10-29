@@ -2183,7 +2183,10 @@ impl App {
         }
         let sent = self.audio.as_ref().is_some_and(|a| a.request(req));
         if !sent {
+            // A thread that is gone answers nothing: no reading is coming.
             self.audio = None;
+            self.mixer_pending = false;
+            self.volume_pending = 0;
         }
         sent
     }
@@ -3514,6 +3517,10 @@ impl App {
     }
 
     fn on_mouse_leave(&mut self) {
+        // A slider drag holds the capture; its release handles the leave.
+        if self.mixer_drag.is_some() {
+            return;
+        }
         self.click.clear();
         self.shelf_release();
         self.middle_down = false;
