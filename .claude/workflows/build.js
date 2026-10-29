@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Plan', detail: 'split into tasks, mark each light or heavy, write a checklist for heavy ones', model: 'opus' },
     { title: 'Build', detail: 'one builder per task, in its own worktree', model: 'sonnet' },
     { title: 'Review', detail: 'heavy only: blind review of a pinned commit, fixes land in the builder worktree', model: 'opus' },
-    { title: 'Check', detail: 'heavy only: tests + the written checklist', model: 'opus' },
+    { title: 'Check', detail: 'heavy only: tests + the written checklist', model: 'sonnet' },
     { title: 'Ship', detail: 'merge passing tasks into local main, test once; no push', model: 'sonnet' },
   ],
 }
@@ -111,7 +111,7 @@ const TOOLS =
   `- Shell commands go through RTK (a Bash hook rewrites them). Prefer rtk forms like "rtk git", "rtk test", "rtk grep"; use "rtk bypass <cmd>" only if output is unusable.\n` +
   `- For any library, framework, SDK, CLI or API: look up current docs with the Context7 MCP (resolve-library-id, then query-docs), matching the version the project uses. Do not rely on memory.\n` +
   `- Project memory is an Obsidian vault at docs/memory/ (start at docs/memory/index.md). Read the notes relevant to your work before starting.\n` +
-  `- Never press media play/pause or anything that could interrupt the owner's playback or other apps. Use the debug demo modes (--demo, --demo-editor, --demo-cli, --demo-robot, --settings) for visuals.\n` +
+  `- Never do anything that could interrupt the owner's other apps (media playback, calls, running builds). For visuals use the project's own demo or debug modes if it has any, never anything that touches real user data.\n` +
   `- Never push to origin and never force-delete branches or worktrees. The main session does that.`
 
 if (!args) throw new Error('Pass the request as args')
@@ -152,8 +152,8 @@ function checkPrompt(where, sha, task) {
   const list = (task.checklist && task.checklist.length ? task.checklist : ['The feature in the brief works as described']).map((c, i) => `${i + 1}. ${c}`).join('\n')
   return (
     `${where}\nConfirm that git rev-parse HEAD is ${sha}; if not, say so in notes and stop. Do not modify tracked files and do not commit.\n` +
-    `Run the full test suite (cargo test --locked) and the release build. Then go through this checklist item by item and report each as pass, fail, or cannot_test. ` +
-    `Use cannot_test (with the reason) for anything that needs an action you must not take or a setup you do not have (real fullscreen apps, real media playback, real IME, a signed-in Google account), instead of guessing. Use the debug demo modes for visuals and compare with the design files named in the brief.\n\nChecklist:\n${list}\n\nBrief:\n${task.brief}` +
+    `Run the full test suite (the project's test command, see 'Project commands' in AGENTS.md) and the project's build command. Then go through this checklist item by item and report each as pass, fail, or cannot_test. ` +
+    `Use cannot_test (with the reason) for anything that needs an action you must not take or a setup you do not have (real third-party accounts, real hardware, other apps' playback, anything that needs a human), instead of guessing. Use the project's demo or debug modes for visuals and compare with the design files named in the brief.\n\nChecklist:\n${list}\n\nBrief:\n${task.brief}` +
     TOOLS
   )
 }
@@ -170,7 +170,7 @@ async function ship(label, ready, request) {
     `Ship these finished task branches to main, in this order: ${ready.map(r => r.branch).join(', ')}.\n` +
     `1. If the working tree on main has uncommitted changes (other than the untracked .claude/worktrees/ folder), STOP and report; do not stash or discard them.\n` +
     `2. Check out main. Note its sha as base. Merge each branch into main with --no-ff. If a merge conflict is not trivial, abort that merge, skip the branch, and report it. A conflict in docs/memory/index.md is trivial: keep both sides' lines.\n` +
-    `3. Run the full test suite once on main (cargo test --locked). If it fails, report the failures. Note main's sha as head.\n` +
+    `3. Run the full test suite once on main (the project's test command, see 'Project commands' in AGENTS.md). If it fails, report the failures. Note main's sha as head.\n` +
     `4. If green, update project memory in docs/memory/ (Obsidian vault) only for decisions or gotchas not already written by the branches: one note each, frontmatter with tags and today's date, [[wikilinks]], linked from docs/memory/index.md; commit as "docs(memory): ...". Skip if nothing new.\n` +
     `5. Do NOT push; the main session pushes after all work is finished. Do not delete branches or worktrees.\n\n` +
     `Request: ${request}\nTasks:\n${ready.map(r => `- ${r.id}: ${r.summary}`).join('\n')}` + TOOLS,
@@ -207,7 +207,7 @@ if (input.verify) {
           `fix:${it.id}#${attempt + 1}`,
           branch
             ? `Work ONLY in the worktree ${worktree} (cd there; use git -C ${worktree}). Fix these findings and commit on branch ${branch}:\n- ${review.findings.join('\n- ')}` + TOOLS
-            : `Create a new branch "fix/${it.id}" from the current main (HEAD), fix these findings in the code that was added by ${it.base}..${it.head}, run cargo test --locked, commit, and report sha, branch and worktree path:\n- ${review.findings.join('\n- ')}` + TOOLS,
+            : `Create a new branch "fix/${it.id}" from the current main (HEAD), fix these findings in the code that was added by ${it.base}..${it.head}, run the project's test command, commit, and report sha, branch and worktree path:\n- ${review.findings.join('\n- ')}` + TOOLS,
           { phase: 'Review', isolation: branch ? undefined : 'worktree', model: OPUS, schema: FIX }
         )
         if (!fix || fix.sha === sha) { log(`${it.id}: the fix produced no new commit`); break }
@@ -221,7 +221,7 @@ if (input.verify) {
     async r => {
       if (r.state !== 'reviewed' || r.verdict !== 'SHIP') return { ...r, check: { passed: false, skipped: true, items: [], notes: 'not checked: review did not end in SHIP' } }
       const where = r.worktree ? `Work in the worktree ${r.worktree} (cd there).` : `Check out ${r.sha} detached in your own worktree.`
-      const c = await safe(`check:${r.id}`, checkPrompt(where, r.sha, r.task), { phase: 'Check', isolation: r.worktree ? undefined : 'worktree', model: OPUS, schema: CHECK })
+      const c = await safe(`check:${r.id}`, checkPrompt(where, r.sha, r.task), { phase: 'Check', isolation: r.worktree ? undefined : 'worktree', model: SONNET, schema: CHECK })
       return { ...r, check: checkResult(c) }
     }
   )
@@ -247,10 +247,10 @@ phase('Plan')
 const plan = await safe(
   'plan',
   `Read the project memory (docs/memory/index.md and the notes it links that relate to this request), then the codebase, and plan this request. Do not write code.\n\n` +
-  `Split the request into INDEPENDENT tasks that touch different files, so they can be built in parallel (at most ${MAX_TASKS}; prefer 1 task if the request is small). Notes and docs for a change go in the same task as its code, never in a separate task.\n\n` +
+  `Split the request into INDEPENDENT tasks that touch different files, so they can be built in parallel (at most ${MAX_TASKS}; prefer 1 task if the request is small). Notes and docs for a change go in the same task as its code, never in a separate task. Builders are Sonnet, so write each brief concretely: exact behaviour, acceptance criteria, files to touch.\n\n` +
   `Mark each task with a weight:\n` +
-  `- "light": small, low-risk, few files, clear requirements, nothing in the core event/render/data paths. Light tasks are built and tested only; there is no review and no live check.\n` +
-  `- "heavy": medium or large; core architecture (window/event/render pipeline, state, scheduling, focus); user data, config or file formats; security; Win32/COM/threading; new features with UI; unclear requirements; or anything you are not sure is safe. Heavy tasks get a blind review and a check.\n` +
+  `- "light": small, low-risk, few files, clear requirements, nothing in the core state, rendering or data paths. Light tasks are built and tested only; there is no review and no live check.\n` +
+  `- "heavy": medium or large; core architecture (state, scheduling, rendering, concurrency, input focus); user data, config or file formats; security; platform APIs or threading; new features with UI; unclear requirements; or anything you are not sure is safe. Heavy tasks get a blind review and a check.\n` +
   `When unsure, pick "heavy".\n\n` +
   `For every heavy task also write "checklist": 3 to 10 concrete things a checker must verify (which demo mode to open, what to compare with which design file, which flows to exercise, which old data to load) and say what must NOT be touched (for example media buttons).\n\n` +
   `Request: ${input.request}` + TOOLS,
@@ -268,7 +268,7 @@ const results = await pipeline(
   async task => {
     const b = await safe(
       `build:${task.id}`,
-      `Build this task. FIRST: your worktree may start from an older commit (the last pushed origin/main), not from the local main that holds all finished work. Before anything else run git log -1 --format=%H main and create your branch from that commit: git checkout -b "task/${task.id}" main. Verify with git merge-base --is-ancestor main HEAD. Then work and commit on that branch. Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Run the relevant tests (cargo test --locked) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
+      `Build this task. FIRST: your worktree may start from an older commit (the last pushed origin/main), not from the local main that holds all finished work. Before anything else run git log -1 --format=%H main and create your branch from that commit: git checkout -b "task/${task.id}" main. Verify with git merge-base --is-ancestor main HEAD. Then work and commit on that branch. Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Run the relevant tests (the project's test command, see 'Project commands' in AGENTS.md) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
       { phase: 'Build', isolation: 'worktree', model: SONNET, schema: BUILD }
     )
     return b ? { ...b, id: task.id, weight: task.weight, state: 'built' } : { id: task.id, weight: task.weight, state: 'build-failed' }
@@ -287,7 +287,7 @@ const results = await pipeline(
       if (review.verdict === 'SHIP' || attempt === FIX_ROUNDS) break
       const fix = await safe(
         `fix:${task.id}#${attempt + 1}`,
-        `Work ONLY in the builder's worktree ${r.worktree} (cd there; use git -C ${r.worktree}); it has branch "${r.branch}" checked out. Do not create another branch and do not check the branch out anywhere else. Fix these findings, run cargo test --locked, and commit on that branch. Return the new sha (git rev-parse HEAD).\n- ${review.findings.join('\n- ')}` + TOOLS,
+        `Work ONLY in the builder's worktree ${r.worktree} (cd there; use git -C ${r.worktree}); it has branch "${r.branch}" checked out. Do not create another branch and do not check the branch out anywhere else. Fix these findings, run the project's test command, and commit on that branch. Return the new sha (git rev-parse HEAD).\n- ${review.findings.join('\n- ')}` + TOOLS,
         { phase: 'Review', model: OPUS, schema: FIX }
       )
       if (!fix || fix.sha === sha) { log(`${task.id}: the fix produced no new commit`); break }
@@ -302,7 +302,7 @@ const results = await pipeline(
     if (r.state !== 'built') return r
     if (r.verdict === 'SKIPPED' || r.verdict === 'DEFERRED') return { ...r, check: { passed: true, skipped: true, items: [], notes: r.verdict === 'SKIPPED' ? 'light task: the builder ran the tests and Ship tests main' : 'deferred to the verify pass' } }
     if (r.verdict !== 'SHIP') return { ...r, check: { passed: false, skipped: true, items: [], notes: 'not checked: review did not end in SHIP' } }
-    const c = await safe(`check:${task.id}`, checkPrompt(`Work in the builder's worktree ${r.worktree} (cd there); branch "${r.branch}".`, r.sha, task), { phase: 'Check', model: OPUS, schema: CHECK })
+    const c = await safe(`check:${task.id}`, checkPrompt(`Work in the builder's worktree ${r.worktree} (cd there); branch "${r.branch}".`, r.sha, task), { phase: 'Check', model: SONNET, schema: CHECK })
     return { ...r, check: checkResult(c) }
   }
 )

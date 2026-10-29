@@ -5,44 +5,44 @@
 | Phase | Model |
 |---|---|
 | Plan | Opus 5.5 (`claude-opus-5-5`) |
-| Execute (write the code) | Sonnet 5.5 (`claude-sonnet-5-5`) |
-| Review, fix and check | Opus 5.5 (`claude-opus-5-5`) |
+| Build (write the code) | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Review and fix | Opus 5.5 (`claude-opus-5-5`) |
+| Check | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Ship | Sonnet 5.5 (`claude-sonnet-5-5`) |
 
 - Spawning subagents (Agent tool) is allowed whenever it helps: parallel
   reading, independent tasks, blind reviewers, fixers. Set each agent's model
   from the table above for the phase it works in.
-- Review, fix and check loop until the review comes back clean.
+- Review and fix loop until the review comes back clean (up to 3 rounds).
 - If a model cannot be selected (for example `model_not_found`), say so and
   ask before falling back to another model.
 
-## Every code change goes through the `build` workflow (re-enabled 2026-10-29)
+## Every code change goes through the `build` workflow
+
+The workflow is the one from Gxl-WorkFlow (`D:\GitHub\Gxl-WorkFlow`,
+`template/.claude/workflows/build.js`), copied unchanged with its model rules
+(the table above). To update it, copy the template file again.
 
 I opt in to multi-agent orchestration for this project. Whenever I ask for a code
 change (new feature, bug fix, refactor), run the `build` workflow
 (`.claude/workflows/build.js`) with my request as `args`. Do not edit the code
 yourself in the main session.
 
-- Do not pick the mode yourself. The workflow's Plan step (Opus) decides
-  between `full` and `lite`.
-- `lite` (small or light tasks) skips the blind review and the live check: the
-  builder runs the tests, and Ship tests `main` before pushing. Only `full`
-  (medium or large, or core/risky work) gets review and check. The rule is in
-  `.claude/workflows/build.js` (`MODES.*.review` / `.check`).
+- Do not weigh the tasks yourself. The workflow's Plan step (Opus) splits the
+  request and marks each task `light` or `heavy`. Light tasks get build only
+  (the builder and Ship run the tests). Heavy tasks get build, a blind review of
+  a pinned commit (fixes land in the builder's worktree), and a check against a
+  written checklist. What the checker cannot test lands in `manualChecks` for me.
 - The workflow merges passing tasks into `main` locally and does not push. The
-  main session pushes `main` once all the requested work is finished (for a
-  batch of runs: after the last run and after the deferred review/check pass).
-  This project uses a single branch (`main`), so that push is pre-approved.
-  Deploy stays with me.
-- Each task is marked light or heavy by the Plan step. Light tasks get build
-  only (the builder and Ship run the tests). Heavy tasks get build, a blind
-  review of a pinned commit (fixes land in the builder's worktree), and a check
-  against a written checklist; anything the checker cannot test lands in
-  `manualChecks` for me.
+  main session pushes `main` once all the requested work is finished. This
+  project uses a single branch (`main`), so that push is pre-approved. Deploy
+  stays with me.
 - For a long batch of runs, pass `args: {request, defer: true}` to build now,
   then run one verify pass with `args: {verify: [...]}` (the `deferred` list the
   runs returned) at the end, before the push.
-- When it finishes, report: mode and why, which tasks were merged, whether
-  `main` was pushed, and any open findings or failed checks.
+- When it finishes, report: which tasks were merged and their weight, whether
+  `main` was pushed, `manualChecks`, `incomplete`, and any open findings or
+  failed checks.
 
 ## Preflight: once per project
 
@@ -98,4 +98,6 @@ the MSVC target (`rustup`, `cargo`); CI builds with `cargo build --release --loc
 - Test: `cargo test --locked` (unit tests live inside `src/**` as `#[cfg(test)]` modules)
 - Run locally: `cargo run --release`. The island is a single-instance UI at the
   top of the screen; stop any installed copy first (`Stop-Process -Name vale, dynamic-island`).
+- Demo and debug modes for visuals (no real user data, no media keys):
+  `--demo`, `--demo-editor`, `--demo-cli`, `--demo-robot`, `--settings`.
 - Release: push a `v*` tag; `.github/workflows/release.yml` builds and publishes.
