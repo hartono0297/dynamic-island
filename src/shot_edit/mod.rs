@@ -441,6 +441,9 @@ pub struct Session {
     pending: Option<Vec<Annotation>>,
     /// Anything changed since the last save or copy.
     changed: bool,
+    /// Counts the changes, so a save that finishes later can tell whether
+    /// the document it wrote is still the one shown.
+    revision: u64,
 }
 
 impl Default for Session {
@@ -455,6 +458,7 @@ impl Default for Session {
             redo: Vec::new(),
             pending: None,
             changed: false,
+            revision: 0,
         }
     }
 }
@@ -495,7 +499,7 @@ impl Session {
         }
         self.undo.push(before);
         self.redo.clear();
-        self.changed = true;
+        self.touch();
         true
     }
 
@@ -589,7 +593,7 @@ impl Session {
         };
         self.redo.push(std::mem::replace(&mut self.doc, before));
         self.selected = None;
-        self.changed = true;
+        self.touch();
         true
     }
 
@@ -599,7 +603,7 @@ impl Session {
         };
         self.undo.push(std::mem::replace(&mut self.doc, after));
         self.selected = None;
-        self.changed = true;
+        self.touch();
         true
     }
 
@@ -617,6 +621,25 @@ impl Session {
     /// The picture was saved or copied.
     pub fn mark_clean(&mut self) {
         self.changed = false;
+    }
+
+    /// The document's change count: taken with a save's snapshot and given
+    /// back to `mark_clean_at` when the save lands.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// A save of the document as it was at `revision` finished: clean only
+    /// when nothing changed since (a later change is not in the file).
+    pub fn mark_clean_at(&mut self, revision: u64) {
+        if self.revision == revision {
+            self.changed = false;
+        }
+    }
+
+    fn touch(&mut self) {
+        self.changed = true;
+        self.revision += 1;
     }
 }
 
@@ -1014,6 +1037,26 @@ mod tests {
         s.tool = Tool::Pen;
         s.color = COLORS[3];
         assert!(!s.dirty());
+    }
+
+    #[test]
+    fn a_save_that_lands_after_a_change_leaves_it_dirty() {
+        let mut s = Session::default();
+        s.add(rect(0.0, 0.0, 10.0, 10.0));
+        // Save pressed: the worker writes this revision.
+        let saved = s.revision();
+        // An arrow drawn before the save lands.
+        s.add(rect(5.0, 5.0, 10.0, 10.0));
+        s.mark_clean_at(saved);
+        assert!(s.dirty(), "the new change is not in the file");
+        // A save of the current document cleans it.
+        let saved = s.revision();
+        s.mark_clean_at(saved);
+        assert!(!s.dirty());
+        // Undo after Save pressed is a change too.
+        s.undo();
+        s.mark_clean_at(saved);
+        assert!(s.dirty());
     }
 
     #[test]

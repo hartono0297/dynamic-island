@@ -682,6 +682,8 @@ keys! {
     EditKeep => "Batal", "Cancel";
     EditCopied => "Disalin ke clipboard", "Copied to the clipboard";
     EditCopyFailed => "Gagal menyalin", "Couldn't copy";
+    EditPreviewFailed => "Gambar terlalu besar untuk ditampilkan di sini",
+        "The picture is too big to show here";
     EditSaving => "Menyimpan…", "Saving…";
     EditDemoNoClipboard => "Mode demo: clipboard tidak disentuh",
         "Demo mode: the clipboard is not touched";

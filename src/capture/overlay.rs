@@ -18,18 +18,19 @@ use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, SetFocus, VK_ESCAPE, VK_RETURN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HWND_TOPMOST, IDC_CROSS,
-    LoadCursorW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA,
-    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_APP, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
+    GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, LoadCursorW, MSG,
+    PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
+    SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, w};
-use windows_numerics::Vector2;
 
 use super::uia::{WM_APP_UIA, take_result};
 use super::win::{self, Frozen, TopWindow};
@@ -43,9 +44,8 @@ const CLASS: windows::core::PCWSTR = w!("ValeSnapOverlay");
 /// How much of the picture stays visible outside the highlight.
 const DIM: f32 = 0.55;
 
-/// Message from `finish` for demos that quit when the overlay is cancelled.
-#[allow(dead_code)]
-const _WM: u32 = WM_APP;
+/// Lost render targets made again in a row before the overlay gives up.
+const RETRIES: u8 = 3;
 
 struct State {
     hwnd: HWND,
@@ -65,6 +65,8 @@ struct State {
     drag: Option<Rect>,
     accent: u32,
     demo: bool,
+    /// Lost targets in a row (see `RETRIES`).
+    lost: u8,
 }
 
 thread_local! {
@@ -187,6 +189,7 @@ fn create(
         drag: None,
         accent: theme::current_window().accent,
         demo,
+        lost: 0,
     };
     let stored = OVERLAY.with(|c| match c.try_borrow_mut() {
         Ok(mut slot) if slot.is_none() => {
@@ -212,15 +215,43 @@ fn create(
             SWP_SHOWWINDOW,
         );
         let _ = ShowWindow(hwnd, SW_SHOWNA);
-        let _ = SetForegroundWindow(hwnd);
-        let _ = SetFocus(Some(hwnd));
-        let _ = InvalidateRect(Some(hwnd), None, false);
     }
+    if !take_foreground(hwnd) {
+        // Esc and Enter would reach the app underneath (Enter could send a
+        // message there): no overlay rather than that.
+        eprintln!("vale: the capture overlay could not take the keyboard");
+        finish(None);
+        return None;
+    }
+    invalidate(hwnd);
     if let Some(windows) = for_uia {
         // Never waited for: the windows are snappable already.
         super::uia::spawn(hwnd, id, windows, stop);
     }
     Some(())
+}
+
+/// Brings the overlay to the foreground with the keyboard focus. Windows
+/// may refuse a plain `SetForegroundWindow` (the foreground lock, after
+/// other input); then this thread's input is joined to the foreground
+/// window's for a moment, which it allows. True when the overlay has it.
+fn take_foreground(hwnd: HWND) -> bool {
+    unsafe {
+        let _ = SetForegroundWindow(hwnd);
+        if GetForegroundWindow() != hwnd {
+            let ours = GetCurrentThreadId();
+            let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let joined =
+                theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, true).as_bool();
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+            if joined {
+                let _ = AttachThreadInput(ours, theirs, false);
+            }
+        }
+        let _ = SetFocus(Some(hwnd));
+        GetForegroundWindow() == hwnd
+    }
 }
 
 /// Closes the overlay. `choice` is the rectangle to keep (virtual-screen
@@ -417,16 +448,31 @@ fn paint(hwnd: HWND) {
     unsafe {
         BeginPaint(hwnd, &mut ps);
     }
-    with(|s| {
-        if draw(s).is_err() {
+    let failed = with(|s| match draw(s) {
+        Ok(()) => {
+            s.lost = 0;
+            false
+        }
+        Err(err) if err.code() == D2DERR_RECREATE_TARGET && s.lost < RETRIES => {
             // A lost target: made again on the next paint.
+            s.lost += 1;
             s.target = None;
             s.picture = None;
             invalidate(hwnd);
+            false
+        }
+        Err(err) => {
+            // Anything else (a frame too big for the device) would fail on
+            // every paint: give up rather than repaint in a loop.
+            eprintln!("vale: the capture overlay could not draw: {err}");
+            true
         }
     });
     unsafe {
         let _ = EndPaint(hwnd, &ps);
+    }
+    if failed == Some(true) {
+        finish(None);
     }
 }
 
@@ -520,11 +566,7 @@ fn draw(s: &mut State) -> windows::core::Result<()> {
             let hy = mon.y as f32 + 24.0 * ui;
             pill(rt, brush, &s.gfx, (hx, hy, hw, hh), hint, size, 0, ui);
         }
-        let _ = Vector2::default();
-        match rt.EndDraw(None, None) {
-            Err(e) if e.code() == D2DERR_RECREATE_TARGET => Err(e),
-            other => other,
-        }
+        rt.EndDraw(None, None)
     }
 }
 

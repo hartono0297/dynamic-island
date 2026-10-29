@@ -4,8 +4,9 @@
 //! The overlay never waits for it: it snaps to the windows at once, and the
 //! finer boxes are added when a result arrives. The work is capped: the
 //! frontmost `MAX_WINDOWS` windows only, `MAX_ELEMENTS` boxes from each, and
-//! `BUDGET` in all, checked between windows (a window that answers slowly
-//! costs its own time, never the overlay's).
+//! `BUDGET` in all. Before each window the UI Automation connection and
+//! transaction timeouts are set to what is left of the budget, so one heavy
+//! or hung window cannot hold the worker past it.
 
 use std::time::{Duration, Instant};
 
@@ -15,8 +16,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, TreeScope_Descendants, UIA_BoundingRectanglePropertyId,
-    UIA_IsOffscreenPropertyId,
+    CUIAutomation8, IUIAutomation, IUIAutomation2, TreeScope_Descendants,
+    UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId,
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
@@ -42,6 +43,13 @@ pub fn searched(windows: &[TopWindow]) -> &[TopWindow] {
 /// Whether another window may still be started `elapsed` into the budget.
 pub fn may_start(elapsed: Duration) -> bool {
     elapsed < BUDGET
+}
+
+/// The connection and transaction timeout for a window started `elapsed`
+/// into the budget: what is left of it, in whole milliseconds, at least 1.
+pub fn timeout_ms(elapsed: Duration) -> u32 {
+    let left = BUDGET.saturating_sub(elapsed).as_millis();
+    left.clamp(1, u128::from(u32::MAX)) as u32
 }
 
 /// The usable boxes of one window: clipped to the window, and not smaller
@@ -78,15 +86,23 @@ pub fn spawn(
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
             let started = Instant::now();
-            if let Some(uia) = unsafe {
-                CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-            }
-            .ok()
-            {
+            // CUIAutomation8 (Windows 8 and later) gives IUIAutomation2,
+            // whose timeouts keep each window inside the budget.
+            if let Ok(uia) = unsafe {
+                CoCreateInstance::<_, IUIAutomation2>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+            } {
                 for window in searched(&windows) {
-                    if !may_start(started.elapsed())
-                        || stop.load(std::sync::atomic::Ordering::Relaxed)
-                    {
+                    let elapsed = started.elapsed();
+                    if !may_start(elapsed) || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let left = timeout_ms(elapsed);
+                    let limited = unsafe {
+                        uia.SetConnectionTimeout(left).is_ok()
+                            && uia.SetTransactionTimeout(left).is_ok()
+                    };
+                    if !limited {
+                        // Without a limit one window could outlast the budget.
                         break;
                     }
                     let found = unsafe { boxes_of(&uia, window) }.unwrap_or_default();
@@ -132,7 +148,8 @@ pub unsafe fn take_result(lparam: LPARAM) -> Option<Vec<Candidate>> {
 }
 
 /// Every on-screen descendant of `window`'s top-level element, with only its
-/// bounding rectangle cached (one cross-process call for the lot).
+/// bounding rectangle cached (one cross-process call for the lot, cut off by
+/// the transaction timeout set before it).
 unsafe fn boxes_of(uia: &IUIAutomation, window: &TopWindow) -> Option<Vec<Candidate>> {
     unsafe {
         let root = uia.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
@@ -185,6 +202,15 @@ mod tests {
         assert!(may_start(Duration::ZERO));
         assert!(may_start(Duration::from_millis(599)));
         assert!(!may_start(Duration::from_millis(600)));
+    }
+
+    #[test]
+    fn each_window_gets_only_what_is_left_of_the_budget() {
+        assert_eq!(timeout_ms(Duration::ZERO), 600);
+        assert_eq!(timeout_ms(Duration::from_millis(450)), 150);
+        // Never zero, and never past the budget.
+        assert_eq!(timeout_ms(Duration::from_millis(600)), 1);
+        assert_eq!(timeout_ms(Duration::from_secs(5)), 1);
     }
 
     #[test]

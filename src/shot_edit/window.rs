@@ -60,8 +60,7 @@ use super::export::{self, Inbox, SaveResult};
 use super::gfx::{Align, Gfx, Target, bitmap, color, rect_f};
 use super::paint::{Pix, draw_annotations, draw_selection};
 use super::{
-    Annotation, COLORS, FRect, Handle, MARKER_ALPHA, MARKER_WIDTH_X, Pt, STROKES, Session, Tool,
-    View, initial_scale, text_size,
+    Annotation, COLORS, FRect, Handle, Pt, STROKES, Session, Tool, View, initial_scale, text_size,
 };
 use crate::capture::Shot;
 use crate::i18n::{Key, tr};
@@ -71,9 +70,14 @@ use crate::ui::geometry::Rect;
 
 const CLASS: windows::core::PCWSTR = w!("ValeShotEditor");
 
-/// A native text editor finished: `wparam` 1 commits, 2 cancels (posted by
-/// the EDIT's subclass, so the EDIT is never destroyed inside its own proc).
+/// A native text editor finished: `wparam` 1 commits, 2 cancels, `lparam`
+/// is the EDIT that sent it (posted by the EDIT's subclass, so the EDIT is
+/// never destroyed inside its own proc). A message from an EDIT that is no
+/// longer the open one is ignored.
 const WM_APP_TEXT: u32 = WM_APP + 50;
+/// Lost render targets made again in a row before a paint gives up (until
+/// the next change asks for one).
+const RETRIES: u8 = 3;
 /// A save worker put its result in the inbox.
 const WM_APP_SAVED: u32 = WM_APP + 51;
 const EDIT_ID: isize = 7001;
@@ -354,6 +358,13 @@ struct Editor {
     footer: Option<(String, Tone)>,
     confirm: bool,
     saving: bool,
+    /// The document's revision the running save writes.
+    save_rev: u64,
+    /// The picture could not be made a bitmap (too big for the device): the
+    /// canvas shows without it and the footer says so.
+    no_picture: bool,
+    /// Lost targets in a row (see `RETRIES`).
+    lost: u8,
     demo: bool,
     inbox: Inbox,
     p: WindowPalette,
@@ -532,6 +543,9 @@ fn try_open(
         footer: None,
         confirm: false,
         saving: false,
+        save_rev: 0,
+        no_picture: false,
+        lost: 0,
         demo,
         inbox: Arc::new(Mutex::new(Vec::new())),
         p,
@@ -707,6 +721,7 @@ fn do_save(hwnd: HWND) {
             return None;
         }
         e.saving = true;
+        e.save_rev = e.session.revision();
         say(e, tr(Key::EditSaving), Tone::Hint);
         let dir = e.demo.then(|| {
             std::env::current_dir()
@@ -739,7 +754,9 @@ fn on_saved(hwnd: HWND) {
             e.saving = false;
             match r {
                 SaveResult::Saved(path) => {
-                    e.session.mark_clean();
+                    // Clean only if nothing changed after Save was pressed:
+                    // a later change is not in the file.
+                    e.session.mark_clean_at(e.save_rev);
                     let dir = path.parent().map(crate::screenshot::folder_label);
                     let msg = format!("{} · {}", tr(Key::ShotSaved), dir.unwrap_or_default());
                     say(e, msg, Tone::Ok);
@@ -982,6 +999,9 @@ fn finish_text(hwnd: HWND, keep: bool) {
     };
     let typed = edit_text(t.edit);
     unsafe {
+        // Unhooked first: the focus it loses on the way out must not post a
+        // commit that would land on the next EDIT.
+        let _ = RemoveWindowSubclass(t.edit, Some(edit_proc), 1);
         let _ = DestroyWindow(t.edit);
         let _ = DeleteObject(HGDIOBJ(t.font.0));
         let _ = DeleteObject(HGDIOBJ(t.brush.0));
@@ -1005,7 +1025,6 @@ fn finish_text(hwnd: HWND, keep: bool) {
         }
     }
     invalidate(hwnd);
-    let _ = t.back;
 }
 
 /// Enter commits, Shift+Enter adds a line, Esc cancels, losing focus commits.
@@ -1021,7 +1040,7 @@ unsafe extern "system" fn edit_proc(
     let post = |what: usize| {
         if let Some(p) = parent {
             unsafe {
-                let _ = PostMessageW(Some(p), WM_APP_TEXT, WPARAM(what), LPARAM(0));
+                let _ = PostMessageW(Some(p), WM_APP_TEXT, WPARAM(what), LPARAM(hwnd.0 as isize));
             }
         }
     };
@@ -1298,12 +1317,23 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             unsafe {
                 BeginPaint(hwnd, &mut ps);
             }
-            with(hwnd, |e| {
-                if draw(e).is_err() {
+            with(hwnd, |e| match draw(e) {
+                Ok(()) => e.lost = 0,
+                Err(err) if err.code() == D2DERR_RECREATE_TARGET => {
+                    // A lost device: made again on the next paint, a few
+                    // times in a row at most.
                     e.target = None;
                     e.picture = None;
                     e.pix.clear();
-                    invalidate(hwnd);
+                    if e.lost < RETRIES {
+                        e.lost += 1;
+                        invalidate(hwnd);
+                    }
+                }
+                Err(err) => {
+                    // Anything else would fail again: no repaint loop, the
+                    // next change tries once more.
+                    eprintln!("vale: the screenshot editor could not draw: {err}");
                 }
             });
             unsafe {
@@ -1433,6 +1463,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_APP_TEXT => {
+            let current = with(hwnd, |e| e.text.as_ref().map(|t| t.edit.0 as isize)).flatten();
+            if current != Some(lparam.0) {
+                // From an EDIT already committed or cancelled.
+                return LRESULT(0);
+            }
             if wparam.0 == 1 {
                 commit_text(hwnd);
             } else {
@@ -1769,6 +1804,7 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
     let Editor {
         target,
         picture,
+        no_picture,
         pix,
         gfx,
         session,
@@ -1787,10 +1823,18 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
     let t = target.as_ref().expect("made above");
     let rt: &ID2D1RenderTarget = &t.rt;
     let brush = &t.brush;
-    if picture.is_none() {
-        *picture = Some(bitmap(rt, base.w, base.h, &base.bgra)?);
+    if picture.is_none() && !*no_picture {
+        match bitmap(rt, base.w, base.h, &base.bgra) {
+            Ok(b) => *picture = Some(b),
+            Err(err) if err.code() == D2DERR_RECREATE_TARGET => return Err(err),
+            Err(err) => {
+                // Too big for the device: the rest still shows.
+                eprintln!("vale: the screenshot cannot be shown: {err}");
+                *no_picture = true;
+                *footer = Some((tr(Key::EditPreviewFailed).to_owned(), Tone::Error));
+            }
+        }
     }
-    let picture = picture.as_ref().expect("made above");
     unsafe {
         rt.BeginDraw();
         rt.Clear(Some(&color(p.bg, 1.0)));
@@ -1804,13 +1848,15 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
         h: base.h as f32 * view.scale,
     };
     unsafe {
-        rt.DrawBitmap(
-            picture,
-            Some(&rect_f(img.x, img.y, img.w, img.h)),
-            1.0,
-            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-            None,
-        );
+        if let Some(picture) = picture.as_ref() {
+            rt.DrawBitmap(
+                picture,
+                Some(&rect_f(img.x, img.y, img.w, img.h)),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            );
+        }
         // Annotations stay inside the picture.
         rt.PushAxisAlignedClip(
             &rect_f(img.x, img.y, img.w, img.h),
@@ -2081,13 +2127,7 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
             Align::Right,
         );
     }
-    let _ = (MARKER_ALPHA, MARKER_WIDTH_X);
-    unsafe {
-        match rt.EndDraw(None, None) {
-            Err(err) if err.code() == D2DERR_RECREATE_TARGET => Err(err),
-            other => other,
-        }
-    }
+    unsafe { rt.EndDraw(None, None) }
 }
 
 // ---- demo ----

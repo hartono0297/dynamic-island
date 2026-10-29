@@ -189,7 +189,7 @@ pub fn copy(hwnd: HWND, base: &Shot, doc: &[Annotation]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shot_edit::{FRect, Pt, Style};
+    use crate::shot_edit::{FRect, Style};
     use chrono::NaiveDate;
 
     fn at() -> chrono::NaiveDateTime {
@@ -284,6 +284,5 @@ mod tests {
         let at = |x: usize, y: usize| &marked[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4];
         assert_eq!(at(5, 15), [0x4D, 0x48, 0xE5, 255]);
         assert_eq!(at(20, 15), [255, 255, 255, 255]);
-        let _ = Pt::new(0.0, 0.0);
     }
 }
