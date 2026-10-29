@@ -658,6 +658,7 @@ keys! {
     ShotIgnoreSetting => "Jika diabaikan", "If ignored";
     ShotIgnoreDesc => "Setelah waktu tampil habis", "Once its time on screen runs out";
     ShotShowFor => "Lama tampil", "Show for";
+    SecondsShort => "dtk", "s";
     // Vale's own region capture and screenshot editor.
     ShotToolSetting => "Alat screenshot", "Screenshot tool";
     ShotToolVale => "Vale", "Vale";
@@ -691,7 +692,6 @@ keys! {
         "Drag to draw · Delete removes · Ctrl+Z undoes";
     EditStroke => "Tebal garis", "Stroke width";
     EditColor => "Warna", "Colour";
-    SecondsShort => "dtk", "s";
 
     // The demo's Claude notices (debug builds).
     DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";

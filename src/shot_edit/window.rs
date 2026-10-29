@@ -47,11 +47,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ES_MULTILINE, GetClientRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDC_CROSS,
     IDC_IBEAM, IsWindow, LoadCursorW, MINMAXINFO, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor,
-    SetForegroundWindow, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    SetForegroundWindow, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
+    WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows::core::{Error, HSTRING, w};
 use windows_numerics::Vector2;
@@ -1184,7 +1184,33 @@ fn on_down(hwnd: HWND, lparam: LPARAM, double: bool) {
     invalidate(hwnd);
 }
 
-fn on_move(hwnd: HWND, lparam: LPARAM) {
+/// Ends the drag in progress as a release would: a click with a drawing tool
+/// leaves nothing behind, and the step's snapshot is closed. False when there
+/// was no drag.
+fn finish_drag(e: &mut Editor) -> bool {
+    let Some(drag) = e.drag.take() else {
+        return false;
+    };
+    if let Drag::Draw { idx, .. } = drag
+        && e.session
+            .doc
+            .get(idx)
+            .is_some_and(Annotation::is_degenerate)
+    {
+        e.session.doc.remove(idx);
+    }
+    e.session.end();
+    true
+}
+
+fn on_move(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    const MK_LBUTTON: usize = 0x0001;
+    if wparam.0 & MK_LBUTTON == 0 {
+        // The release went elsewhere (capture lost): the drag is over.
+        if with(hwnd, finish_drag) == Some(true) {
+            invalidate(hwnd);
+        }
+    }
     let (x, y) = xy(lparam);
     let changed = with(hwnd, |e| {
         let mut changed = false;
@@ -1240,23 +1266,10 @@ fn on_move(hwnd: HWND, lparam: LPARAM) {
 }
 
 fn on_up(hwnd: HWND, lparam: LPARAM) {
-    unsafe {
-        let _ = ReleaseCapture();
-    }
     let (x, y) = xy(lparam);
     let action = with(hwnd, |e| {
         let pressed = e.pressed.take();
-        if let Some(drag) = e.drag.take() {
-            // A click with a drawing tool leaves nothing behind.
-            if let Drag::Draw { idx, .. } = drag
-                && e.session
-                    .doc
-                    .get(idx)
-                    .is_some_and(Annotation::is_degenerate)
-            {
-                e.session.doc.remove(idx);
-            }
-            e.session.end();
+        if finish_drag(e) {
             return None;
         }
         let hit = e.layout.hit(x, y)?;
@@ -1265,6 +1278,11 @@ fn on_up(hwnd: HWND, lparam: LPARAM) {
         (pressed == Some(hit) && live).then_some(hit)
     })
     .flatten();
+    // Released after the state above is settled: WM_CAPTURECHANGED finds no
+    // drag and no press left to cancel.
+    unsafe {
+        let _ = ReleaseCapture();
+    }
     if let Some(hit) = action {
         // A click on a button the bar leaves live: only its own and Close.
         do_hit(hwnd, hit);
@@ -1276,8 +1294,10 @@ fn on_up(hwnd: HWND, lparam: LPARAM) {
 fn on_key(hwnd: HWND, vk: u16) {
     let ctrl = key_down(VK_CONTROL.0);
     let shift = key_down(VK_SHIFT.0);
-    let typing = with(hwnd, |e| e.text.is_some()).unwrap_or(false);
-    if typing {
+    // Typing goes to the EDIT; mid-drag, an edit or undo would land under the
+    // drag's pending snapshot.
+    let busy = with(hwnd, |e| e.text.is_some() || e.drag.is_some()).unwrap_or(false);
+    if busy {
         return;
     }
     if vk == VK_ESCAPE.0 {
@@ -1415,7 +1435,21 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            on_move(hwnd, lparam);
+            on_move(hwnd, wparam, lparam);
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            // Capture lost mid-drag (Alt+Tab, Win, another window): the
+            // release will not come here, so end the drag and the press now.
+            if lparam.0 != hwnd.0 as isize {
+                let changed = with(hwnd, |e| {
+                    let pressed = e.pressed.take().is_some();
+                    finish_drag(e) || pressed
+                });
+                if changed == Some(true) {
+                    invalidate(hwnd);
+                }
+            }
             LRESULT(0)
         }
         WM_LBUTTONUP => {

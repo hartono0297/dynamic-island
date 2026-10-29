@@ -26,9 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
     GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, LoadCursorW, MSG,
     PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
-    SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP,
-    WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, w};
 
@@ -331,7 +331,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(1)
         }
         WM_MOUSEMOVE => {
+            const MK_LBUTTON: usize = 0x0001;
+            let held = wparam.0 & MK_LBUTTON != 0;
             let changed = with(|s| {
+                if !held {
+                    // The release went elsewhere (capture lost): no drag.
+                    s.down = None;
+                }
                 let origin = s.frame.origin;
                 let p = (
                     origin.0 + i32::from(lparam.0 as i16),
@@ -362,9 +368,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            unsafe {
-                let _ = ReleaseCapture();
-            }
             let choice = with(|s| {
                 let origin = s.frame.origin;
                 let up = (
@@ -379,12 +382,40 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     Some(click_target(s))
                 } else {
                     let r = drag_rect(down, up, s.frame.rect());
-                    (!r.is_empty()).then_some(r)
+                    if r.is_empty() {
+                        // A straight line takes nothing: back to snapping.
+                        s.drag = None;
+                        s.hover = pick(&s.cands, up);
+                        return None;
+                    }
+                    Some(r)
                 }
             })
             .flatten();
-            if let Some(r) = choice {
-                finish(Some(r));
+            // Released after the state above is settled, so WM_CAPTURECHANGED
+            // finds no press left to cancel.
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            match choice {
+                Some(r) => finish(Some(r)),
+                None => invalidate(hwnd),
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            // Capture lost mid-drag (Alt+Tab, Win, another window): the
+            // release will not come here, so drop the press and its drag.
+            if lparam.0 != hwnd.0 as isize {
+                let changed = with(|s| {
+                    let pressed = s.down.take().is_some() || s.drag.is_some();
+                    s.drag = None;
+                    s.hover = pick(&s.cands, s.cursor);
+                    pressed
+                });
+                if changed == Some(true) {
+                    invalidate(hwnd);
+                }
             }
             LRESULT(0)
         }
@@ -406,7 +437,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         }
         WM_APP_UIA => {
             // Always taken, so its box is freed even for an older capture.
-            let found = unsafe { take_result(lparam) };
+            let found = take_result(lparam);
             let changed = with(|s| {
                 let Some(found) = found else { return false };
                 if wparam.0 != s.id {
@@ -435,7 +466,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             while unsafe { PeekMessageW(&mut m, Some(hwnd), WM_APP_UIA, WM_APP_UIA, PM_REMOVE) }
                 .as_bool()
             {
-                drop(unsafe { take_result(m.lParam) });
+                drop(take_result(m.lParam));
             }
             LRESULT(0)
         }

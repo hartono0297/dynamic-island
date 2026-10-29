@@ -8,6 +8,8 @@
 //! transaction timeouts are set to what is left of the budget, so one heavy
 //! or hung window cannot hold the worker past it.
 
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -32,8 +34,31 @@ pub const MAX_ELEMENTS: usize = 400;
 pub const BUDGET: Duration = Duration::from_millis(600);
 
 /// The overlay's `WM_APP + n` for a result: `wparam` is the capture's
-/// number, `lparam` a `Box<Vec<Candidate>>` (see `take_result`).
+/// number, `lparam` a ticket for the boxes (see `take_result`).
 pub const WM_APP_UIA: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 41;
+
+/// Results posted and not yet taken, by ticket. The message carries only the
+/// ticket, so a stray `WM_APP_UIA` from another process finds nothing to take
+/// instead of a pointer to free.
+static INBOX: Mutex<Vec<(usize, Vec<Candidate>)>> = Mutex::new(Vec::new());
+static NEXT_TICKET: AtomicUsize = AtomicUsize::new(1);
+
+/// Keeps `found` until its ticket is taken.
+fn deposit(found: Vec<Candidate>) -> usize {
+    let ticket = NEXT_TICKET.fetch_add(1, Ordering::Relaxed);
+    INBOX
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push((ticket, found));
+    ticket
+}
+
+/// The boxes under `ticket`, once; None for a ticket never issued or taken.
+fn withdraw(ticket: usize) -> Option<Vec<Candidate>> {
+    let mut inbox = INBOX.lock().unwrap_or_else(|p| p.into_inner());
+    let at = inbox.iter().position(|(t, _)| *t == ticket)?;
+    Some(inbox.swap_remove(at).1)
+}
 
 /// The windows worth searching: the frontmost `MAX_WINDOWS`.
 pub fn searched(windows: &[TopWindow]) -> &[TopWindow] {
@@ -120,31 +145,26 @@ pub fn spawn(
 }
 
 /// Hands `found` to the overlay. A window that is gone takes nothing: the
-/// box comes back and is freed here.
+/// boxes are taken back and freed here.
 fn post(target: isize, capture: usize, found: Vec<Candidate>) {
-    let raw = Box::into_raw(Box::new(found));
+    let ticket = deposit(found);
     let sent = unsafe {
         PostMessageW(
             Some(HWND(target as *mut _)),
             WM_APP_UIA,
             WPARAM(capture),
-            LPARAM(raw as isize),
+            LPARAM(ticket as isize),
         )
     };
     if sent.is_err() {
-        drop(unsafe { Box::from_raw(raw) });
+        drop(withdraw(ticket));
     }
 }
 
-/// The result `post` made, taken back once (the overlay frees it by
-/// dropping it).
-///
-/// # Safety
-/// `lparam` must be the `LPARAM` of a `WM_APP_UIA` message, and each
-/// message may be taken once.
-pub unsafe fn take_result(lparam: LPARAM) -> Option<Vec<Candidate>> {
-    let raw = lparam.0 as *mut Vec<Candidate>;
-    (!raw.is_null()).then(|| *unsafe { Box::from_raw(raw) })
+/// The result `post` deposited for a `WM_APP_UIA` message's `lparam`, taken
+/// once (the overlay frees it by dropping it). Anything else gives None.
+pub fn take_result(lparam: LPARAM) -> Option<Vec<Candidate>> {
+    usize::try_from(lparam.0).ok().and_then(withdraw)
 }
 
 /// Every on-screen descendant of `window`'s top-level element, with only its
@@ -231,6 +251,19 @@ mod tests {
         assert_eq!(found[0].rect, Rect::new(10, 10, 100, 50));
         assert_eq!(found[1].rect, Rect::new(350, 250, 50, 50));
         assert!(found.iter().all(|c| c.z == 2 && c.depth == 1));
+    }
+
+    #[test]
+    fn only_a_posted_result_is_taken_and_only_once() {
+        let w = top(0);
+        let boxes = candidates_of(&w, [Rect::new(10, 10, 100, 50)]);
+        let ticket = deposit(boxes.clone());
+        // A stray message's lparam is not a ticket.
+        assert!(take_result(LPARAM(0)).is_none());
+        assert!(take_result(LPARAM(-1)).is_none());
+        assert!(take_result(LPARAM(0x7fff_0000)).is_none());
+        assert_eq!(take_result(LPARAM(ticket as isize)), Some(boxes));
+        assert!(take_result(LPARAM(ticket as isize)).is_none());
     }
 
     #[test]
