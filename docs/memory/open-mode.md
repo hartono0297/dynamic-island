@@ -1,5 +1,5 @@
 ---
-tags: [decision, gotcha, panel, hover, notices, v3.2]
+tags: [decision, gotcha, panel, hover, notices, v3.2, v3.3]
 date: 2026-10-29
 ---
 
@@ -31,6 +31,9 @@ outside). A typo in the file reads as `Hover`; the field is the island's own
   (`current`) is still dismissed by a click. `hover_opened` starts the media
   guard, and a latched panel keeps it even before the hover dwell arrives
   ([[media-click-guards]]).
+- A file drop on the island latches the panel like a click (v3.3,
+  `Event::ShelfDropped`, see [[shelf]]); in Hover mode the drop's own visit
+  does not close it, the next one hands the panel to hover.
 - What else holds the panel (an editor, the CLI input, the clipboard search)
   survives a click outside, as it did before.
 

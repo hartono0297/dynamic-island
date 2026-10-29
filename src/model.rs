@@ -233,6 +233,14 @@ pub enum Event {
     /// Files were dropped on the island. `App` puts them on the shelf, the
     /// reducer ignores it.
     ShelfDrop(Vec<std::path::PathBuf>),
+    /// `App` put dropped files on the shelf. The panel opens on it and stays
+    /// (a drop latches it like a click): the drag is over, so what held the
+    /// panel for the drag ends, and the drop's own visit does not close it.
+    ShelfDropped,
+    /// The pointer left the island with the drop's visit still on and the
+    /// dwell never fired (so no `Hover(false)` follows): the visit is over.
+    /// `App` sends it when the reducer says `shelf_drop_here()`.
+    ShelfDropLeft,
     /// A folder check for screenshot `shot` ended: the Screenshots folder
     /// and the file that matched, if any. `App` keeps it, the reducer
     /// ignores it.

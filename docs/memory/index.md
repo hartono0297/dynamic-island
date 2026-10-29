@@ -44,7 +44,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
 - [[readme-structure]]: README with gallery, install and uninstall, credits in THIRD-PARTY-NOTICES.md; long guide in docs/guide.md; APNG tours
 - [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge
-- [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory)
+- [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory); a drop latches the panel (v3.3)
 - [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 
