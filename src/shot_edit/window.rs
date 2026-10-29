@@ -246,7 +246,6 @@ impl Layout {
             .map(|(h, _)| *h)
     }
 
-    #[cfg(test)]
     pub fn rect_of(&self, hit: Hit) -> Option<Rect> {
         self.items.iter().find(|(h, _)| *h == hit).map(|(_, r)| *r)
     }
@@ -775,10 +774,37 @@ fn on_saved(hwnd: HWND) {
     invalidate(hwnd);
 }
 
-/// The window's close: asks first when something changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseAction {
+    Destroy,
+    Ask,
+}
+
+/// Closing with nothing changed destroys at once; with changes it asks.
+fn close_action(dirty: bool) -> CloseAction {
+    if dirty {
+        CloseAction::Ask
+    } else {
+        CloseAction::Destroy
+    }
+}
+
+/// The keys the discard bar answers: Enter discards, Esc keeps editing.
+fn confirm_key(vk: u16) -> Option<Hit> {
+    if vk == VK_RETURN.0 {
+        Some(Hit::Discard)
+    } else if vk == VK_ESCAPE.0 {
+        Some(Hit::Keep)
+    } else {
+        None
+    }
+}
+
+/// The window's close: asks first when something changed. Also reached from
+/// WM_CLOSE (the X button, Alt+F4); with the bar already up it stays up.
 fn request_close(hwnd: HWND) {
     let ask = with(hwnd, |e| {
-        if e.session.dirty() {
+        if close_action(e.session.dirty()) == CloseAction::Ask {
             e.confirm = true;
             recompute_view(e);
             true
@@ -787,6 +813,13 @@ fn request_close(hwnd: HWND) {
         }
     });
     if ask == Some(true) {
+        // The window, not an EDIT, holds the keys the bar answers.
+        let editing = with(hwnd, |e| e.text.is_some()).unwrap_or(false);
+        if !editing {
+            unsafe {
+                let _ = SetFocus(Some(hwnd));
+            }
+        }
         invalidate(hwnd);
     } else {
         unsafe {
@@ -1333,6 +1366,13 @@ fn on_key(hwnd: HWND, vk: u16) {
     if busy {
         return;
     }
+    // While the bar asks, only Enter and Esc count.
+    if with(hwnd, |e| e.confirm).unwrap_or(false) {
+        if let Some(hit) = confirm_key(vk) {
+            do_hit(hwnd, hit);
+        }
+        return;
+    }
     if vk == VK_ESCAPE.0 {
         on_escape(hwnd);
         return;
@@ -1861,6 +1901,26 @@ fn glyph(
     }
 }
 
+/// The stages of one frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layer {
+    Canvas,
+    ToolbarBack,
+    FooterBack,
+    Buttons,
+    FooterText,
+}
+
+/// Direct2D paints in call order, so a region's background has to come before
+/// the buttons that sit in it (the discard bar's buttons live in the footer).
+const PAINT_ORDER: [Layer; 5] = [
+    Layer::Canvas,
+    Layer::ToolbarBack,
+    Layer::FooterBack,
+    Layer::Buttons,
+    Layer::FooterText,
+];
+
 fn draw(e: &mut Editor) -> windows::core::Result<()> {
     let (cw, ch) = e.client;
     if e.target.is_none() {
@@ -1907,293 +1967,312 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
         rt.BeginDraw();
         rt.Clear(Some(&color(p.bg, 1.0)));
     }
-    // Canvas.
-    fill(rt, brush, layout.canvas, p.card, 1.0);
-    let img = Rect {
-        x: view.ox,
-        y: view.oy,
-        w: base.w as f32 * view.scale,
-        h: base.h as f32 * view.scale,
-    };
-    unsafe {
-        if let Some(picture) = picture.as_ref() {
-            rt.DrawBitmap(
-                picture,
-                Some(&rect_f(img.x, img.y, img.w, img.h)),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                None,
-            );
-        }
-        // Annotations stay inside the picture.
-        rt.PushAxisAlignedClip(
-            &rect_f(img.x, img.y, img.w, img.h),
-            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-        );
-    }
-    let editing = text.as_ref().and_then(|t| t.index);
-    draw_annotations(rt, brush, gfx, base, &session.doc, view, editing, pix);
-    unsafe {
-        rt.PopAxisAlignedClip();
-    }
     let (border, ba) = rgba(p.border);
-    unsafe {
-        brush.SetColor(&color(border, ba.max(0.12)));
-        rt.DrawRectangle(
-            &rect_f(img.x - 0.5, img.y - 0.5, img.w + 1.0, img.h + 1.0),
-            brush,
-            1.0,
-            None,
-        );
-    }
-    if let Some(a) = session.selected.and_then(|i| session.doc.get(i))
-        && editing.is_none()
-    {
-        draw_selection(rt, brush, a, view, p.accent, ui);
-    }
-    // Toolbar.
-    fill(rt, brush, layout.toolbar, p.bg, 1.0);
-    fill(
-        rt,
-        brush,
-        Rect {
-            x: 0.0,
-            y: layout.toolbar.h - 1.0,
-            w: layout.toolbar.w,
-            h: 1.0,
-        },
-        border,
-        ba.max(0.12),
-    );
-    for x in &layout.seps {
-        fill(
-            rt,
-            brush,
-            Rect {
-                x: *x,
-                y: layout.toolbar.h * 0.28,
-                w: 1.0,
-                h: layout.toolbar.h * 0.44,
-            },
-            border,
-            ba.max(0.18),
-        );
-    }
     let (sel_rgb, sel_a) = rgba(p.selection);
-    for (hit, r) in &layout.items {
-        // While the bar asks, only its two buttons are live.
-        let live = !*confirm || matches!(hit, Hit::Keep | Hit::Discard);
-        let hot = live && *hover == Some(*hit);
-        let a = if live { 1.0 } else { 0.35 };
-        match *hit {
-            Hit::Tool(tool) => {
-                let on = session.tool == tool;
-                if on {
-                    fill_round(rt, brush, *r, 9.0 * ui, sel_rgb, sel_a);
-                } else if hot {
-                    fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+    // Direct2D paints in call order: PAINT_ORDER is the order, and a region's
+    // background always comes before the buttons that live in it.
+    for layer in PAINT_ORDER {
+        match layer {
+            Layer::Canvas => {
+                fill(rt, brush, layout.canvas, p.card, 1.0);
+                let img = Rect {
+                    x: view.ox,
+                    y: view.oy,
+                    w: base.w as f32 * view.scale,
+                    h: base.h as f32 * view.scale,
+                };
+                unsafe {
+                    if let Some(picture) = picture.as_ref() {
+                        rt.DrawBitmap(
+                            picture,
+                            Some(&rect_f(img.x, img.y, img.w, img.h)),
+                            1.0,
+                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                            None,
+                        );
+                    }
+                    // Annotations stay inside the picture.
+                    rt.PushAxisAlignedClip(
+                        &rect_f(img.x, img.y, img.w, img.h),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    );
                 }
-                glyph(
-                    rt,
-                    brush,
-                    gfx,
-                    Glyph::Tool(tool),
-                    *r,
-                    if on { p.accent } else { p.text },
-                    a,
-                    ui,
-                );
-            }
-            Hit::Color(i) => {
-                let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
-                let on = session.color == COLORS[i];
-                let radius = 9.0 * ui;
-                if hot && !on {
-                    fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                let editing = text.as_ref().and_then(|t| t.index);
+                draw_annotations(rt, brush, gfx, base, &session.doc, view, editing, pix);
+                unsafe {
+                    rt.PopAxisAlignedClip();
                 }
                 unsafe {
-                    use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
-                    let ell = |rad: f32| D2D1_ELLIPSE {
-                        point: Vector2::new(cx, cy),
-                        radiusX: rad,
-                        radiusY: rad,
-                    };
-                    brush.SetColor(&color(COLORS[i], a));
-                    rt.FillEllipse(&ell(radius), brush);
-                    brush.SetColor(&color(p.text, 0.22 * a));
-                    rt.DrawEllipse(&ell(radius), brush, 1.0, None);
-                    if on {
-                        brush.SetColor(&color(p.accent, a));
-                        rt.DrawEllipse(&ell(radius + 3.5 * ui), brush, 2.0 * ui, None);
+                    brush.SetColor(&color(border, ba.max(0.12)));
+                    rt.DrawRectangle(
+                        &rect_f(img.x - 0.5, img.y - 0.5, img.w + 1.0, img.h + 1.0),
+                        brush,
+                        1.0,
+                        None,
+                    );
+                }
+                if let Some(a) = session.selected.and_then(|i| session.doc.get(i))
+                    && editing.is_none()
+                {
+                    draw_selection(rt, brush, a, view, p.accent, ui);
+                }
+            }
+            Layer::ToolbarBack => {
+                fill(rt, brush, layout.toolbar, p.bg, 1.0);
+                fill(
+                    rt,
+                    brush,
+                    Rect {
+                        x: 0.0,
+                        y: layout.toolbar.h - 1.0,
+                        w: layout.toolbar.w,
+                        h: 1.0,
+                    },
+                    border,
+                    ba.max(0.12),
+                );
+                for x in &layout.seps {
+                    fill(
+                        rt,
+                        brush,
+                        Rect {
+                            x: *x,
+                            y: layout.toolbar.h * 0.28,
+                            w: 1.0,
+                            h: layout.toolbar.h * 0.44,
+                        },
+                        border,
+                        ba.max(0.18),
+                    );
+                }
+            }
+            Layer::FooterBack => {
+                fill(rt, brush, layout.footer, p.bg, 1.0);
+                fill(
+                    rt,
+                    brush,
+                    Rect {
+                        x: 0.0,
+                        y: layout.footer.y,
+                        w: layout.footer.w,
+                        h: 1.0,
+                    },
+                    border,
+                    ba.max(0.12),
+                );
+            }
+            Layer::Buttons => {
+                for (hit, r) in &layout.items {
+                    // While the bar asks, only its two buttons are live.
+                    let live = !*confirm || matches!(hit, Hit::Keep | Hit::Discard);
+                    let hot = live && *hover == Some(*hit);
+                    let a = if live { 1.0 } else { 0.35 };
+                    match *hit {
+                        Hit::Tool(tool) => {
+                            let on = session.tool == tool;
+                            if on {
+                                fill_round(rt, brush, *r, 9.0 * ui, sel_rgb, sel_a);
+                            } else if hot {
+                                fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                            }
+                            glyph(
+                                rt,
+                                brush,
+                                gfx,
+                                Glyph::Tool(tool),
+                                *r,
+                                if on { p.accent } else { p.text },
+                                a,
+                                ui,
+                            );
+                        }
+                        Hit::Color(i) => {
+                            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                            let on = session.color == COLORS[i];
+                            let radius = 9.0 * ui;
+                            if hot && !on {
+                                fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                            }
+                            unsafe {
+                                use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+                                let ell = |rad: f32| D2D1_ELLIPSE {
+                                    point: Vector2::new(cx, cy),
+                                    radiusX: rad,
+                                    radiusY: rad,
+                                };
+                                brush.SetColor(&color(COLORS[i], a));
+                                rt.FillEllipse(&ell(radius), brush);
+                                brush.SetColor(&color(p.text, 0.22 * a));
+                                rt.DrawEllipse(&ell(radius), brush, 1.0, None);
+                                if on {
+                                    brush.SetColor(&color(p.accent, a));
+                                    rt.DrawEllipse(&ell(radius + 3.5 * ui), brush, 2.0 * ui, None);
+                                }
+                            }
+                        }
+                        Hit::Stroke(i) => {
+                            let on = session.stroke == i;
+                            if on {
+                                fill_round(rt, brush, *r, 9.0 * ui, sel_rgb, sel_a);
+                            } else if hot {
+                                fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                            }
+                            let wpx = [2.0, 4.0, 7.0][i] * ui;
+                            unsafe {
+                                brush.SetColor(&color(if on { p.accent } else { p.text }, a))
+                            };
+                            line(
+                                rt,
+                                brush,
+                                gfx,
+                                (r.x + r.w * 0.28, r.y + r.h / 2.0),
+                                (r.x + r.w * 0.72, r.y + r.h / 2.0),
+                                wpx,
+                            );
+                        }
+                        Hit::Undo | Hit::Redo => {
+                            let can = if matches!(hit, Hit::Undo) {
+                                session.can_undo()
+                            } else {
+                                session.can_redo()
+                            };
+                            if hot && can {
+                                fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                            }
+                            let g = if matches!(hit, Hit::Undo) {
+                                Glyph::Undo
+                            } else {
+                                Glyph::Redo
+                            };
+                            glyph(
+                                rt,
+                                brush,
+                                gfx,
+                                g,
+                                *r,
+                                p.text,
+                                if can { a } else { 0.3 * a },
+                                ui,
+                            );
+                        }
+                        Hit::Copy | Hit::Save | Hit::Close | Hit::Discard | Hit::Keep => {
+                            let (label, primary, danger) = match hit {
+                                Hit::Copy => (tr(Key::EditCopy), false, false),
+                                Hit::Save => (tr(Key::EditSave), true, false),
+                                Hit::Close => (tr(Key::EditClose), false, false),
+                                Hit::Discard => (tr(Key::EditDiscard), false, true),
+                                _ => (tr(Key::EditKeep), false, false),
+                            };
+                            let busy = matches!(hit, Hit::Save) && *saving;
+                            let (bg, fg) = if primary {
+                                (p.accent, p.on_accent)
+                            } else if danger {
+                                (p.error, if p.light { 0xFFFFFF } else { 0x1A1210 })
+                            } else if hot {
+                                (p.button_hover, p.text)
+                            } else {
+                                (p.button, p.text)
+                            };
+                            let mut alpha = a;
+                            // Copy is inert in the demos.
+                            if (matches!(hit, Hit::Copy) && *demo) || busy {
+                                alpha *= 0.5;
+                            }
+                            fill_round(rt, brush, *r, 10.0 * ui, bg, alpha);
+                            gfx.text_in(
+                                rt,
+                                brush,
+                                label,
+                                (r.x, r.y, r.w, r.h),
+                                UI_TEXT * ui,
+                                500,
+                                fg,
+                                alpha,
+                                Align::Center,
+                            );
+                        }
                     }
                 }
             }
-            Hit::Stroke(i) => {
-                let on = session.stroke == i;
-                if on {
-                    fill_round(rt, brush, *r, 9.0 * ui, sel_rgb, sel_a);
-                } else if hot {
-                    fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
-                }
-                let wpx = [2.0, 4.0, 7.0][i] * ui;
-                unsafe { brush.SetColor(&color(if on { p.accent } else { p.text }, a)) };
-                line(
-                    rt,
-                    brush,
-                    gfx,
-                    (r.x + r.w * 0.28, r.y + r.h / 2.0),
-                    (r.x + r.w * 0.72, r.y + r.h / 2.0),
-                    wpx,
+            Layer::FooterText => {
+                let pad = MARGIN * ui;
+                let mut text_box = (
+                    pad,
+                    layout.footer.y,
+                    (layout.footer.w - 2.0 * pad).max(0.0),
+                    layout.footer.h,
                 );
-            }
-            Hit::Undo | Hit::Redo => {
-                let can = if matches!(hit, Hit::Undo) {
-                    session.can_undo()
+                if *confirm {
+                    // The question ends before the Discard button.
+                    if let Some(d) = layout.rect_of(Hit::Discard) {
+                        text_box.2 = (d.x - 12.0 * ui - text_box.0).max(0.0);
+                    }
+                    gfx.text_in(
+                        rt,
+                        brush,
+                        tr(Key::EditDiscardAsk),
+                        text_box,
+                        UI_TEXT * ui,
+                        600,
+                        p.text,
+                        1.0,
+                        Align::Left,
+                    );
                 } else {
-                    session.can_redo()
-                };
-                if hot && can {
-                    fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
+                    // The button under the pointer names itself; else the last result;
+                    // else the hint.
+                    let (msg, tone) = (*hover)
+                        .and_then(tip)
+                        .map(|t| (t, Tone::Hint))
+                        .or_else(|| footer.clone())
+                        .unwrap_or_else(|| (tr(Key::EditHint).to_owned(), Tone::Hint));
+                    let rgb = match tone {
+                        Tone::Hint => p.secondary,
+                        Tone::Ok => p.text,
+                        Tone::Error => p.error,
+                    };
+                    let size_info = format!(
+                        "{} × {} · {}%",
+                        base.w,
+                        base.h,
+                        (view.scale * 100.0).round() as i32
+                    );
+                    let info_w = gfx.measure(&size_info, 12.0 * ui, 400).0 + 4.0;
+                    gfx.text_in(
+                        rt,
+                        brush,
+                        &msg,
+                        (
+                            text_box.0,
+                            text_box.1,
+                            (text_box.2 - info_w - 12.0 * ui).max(0.0),
+                            text_box.3,
+                        ),
+                        12.5 * ui,
+                        400,
+                        rgb,
+                        1.0,
+                        Align::Left,
+                    );
+                    gfx.text_in(
+                        rt,
+                        brush,
+                        &size_info,
+                        (
+                            text_box.0 + text_box.2 - info_w,
+                            text_box.1,
+                            info_w,
+                            text_box.3,
+                        ),
+                        12.0 * ui,
+                        400,
+                        p.tertiary,
+                        1.0,
+                        Align::Right,
+                    );
                 }
-                let g = if matches!(hit, Hit::Undo) {
-                    Glyph::Undo
-                } else {
-                    Glyph::Redo
-                };
-                glyph(
-                    rt,
-                    brush,
-                    gfx,
-                    g,
-                    *r,
-                    p.text,
-                    if can { a } else { 0.3 * a },
-                    ui,
-                );
-            }
-            Hit::Copy | Hit::Save | Hit::Close | Hit::Discard | Hit::Keep => {
-                let (label, primary, danger) = match hit {
-                    Hit::Copy => (tr(Key::EditCopy), false, false),
-                    Hit::Save => (tr(Key::EditSave), true, false),
-                    Hit::Close => (tr(Key::EditClose), false, false),
-                    Hit::Discard => (tr(Key::EditDiscard), false, true),
-                    _ => (tr(Key::EditKeep), false, false),
-                };
-                let busy = matches!(hit, Hit::Save) && *saving;
-                let (bg, fg) = if primary {
-                    (p.accent, p.on_accent)
-                } else if danger {
-                    (p.error, if p.light { 0xFFFFFF } else { 0x1A1210 })
-                } else if hot {
-                    (p.button_hover, p.text)
-                } else {
-                    (p.button, p.text)
-                };
-                let mut alpha = a;
-                // Copy is inert in the demos.
-                if (matches!(hit, Hit::Copy) && *demo) || busy {
-                    alpha *= 0.5;
-                }
-                fill_round(rt, brush, *r, 10.0 * ui, bg, alpha);
-                gfx.text_in(
-                    rt,
-                    brush,
-                    label,
-                    (r.x, r.y, r.w, r.h),
-                    UI_TEXT * ui,
-                    500,
-                    fg,
-                    alpha,
-                    Align::Center,
-                );
             }
         }
-    }
-    // Footer: a line, or the bar.
-    fill(rt, brush, layout.footer, p.bg, 1.0);
-    fill(
-        rt,
-        brush,
-        Rect {
-            x: 0.0,
-            y: layout.footer.y,
-            w: layout.footer.w,
-            h: 1.0,
-        },
-        border,
-        ba.max(0.12),
-    );
-    let pad = MARGIN * ui;
-    let text_box = (
-        pad,
-        layout.footer.y,
-        (layout.footer.w - 2.0 * pad).max(0.0),
-        layout.footer.h,
-    );
-    if *confirm {
-        gfx.text_in(
-            rt,
-            brush,
-            tr(Key::EditDiscardAsk),
-            text_box,
-            UI_TEXT * ui,
-            600,
-            p.text,
-            1.0,
-            Align::Left,
-        );
-    } else {
-        // The button under the pointer names itself; else the last result;
-        // else the hint.
-        let (msg, tone) = (*hover)
-            .and_then(tip)
-            .map(|t| (t, Tone::Hint))
-            .or_else(|| footer.clone())
-            .unwrap_or_else(|| (tr(Key::EditHint).to_owned(), Tone::Hint));
-        let rgb = match tone {
-            Tone::Hint => p.secondary,
-            Tone::Ok => p.text,
-            Tone::Error => p.error,
-        };
-        let size_info = format!(
-            "{} × {} · {}%",
-            base.w,
-            base.h,
-            (view.scale * 100.0).round() as i32
-        );
-        let info_w = gfx.measure(&size_info, 12.0 * ui, 400).0 + 4.0;
-        gfx.text_in(
-            rt,
-            brush,
-            &msg,
-            (
-                text_box.0,
-                text_box.1,
-                (text_box.2 - info_w - 12.0 * ui).max(0.0),
-                text_box.3,
-            ),
-            12.5 * ui,
-            400,
-            rgb,
-            1.0,
-            Align::Left,
-        );
-        gfx.text_in(
-            rt,
-            brush,
-            &size_info,
-            (
-                text_box.0 + text_box.2 - info_w,
-                text_box.1,
-                info_w,
-                text_box.3,
-            ),
-            12.0 * ui,
-            400,
-            p.tertiary,
-            1.0,
-            Align::Right,
-        );
     }
     unsafe { rt.EndDraw(None, None) }
 }
@@ -2275,6 +2354,28 @@ mod tests {
     use super::*;
 
     const LABELS: Labels = [44.0, 52.0, 40.0, 40.0, 38.0];
+
+    #[test]
+    fn the_footer_background_is_painted_before_the_buttons() {
+        let at = |l: Layer| PAINT_ORDER.iter().position(|x| *x == l).unwrap();
+        assert!(at(Layer::FooterBack) < at(Layer::Buttons));
+        assert!(at(Layer::ToolbarBack) < at(Layer::Buttons));
+        assert!(at(Layer::FooterText) > at(Layer::FooterBack));
+    }
+
+    #[test]
+    fn closing_asks_only_when_something_changed() {
+        assert_eq!(close_action(false), CloseAction::Destroy);
+        assert_eq!(close_action(true), CloseAction::Ask);
+    }
+
+    #[test]
+    fn the_bar_answers_enter_and_esc_only() {
+        assert_eq!(confirm_key(VK_RETURN.0), Some(Hit::Discard));
+        assert_eq!(confirm_key(VK_ESCAPE.0), Some(Hit::Keep));
+        assert_eq!(confirm_key(0x5A), None);
+        assert_eq!(confirm_key(VK_DELETE.0), None);
+    }
 
     fn all_overlaps(items: &[(Hit, Rect)]) -> Vec<(Hit, Hit)> {
         let mut bad = Vec::new();
