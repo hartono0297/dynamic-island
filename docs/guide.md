@@ -213,16 +213,15 @@ The C runtime is linked statically (`.cargo/config.toml`), so the exe runs witho
 
 ## Fonts and credits
 
-The exe embeds Latin subsets of two typefaces, both under the SIL Open Font License 1.1:
+Vale stands on the work of others; the full list, with versions and licences, is in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md). In short:
 
-- **DM Sans** by Colophon Foundry for Google Fonts, © 2014 The DM Sans Project Authors (text and numbers)
-- **DM Mono** by Colophon Foundry for Google Fonts, © 2020 The DM Mono Project Authors (the CLI)
+- **DM Sans** and **DM Mono** by Colophon Foundry for Google Fonts, embedded as Latin subsets, SIL Open Font License 1.1 ([`assets/fonts/OFL.txt`](../assets/fonts/OFL.txt)). [`scripts/make-fonts.ps1`](../scripts/make-fonts.ps1) rebuilds them from pinned upstream sources.
+- **Mole for Windows** by tw93 ([github.com/tw93/Mole](https://github.com/tw93/Mole/tree/windows)): the cleaner's list of locations (which cache, temp and download folders are safe to clean, and after how many days) follows version 1.30.0, commit `500dfc4c`, © 2025 tw93, MIT; only that data is used and the island scans and deletes with its own code (full text in [`NOTICE`](../NOTICE)). The *Automatic · Mole* mode runs the Mole you installed (GPL-3.0 since 2026-10-11) as a separate program; no Mole code is copied into or linked with the island (see [Mole](#mole)).
+- **Rust crates**: `windows` (Microsoft's Windows API bindings), `serde`, `serde_json`, `chrono` and their dependencies, all MIT / Apache-2.0 or similar.
+- **Services**: Google Calendar API, [LRCLIB](https://lrclib.net) for synced lyrics, Google Search for web searches.
+- **Works with** [Claude Code](https://claude.com/claude-code) through its hooks.
 
-Licence texts and copyright lines are in [`assets/fonts/OFL.txt`](../assets/fonts/OFL.txt). [`scripts/make-fonts.ps1`](../scripts/make-fonts.ps1) rebuilds the files from pinned upstream sources.
-
-The cleaner's list of locations (which cache, temp and download folders are safe to clean, and after how many days) follows **Mole for Windows** by tw93 ([github.com/tw93/mole](https://github.com/tw93/mole), branch `windows`, version 1.30.0), © 2025 tw93, under the MIT licence. Only that data is used; the island scans and deletes with its own code. The full licence text is in [`NOTICE`](../NOTICE). That data comes from the last MIT commit; the `windows` branch is GPL-3.0 since 2026-10-11, and nothing from it after that is used.
-
-The cleaner's *Automatic · Mole* mode runs **Mole for Windows** (GPL-3.0 since 2026-10-11) as a separate program that you install; no Mole code is copied into or linked with the island (see [Mole](#mole)).
+The notch idea is inspired by Apple's Dynamic Island; Vale is not affiliated with Apple or any other company named here.
 
 Design notes and plans: [`docs/superpowers/`](superpowers/).
 

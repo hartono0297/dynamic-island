@@ -3,16 +3,28 @@ tags: [convention, readme, docs, v3.2]
 date: 2026-10-29
 ---
 
-# README: short front page, long guide
+# README: front page with a gallery, long guide
 
-`README.md` is the minimalist front page: logo, one-line pitch, badges
-(release, stars, MIT, Windows 11, size), an animated tour, the install line, a
-one-screen feature table, a pointer to the guide, the privacy line and the
-licence. The long reference (every feature, settings table, Google Calendar
-setup, Mole, data and privacy, build, troubleshooting, limits, fonts and
-credits) lives in `docs/guide.md`. Keep the README short; put new detail in
-the guide, and update the README table only for a new page or headline feature.
+`README.md` (reworked 2026-10-29 on the owner's ask: "too little", and
+uninstall must be there too): logo, pitch, badges (release, downloads, stars,
+MIT, Windows 11, size), quick links, the animated tour, *Why Vale*, Install,
+**Uninstall** (the `irm` line, `DI_PURGE=1` to remove data, the offline copy
+in `%LOCALAPPDATA%\Programs\Vale`), the feature table, a 2 × 4 screenshot
+gallery (`<table>`), the notices animation, Privacy, Build, **Credits** and
+License. The long reference (every feature, settings table, Google Calendar
+setup, Mole, data and privacy, troubleshooting, limits) lives in
+`docs/guide.md`; new detail goes there.
 
+- **Credits:** `THIRD-PARTY-NOTICES.md` lists every third-party component:
+  Mole for Windows (data, MIT at `500dfc4c`; runs your own GPL-3.0 install),
+  DM Sans / DM Mono (OFL 1.1), every Rust crate from `Cargo.lock` with version
+  and licence, the services (Google Calendar, LRCLIB, Google Search, GitHub
+  Releases), Claude Code, and the trademark note (inspired by Apple's Dynamic
+  Island). Regenerate its crate tables when `Cargo.lock` changes:
+  `cargo metadata --format-version 1 --locked --filter-platform x86_64-pc-windows-msvc > meta.json`
+  then `python scripts/third-party.py meta.json`. `NOTICE` keeps Mole's full
+  MIT text. The release zip carries `LICENSE`, `NOTICE`,
+  `THIRD-PARTY-NOTICES.md` and the fonts' OFL as `OFL-fonts.txt`.
 - **Animations:** `assets/screenshots/tour.png` (pages) and `notices.png` are
   **APNG**, which GitHub shows as a looping animation in an `<img>`. They are
   built from the demo screenshots by `scripts/make-apng.py` (standard-library

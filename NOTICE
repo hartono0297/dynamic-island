@@ -18,6 +18,10 @@ licensed under the GPL-3.0; nothing from those is used.
 The fonts embedded in the exe (DM Sans, DM Mono) are under the SIL Open Font
 License 1.1; see assets/fonts/OFL.txt.
 
+Every third-party component (the Rust crates with their versions and
+licences, the fonts, Mole, and the services Vale talks to) is listed in
+THIRD-PARTY-NOTICES.md.
+
 -------------------------------------------------------------------------------
 Mole for Windows, MIT licence (LICENSE at commit 500dfc4c)
 -------------------------------------------------------------------------------

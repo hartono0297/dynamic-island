@@ -42,7 +42,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
 - [[gestures]]: middle click, swipe and sideways wheel on the music views
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
-- [[readme-structure]]: short README + docs/guide.md, APNG tours (scripts/make-apng.py), MIT licence
+- [[readme-structure]]: README with gallery, install and uninstall, credits in THIRD-PARTY-NOTICES.md; long guide in docs/guide.md; APNG tours
 - [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge
 - [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory)
 - [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
