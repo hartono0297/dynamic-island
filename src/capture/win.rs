@@ -84,14 +84,35 @@ pub fn monitor_at(pt: (i32, i32)) -> (Rect, u32) {
     }
 }
 
-/// The windows of this process that are on screen: the island, its halo,
-/// the stay-behind helper, an open editor.
+/// The window classes kept out of the frozen frame: the island
+/// (`ui::window`), which also wears the halo margin and moves behind other
+/// windows for "Di belakang jendela"; neither is a window of its own.
+/// Vale's other windows (Settings, the calendar and notes editor, a
+/// screenshot editor) stay in the picture like any app's, so they can be
+/// captured; they are only left out as snap targets (`top_windows`).
+const KEPT_OUT: &[&str] = &["ValeWindow"];
+
+fn is_kept_out(class: &str) -> bool {
+    KEPT_OUT.contains(&class)
+}
+
+/// The class name of `hwnd` (cut at 32 characters, longer than any of ours).
+unsafe fn class_of(hwnd: HWND) -> String {
+    let mut name = [0u16; 32];
+    let n = unsafe { GetClassNameW(hwnd, &mut name) }.max(0) as usize;
+    String::from_utf16_lossy(&name[..n.min(name.len())])
+}
+
+/// The island's windows of this process that are on screen (`KEPT_OUT`).
 fn own_windows() -> Vec<HWND> {
     unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let list = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        if pid == unsafe { GetCurrentProcessId() }
+            && unsafe { IsWindowVisible(hwnd) }.as_bool()
+            && is_kept_out(&unsafe { class_of(hwnd) })
+        {
             list.push(hwnd);
         }
         true.into()
@@ -103,7 +124,7 @@ fn own_windows() -> Vec<HWND> {
     list
 }
 
-/// Keeps the island and its helper windows out of a screen grab for as long
+/// Keeps the island (`KEPT_OUT`) out of a screen grab for as long
 /// as it lives: `WDA_EXCLUDEFROMCAPTURE` on each, restored to what it was
 /// when this drops. A window that refuses is hidden instead and shown again.
 struct OutOfTheShot {
@@ -156,8 +177,8 @@ impl Drop for OutOfTheShot {
 }
 
 /// Copies the whole virtual screen into memory (GDI `BitBlt` with
-/// `CAPTUREBLT`, so layered windows come along), with this process's own
-/// windows left out. `None` when GDI could not make the bitmap.
+/// `CAPTUREBLT`, so layered windows come along), with the island left out
+/// (`KEPT_OUT`). `None` when GDI could not make the bitmap.
 pub fn grab_virtual_screen() -> Option<Frozen> {
     let area = virtual_screen();
     if area.is_empty() {
@@ -321,10 +342,7 @@ unsafe fn snappable(hwnd: HWND, own_pid: u32, bounds: Rect) -> Option<Rect> {
         if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT.0 != 0 {
             return None;
         }
-        let mut name = [0u16; 32];
-        let n = GetClassNameW(hwnd, &mut name).max(0) as usize;
-        let class = String::from_utf16_lossy(&name[..n.min(name.len())]);
-        if is_desktop_class(&class) {
+        if is_desktop_class(&class_of(hwnd)) {
             return None;
         }
         let mut frame = RECT::default();
@@ -362,6 +380,17 @@ mod tests {
         assert!(is_desktop_class("WorkerW"));
         assert!(!is_desktop_class("Shell_TrayWnd"));
         assert!(!is_desktop_class("CabinetWClass"));
+    }
+
+    #[test]
+    fn only_the_island_is_kept_out_of_the_shot() {
+        assert!(is_kept_out("ValeWindow"));
+        // Vale's own Settings and editors can be captured.
+        assert!(!is_kept_out("ValeSettings"));
+        assert!(!is_kept_out("ValeEditor"));
+        assert!(!is_kept_out("ValeEditorPopover"));
+        assert!(!is_kept_out("ValeShotEditor"));
+        assert!(!is_kept_out("Notepad"));
     }
 
     #[test]

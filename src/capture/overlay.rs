@@ -4,7 +4,8 @@
 //! The pointer snaps to the window under it at once; finer boxes (panels,
 //! toolbars) are added when the UI Automation worker answers. A click takes
 //! the highlight, a drag draws a rectangle, Enter takes the highlight, a
-//! right click or Esc cancels. One overlay at a time. It exists only while
+//! right click or Esc cancels, and so does losing the foreground (Alt+Tab,
+//! the Win key, another app). One overlay at a time. It exists only while
 //! in use: no timer, nothing at idle, and the frame is freed when it closes.
 
 use std::cell::{Cell, RefCell};
@@ -26,9 +27,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
     GetForegroundWindow, GetWindowThreadProcessId, HWND_TOPMOST, IDC_CROSS, LoadCursorW, MSG,
     PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA, SWP_SHOWWINDOW,
-    SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_ACTIVATE, WM_ACTIVATEAPP,
+    WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, w};
 
@@ -67,6 +69,10 @@ struct State {
     demo: bool,
     /// Lost targets in a row (see `RETRIES`).
     lost: u8,
+    /// Set once the overlay holds the foreground: from then on losing it
+    /// cancels. Not before, so the brief input join in `take_foreground`
+    /// (which can move the activation around) does not end it.
+    armed: bool,
 }
 
 thread_local! {
@@ -190,6 +196,7 @@ fn create(
         accent: theme::current_window().accent,
         demo,
         lost: 0,
+        armed: false,
     };
     let stored = OVERLAY.with(|c| match c.try_borrow_mut() {
         Ok(mut slot) if slot.is_none() => {
@@ -223,6 +230,9 @@ fn create(
         finish(None);
         return None;
     }
+    // Nothing is pumped between the check above and this, so the overlay
+    // still holds the foreground.
+    with(|s| s.armed = true);
     invalidate(hwnd);
     if let Some(windows) = for_uia {
         // Never waited for: the windows are snappable already.
@@ -307,6 +317,21 @@ fn moved(s: &mut State, cursor: (i32, i32)) -> bool {
     // The hint follows the pointer to another monitor.
     let monitor_changed = win::monitor_at(old_cursor).0 != win::monitor_at(cursor).0;
     s.hover != old_hover || s.drag != old_drag || monitor_changed
+}
+
+/// The overlay lost the foreground: keys now go to another window (Enter
+/// could send a message there) while the frozen screen still shows, so it
+/// cancels. Ignored until `create` has armed it.
+fn deactivated() {
+    if with(|s| s.armed) == Some(true) {
+        finish(None);
+    }
+}
+
+/// `WM_ACTIVATE` says the window was deactivated: `WA_INACTIVE` (0) in the
+/// low word of `wparam`.
+fn is_deactivation(wparam: usize) -> bool {
+    wparam & 0xFFFF == 0
 }
 
 fn invalidate(hwnd: HWND) {
@@ -458,6 +483,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_DISPLAYCHANGE => {
             // The frozen frame no longer fits the screen.
             finish(None);
+            LRESULT(0)
+        }
+        WM_ACTIVATE if is_deactivation(wparam.0) => {
+            deactivated();
+            LRESULT(0)
+        }
+        WM_ACTIVATEAPP if wparam.0 == 0 => {
+            // Another app took the foreground.
+            deactivated();
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -656,6 +690,17 @@ mod tests {
     #[test]
     fn no_overlay_is_up_in_a_test() {
         assert!(!active());
+    }
+
+    #[test]
+    fn only_wa_inactive_is_a_deactivation() {
+        // WA_INACTIVE, with the minimised flag in the high word or not.
+        assert!(is_deactivation(0));
+        assert!(is_deactivation(0x0001_0000));
+        // WA_ACTIVE and WA_CLICKACTIVE.
+        assert!(!is_deactivation(1));
+        assert!(!is_deactivation(2));
+        assert!(!is_deactivation(0x0001_0001));
     }
 
     #[test]

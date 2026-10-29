@@ -17,11 +17,14 @@ Vale.
   `SRCCOPY|CAPTUREBLT` + GetDIBits, 32 bpp top-down) in physical px. It lives
   in memory only and is freed when the overlay closes; the crop is freed when
   the editor closes. Nothing touches disk or clipboard without Save or Copy.
-- **Display affinity.** Every visible window of our own process (island,
-  halo, stay-behind helper, an open editor) gets `WDA_EXCLUDEFROMCAPTURE` just
-  for the BitBlt and its previous affinity back right after (`DwmFlush` in
-  between). A window that refuses is hidden and shown again. Windows of our
-  process are never snap targets.
+- **Display affinity.** Only the island is kept out of the frame: visible
+  windows of our process whose class is in `win::KEPT_OUT` (`ValeWindow`; the
+  halo margin and "Di belakang jendela" are the same window, not helpers of
+  their own) get `WDA_EXCLUDEFROMCAPTURE` just for the BitBlt and their
+  previous affinity back right after (`DwmFlush` in between). A window that
+  refuses is hidden and shown again. Settings, the calendar/notes editor and
+  a screenshot editor stay in the picture, so they can be captured (a bug
+  report). Windows of our process are still never snap targets.
 - **Snapping** (`capture::pick`, pure): the frontmost top-level window under
   the pointer (lowest z, depth 0), then the smallest candidate of that window
   that holds the pointer, skipping boxes under 12 × 12. Elements of windows
@@ -29,13 +32,26 @@ Vale.
   further is a drag (`drag_rect`, clamped to the virtual screen).
 - **UI Automation budget** (`capture::uia`). One short-lived worker (COM MTA),
   never waited for: the overlay snaps to windows at once, finer boxes join
-  when a window's result arrives (`WM_APP_UIA`, a boxed `Vec<Candidate>`,
-  freed by the overlay even for a stale capture or at destroy). Frontmost 6
-  windows, 400 boxes each (`FindAllBuildCache`, only BoundingRectangle cached,
-  off-screen filtered out), 600 ms in all: `CUIAutomation8` as
-  `IUIAutomation2`, connection and transaction timeouts set to what is left
-  of the budget before each window, so a heavy or hung window cannot hold the
-  worker past it. No timer, no thread at idle.
+  when a window's result arrives. Frontmost 6 windows, 400 usable boxes and
+  800 elements looked at per window, 600 ms in all. Each window is walked
+  breadth first, one `FindAllBuildCache(TreeScope_Children)` per opened
+  element (only BoundingRectangle cached, off-screen filtered out, boxes under
+  12 px clipped to the window are neither kept nor opened). Not
+  `TreeScope_Descendants`: that fetches the whole subtree in one go, so the
+  caps only cut the list afterwards and the pre-order cut-off dropped the
+  right and bottom panes of a big window. Before every call (`uia::Clock`)
+  the budget and the stop flag are checked and `IUIAutomation2`'s connection
+  and transaction timeouts (`CUIAutomation8`) are set to what is left, so the
+  600 ms holds across all windows, not only between them. No timer, no thread
+  at idle.
+- **UIA results by ticket.** `WM_APP_UIA` carries the capture number in
+  `wparam` and a ticket in `lparam`; the boxes wait in a static `INBOX`
+  (`deposit`, `withdraw`, `take_result`). Not a boxed pointer: a stray or
+  forged `WM_APP_UIA` (another process can post one) would make the overlay
+  free whatever its `lparam` points at, while an unknown ticket just finds
+  nothing. A post that fails withdraws its own ticket; the overlay takes
+  every ticket it receives, even for a stale capture, and drains the queue
+  at `WM_DESTROY` (only a post racing the destroy itself can stay behind).
 - **Windows list.** `EnumWindows` in z-order; skipped: invisible, minimised,
   cloaked, zero-size, `WS_EX_TRANSPARENT`, Progman/WorkerW (the desktop would
   swallow every click), own process. Rect from `DWMWA_EXTENDED_FRAME_BOUNDS`.
@@ -44,7 +60,11 @@ Vale.
   under the pointer changes. One at a time (a second trigger is ignored).
   Display change cancels. If it cannot take the foreground (plain
   `SetForegroundWindow`, then a brief `AttachThreadInput` to the foreground
-  thread) it cancels, so Esc/Enter never reach the app underneath.
+  thread) it cancels, so Esc/Enter never reach the app underneath. Once it
+  has the foreground (`armed`), losing it (`WM_ACTIVATE` `WA_INACTIVE`,
+  `WM_ACTIVATEAPP` false: Alt+Tab, Win, another app) cancels too; the frozen
+  screen would otherwise stay up while the keys went elsewhere. Not armed
+  before that, because the input join can move the activation around.
 - **Draw errors** (overlay and editor): only `D2DERR_RECREATE_TARGET` is
   retried, at most 3 in a row; anything else stops (overlay cancels; the
   editor shows the canvas without a picture too big for the device and says

@@ -3,11 +3,18 @@
 //!
 //! The overlay never waits for it: it snaps to the windows at once, and the
 //! finer boxes are added when a result arrives. The work is capped: the
-//! frontmost `MAX_WINDOWS` windows only, `MAX_ELEMENTS` boxes from each, and
-//! `BUDGET` in all. Before each window the UI Automation connection and
-//! transaction timeouts are set to what is left of the budget, so one heavy
-//! or hung window cannot hold the worker past it.
+//! frontmost `MAX_WINDOWS` windows only, `MAX_ELEMENTS` boxes from each
+//! (`MAX_VISITED` elements looked at), and `BUDGET` in all.
+//!
+//! A window is walked breadth first, one level of one element per call
+//! (`FindAllBuildCache` with `TreeScope_Children`), never its whole subtree
+//! at once: so the caps limit the work itself, and the large panes near the
+//! top of the tree come before the small leaves deep in any one of them.
+//! Before every call the budget is checked, the stop flag read, and the UI
+//! Automation connection and transaction timeouts set to what is left, so
+//! neither one heavy window nor a hung one holds the worker past the budget.
 
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -18,7 +25,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation8, IUIAutomation, IUIAutomation2, TreeScope_Descendants,
+    CUIAutomation8, IUIAutomation2, IUIAutomationElement, TreeScope_Children,
     UIA_BoundingRectanglePropertyId, UIA_IsOffscreenPropertyId,
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
@@ -30,7 +37,9 @@ use super::{Candidate, MIN_SNAP, Rect};
 pub const MAX_WINDOWS: usize = 6;
 /// Boxes taken from one window.
 pub const MAX_ELEMENTS: usize = 400;
-/// Time for all of it; no new window is started after this.
+/// Elements looked at in one window, usable as a box or not.
+pub const MAX_VISITED: usize = MAX_ELEMENTS * 2;
+/// Time for all of it; no call is started after this.
 pub const BUDGET: Duration = Duration::from_millis(600);
 
 /// The overlay's `WM_APP + n` for a result: `wparam` is the capture's
@@ -65,25 +74,31 @@ pub fn searched(windows: &[TopWindow]) -> &[TopWindow] {
     &windows[..windows.len().min(MAX_WINDOWS)]
 }
 
-/// Whether another window may still be started `elapsed` into the budget.
+/// Whether another call may still be started `elapsed` into the budget.
 pub fn may_start(elapsed: Duration) -> bool {
     elapsed < BUDGET
 }
 
-/// The connection and transaction timeout for a window started `elapsed`
+/// The connection and transaction timeout for a call started `elapsed`
 /// into the budget: what is left of it, in whole milliseconds, at least 1.
 pub fn timeout_ms(elapsed: Duration) -> u32 {
     let left = BUDGET.saturating_sub(elapsed).as_millis();
     left.clamp(1, u128::from(u32::MAX)) as u32
 }
 
-/// The usable boxes of one window: clipped to the window, and not smaller
-/// than `MIN_SNAP` (those could never be picked), at most `MAX_ELEMENTS`.
+/// `r` clipped to the window, or None when what is left is smaller than
+/// `MIN_SNAP` (it could never be picked). Such an element is not opened
+/// either: its children lie inside it.
+pub fn usable(window: &TopWindow, r: Rect) -> Option<Rect> {
+    let r = r.intersect(&window.rect);
+    (r.w >= MIN_SNAP && r.h >= MIN_SNAP).then_some(r)
+}
+
+/// The usable boxes of one window (`usable`), at most `MAX_ELEMENTS`.
 pub fn candidates_of(window: &TopWindow, rects: impl IntoIterator<Item = Rect>) -> Vec<Candidate> {
     rects
         .into_iter()
-        .map(|r| r.intersect(&window.rect))
-        .filter(|r| r.w >= MIN_SNAP && r.h >= MIN_SNAP)
+        .filter_map(|r| usable(window, r))
         .take(MAX_ELEMENTS)
         .map(|rect| Candidate {
             rect,
@@ -95,7 +110,7 @@ pub fn candidates_of(window: &TopWindow, rects: impl IntoIterator<Item = Rect>) 
 
 /// Starts the worker. Each window's boxes are posted to `overlay` as soon
 /// as that window is done, tagged with `capture` (a result for an older
-/// capture is dropped by the overlay). `stop` is checked between windows:
+/// capture is dropped by the overlay). `stop` is checked before every call:
 /// the overlay raises it when it closes. False when the thread could not
 /// start.
 pub fn spawn(
@@ -110,31 +125,24 @@ pub fn spawn(
         .name("capture-uia".into())
         .spawn(move || {
             let inited = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-            let started = Instant::now();
             // CUIAutomation8 (Windows 8 and later) gives IUIAutomation2,
-            // whose timeouts keep each window inside the budget.
+            // whose timeouts keep each call inside the budget.
             if let Ok(uia) = unsafe {
                 CoCreateInstance::<_, IUIAutomation2>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
             } {
+                let clock = Clock {
+                    uia: &uia,
+                    started: Instant::now(),
+                    stop: &stop,
+                };
                 for window in searched(&windows) {
-                    let elapsed = started.elapsed();
-                    if !may_start(elapsed) || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let Some(found) = (unsafe { boxes_of(&clock, window) }) else {
+                        // Out of time, stopped, or no limit could be set.
                         break;
-                    }
-                    let left = timeout_ms(elapsed);
-                    let limited = unsafe {
-                        uia.SetConnectionTimeout(left).is_ok()
-                            && uia.SetTransactionTimeout(left).is_ok()
                     };
-                    if !limited {
-                        // Without a limit one window could outlast the budget.
-                        break;
+                    if !found.is_empty() {
+                        post(target, capture, found);
                     }
-                    let found = unsafe { boxes_of(&uia, window) }.unwrap_or_default();
-                    if found.is_empty() {
-                        continue;
-                    }
-                    post(target, capture, found);
                 }
             }
             if inited {
@@ -167,28 +175,79 @@ pub fn take_result(lparam: LPARAM) -> Option<Vec<Candidate>> {
     usize::try_from(lparam.0).ok().and_then(withdraw)
 }
 
-/// Every on-screen descendant of `window`'s top-level element, with only its
-/// bounding rectangle cached (one cross-process call for the lot, cut off by
-/// the transaction timeout set before it).
-unsafe fn boxes_of(uia: &IUIAutomation, window: &TopWindow) -> Option<Vec<Candidate>> {
+/// The budget the worker shares across every call.
+struct Clock<'a> {
+    uia: &'a IUIAutomation2,
+    started: Instant,
+    stop: &'a std::sync::atomic::AtomicBool,
+}
+
+impl Clock<'_> {
+    /// Before a cross-process call: false when the budget is spent, the
+    /// overlay has closed, or the timeouts could not be set to what is left
+    /// (without a limit one call could outlast the budget).
+    fn go(&self) -> bool {
+        let elapsed = self.started.elapsed();
+        if !may_start(elapsed) || self.stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let left = timeout_ms(elapsed);
+        unsafe {
+            self.uia.SetConnectionTimeout(left).is_ok()
+                && self.uia.SetTransactionTimeout(left).is_ok()
+        }
+    }
+}
+
+/// The on-screen elements of `window`, breadth first, with only their
+/// bounding rectangles cached: one call per opened element, each limited by
+/// `clock`. Stops at `MAX_ELEMENTS` usable boxes or `MAX_VISITED` elements.
+/// What was found before the budget ran out is kept. None when the window
+/// could not even be started (no time left, stopped, no cache request),
+/// which ends the worker.
+unsafe fn boxes_of(clock: &Clock, window: &TopWindow) -> Option<Vec<Candidate>> {
+    let uia = clock.uia;
     unsafe {
-        let root = uia.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
+        if !clock.go() {
+            return None;
+        }
+        let Ok(root) = uia.ElementFromHandle(HWND(window.hwnd as *mut _)) else {
+            // Closed since the list was made: the next window.
+            return Some(Vec::new());
+        };
         let cache = uia.CreateCacheRequest().ok()?;
         cache.AddProperty(UIA_BoundingRectanglePropertyId).ok()?;
         let on_screen = uia
             .CreatePropertyCondition(UIA_IsOffscreenPropertyId, &VARIANT::from(false))
             .ok()?;
-        let all = root
-            .FindAllBuildCache(TreeScope_Descendants, &on_screen, &cache)
-            .ok()?;
-        let n = all.Length().ok()?.max(0) as usize;
-        let mut rects = Vec::with_capacity(n.min(MAX_ELEMENTS * 2));
-        for i in 0..n.min(MAX_ELEMENTS * 2) {
-            let Ok(element) = all.GetElement(i as i32) else {
+        let mut rects: Vec<Rect> = Vec::new();
+        let mut visited = 0usize;
+        let mut open: VecDeque<IUIAutomationElement> = VecDeque::from([root]);
+        'walk: while let Some(parent) = open.pop_front() {
+            if !clock.go() {
+                break;
+            }
+            let Ok(children) = parent.FindAllBuildCache(TreeScope_Children, &on_screen, &cache)
+            else {
                 continue;
             };
-            if let Ok(r) = element.CachedBoundingRectangle() {
-                rects.push(Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top));
+            let n = children.Length().unwrap_or(0).max(0);
+            for i in 0..n {
+                if visited >= MAX_VISITED || rects.len() >= MAX_ELEMENTS {
+                    break 'walk;
+                }
+                visited += 1;
+                let Ok(element) = children.GetElement(i) else {
+                    continue;
+                };
+                let Ok(r) = element.CachedBoundingRectangle() else {
+                    continue;
+                };
+                let r = Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top);
+                if let Some(r) = usable(window, r) {
+                    rects.push(r);
+                    open.push_back(element);
+                }
             }
         }
         Some(candidates_of(window, rects))
@@ -264,6 +323,18 @@ mod tests {
         assert!(take_result(LPARAM(0x7fff_0000)).is_none());
         assert_eq!(take_result(LPARAM(ticket as isize)), Some(boxes));
         assert!(take_result(LPARAM(ticket as isize)).is_none());
+    }
+
+    #[test]
+    fn a_box_too_small_or_outside_is_not_usable() {
+        let w = top(0);
+        assert_eq!(
+            usable(&w, Rect::new(-10, -10, 50, 50)),
+            Some(Rect::new(0, 0, 40, 40))
+        );
+        assert_eq!(usable(&w, Rect::new(500, 0, 50, 50)), None);
+        assert_eq!(usable(&w, Rect::new(0, 0, MIN_SNAP - 1, 100)), None);
+        assert!(MAX_VISITED >= MAX_ELEMENTS);
     }
 
     #[test]
