@@ -1489,6 +1489,7 @@ impl App {
                 }
                 self.arm_reminders();
             }
+            Effect::OpenSettings => open_settings(self.hwnd),
         }
         None
     }
@@ -6510,7 +6511,7 @@ mod tests {
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Pomodoro), 1.0);
         assert_eq!(slide_from(&pages, Page::Pomodoro, Page::Calendar), -1.0);
         // Shortcuts moved to the front: going to it is going back.
-        pages.move_by(Page::Shortcuts, -10);
+        pages.move_to(Page::Shortcuts, 0);
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Shortcuts), -1.0);
         assert_eq!(slide_from(&pages, Page::Shortcuts, Page::Calendar), 1.0);
     }

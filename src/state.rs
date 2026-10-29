@@ -1310,6 +1310,18 @@ impl IslandState {
                     self.page = Page::Clipboard;
                 }
             }
+            // A page tile jumps there, like the Clipboard tile: no collapse,
+            // and a page that is switched off opens too (it holds for this
+            // visit only, `leave_hidden_page` moves off it on close).
+            Hit::Shortcut(Shortcut::Go(page)) => {
+                if matches!(self.view(), View::Panel(_)) {
+                    self.page = page;
+                }
+            }
+            // Vale's own Settings window; the panel gets out of the way.
+            Hit::Shortcut(Shortcut::ValeSettings) => {
+                self.collapse_for(Effect::OpenSettings, effects)
+            }
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
@@ -3467,6 +3479,45 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::System));
         assert_eq!(s.cleaner().unwrap().mode, CleanMode::Mole);
         assert_eq!(s.waiting_strip(), None);
+    }
+
+    #[test]
+    fn a_go_tile_switches_the_page_without_collapsing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        for page in [Page::Shelf, Page::Calendar, Page::Cli, Page::Mixer] {
+            let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Go(page))), t0);
+            assert_eq!(effects, vec![], "no collapse, no effect");
+            assert_eq!(s.view(), View::Panel(page));
+        }
+    }
+
+    #[test]
+    fn a_go_tile_opens_a_page_switched_off_for_that_visit_only() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Notes);
+        s.apply(Event::PanelPages(pages), t0);
+        open_on(&mut s, Page::Shortcuts, t0);
+        let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::Go(Page::Notes))), t0);
+        assert_eq!(effects, vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        // The panel closes: the next visit starts on a page that is on.
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn the_vale_settings_tile_collapses_and_asks_to_open_the_settings() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Shortcuts, t0);
+        let effects = s.apply(Event::Click(Hit::Shortcut(Shortcut::ValeSettings)), t0);
+        assert_eq!(effects, vec![Effect::OpenSettings]);
+        assert_eq!(s.view(), View::Idle);
     }
 
     #[test]

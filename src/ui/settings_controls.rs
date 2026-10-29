@@ -576,6 +576,11 @@ impl Painter<'_> {
             self.set_rgba(self.p.border);
             unsafe { self.rt.FillRectangle(&d2d_rect(*d), self.brush) };
         }
+        // The row a drag holds sits on a raised plate over the others.
+        if let Some(r) = l.lifted {
+            self.fill_round(r, CONTROL_RADIUS, self.p.button, 1.0);
+            self.stroke_round(r, CONTROL_RADIUS, self.p.border);
+        }
         if let Some(r) = l.preview {
             self.preview(r, s);
         }
@@ -655,6 +660,22 @@ impl Painter<'_> {
                     }
                 }
                 Control::Button(b) => self.button(b, s),
+                Control::IconButton {
+                    hit,
+                    rect,
+                    icon,
+                    enabled,
+                    bare,
+                } => {
+                    if *bare {
+                        // A drag handle: only dots, darker under the pointer.
+                        let near = s.hover == Some(*hit) || s.pressed == Some(*hit);
+                        let ink = if near { self.p.text } else { self.p.secondary };
+                        self.icon(*icon, *rect, 16.0, ink, 1.0, false);
+                    } else {
+                        self.step_button(*rect, *icon, enabled.then_some(*hit), s);
+                    }
+                }
             }
         }
     }

@@ -95,18 +95,29 @@ impl PanelPages {
         true
     }
 
-    /// Moves `page` `delta` places (negative: earlier), stopping at the
-    /// ends; false when it did not move.
-    pub fn move_by(&mut self, page: Page, delta: i32) -> bool {
+    /// Takes `page` out and puts it at place `index` of the order (the
+    /// place it has once moved, shown pages and hidden ones counted alike);
+    /// false when `index` is out of range or nothing moves.
+    pub fn move_to(&mut self, page: Page, index: usize) -> bool {
         let from = self.position(page);
-        let last = self.entries.len() as i64 - 1;
-        let to = (from as i64 + i64::from(delta)).clamp(0, last) as usize;
-        if to == from {
+        if index >= self.entries.len() || index == from {
             return false;
         }
         let entry = self.entries.remove(from);
-        self.entries.insert(to, entry);
+        self.entries.insert(index, entry);
         true
+    }
+
+    /// Moves a shown `page` `delta` places among the pages shown (negative:
+    /// earlier), stopping at the ends. Hidden pages in between keep their
+    /// places relative to it. False when it did not move or is hidden.
+    pub fn move_shown(&mut self, page: Page, delta: i32) -> bool {
+        let shown = self.visible();
+        let Some(at) = shown.iter().position(|p| *p == page) else {
+            return false;
+        };
+        let to = (at as i64 + i64::from(delta)).clamp(0, shown.len() as i64 - 1) as usize;
+        to != at && self.move_to(page, self.position(shown[to]))
     }
 
     /// Where `page` is in the order, shown or not.
@@ -291,13 +302,61 @@ mod tests {
     #[test]
     fn moving_a_page_swaps_it_with_its_neighbour_and_stops_at_the_ends() {
         let mut p = PanelPages::default();
-        assert!(p.move_by(Page::Media, -1));
+        assert!(p.move_shown(Page::Media, -1));
         assert_eq!(p.position(Page::Media), 3);
         assert_eq!(p.position(Page::Notes), 4);
-        assert!(!p.move_by(Page::Calendar, -1), "already first");
-        assert!(!p.move_by(Page::Shortcuts, 1), "already last");
-        assert!(p.move_by(Page::Calendar, 1));
+        assert!(!p.move_shown(Page::Calendar, -1), "already first");
+        assert!(!p.move_shown(Page::Shortcuts, 1), "already last");
+        assert!(p.move_shown(Page::Calendar, 1));
         assert_eq!(p.entries()[0].0, Page::Pomodoro);
+    }
+
+    #[test]
+    fn move_to_puts_a_page_at_a_place_of_the_order() {
+        let mut p = PanelPages::default();
+        assert!(p.move_to(Page::Calendar, 3));
+        assert_eq!(p.position(Page::Calendar), 3);
+        assert_eq!(p.entries()[0].0, Page::Pomodoro);
+        assert_eq!(p.entries()[2].0, Page::Notes);
+        assert!(p.move_to(Page::Calendar, 0), "and back");
+        assert_eq!(p.visible(), Page::ALL.to_vec());
+        assert!(!p.move_to(Page::Notes, 3), "already there");
+        assert!(!p.move_to(Page::Notes, 99), "out of range");
+        assert!(p.move_to(Page::Calendar, Page::ALL.len() - 1));
+        assert_eq!(p.entries().last().unwrap().0, Page::Calendar);
+        // Flags travel with the page.
+        let mut p = PanelPages::default();
+        p.toggle(Page::Notes);
+        p.move_to(Page::Notes, 0);
+        assert!(!p.is_on(Page::Notes));
+        assert_eq!(p.position(Page::Notes), 0);
+    }
+
+    #[test]
+    fn move_shown_steps_over_hidden_pages() {
+        let mut p = PanelPages::default();
+        p.toggle(Page::Reminders);
+        // Notes goes up one shown page, past the hidden Reminders.
+        assert!(p.move_shown(Page::Notes, -1));
+        assert_eq!(p.position(Page::Notes), 1);
+        assert_eq!(
+            p.visible()[..4],
+            [Page::Calendar, Page::Notes, Page::Pomodoro, Page::Media]
+        );
+        let mut p = PanelPages::default();
+        p.toggle(Page::Reminders);
+        // Pomodoro down: past the hidden Reminders to Notes' place.
+        assert!(p.move_shown(Page::Pomodoro, 1));
+        assert_eq!(
+            p.visible()[..4],
+            [Page::Calendar, Page::Notes, Page::Pomodoro, Page::Media]
+        );
+        assert!(!p.move_shown(Page::Calendar, -1), "first");
+        assert!(!p.move_shown(Page::Shortcuts, 1), "last");
+        assert!(!p.move_shown(Page::Reminders, 1), "hidden");
+        // The ends clamp: a big step lands on the first.
+        assert!(p.move_shown(Page::Shortcuts, -50));
+        assert_eq!(p.visible()[0], Page::Shortcuts);
     }
 
     #[test]
@@ -324,8 +383,7 @@ mod tests {
         assert_eq!(p.step(Page::System, 2), Page::Shortcuts);
         // Nothing shown past it: it stays.
         p.toggle(Page::Shortcuts);
-        p.move_by(Page::System, 1);
-        p.move_by(Page::System, 1);
+        p.move_to(Page::System, Page::ALL.len() - 1);
         assert_eq!(p.entries().last().unwrap().0, Page::System);
         assert_eq!(p.step(Page::System, 1), Page::System);
     }
@@ -333,7 +391,7 @@ mod tests {
     #[test]
     fn the_wheel_follows_a_custom_order() {
         let mut p = PanelPages::default();
-        p.move_by(Page::Shortcuts, -10);
+        p.move_to(Page::Shortcuts, 0);
         assert_eq!(p.entries()[0].0, Page::Shortcuts);
         assert_eq!(p.step(Page::Shortcuts, 1), Page::Calendar);
         assert_eq!(p.step(Page::Calendar, -1), Page::Shortcuts);

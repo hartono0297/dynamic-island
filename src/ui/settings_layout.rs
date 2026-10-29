@@ -21,7 +21,7 @@ use crate::model::{Page, PomoField};
 use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
-use crate::tiles::{CustomKind, ShortcutTiles, Tile};
+use crate::tiles::{CustomKind, MAX_CUSTOM, MAX_SHOWN, ShortcutTiles, Tile, TileGroup, group};
 use crate::ui::icons::Icon;
 use crate::ui::robot::{Motion, SLEEP_MAX, SLEEP_MIN};
 
@@ -33,7 +33,7 @@ pub const CLIENT_H: f32 = 520.0;
 pub const SIDEBAR_W: f32 = 184.0;
 const PAD: f32 = 24.0;
 const CARD_GAP: f32 = 12.0;
-const ROW_H: f32 = 52.0;
+pub const ROW_H: f32 = 52.0;
 
 // Studio radius scale (docs/design/studio-ui.html): card 14, control 10
 // (segmented track, sidebar item, text field), the segment inside a track 8,
@@ -107,6 +107,14 @@ pub const DOT: f32 = 6.0;
 const DOT_GAP: f32 = 5.0;
 const ABOUT_LOGO: f32 = 64.0;
 const BATTERY_RANGE: (u8, u8, u8) = (5, 50, 5);
+/// The first row of a list card: its count and "Kembalikan bawaan".
+const HEADER_H: f32 = 48.0;
+/// A sub-header inside a card ("Tersembunyi", a group of "Tersedia").
+const SUBHEAD_H: f32 = 32.0;
+/// The drag handle's column: a row's label starts after it.
+const GRIP_W: f32 = 28.0;
+/// Padding above the own-shortcut form's first row.
+const FORM_PAD: f32 = 6.0;
 
 pub const REPO_URL: &str = "https://github.com/hartono0297/dynamic-island";
 pub const RELEASES_URL: &str = "https://github.com/hartono0297/dynamic-island/releases";
@@ -318,15 +326,29 @@ pub enum Hit {
     RamWarn(i32),
     /// "Lindungi cache Cargo & Autodesk di Mole".
     MoleProtect,
-    /// "Halaman panel": a page's toggle, and its order stepper (−1 earlier,
-    /// +1 later).
+    /// "Halaman panel": a page's "Sembunyikan" / "Tampilkan", and its up
+    /// (−1) / down (+1) buttons among the pages shown.
     PageOn(Page),
     PageMove(Page, i32),
-    /// "Pintasan": a tile's toggle, its order stepper, and "Hapus" (a custom
-    /// tile), by its place in the list.
+    /// The drag handle of a shown page, and "Kembalikan bawaan".
+    PageGrip(Page),
+    PageReset,
+    /// "Pintasan": a tile's "Sembunyikan" / "+ Tambah", its up (−1) / down
+    /// (+1) buttons among the tiles shown, and "Hapus" (a custom tile), by
+    /// its place in the list.
     TileOn(usize),
     TileMove(usize, i32),
     TileRemove(usize),
+    /// The drag handle of a shown tile, and "Kembalikan bawaan".
+    TileGrip(usize),
+    TileReset,
+    /// "+ Pintasan sendiri": opens the form; its Jenis segments, "Pilih…",
+    /// "Batal" and "Tambah".
+    TileFormOpen,
+    TileFormKind(CustomKind),
+    TileBrowse,
+    TileFormCancel,
+    TileFormAdd,
     DndHelp,
     Pomo(PomoField, i32),
     GoogleSave,
@@ -381,6 +403,8 @@ pub enum Group {
     Motion,
     ClipHotkey,
     ShotIgnore,
+    /// The own-shortcut form's Jenis.
+    TileKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -419,6 +443,21 @@ pub struct Button {
 pub enum Field {
     ClientId,
     ClientSecret,
+    /// The own-shortcut form's Nama and Target.
+    TileName,
+    TileTarget,
+}
+
+impl Field {
+    /// Where the window keeps the field's text.
+    pub fn index(self) -> usize {
+        match self {
+            Field::ClientId => 0,
+            Field::ClientSecret => 1,
+            Field::TileName => 2,
+            Field::TileTarget => 3,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -449,6 +488,15 @@ pub enum Control {
         selected: Accent,
     },
     Button(Button),
+    /// A round button with only an icon (the lists' up and down chevrons),
+    /// or with `bare` just the icon (a row's drag handle).
+    IconButton {
+        hit: Hit,
+        rect: Rect,
+        icon: Icon,
+        enabled: bool,
+        bare: bool,
+    },
 }
 
 impl Control {
@@ -470,6 +518,13 @@ impl Control {
                 .collect(),
             Control::Button(b) if b.enabled => vec![(b.hit, b.rect)],
             Control::Button(_) => Vec::new(),
+            Control::IconButton {
+                hit,
+                rect,
+                enabled: true,
+                ..
+            } => vec![(*hit, *rect)],
+            Control::IconButton { .. } => Vec::new(),
         }
     }
 
@@ -497,6 +552,7 @@ impl Control {
                 }
             }
             Control::Button(b) => down(&mut b.rect),
+            Control::IconButton { rect, .. } => down(rect),
         }
     }
 
@@ -513,6 +569,7 @@ impl Control {
                 .reduce(union)
                 .unwrap_or_default(),
             Control::Button(b) => b.rect,
+            Control::IconButton { rect, .. } => *rect,
         }
     }
 }
@@ -563,6 +620,65 @@ pub struct Layout {
     pub viewport: Option<Rect>,
     pub scroll_max: f32,
     pub scroll: f32,
+    /// The rows of the lists that can be reordered, each with its drag
+    /// handle's hit, in the order they are drawn.
+    pub rows: Vec<ReorderRow>,
+    /// The row held by a drag, drawn raised over the others.
+    pub lifted: Option<Rect>,
+}
+
+/// A list the owner reorders: by dragging a handle or with the buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum List {
+    Pages,
+    Tiles,
+}
+
+/// One row of a reorderable list: where it is, and the hit of its handle.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReorderRow {
+    pub list: List,
+    pub grip: Hit,
+    pub rect: Rect,
+}
+
+/// A drag in progress: the row picked up (its place among the rows shown),
+/// the place it would drop at, and where its top is (in unscrolled layout
+/// pixels, following the pointer).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DragView {
+    pub list: List,
+    pub from: usize,
+    pub to: usize,
+    pub top: f32,
+}
+
+/// The own-shortcut form while it is open: the kind chosen and what is
+/// wrong with the last try.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TileForm {
+    pub kind: CustomKind,
+    pub error: Option<Key>,
+}
+
+/// The row slot a dragged row dropped with its centre at `y` takes: the last
+/// row whose top is at or above `y` (the first one when `y` is above them
+/// all). `row_tops` are the tops of the rows, in order.
+pub fn drop_index(y: f32, row_tops: &[f32]) -> usize {
+    row_tops.iter().rposition(|top| *top <= y).unwrap_or(0)
+}
+
+/// The rows' places as they are drawn during a drag: the row held leaves
+/// its place and takes the one it would drop at.
+fn display_order(n: usize, drag: Option<&DragView>) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..n).collect();
+    if let Some(d) = drag
+        && d.from < n
+    {
+        let held = order.remove(d.from);
+        order.insert(d.to.min(n - 1), held);
+    }
+    order
 }
 
 impl Layout {
@@ -696,6 +812,11 @@ pub struct State<'a> {
     pub pages: PanelPages,
     /// "Pintasan": the tiles' order, which show, and the custom ones.
     pub tiles: ShortcutTiles,
+    /// A drag on one of the two lists, and the own-shortcut form.
+    pub drag: Option<DragView>,
+    pub tile_form: Option<TileForm>,
+    /// A message after the last tile added (it is off: the page is full).
+    pub tile_note: Option<Key>,
     pub version: &'a str,
     /// The data folder in use, as `data_dir::label` names it.
     pub data_dir: &'a str,
@@ -1172,6 +1293,80 @@ impl Builder<'_> {
         x
     }
 
+    /// A round chevron button right-aligned at `right`, centered on `cy`.
+    /// Returns its left edge.
+    fn icon_button(&mut self, right: f32, cy: f32, hit: Hit, icon: Icon, enabled: bool) -> f32 {
+        let rect = Rect {
+            x: right - STEP_BUTTON,
+            y: cy - STEP_BUTTON / 2.0,
+            w: STEP_BUTTON,
+            h: STEP_BUTTON,
+        };
+        self.l.controls.push(Control::IconButton {
+            hit,
+            rect,
+            icon,
+            enabled,
+            bare: false,
+        });
+        rect.x
+    }
+
+    /// A row's drag handle, in the column at the left of `card`.
+    fn grip(&mut self, card: Rect, cy: f32, hit: Hit) {
+        let rect = Rect {
+            x: card.x + 8.0,
+            y: cy - STEP_BUTTON / 2.0,
+            w: GRIP_W - 4.0,
+            h: STEP_BUTTON,
+        };
+        self.l.controls.push(Control::IconButton {
+            hit,
+            rect,
+            icon: Icon::Grip,
+            enabled: true,
+            bare: true,
+        });
+    }
+
+    /// The first row of a list card: `title` (the count) and the button
+    /// that puts the list back to its defaults.
+    fn list_header(&mut self, card: Rect, title: String, reset: Hit, enabled: bool) {
+        let cy = card.y + HEADER_H / 2.0;
+        let label = self.t(Key::ListRestore);
+        let w = self.button_w(&[&label], ButtonKind::Secondary);
+        let item = (reset, label, ButtonKind::Secondary, enabled, w);
+        let x = self.buttons(RIGHT, cy, vec![item]);
+        let rect = Rect {
+            x: card.x + INSET,
+            y: cy - 10.0,
+            w: row_text_w(card, x),
+            h: 20.0,
+        };
+        self.text(rect, title, Font::Label, Tone::Primary, Align::Left);
+    }
+
+    /// A small uppercase title across a card at `y`, with a hairline above
+    /// it unless it opens the card.
+    fn sub_header(&mut self, card: Rect, y: f32, label: String, line: bool) {
+        if line {
+            self.divider(card, y);
+        }
+        let rect = Rect {
+            x: card.x + INSET,
+            y: y + (SUBHEAD_H - EYEBROW_H) / 2.0 + 2.0,
+            w: card.w - 2.0 * INSET,
+            h: EYEBROW_H,
+        };
+        self.text(
+            rect,
+            label.to_uppercase(),
+            Font::Eyebrow,
+            Tone::Secondary,
+            Align::Left,
+        );
+    }
+
     fn button_w(&self, labels: &[&str], kind: ButtonKind) -> f32 {
         let widest = labels
             .iter()
@@ -1356,9 +1551,17 @@ fn scroll(l: &mut Layout, scroll: f32) {
     for (_, r) in &mut l.fields {
         down(r);
     }
-    for r in [&mut l.preview, &mut l.about_logo, &mut l.note_glyph]
-        .into_iter()
-        .flatten()
+    for r in &mut l.rows {
+        down(&mut r.rect);
+    }
+    for r in [
+        &mut l.preview,
+        &mut l.about_logo,
+        &mut l.note_glyph,
+        &mut l.lifted,
+    ]
+    .into_iter()
+    .flatten()
     {
         down(r);
     }
@@ -1484,34 +1687,105 @@ fn page_key(p: Page) -> Key {
     }
 }
 
-/// "Halaman panel": one row per page in the owner's order, its order stepper
-/// (− earlier, + later; the position in between) and its toggle. The last
-/// page still shown cannot be switched off.
+/// "Halaman panel": the pages shown come first, in the owner's order, each
+/// with a drag handle, up and down buttons and "Sembunyikan"; under
+/// "Tersembunyi" come the others, each with "Tampilkan". The last page still
+/// shown cannot be hidden. The header counts them and restores the defaults.
 fn pages_card(b: &mut Builder, s: &State) {
     b.eyebrow(Key::PanelPages, CONTENT_W - 4.0);
-    let entries = s.pages.entries();
-    let card = b.card(entries.len() as f32 * ROW_H);
-    let shown = s.pages.visible().len();
-    let last = entries.len() - 1;
-    for (i, (page, on)) in entries.iter().enumerate() {
-        let y = card.y + i as f32 * ROW_H;
+    let shown = s.pages.visible();
+    let hidden: Vec<Page> = s
+        .pages
+        .entries()
+        .iter()
+        .filter(|(_, on)| !on)
+        .map(|(p, _)| *p)
+        .collect();
+    let (n, total) = (shown.len(), s.pages.entries().len());
+    let extra = if hidden.is_empty() {
+        0.0
+    } else {
+        SUBHEAD_H + hidden.len() as f32 * ROW_H
+    };
+    let card = b.card(HEADER_H + n as f32 * ROW_H + extra);
+    let title = format!("{}: {n}/{total}", b.t(Key::PagesShown));
+    let changed = s.pages != PanelPages::default();
+    b.list_header(card, title, Hit::PageReset, changed);
+
+    let top = card.y + HEADER_H;
+    let drag = s.drag.filter(|d| d.list == List::Pages);
+    let hide = b.t(Key::ListHide);
+    let text_card = Rect {
+        x: card.x + GRIP_W,
+        w: card.w - GRIP_W,
+        ..card
+    };
+    for (slot, item) in display_order(n, drag.as_ref()).into_iter().enumerate() {
+        let page = shown[item];
+        let held = drag.filter(|d| d.from == item);
+        let y = held.map_or(top + slot as f32 * ROW_H, |d| d.top);
         let cy = y + ROW_H / 2.0;
-        let locked = *on && shown == 1;
-        let x = b.toggle_if(Hit::PageOn(*page), RIGHT, cy, *on, !locked);
-        let x = b.stepper(
-            x - GAP,
-            cy,
-            (i + 1).to_string(),
-            Hit::PageMove(*page, -1),
-            Hit::PageMove(*page, 1),
-            (i > 0, i < last),
-            true,
-        );
-        let desc = (i == 0).then(|| (b.t(Key::PageOrderDesc), Tone::Secondary));
-        b.row_text(card, y, b.t(page_key(*page)), desc, false, x);
-        if i > 0 {
-            b.divider(card, y);
+        b.divider(card, top + slot as f32 * ROW_H);
+        if held.is_some() {
+            b.l.lifted = Some(lifted_rect(card, y));
         }
+        b.l.rows.push(ReorderRow {
+            list: List::Pages,
+            grip: Hit::PageGrip(page),
+            rect: Rect {
+                x: card.x,
+                y,
+                w: card.w,
+                h: ROW_H,
+            },
+        });
+        b.grip(card, cy, Hit::PageGrip(page));
+        let x = b.icon_button(RIGHT, cy, Hit::PageMove(page, 1), Icon::ChevD, item + 1 < n);
+        let x = b.icon_button(x - 4.0, cy, Hit::PageMove(page, -1), Icon::ChevU, item > 0);
+        let locked = n == 1;
+        let w = b.button_w(&[&hide], ButtonKind::Secondary);
+        let button = (
+            Hit::PageOn(page),
+            hide.clone(),
+            ButtonKind::Secondary,
+            !locked,
+            w,
+        );
+        let x = b.buttons(x - GAP, cy, vec![button]);
+        let desc = locked.then(|| (b.t(Key::PagesLastShown), Tone::Secondary));
+        b.row_text(text_card, y, b.t(page_key(page)), desc, false, x);
+    }
+
+    if !hidden.is_empty() {
+        let y0 = top + n as f32 * ROW_H;
+        b.sub_header(card, y0, b.t(Key::PagesHidden), true);
+        let show = b.t(Key::ListShow);
+        let w = b.button_w(&[&show], ButtonKind::Secondary);
+        for (i, page) in hidden.iter().enumerate() {
+            let y = y0 + SUBHEAD_H + i as f32 * ROW_H;
+            if i > 0 {
+                b.divider(card, y);
+            }
+            let button = (
+                Hit::PageOn(*page),
+                show.clone(),
+                ButtonKind::Secondary,
+                true,
+                w,
+            );
+            let x = b.buttons(RIGHT, y + ROW_H / 2.0, vec![button]);
+            b.row_text(card, y, b.t(page_key(*page)), None, false, x);
+        }
+    }
+}
+
+/// The raised plate under the row a drag holds, with its top at `y`.
+fn lifted_rect(card: Rect, y: f32) -> Rect {
+    Rect {
+        x: card.x + 4.0,
+        y,
+        w: card.w - 8.0,
+        h: ROW_H,
     }
 }
 
@@ -1538,44 +1812,75 @@ fn tile_target(b: &Builder, lang: Lang, kind: CustomKind, target: &str, max_w: f
     }
 }
 
-/// "Pintasan": one row per tile in the owner's order, with its toggle and
-/// order stepper like "Halaman panel", and "Hapus" on a custom tile. The
-/// last tile still shown cannot be switched off, and while twelve show no
-/// other can be switched on (its row says the page is full). A tile on past
-/// the twelfth (a list edited by hand) says it does not show. Under the
-/// card, where the custom tiles come from.
+/// "Pintasan": the tiles shown come first, in the owner's order, each with
+/// a drag handle, up and down buttons, "Sembunyikan" and (an own tile)
+/// "Hapus"; the header counts them against the twelve the page takes and
+/// restores the defaults. Under "Tersedia" are the tiles that are off, by
+/// group, each with "+ Tambah" (off while twelve show), and the form that
+/// makes a tile of the owner's own. The last tile still shown cannot be
+/// hidden; a tile on past the twelfth (a list edited by hand) says it does
+/// not show.
 fn tiles_card(b: &mut Builder, s: &State) {
     b.eyebrow(Key::Shortcuts, CONTENT_W - 4.0);
     let entries = s.tiles.entries();
-    let card = b.card(entries.len() as f32 * ROW_H);
-    let shown = s.tiles.shown();
-    let full = s.tiles.full();
-    let last = entries.len() - 1;
-    let delete = b.t(Key::Delete);
-    for (i, (tile, on)) in entries.iter().enumerate() {
-        let y = card.y + i as f32 * ROW_H;
+    let on_idx: Vec<usize> = (0..entries.len()).filter(|i| entries[*i].1).collect();
+    let n = on_idx.len();
+    let card = b.card(HEADER_H + n as f32 * ROW_H);
+    let title = format!("{}: {}/{MAX_SHOWN}", b.t(Key::TilesShown), n.min(MAX_SHOWN));
+    let mut defaults = s.tiles.clone();
+    defaults.reset();
+    b.list_header(card, title, Hit::TileReset, defaults != s.tiles);
+
+    let top = card.y + HEADER_H;
+    let drag = s.drag.filter(|d| d.list == List::Tiles);
+    let (hide, delete) = (b.t(Key::ListHide), b.t(Key::Delete));
+    let text_card = Rect {
+        x: card.x + GRIP_W,
+        w: card.w - GRIP_W,
+        ..card
+    };
+    for (slot, item) in display_order(n, drag.as_ref()).into_iter().enumerate() {
+        let i = on_idx[item];
+        let held = drag.filter(|d| d.from == item);
+        let y = held.map_or(top + slot as f32 * ROW_H, |d| d.top);
         let cy = y + ROW_H / 2.0;
-        let locked = (*on && shown == 1) || (!*on && full);
-        let limit_note = if s.tiles.beyond_limit(i) {
+        b.divider(card, top + slot as f32 * ROW_H);
+        if held.is_some() {
+            b.l.lifted = Some(lifted_rect(card, y));
+        }
+        b.l.rows.push(ReorderRow {
+            list: List::Tiles,
+            grip: Hit::TileGrip(i),
+            rect: Rect {
+                x: card.x,
+                y,
+                w: card.w,
+                h: ROW_H,
+            },
+        });
+        b.grip(card, cy, Hit::TileGrip(i));
+        let x = b.icon_button(RIGHT, cy, Hit::TileMove(i, 1), Icon::ChevD, item + 1 < n);
+        let x = b.icon_button(x - 4.0, cy, Hit::TileMove(i, -1), Icon::ChevU, item > 0);
+        let locked = n == 1;
+        let w = b.button_w(&[&hide], ButtonKind::Secondary);
+        let button = (
+            Hit::TileOn(i),
+            hide.clone(),
+            ButtonKind::Secondary,
+            !locked,
+            w,
+        );
+        let mut x = b.buttons(x - GAP, cy, vec![button]);
+        let note = if s.tiles.beyond_limit(i) {
             Some(Key::TileNotShown)
-        } else if !*on && full {
-            Some(Key::TilePageFull)
+        } else if locked {
+            Some(Key::TilesLastShown)
         } else {
             None
         };
-        let limit_note = limit_note.map(|k| (b.t(k), Tone::Secondary));
-        let x = b.toggle_if(Hit::TileOn(i), RIGHT, cy, *on, !locked);
-        let mut x = b.stepper(
-            x - GAP,
-            cy,
-            (i + 1).to_string(),
-            Hit::TileMove(i, -1),
-            Hit::TileMove(i, 1),
-            (i > 0, i < last),
-            true,
-        );
-        let (label, desc) = match tile {
-            Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), limit_note),
+        let note = note.map(|k| (b.t(k), Tone::Secondary));
+        let (label, desc) = match &entries[i].0 {
+            Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), note),
             Tile::Custom(c) => {
                 let w = b.button_w(&[&delete], ButtonKind::Secondary);
                 let item = (
@@ -1587,8 +1892,8 @@ fn tiles_card(b: &mut Builder, s: &State) {
                 );
                 x = b.buttons(x - GAP, cy, vec![item]);
                 // Why it does not show matters more than where it points.
-                let desc = limit_note.unwrap_or_else(|| {
-                    let max_w = row_text_w(card, x);
+                let desc = note.unwrap_or_else(|| {
+                    let max_w = row_text_w(text_card, x);
                     (
                         tile_target(b, s.lang, c.kind, &c.target, max_w),
                         Tone::Secondary,
@@ -1597,20 +1902,226 @@ fn tiles_card(b: &mut Builder, s: &State) {
                 (c.label.clone(), Some(desc))
             }
         };
-        b.row_text(card, y, label, desc, false, x);
-        if i > 0 {
-            b.divider(card, y);
+        b.row_text(text_card, y, label, desc, false, x);
+    }
+
+    available_card(b, s);
+}
+
+/// "Tersedia": the tiles that are off, grouped, and the own-shortcut form.
+fn available_card(b: &mut Builder, s: &State) {
+    let entries = s.tiles.entries();
+    let full = s.tiles.full();
+    let groups: Vec<(TileGroup, Vec<usize>)> = TileGroup::ALL
+        .iter()
+        .map(|g| {
+            let items: Vec<usize> = (0..entries.len())
+                .filter(|i| !entries[*i].1 && group(&entries[*i].0) == *g)
+                .collect();
+            (*g, items)
+        })
+        .filter(|(_, items)| !items.is_empty())
+        .collect();
+    let list_h: f32 = groups
+        .iter()
+        .map(|(_, items)| SUBHEAD_H + items.len() as f32 * ROW_H)
+        .sum();
+
+    // The row that opens the form, or the form itself: heights first.
+    let probe = Rect {
+        x: CONTENT_X,
+        y: 0.0,
+        w: CONTENT_W,
+        h: 0.0,
+    };
+    let can_open = s.tiles.customs() < MAX_CUSTOM;
+    let open_label = b.t(Key::TileAddOwn);
+    let open_w = b.button_w(&[&open_label], ButtonKind::Secondary);
+    let desc_key = if can_open {
+        Key::TileOwnDesc
+    } else {
+        Key::TileOwnFull
+    };
+    let mut desc_lines = vec![b.t(desc_key)];
+    if let Some(k) = s.tile_note.filter(|_| can_open) {
+        desc_lines.extend(b.wrap(&b.t(k), Font::Desc, row_text_w(probe, RIGHT - open_w)));
+    }
+    let error_lines = s
+        .tile_form
+        .and_then(|f| f.error)
+        .map(|k| b.wrap(&b.t(k), Font::Desc, RIGHT - CONTENT_X - INSET))
+        .unwrap_or_default();
+    let error_h = if error_lines.is_empty() {
+        0.0
+    } else {
+        error_lines.len() as f32 * DESC_LINE_H + 8.0
+    };
+    let tail_h = match s.tile_form {
+        Some(_) => FORM_PAD + 3.0 * FIELD_ROW_H + error_h + ROW_H,
+        None => wrapped_row_h(desc_lines.len()),
+    };
+
+    b.eyebrow(Key::TilesAvailable, CONTENT_W - 4.0);
+    let card = b.card(list_h + tail_h);
+    let (add, delete) = (b.t(Key::TileAdd), b.t(Key::Delete));
+    let add_w = b.button_w(&[&add], ButtonKind::Secondary);
+    let delete_w = b.button_w(&[&delete], ButtonKind::Secondary);
+    let mut y = card.y;
+    for (g, items) in groups {
+        let key = match g {
+            TileGroup::Pages => Key::TileGroupPages,
+            TileGroup::Windows => Key::TileGroupWindows,
+            TileGroup::Vale => Key::TileGroupVale,
+            TileGroup::Own => Key::TileGroupOwn,
+        };
+        b.sub_header(card, y, b.t(key), y > card.y);
+        y += SUBHEAD_H;
+        for (k, i) in items.into_iter().enumerate() {
+            let cy = y + ROW_H / 2.0;
+            if k > 0 {
+                b.divider(card, y);
+            }
+            let button = (
+                Hit::TileOn(i),
+                add.clone(),
+                ButtonKind::Secondary,
+                !full,
+                add_w,
+            );
+            let mut x = b.buttons(RIGHT, cy, vec![button]);
+            let note = full.then(|| (b.t(Key::TilePageFull), Tone::Secondary));
+            let (label, desc) = match &entries[i].0 {
+                Tile::Builtin(sc) => (b.t(crate::shortcuts::label(*sc)), note),
+                Tile::Custom(c) => {
+                    let item = (
+                        Hit::TileRemove(i),
+                        delete.clone(),
+                        ButtonKind::Secondary,
+                        true,
+                        delete_w,
+                    );
+                    x = b.buttons(x - GAP, cy, vec![item]);
+                    let desc = note.unwrap_or_else(|| {
+                        let max_w = row_text_w(card, x);
+                        (
+                            tile_target(b, s.lang, c.kind, &c.target, max_w),
+                            Tone::Secondary,
+                        )
+                    });
+                    (c.label.clone(), Some(desc))
+                }
+            };
+            b.row_text(card, y, label, desc, false, x);
+            y += ROW_H;
         }
     }
-    let hint = Rect {
-        x: CONTENT_X + 4.0,
-        y: b.y - CARD_GAP + 4.0,
-        w: CONTENT_W - 8.0,
-        h: 18.0,
+    if y > card.y {
+        b.divider(card, y);
+    }
+    match s.tile_form {
+        None => {
+            let button = (
+                Hit::TileFormOpen,
+                open_label,
+                ButtonKind::Secondary,
+                can_open,
+                open_w,
+            );
+            let cy = y + tail_h / 2.0;
+            let x = b.buttons(RIGHT, cy, vec![button]);
+            let label = b.t(Key::TileGroupOwn);
+            b.row_text_lines(card, y, label, desc_lines, Tone::Secondary, x);
+        }
+        Some(form) => tile_form(b, card, y, form, &error_lines),
+    }
+}
+
+/// The own-shortcut form, from `y` down: Nama, Jenis, Target (with "Pilih…"
+/// for an app or a folder), the message about the last try, "Batal" and
+/// "Tambah".
+fn tile_form(b: &mut Builder, card: Rect, y: f32, form: TileForm, error: &[String]) {
+    let labels = [
+        b.t(Key::TileFormName),
+        b.t(Key::TileFormKind),
+        b.t(Key::TileFormTarget),
+    ];
+    let label_w = labels
+        .iter()
+        .map(|l| b.w(l, Font::Label))
+        .fold(0.0, f32::max);
+    let field_x = card.x + INSET + label_w + 2.0 * GAP;
+    let top = y + FORM_PAD;
+    let row = |i: usize| top + i as f32 * FIELD_ROW_H;
+    for (i, label) in labels.into_iter().enumerate() {
+        let rect = Rect {
+            x: card.x + INSET,
+            y: row(i) + (FIELD_ROW_H - 20.0) / 2.0,
+            w: label_w + GAP,
+            h: 20.0,
+        };
+        b.text(rect, label, Font::Label, Tone::Primary, Align::Left);
+    }
+    let field = |i: usize, right: f32| Rect {
+        x: field_x,
+        y: row(i) + (FIELD_ROW_H - FIELD_H) / 2.0,
+        w: right - field_x,
+        h: FIELD_H,
     };
-    let note = b.t(Key::TilesOwnHint);
-    b.text(hint, note, Font::Desc, Tone::Secondary, Align::Left);
-    b.y += 22.0;
+    b.l.fields.push((Field::TileName, field(0, RIGHT)));
+
+    let kinds = [
+        (CustomKind::App, Key::TileKindApp),
+        (CustomKind::Folder, Key::TileKindFolder),
+        (CustomKind::Url, Key::TileKindWeb),
+    ];
+    let items = kinds
+        .iter()
+        .map(|(k, key)| (Hit::TileFormKind(*k), b.t(*key)))
+        .collect();
+    let selected = index_of(&CustomKind::ALL, &form.kind);
+    let kind_cy = row(1) + FIELD_ROW_H / 2.0;
+    b.segmented(Group::TileKind, RIGHT, kind_cy, items, selected);
+
+    let mut right = RIGHT;
+    if form.kind != CustomKind::Url {
+        let label = b.t(Key::TileBrowse);
+        let w = b.button_w(&[&label], ButtonKind::Secondary);
+        let button = (Hit::TileBrowse, label, ButtonKind::Secondary, true, w);
+        right = b.buttons(RIGHT, row(2) + FIELD_ROW_H / 2.0, vec![button]) - GAP;
+    }
+    b.l.fields.push((Field::TileTarget, field(2, right)));
+
+    let mut y = row(3);
+    if !error.is_empty() {
+        for (i, line) in error.iter().enumerate() {
+            let rect = Rect {
+                x: card.x + INSET,
+                y: y + 2.0 + i as f32 * DESC_LINE_H,
+                w: RIGHT - card.x - INSET,
+                h: 16.0,
+            };
+            b.text(rect, line.clone(), Font::Desc, Tone::Bad, Align::Left);
+        }
+        y += error.len() as f32 * DESC_LINE_H + 8.0;
+    }
+    let (cancel, add) = (b.t(Key::Cancel), b.t(Key::TileFormAdd));
+    let items = vec![
+        (
+            Hit::TileFormCancel,
+            cancel.clone(),
+            ButtonKind::Secondary,
+            true,
+            b.button_w(&[&cancel], ButtonKind::Secondary),
+        ),
+        (
+            Hit::TileFormAdd,
+            add.clone(),
+            ButtonKind::Primary,
+            true,
+            b.button_w(&[&add], ButtonKind::Primary),
+        ),
+    ];
+    b.buttons(RIGHT, y + ROW_H / 2.0, items);
 }
 
 /// The width left for a row's label and description, left of `control_x`.
@@ -2435,7 +2946,7 @@ mod tests {
                         pages: if locked {
                             let mut p = PanelPages::default();
                             p.toggle(Page::Cli);
-                            p.move_by(Page::Shortcuts, -10);
+                            p.move_to(Page::Shortcuts, 0);
                             p
                         } else {
                             PanelPages::default()
@@ -2459,10 +2970,16 @@ mod tests {
                                 );
                                 t.add(own.expect("valid"));
                             }
+                            // One own tile that is off: the page is full.
+                            let last = t.entries().len() - 1;
+                            t.toggle(last);
                             t
                         } else {
                             ShortcutTiles::default()
                         },
+                        drag: None,
+                        tile_form: None,
+                        tile_note: None,
                         version: "2.1.0",
                         data_dir: r"%APPDATA%\Vale",
                     });
@@ -2488,6 +3005,45 @@ mod tests {
                     hook_note: Some((text(lang, key), Tone::Good)),
                     ..base.clone()
                 });
+            }
+        }
+        // The own-shortcut form open on each kind with each message, the
+        // note after a tile added off, and a row in hand on each list: with
+        // the default lists and with the long, full ones.
+        for base in [out[0].clone(), out[2].clone()] {
+            for lang in [Lang::Id, Lang::En] {
+                for kind in CustomKind::ALL {
+                    for error in [
+                        None,
+                        Some(Key::TileErrName),
+                        Some(Key::TileErrPath),
+                        Some(Key::TileErrUrl),
+                        Some(Key::TileOwnFull),
+                    ] {
+                        out.push(State {
+                            lang,
+                            tile_form: Some(TileForm { kind, error }),
+                            ..base.clone()
+                        });
+                    }
+                }
+                out.push(State {
+                    lang,
+                    tile_note: Some(Key::TileAddedOff),
+                    ..base.clone()
+                });
+                for list in [List::Pages, List::Tiles] {
+                    out.push(State {
+                        lang,
+                        drag: Some(DragView {
+                            list,
+                            from: 1,
+                            to: 3,
+                            top: FIRST_CARD_Y + 600.0,
+                        }),
+                        ..base.clone()
+                    });
+                }
             }
         }
         out
