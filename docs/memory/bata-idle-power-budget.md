@@ -1,6 +1,6 @@
 ---
 tags: [decision, robot, power, timers]
-date: 2026-10-27
+date: 2026-10-29
 ---
 
 # The notch assistant's idle power budget
