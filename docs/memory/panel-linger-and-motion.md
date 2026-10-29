@@ -130,13 +130,27 @@ outside into `Dismiss`). It stops when the linger ends.
   it opens, the floor it already had when a panel resizes. Tests in
   `motion.rs` pin 1 at the panel's height, a monotonic fall and 0 at 34, 76
   and `SHOT_H`.
+- **Gotcha, a retarget mid-fade keeps the alpha:** with hover, the panel is
+  often reopened while its close still runs (pointer out, back in). The
+  drawn view is then compact, so "grows from the visible view" would put the
+  floor at the shape's height and the content would pop from ~93 % to 0.
+  `refresh` passes the alpha the panel content has now (`FadeStart::alpha`:
+  a panel still opening, or the `leaving` one still fading, measured against
+  its own height, `panel_rest_h`), and `fade_floor` picks the floor that
+  keeps it: `carried` on a reopen of the same panel, else the floor solved
+  from the alpha (it may be below 0 for a taller panel). A close retargeted
+  to another view keeps the alpha too unless the target needs a higher floor
+  (the fade must still be 0 when the morph ends). A settled view has no
+  alpha and gets the plain rules above.
 - **Gotcha, Fullscreen clears the leaving snapshot:** `Fullscreen(true)` takes
   the panel off screen (view Hidden) while `drawn` still says Panel, so the
   snapshot `closed_panel` kept would become `leaving` when the game ends and
   the island returns as Idle, and old panel content showed faintly. `refresh`
   now clears `leaving` and `closed_panel` on a Hidden retarget, and
   `leaving_snapshot` hands one over only when the morph starts from a view
-  that was visible (`anim.to_opacity == 1.0`), never from a hidden one.
+  that was visible (`anim.to_opacity == 1.0`), never from a hidden one. The
+  decision is the pure `leaving_on_morph` (and `closed_panel_after` for
+  `follow_closed_panel`); app tests walk Panel, Hidden, Idle through them.
 - The CLI folder menu's reveal uses `layer2` too, so it is skipped (the menu
   shows at once) while a page cross-fade is running: D2D cannot push one
   layer twice, and `EndDraw` would fail.

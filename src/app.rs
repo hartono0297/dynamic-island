@@ -100,8 +100,8 @@ use crate::ui::geometry::{
     lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
 };
 use crate::ui::motion::{
-    COMPACT_H, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
-    content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, transition,
+    COMPACT_H, FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
+    content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, panel_fade, transition,
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -1684,11 +1684,8 @@ impl App {
     /// now is kept as it was, for its fade-out (`refresh` hands it to
     /// `leaving`). Its close already reset what it showed.
     fn follow_closed_panel(&mut self, shown_before: Option<ShownPanel>) {
-        if matches!(self.state.view(), View::Panel(_)) {
-            self.closed_panel = None;
-        } else if shown_before.is_some() {
-            self.closed_panel = shown_before;
-        }
+        self.closed_panel =
+            closed_panel_after(&self.state.view(), shown_before, self.closed_panel.take());
     }
 
     /// Without a client ID there is nothing to log in to; the notice says
@@ -2829,6 +2826,17 @@ impl App {
             // Drawn on screen before this morph (not hidden, not heading
             // for it): only then does a closing panel have content to fade.
             let from_visible = self.anim.to_opacity == 1.0;
+            // Panel content caught mid-fade: a panel still opening, or a
+            // closing one still fading out (as `draw` paints them).
+            let panel_alpha = if !self.anim.running || !from_visible {
+                None
+            } else if was_panel.is_some() {
+                Some(panel_fade(shape.h, self.anim.to.h, self.fade_floor_h))
+            } else {
+                self.leaving
+                    .as_ref()
+                    .map(|shown| panel_fade(shape.h, panel_rest_h(style, shown), self.fade_floor_h))
+            };
             // Hidden keeps the shape where it is and only fades it out.
             let (to, to_opacity) = target.map_or((shape, 0.0), |s| (s, 1.0));
             self.anim = Anim {
@@ -2842,28 +2850,39 @@ impl App {
                 plain: !self.animations,
                 fade_from,
             };
+            (self.leaving, self.closed_panel) = leaving_on_morph(
+                MorphTo {
+                    is_panel,
+                    hiding,
+                    compact_swap,
+                },
+                was_panel,
+                from_visible,
+                self.leaving.take(),
+                self.closed_panel.take(),
+            );
             if !hiding {
+                // The panel whose content fades in this morph: the one it
+                // opens into, else the one closing.
+                let rest_h = if is_panel {
+                    to.h
+                } else {
+                    self.leaving
+                        .as_ref()
+                        .map_or(to.h, |shown| panel_rest_h(style, shown))
+                };
                 self.fade_floor_h = fade_floor(
                     is_panel,
                     to.h,
-                    was_panel.is_some(),
-                    self.fade_floor_h,
-                    from_visible,
-                    shape.h,
+                    rest_h,
+                    FadeStart {
+                        shape_h: shape.h,
+                        from_panel: was_panel.is_some(),
+                        from_visible,
+                        carried: self.fade_floor_h,
+                        alpha: panel_alpha,
+                    },
                 );
-            }
-            if is_panel {
-                self.leaving = None;
-                self.closed_panel = None;
-            } else if hiding {
-                // Off screen (a fullscreen app): nothing of the panel is
-                // left to fade out when the island comes back.
-                self.leaving = None;
-                self.closed_panel = None;
-            } else if compact_swap && was_panel.is_some() {
-                // As it showed before its close reset it; without that, no
-                // fade-out rather than content that is not what was there.
-                self.leaving = leaving_snapshot(was_panel, from_visible, self.closed_panel.take());
             }
             // The enlarged panel needs the taller canvas before it grows.
             self.sync_window_height(now);
@@ -5681,8 +5700,6 @@ fn is_color_set_change(lparam: LPARAM) -> bool {
     !area.is_null() && unsafe { area.to_string() }.is_ok_and(|a| a == "ImmersiveColorSet")
 }
 
-/// Windows' "Animation effects" (Settings, Accessibility, Visual effects;
-/// `SPI_GETCLIENTAREAANIMATION`). On when it cannot be read.
 /// The panel that fades out while the island morphs into a compact view or
 /// notice: what `closed_panel` kept, only if that panel was on screen when
 /// the morph started (`from_visible`) and is the page that was drawn. A
@@ -5699,6 +5716,67 @@ fn leaving_snapshot(
     closed.filter(|shown| Some(shown.page) == was_panel)
 }
 
+/// Where a morph that `refresh` starts is heading, for `leaving_on_morph`.
+#[derive(Clone, Copy, Debug)]
+struct MorphTo {
+    /// To a panel.
+    is_panel: bool,
+    /// To Hidden (a fullscreen app): the shape stays and fades out.
+    hiding: bool,
+    /// To another compact view or notice than the one drawn.
+    compact_swap: bool,
+}
+
+/// `closed_panel` after an applied event (`follow_closed_panel`): gone
+/// while a panel shows, else the panel that showed before the event and
+/// does not now (`shown_before`), else what it kept.
+fn closed_panel_after(
+    view: &View,
+    shown_before: Option<ShownPanel>,
+    closed: Option<ShownPanel>,
+) -> Option<ShownPanel> {
+    if matches!(view, View::Panel(_)) {
+        None
+    } else {
+        shown_before.or(closed)
+    }
+}
+
+/// `(leaving, closed_panel)` once a morph starts. A panel opening, or the
+/// island going off screen (nothing of the panel is left to fade out when
+/// it comes back), clears both. A panel closing into a compact view or a
+/// notice hands its snapshot to the fade (`leaving_snapshot`). Any other
+/// retarget (a close retargeted mid-way) keeps them: the fade goes on.
+fn leaving_on_morph(
+    to: MorphTo,
+    was_panel: Option<Page>,
+    from_visible: bool,
+    leaving: Option<ShownPanel>,
+    closed: Option<ShownPanel>,
+) -> (Option<ShownPanel>, Option<ShownPanel>) {
+    if to.is_panel || to.hiding {
+        (None, None)
+    } else if to.compact_swap && was_panel.is_some() {
+        // As it showed before its close reset it; without that, no
+        // fade-out rather than content that is not what was there.
+        (leaving_snapshot(was_panel, from_visible, closed), None)
+    } else {
+        (leaving, closed)
+    }
+}
+
+/// The height of the panel a snapshot showed, as `paint_leaving_panel`
+/// sizes it.
+fn panel_rest_h(style: Style, shown: &ShownPanel) -> f32 {
+    shape_for(
+        style,
+        panel_kind(shown.page, shown.cli_tall, shown.cleaner.is_some()),
+    )
+    .h
+}
+
+/// Windows' "Animation effects" (Settings, Accessibility, Visual effects;
+/// `SPI_GETCLIENTAREAANIMATION`). On when it cannot be read.
 fn client_animations_on() -> bool {
     // A BOOL: four bytes.
     let mut on: i32 = 1;
@@ -6029,20 +6107,98 @@ mod tests {
         assert_eq!(leaving_snapshot(Some(Page::Notes), true, None), None);
     }
 
+    fn morph_to(is_panel: bool, hiding: bool, compact_swap: bool) -> MorphTo {
+        MorphTo {
+            is_panel,
+            hiding,
+            compact_swap,
+        }
+    }
+
     #[test]
     fn a_fullscreen_hide_then_an_idle_return_fades_no_panel() {
-        let shape = shape_for(Style::Notch, ShapeKind::Panel);
-        // The panel was on screen, then Fullscreen hid it (retarget to
-        // Hidden: opacity 0) and the game ended (retarget to Idle). The
-        // snapshot is gone and the morph did not start from a visible view.
-        let mut anim = Anim::settled(shape, 1.0);
-        assert_eq!(anim.to_opacity, 1.0);
-        anim.to_opacity = 0.0;
-        let from_visible = anim.to_opacity == 1.0;
-        assert!(!from_visible);
+        let notes = Some(Page::Notes);
+        // The Notes panel shows: nothing is kept.
+        let closed = closed_panel_after(&View::Panel(Page::Notes), None, None);
+        assert_eq!(closed, None);
+        // Fullscreen(true): the view is Hidden, and the event keeps the
+        // panel as it showed (`follow_closed_panel`).
+        let closed = closed_panel_after(&View::Hidden, Some(shown(Page::Notes)), closed);
+        assert_eq!(closed, Some(shown(Page::Notes)));
+        // `refresh` retargets to Hidden (`drawn` still says Panel, the
+        // panel was visible): both are cleared.
+        let (leaving, closed) =
+            leaving_on_morph(morph_to(false, true, false), notes, true, None, closed);
+        assert_eq!((&leaving, &closed), (&None, &None));
+        // The game ends: the event that brings Idle back had no panel
+        // before it, so nothing is stored again.
+        let closed = closed_panel_after(&View::Idle, None, closed);
+        assert_eq!(closed, None);
+        // `refresh` to Idle: `drawn` still says Panel, so it is a compact
+        // swap from a panel, but the island was hidden: no fade.
+        let from_visible = false;
+        let (leaving, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            from_visible,
+            leaving,
+            closed,
+        );
+        assert_eq!((leaving, closed), (None, None));
+        // Even a snapshot that survived is not handed over from hidden.
+        let (leaving, _) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            from_visible,
+            None,
+            Some(shown(Page::Notes)),
+        );
+        assert_eq!(leaving, None);
+    }
+
+    #[test]
+    fn the_leaving_snapshot_follows_the_morph() {
+        let notes = Some(Page::Notes);
+        let snapshot = Some(shown(Page::Notes));
+        // A visible panel closing into a compact view: the snapshot fades.
+        let (leaving, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            notes,
+            true,
+            None,
+            snapshot.clone(),
+        );
+        assert_eq!((&leaving, &closed), (&snapshot, &None));
+        // Retargeted mid-close (no panel drawn now): the fade goes on.
+        let (kept, closed) = leaving_on_morph(
+            morph_to(false, false, true),
+            None,
+            true,
+            leaving.clone(),
+            closed,
+        );
+        assert_eq!((&kept, &closed), (&snapshot, &None));
+        let (kept, _) = leaving_on_morph(morph_to(false, false, false), None, true, leaving, None);
+        assert_eq!(kept, snapshot);
+        // Reopened mid-close: the panel shows itself, nothing leaves.
+        let (leaving, closed) =
+            leaving_on_morph(morph_to(true, false, false), None, true, kept, snapshot);
+        assert_eq!((leaving, closed), (None, None));
+    }
+
+    #[test]
+    fn the_closing_panel_is_sized_as_it_showed() {
+        let tall = ShownPanel {
+            cli_tall: true,
+            ..shown(Page::Cli)
+        };
         assert_eq!(
-            leaving_snapshot(Some(Page::Notes), from_visible, Some(shown(Page::Notes))),
-            None
+            panel_rest_h(Style::Notch, &tall),
+            shape_for(Style::Notch, ShapeKind::PanelTall).h
+        );
+        assert_eq!(
+            panel_rest_h(Style::Notch, &shown(Page::Notes)),
+            shape_for(Style::Notch, ShapeKind::Panel).h
         );
     }
 
