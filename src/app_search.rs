@@ -13,6 +13,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_WIN, RegisterHotKey, UnregisterHotKey, VK_SPACE,
 };
 use windows::Win32::Foundation::HWND;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, GW_HWNDNEXT, GWL_EXSTYLE, GetClassNameW,
@@ -26,6 +29,7 @@ use crate::config::SearchHotkey;
 use crate::i18n::{self, Key, tr};
 use crate::model::{Event, Hit, Notice, NoticeKind, Page, View};
 use crate::search::{self, Action, AppEntry, Labels, SearchResult};
+use crate::search_files::{self, FileEntry, Limits};
 use crate::shelf::{self, Probe};
 use crate::shortcuts;
 use crate::ui::cli_input::{CliInput, Key as InputKey};
@@ -43,6 +47,14 @@ pub(super) struct SearchState {
     pub apps: Option<Vec<AppEntry>>,
     /// The index thread was started.
     pub indexing: bool,
+    /// The files and folders last walked, newest walk; empty until the
+    /// first one is done. In memory only.
+    pub files: Vec<FileEntry>,
+    /// A walk is running, and when the last one started.
+    pub walking: bool,
+    pub walk_started: Option<Instant>,
+    /// At least one walk has finished (the "reading files" hint ends).
+    pub walked: bool,
     /// The field's text as last searched.
     pub query: String,
     pub results: Vec<SearchResult>,
@@ -72,6 +84,21 @@ fn with_labels<T>(f: impl FnOnce(&Labels) -> T) -> T {
         root: &i18n::search_root,
         size: &size,
     })
+}
+
+/// Where the highlight goes when the list is made again without a new
+/// query (the app index or the file index arrived): the row of the same
+/// result as before (compared by what Enter does), else the first.
+pub(super) fn keep_selection(old: &[SearchResult], at: usize, new: &[SearchResult]) -> usize {
+    old.get(at)
+        .and_then(|was| new.iter().position(|r| r.action == was.action))
+        .unwrap_or(0)
+}
+
+/// Whether a file walk should start now: none is running, and the last
+/// one started `FILE_FRESH` ago or never.
+pub(super) fn walk_due(last: Option<Instant>, running: bool, now: Instant) -> bool {
+    !running && last.is_none_or(|at| now.saturating_duration_since(at) > search_files::FILE_FRESH)
 }
 
 /// The highlighted row after an Up or a Down among `n` rows (it stops at
@@ -173,19 +200,63 @@ impl App {
         }
     }
 
-    /// The index arrived: what is typed is searched again.
+    /// Walks the user's folders for file and folder names, on a short-lived
+    /// thread, when the search opens and the last walk is older than
+    /// `FILE_FRESH` (the old list answers meanwhile). Nothing runs while the
+    /// search is closed.
+    fn start_search_files(&mut self) {
+        let now = Instant::now();
+        if !walk_due(self.search.walk_started, self.search.walking, now) {
+            return;
+        }
+        self.search.walking = true;
+        self.search.walk_started = Some(now);
+        let tx = self.tx.clone();
+        let wake = poster(self.hwnd, WM_APP_EVENT);
+        let spawned = std::thread::Builder::new()
+            .name("vale-search-files".into())
+            .spawn(move || {
+                // Reading thousands of directories is not urgent: stay out of
+                // the way of whatever the user is doing.
+                unsafe {
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+                }
+                let files = search_files::walk(&search_files::default_roots(), Limits::DEFAULT);
+                if tx.send(Event::SearchFiles(files)).is_ok() {
+                    wake();
+                }
+            });
+        if spawned.is_err() {
+            self.search.walking = false;
+        }
+    }
+
+    /// The index arrived: what is typed is searched again, the highlight
+    /// staying on the same result.
     pub(super) fn on_search_index(&mut self, apps: Vec<AppEntry>) {
         self.search.apps = Some(apps);
         self.search.indexing = false;
-        self.search_again();
+        self.search_again(true);
+        self.redraw_search();
+    }
+
+    /// A walk finished: the new names replace the old ones, and what is typed
+    /// is searched again.
+    pub(super) fn on_search_files(&mut self, files: Vec<FileEntry>) {
+        self.search.files = files;
+        self.search.walking = false;
+        self.search.walked = true;
+        self.search_again(true);
         self.redraw_search();
     }
 
     /// The reducer opened the search: a clean field takes the keyboard (the
     /// island activates). When it cannot have it, the search closes again.
     pub(super) fn focus_search(&mut self) -> Option<Event> {
-        // Every way in (hotkey, tray, tile) reads the Start Menu once.
+        // Every way in (hotkey, tray, tile) reads the Start Menu once and
+        // looks at the user's folders again when the last look is old.
         self.start_search_index();
+        self.start_search_files();
         if editor::focus_open_editor() {
             return Some(Event::SearchClose);
         }
@@ -276,18 +347,27 @@ impl App {
             .unwrap_or_default();
         if typed != self.search.query {
             self.search.query = typed;
-            self.search_again();
+            self.search_again(false);
         }
         self.redraw_search();
     }
 
-    /// Searches again for what is typed; the highlight goes to the first row.
-    fn search_again(&mut self) {
+    /// Searches again for what is typed. A new query puts the highlight on
+    /// the first row; an index that arrived (`keep`) leaves it on the same
+    /// result.
+    fn search_again(&mut self, keep: bool) {
         let lang = i18n::lang();
         let apps = self.search.apps.as_deref().unwrap_or(&[]);
-        self.search.results =
-            with_labels(|labels| search::search(&self.search.query, apps, &[], lang, labels));
-        self.search.selected = 0;
+        let files = &self.search.files;
+        let results = with_labels(|labels| {
+            search::search(&self.search.query, apps, files, lang, labels)
+        });
+        self.search.selected = if keep {
+            keep_selection(&self.search.results, self.search.selected, &results)
+        } else {
+            0
+        };
+        self.search.results = results;
     }
 
     fn redraw_search(&mut self) {
@@ -427,6 +507,7 @@ fn window_to_return_to(before: HWND, island: HWND) -> Option<HWND> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn the_highlight_stops_at_both_ends() {
@@ -436,6 +517,48 @@ mod tests {
         assert_eq!(move_selection(3, 4, true), 2);
         assert_eq!(move_selection(0, 0, false), 0);
         assert_eq!(move_selection(5, 0, true), 0);
+    }
+
+    fn result(name: &str) -> SearchResult {
+        SearchResult {
+            kind: search::Kind::File,
+            title: name.into(),
+            subtitle: String::new(),
+            action: Action::OpenPath(std::path::PathBuf::from(format!(r"C:\Home\{name}"))),
+            path: None,
+        }
+    }
+
+    #[test]
+    fn the_highlight_stays_on_the_same_result_when_more_arrive() {
+        let names = |list: &[&str]| -> Vec<SearchResult> { list.iter().map(|n| result(n)).collect() };
+        let old = names(&["a", "b", "c"]);
+        // More results came in above and below: "b" moved down.
+        let more = names(&["x", "a", "y", "b", "c", "z"]);
+        assert_eq!(keep_selection(&old, 1, &more), 3);
+        assert_eq!(keep_selection(&old, 0, &more), 1);
+        assert_eq!(keep_selection(&old, 2, &more), 4);
+        // The same list: where it was.
+        assert_eq!(keep_selection(&old, 2, &old), 2);
+        // The result is gone: the first row.
+        let gone = names(&["x", "a", "c"]);
+        assert_eq!(keep_selection(&old, 1, &gone), 0);
+        // Nothing before, nothing now, a stale index: the first row.
+        assert_eq!(keep_selection(&[], 0, &more), 0);
+        assert_eq!(keep_selection(&old, 9, &more), 0);
+        assert_eq!(keep_selection(&old, 1, &[]), 0);
+    }
+
+    #[test]
+    fn a_fresh_or_running_walk_is_not_started_again() {
+        let now = Instant::now();
+        assert!(walk_due(None, false, now), "never walked");
+        assert!(!walk_due(None, true, now), "running");
+        let ago = |s: u64| now.checked_sub(Duration::from_secs(s));
+        assert!(!walk_due(ago(5), false, now), "five seconds old");
+        assert!(!walk_due(ago(29), false, now));
+        assert!(walk_due(ago(31), false, now), "stale");
+        assert!(!walk_due(ago(31), true, now), "stale but running");
     }
 
     #[test]

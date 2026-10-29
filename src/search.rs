@@ -8,7 +8,6 @@
 //! from two typed characters and share the rows with the apps.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::i18n::Lang;
 use crate::search_files::{FileEntry, RootKind};
@@ -668,6 +667,7 @@ pub fn dedupe(mut apps: Vec<AppEntry>) -> Vec<AppEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     fn labels() -> Labels<'static> {
         Labels {

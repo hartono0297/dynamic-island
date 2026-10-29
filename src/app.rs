@@ -936,6 +936,10 @@ impl App {
                     self.on_search_index(apps);
                     continue;
                 }
+                Event::SearchFiles(files) => {
+                    self.on_search_files(files);
+                    continue;
+                }
                 Event::ShelfDragOver(on) => {
                     // A drag that entered the island is a halo trigger: if
                     // it strays above the island once the panel has gone,

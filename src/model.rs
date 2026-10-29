@@ -15,6 +15,7 @@ use crate::tiles::{CustomTile, ShortcutTiles};
 use crate::pomodoro::PomoSettings;
 use crate::screenshot::{FileCandidate, FileOutcome};
 use crate::search::AppEntry;
+use crate::search_files::FileEntry;
 use crate::system::SystemSample;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,6 +162,10 @@ pub enum Event {
     /// The Start Menu's apps, indexed on a background thread. `App` keeps
     /// them; the reducer has no use for them.
     SearchIndex(Vec<AppEntry>),
+    /// The names under the user's Desktop, Documents, Downloads, Pictures,
+    /// Videos and Music, walked on a background thread. `App` keeps them; the
+    /// reducer has no use for them.
+    SearchFiles(Vec<FileEntry>),
     /// Enter in the search field copied an entry: the panel closes like
     /// after a shortcut, and the keyboard goes back.
     ClipCommit,
