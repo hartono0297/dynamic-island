@@ -39,7 +39,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[open-mode]]: Mode buka (Hover, Hover & tetap, Klik) and notices with a button
 - [[scroll-volume]]: the wheel over the music notch / cover turns the master volume 2 % a notch
 - [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
-- [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json
+- [[shortcut-tiles]]: Pintasan tiles chosen in Settings (page jumps, Vale Settings, own tiles added in a form), drag to reorder
 - [[gestures]]: middle click, swipe and sideways wheel on the music views
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
 - [[v3-3-handoff]]: v3.3 (icon refresh, stay-behind rise, shelf drop, file search), owner checks, minors left

@@ -2799,7 +2799,7 @@ mod tests {
         .expect("valid");
         assert!(on);
         assert_eq!(next.customs(), 1);
-        assert_eq!(next.entries().last().unwrap().1, true);
+        assert!(next.entries().last().unwrap().1);
         // What is wrong is told per part, and by kind.
         let key = |r: std::result::Result<(ShortcutTiles, bool), Key>| r.map(|_| ()).unwrap_err();
         assert_eq!(
