@@ -2,6 +2,9 @@
 name = "vale"
 version = "3.2.1"
 edition = "2024"
+license = "MIT"
+description = "Vale: a notch for the top of the Windows 11 screen"
+repository = "https://github.com/hartono0297/dynamic-island"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

@@ -38,7 +38,7 @@ jobs:
           Copy-Item target/release/vale.exe dist/
           $hash = (Get-FileHash dist/vale.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -Path dist/vale.exe.sha256 -Value "$hash  vale.exe" -NoNewline -Encoding ascii
-          Copy-Item dist/vale.exe, install.ps1, uninstall.ps1, README.md pkg/
+          Copy-Item dist/vale.exe, install.ps1, uninstall.ps1, README.md, LICENSE pkg/
           Compress-Archive -Path pkg/* -DestinationPath "dist/vale-$tag.zip"
 
       - name: Publish release
