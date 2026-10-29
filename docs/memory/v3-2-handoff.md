@@ -5,8 +5,14 @@ date: 2026-10-28
 
 # v3.2 handoff
 
-Version `3.2.0` (Cargo.toml, Cargo.lock), `cargo test --locked` 966 passed. Not
-pushed, not tagged: pushing `main` and the `v3.2.0` tag are the owner's calls.
+**State (2026-10-29): version 3.2.1 is released** (tags `v3.2.0` and `v3.2.1`
+pushed by the owner, release assets built by `release.yml`; `install.ps1` installs
+the latest). `main` is pushed; `cargo test --locked` 1049 passed. To continue on
+another PC: `git pull`, read this note and [[index]], `rustup` + MSVC, then
+`cargo test --locked` (the Mole PowerShell test is a known flake under load;
+rerun). Tag pushes are the owner's call (the agent's permission check refuses
+them): the owner runs `git tag vX.Y.Z; git push origin vX.Y.Z` in PowerShell
+(no `&&` in Windows PowerShell 5.1).
 
 Done, one commit per run (plan: `docs/design/rencana-v3.2.pdf`):
 [[open-mode]] (Mode buka, notices with buttons), clipboard scroll, screenshot
