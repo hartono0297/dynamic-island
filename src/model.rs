@@ -499,6 +499,8 @@ pub enum Effect {
     Clip(ClipAction),
     /// Something to do with the screenshot on preview.
     Shot(ShotAction),
+    /// Open Vale's own Settings window (the "Setelan Vale" tile).
+    OpenSettings,
 }
 
 /// What the screenshot preview asks for (screenshot id).
@@ -594,10 +596,14 @@ pub enum Shortcut {
     TaskManager,
     WindowsSettings,
     Lock,
+    /// Opens Vale's own Settings window.
+    ValeSettings,
+    /// Jumps straight to a panel page (never Search or Shortcuts).
+    Go(Page),
 }
 
 impl Shortcut {
-    pub const ALL: [Shortcut; 9] = [
+    pub const ALL: [Shortcut; 19] = [
         Shortcut::Screenshot,
         Shortcut::Clipboard,
         Shortcut::Search,
@@ -607,7 +613,23 @@ impl Shortcut {
         Shortcut::TaskManager,
         Shortcut::WindowsSettings,
         Shortcut::Lock,
+        Shortcut::ValeSettings,
+        Shortcut::Go(Page::Calendar),
+        Shortcut::Go(Page::Pomodoro),
+        Shortcut::Go(Page::Reminders),
+        Shortcut::Go(Page::Notes),
+        Shortcut::Go(Page::Media),
+        Shortcut::Go(Page::Mixer),
+        Shortcut::Go(Page::Shelf),
+        Shortcut::Go(Page::System),
+        Shortcut::Go(Page::Cli),
     ];
+
+    /// Whether a fresh install shows this tile: the original nine, Vale's
+    /// own Settings and the Shelf. The other page tiles are there to add.
+    pub fn default_on(self) -> bool {
+        !matches!(self, Shortcut::Go(p) if p != Page::Shelf)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

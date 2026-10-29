@@ -348,8 +348,6 @@ keys! {
     TileKindApp => "Aplikasi", "App";
     TileKindFolder => "Folder", "Folder";
     TileKindUrl => "Alamat web", "Web address";
-    TilesOwnHint => "Tile sendiri: tambahkan di config.json (lihat README)",
-        "Your own tiles: add them in config.json (see the README)";
     TileNotShown => "Tidak tampil (maks. 12)", "Not shown (12 max)";
     TilePageFull => "Halaman penuh (maks. 12)", "Page full (12 max)";
     ShortcutScreenshot => "Screenshot", "Screenshot";
@@ -361,6 +359,43 @@ keys! {
     ShortcutTaskManager => "Pengelola Tugas", "Task Manager";
     ShortcutSettings => "Pengaturan Windows", "Windows Settings";
     ShortcutLock => "Kunci layar", "Lock screen";
+    ShortcutValeSettings => "Setelan Vale", "Vale Settings";
+    ShortcutGoShelf => "Rak", "Shelf";
+    // Settings → Tampilan → Halaman panel and Pintasan: the lists.
+    PagesShown => "Tampil di panel", "Shown on the panel";
+    PagesHidden => "Tersembunyi", "Hidden";
+    PagesLastShown => "Minimal satu halaman tampil", "At least one page must show";
+    TilesShown => "Tampil di halaman", "Shown on the page";
+    TilesLastShown => "Minimal satu pintasan tampil", "At least one shortcut must show";
+    TilesAvailable => "Tersedia", "Available";
+    TileGroupPages => "Halaman", "Pages";
+    TileGroupWindows => "Windows", "Windows";
+    TileGroupVale => "Vale", "Vale";
+    TileGroupOwn => "Milik sendiri", "Your own";
+    ListHide => "Sembunyikan", "Hide";
+    ListShow => "Tampilkan", "Show";
+    TileAdd => "+ Tambah", "+ Add";
+    ListRestore => "Kembalikan bawaan", "Restore defaults";
+    // The own-shortcut form.
+    TileAddOwn => "+ Pintasan sendiri", "+ Your own shortcut";
+    TileOwnDesc => "Aplikasi, folder, atau alamat web", "An app, a folder or a web address";
+    TileOwnFull => "Sudah 8 pintasan sendiri (maks.)", "8 of your own already (max)";
+    TileFormName => "Nama", "Name";
+    TileFormKind => "Jenis", "Type";
+    TileFormTarget => "Target", "Target";
+    TileKindWeb => "Web", "Web";
+    TileBrowse => "Pilih…", "Browse…";
+    TileFormAdd => "Tambah", "Add";
+    TileFilterApps => "Program (*.exe)", "Programs (*.exe)";
+    TileFilterAll => "Semua berkas (*.*)", "All files (*.*)";
+    TileErrName => "Nama harus 1 sampai 14 huruf, tanpa karakter kontrol",
+        "The name takes 1 to 14 characters, no control characters";
+    TileErrPath => "Isi jalur lengkap, misalnya C:\\Proyek (bukan jalur relatif atau jaringan)",
+        "Give a full path such as C:\\Proyek (not a relative or network path)";
+    TileErrUrl => "Alamat harus diawali http://, https:// atau mailto:",
+        "The address must start with http://, https:// or mailto:";
+    TileAddedOff => "Ditambahkan, belum tampil: halaman penuh (maks. 12)",
+        "Added, not shown yet: the page is full (12 max)";
 
     // Editors.
     EditorNote => "Catatan", "Note";
@@ -468,7 +503,6 @@ keys! {
     PageSystem => "Sistem", "System";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
-    PageOrderDesc => "Urutan: − lebih awal, + lebih akhir", "Order: − earlier, + later";
     Language => "Bahasa", "Language";
     LanguageDesc => "Island dan semua jendela", "The island and every window";
     LangIndonesian => "Indonesia", "Indonesia";

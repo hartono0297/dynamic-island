@@ -2,7 +2,8 @@
 //! action runs a moment later, once the window the user was in is in front
 //! again: Win+. opens at its caret, and a screen clip must not catch the
 //! panel. The Clipboard tile is the exception: it opens the island's own
-//! Clipboard page (the reducer does that), not Win+V.
+//! Clipboard page (the reducer does that), not Win+V; so do the tiles that
+//! jump to a page and the one that opens Vale's own Settings.
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
@@ -13,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::i18n::Key;
-use crate::model::Shortcut;
+use crate::model::{Page, Shortcut};
 use crate::tiles::{CustomKind, CustomTile};
 use crate::ui::geometry::ANIM_MS;
 use crate::ui::icons::Icon;
@@ -47,12 +48,14 @@ pub fn drive_root(letter: char) -> String {
     format!("{letter}:\\")
 }
 
-/// `None` for the Clipboard and Cari tiles: they open the island's own
-/// Clipboard page and quick search (the reducer does that).
+/// `None` for the Clipboard, Cari, page and Vale Settings tiles: they open
+/// the island's own Clipboard page, quick search, a page and Settings (the
+/// reducer does that).
 pub fn shortcut_action(s: Shortcut) -> Option<Action> {
     Some(match s {
         Shortcut::Screenshot => Action::Open("ms-screenclip:"),
         Shortcut::Clipboard | Shortcut::Search => return None,
+        Shortcut::ValeSettings | Shortcut::Go(_) => return None,
         Shortcut::Emoji => Action::WinKey(VK_OEM_PERIOD),
         Shortcut::Explorer => Action::System("explorer.exe"),
         Shortcut::Calculator => Action::System(r"System32\calc.exe"),
@@ -83,6 +86,40 @@ pub fn label(s: Shortcut) -> Key {
         Shortcut::TaskManager => Key::ShortcutTaskManager,
         Shortcut::WindowsSettings => Key::ShortcutSettings,
         Shortcut::Lock => Key::ShortcutLock,
+        Shortcut::ValeSettings => Key::ShortcutValeSettings,
+        Shortcut::Go(page) => match page {
+            Page::Calendar => Key::PageCalendar,
+            Page::Pomodoro => Key::PagePomodoro,
+            Page::Reminders => Key::PageReminders,
+            Page::Notes => Key::PageNotes,
+            Page::Media => Key::PageMedia,
+            Page::Mixer => Key::PageMixer,
+            // "Rak berkas" is too long under a tile's icon.
+            Page::Shelf => Key::ShortcutGoShelf,
+            Page::System => Key::PageSystem,
+            Page::Cli => Key::PageCli,
+            Page::Clipboard => Key::PageClipboard,
+            Page::Shortcuts => Key::PageShortcuts,
+            Page::Search => Key::ShortcutSearch,
+        },
+    }
+}
+
+/// The icon of the tile that jumps to `page`.
+fn page_icon(page: Page) -> Icon {
+    match page {
+        Page::Calendar => Icon::Calendar,
+        Page::Pomodoro => Icon::Timer,
+        Page::Reminders => Icon::Bell,
+        Page::Notes => Icon::Note,
+        Page::Media => Icon::Music,
+        Page::Mixer => Icon::Volume,
+        Page::Clipboard => Icon::Clipboard,
+        Page::Shelf => Icon::TempFile,
+        Page::System => Icon::Chip,
+        Page::Cli => Icon::Terminal,
+        Page::Shortcuts => Icon::Grid,
+        Page::Search => Icon::Search,
     }
 }
 
@@ -98,6 +135,8 @@ pub fn icon(s: Shortcut) -> Icon {
         Shortcut::TaskManager => Icon::Activity,
         Shortcut::WindowsSettings => Icon::Gear,
         Shortcut::Lock => Icon::Lock,
+        Shortcut::ValeSettings => Icon::Sliders,
+        Shortcut::Go(page) => page_icon(page),
     }
 }
 
@@ -259,8 +298,33 @@ mod tests {
                     Some(Action::Open("ms-settings:"))
                 ),
                 (Shortcut::Lock, Some(Action::Lock)),
+                // Vale's own Settings and the page tiles: the reducer's.
+                (Shortcut::ValeSettings, None),
+                (Shortcut::Go(Page::Calendar), None),
+                (Shortcut::Go(Page::Pomodoro), None),
+                (Shortcut::Go(Page::Reminders), None),
+                (Shortcut::Go(Page::Notes), None),
+                (Shortcut::Go(Page::Media), None),
+                (Shortcut::Go(Page::Mixer), None),
+                (Shortcut::Go(Page::Shelf), None),
+                (Shortcut::Go(Page::System), None),
+                (Shortcut::Go(Page::Cli), None),
             ]
         );
+    }
+
+    #[test]
+    fn vale_settings_does_not_look_like_the_windows_gear() {
+        assert_ne!(
+            icon(Shortcut::ValeSettings),
+            icon(Shortcut::WindowsSettings)
+        );
+        assert_ne!(
+            label(Shortcut::ValeSettings),
+            label(Shortcut::WindowsSettings)
+        );
+        assert_eq!(icon(Shortcut::Go(Page::Calendar)), Icon::Calendar);
+        assert_eq!(label(Shortcut::Go(Page::Shelf)), Key::ShortcutGoShelf);
     }
 
     #[test]

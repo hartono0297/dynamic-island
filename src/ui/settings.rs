@@ -33,7 +33,9 @@ use windows::Win32::Graphics::Gdi::{
     SetTextColor, TEXTMETRICW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{EM_SETCUEBANNER, EM_SETSEL, SetWindowTheme, WM_MOUSELEAVE};
+use windows::Win32::UI::Controls::{
+    EM_SETCUEBANNER, EM_SETLIMITTEXT, EM_SETSEL, SetWindowTheme, WM_MOUSELEAVE,
+};
 use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, GetSystemMetricsForDpi,
     MDT_EFFECTIVE_DPI,
@@ -47,16 +49,17 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, EN_CHANGE, EN_KILLFOCUS,
-    EN_SETFOCUS, ES_AUTOHSCROLL, ES_PASSWORD, GetClientRect, GetWindowTextLengthW, GetWindowTextW,
-    HICON, HMENU, HTCLIENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND, IMAGE_ICON, IsIconic,
-    IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW, LoadImageW, MoveWindow, PostMessageW,
-    RegisterClassExW, SM_CXICON, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNA,
-    SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow,
-    SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT,
-    WM_SETCURSOR, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    EN_SETFOCUS, ES_AUTOHSCROLL, ES_PASSWORD, GetClientRect, GetDlgCtrlID, GetWindowTextLengthW,
+    GetWindowTextW, HICON, HMENU, HTCLIENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND, IDC_SIZEALL,
+    IMAGE_ICON, IsIconic, IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW, LoadImageW,
+    MoveWindow, PostMessageW, RegisterClassExW, SM_CXICON, SM_CXSMICON, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor,
+    SetForegroundWindow, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SETICON,
+    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MINIMIZEBOX,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
@@ -64,9 +67,9 @@ use super::frame_clock::{FrameClock, WM_APP_FRAME};
 use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
-    CLIENT_H, CLIENT_W, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, RELEASES_URL, REPO_URL,
-    Section, State, Tone, battery_step, clip_items_step, disk_warn_step, layout, ram_warn_step,
-    scroll_by, shot_secs_step,
+    CLIENT_H, CLIENT_W, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, List,
+    RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, State, TileForm, Tone, battery_step,
+    clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by, shot_secs_step,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -83,7 +86,7 @@ use crate::pages::PanelPages;
 use crate::pomodoro::PomoSettings;
 use crate::sources::battery::read_battery;
 use crate::theme::{self, Accent, Surface, WindowPalette, WindowTheme};
-use crate::tiles::ShortcutTiles;
+use crate::tiles::{CustomKind, CustomProblem, CustomTile, LABEL_MAX, ShortcutTiles, TARGET_MAX};
 
 /// Posted to the owner for each change: `lparam` is a `Box<Action>` raw
 /// pointer the owner frees (`take_action`). WM_APP + 1..7 are taken.
@@ -92,6 +95,9 @@ pub const WM_APP_SETTINGS_ACTION: u32 = WM_APP + 8;
 const WM_APP_SUBMIT: u32 = WM_APP + 9;
 /// The section fade ended: the credential fields may show.
 const WM_APP_PLACE: u32 = WM_APP + 10;
+/// From the own-shortcut form's fields: `wparam` 0 adds the tile (Enter), 1
+/// closes the form (Esc), 2 gives its Nama field the keyboard.
+const WM_APP_FORM: u32 = WM_APP + 12;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -149,29 +155,78 @@ pub enum Action {
     Closed,
 }
 
-/// "Halaman panel": the pages after a click on a page's toggle or order
-/// stepper, or `None` when it changes nothing (or is not such a click).
+/// "Halaman panel": the pages after a click on a page's "Sembunyikan" /
+/// "Tampilkan", its up or down button (among the pages shown) or "Kembalikan
+/// bawaan", or `None` when it changes nothing (or is not such a click).
 fn page_action(pages: &PanelPages, hit: Hit) -> Option<PanelPages> {
     let mut next = pages.clone();
     let changed = match hit {
         Hit::PageOn(p) => next.toggle(p),
-        Hit::PageMove(p, d) => next.move_by(p, d),
+        Hit::PageMove(p, d) => next.move_shown(p, d),
+        Hit::PageReset => {
+            next = PanelPages::default();
+            next != *pages
+        }
         _ => false,
     };
     changed.then_some(next)
 }
 
-/// "Pintasan": the tiles after a click on a tile's toggle, order stepper or
-/// "Hapus", or `None` when it changes nothing (or is not such a click).
+/// "Pintasan": the tiles after a click on a tile's "Sembunyikan" / "+
+/// Tambah", its up or down button (among the tiles shown), "Hapus" or
+/// "Kembalikan bawaan", or `None` when it changes nothing (or is not such a
+/// click).
 fn tile_action(tiles: &ShortcutTiles, hit: Hit) -> Option<ShortcutTiles> {
     let mut next = tiles.clone();
     let changed = match hit {
         Hit::TileOn(i) => next.toggle(i),
-        Hit::TileMove(i, d) => next.move_by(i, d),
+        Hit::TileMove(i, d) => next.move_shown(i, d),
         Hit::TileRemove(i) => next.remove(i),
+        Hit::TileReset => {
+            next.reset();
+            next != *tiles
+        }
         _ => false,
     };
     changed.then_some(next)
+}
+
+/// What "Tambah" in the form does: the tiles with the typed one at the end
+/// and whether it is on (it is not while twelve show already), or the message
+/// that says what is wrong with what was typed.
+fn add_tile_to(
+    tiles: &ShortcutTiles,
+    kind: CustomKind,
+    name: &str,
+    target: &str,
+) -> std::result::Result<(ShortcutTiles, bool), Key> {
+    let tile = CustomTile::check(name, kind, target).map_err(|problem| match problem {
+        CustomProblem::Label => Key::TileErrName,
+        CustomProblem::Target if kind == CustomKind::Url => Key::TileErrUrl,
+        CustomProblem::Target => Key::TileErrPath,
+    })?;
+    let mut next = tiles.clone();
+    let on = next.add_own(tile).ok_or(Key::TileOwnFull)?;
+    Ok((next, on))
+}
+
+/// The pages after a drag dropped the page shown at place `from` on the
+/// place `to` among the pages shown.
+fn page_drop(pages: &PanelPages, from: usize, to: usize) -> Option<PanelPages> {
+    let shown = pages.visible();
+    let (page, target) = (*shown.get(from)?, *shown.get(to)?);
+    let mut next = pages.clone();
+    next.move_to(page, next.position(target)).then_some(next)
+}
+
+/// The tiles after a drag dropped the tile shown at place `from` on the
+/// place `to` among the tiles shown.
+fn tile_drop(tiles: &ShortcutTiles, from: usize, to: usize) -> Option<ShortcutTiles> {
+    let on: Vec<usize> = (0..tiles.entries().len())
+        .filter(|i| tiles.entries()[*i].1)
+        .collect();
+    let mut next = tiles.clone();
+    next.move_to(*on.get(from)?, *on.get(to)?).then_some(next)
 }
 
 /// Takes ownership of a `WM_APP_SETTINGS_ACTION`'s `lparam`.
@@ -268,11 +323,14 @@ const ANIM: Duration = Duration::from_millis(120);
 const TIMER_CONFIRM: usize = 1;
 const TIMER_GOOGLE_NOTE: usize = 2;
 const TIMER_HOOK_NOTE: usize = 3;
+const TIMER_TILE_NOTE: usize = 4;
 const CONFIRM_MS: u32 = 4000;
 const NOTE_MS: u32 = 5000;
 const ERROR_NOTE_MS: u32 = 10_000;
 const ID_CLIENT_ID: i32 = 101;
 const ID_CLIENT_SECRET: i32 = 102;
+const ID_TILE_NAME: i32 = 103;
+const ID_TILE_TARGET: i32 = 104;
 const SUBCLASS_ID: usize = 1;
 /// Upward offset the new section's content starts from.
 const CONTENT_RISE: f32 = 6.0;
@@ -366,10 +424,13 @@ impl Anims {
     }
 }
 
-/// The two credential fields and the GDI objects they use.
+/// The two credential fields and the own-shortcut form's two, and the GDI
+/// objects they use.
 struct Edits {
     id: HWND,
     secret: HWND,
+    name: HWND,
+    target: HWND,
     font: HFONT,
     /// Text line height of `font`, in physical pixels.
     line_h: i32,
@@ -378,8 +439,21 @@ struct Edits {
 }
 
 impl Edits {
-    fn hwnds(&self) -> [HWND; 2] {
-        [self.id, self.secret]
+    fn hwnds(&self) -> [HWND; 4] {
+        [self.id, self.secret, self.name, self.target]
+    }
+
+    /// The field Tab goes to from `edit`: the other of its pair.
+    fn partner(&self, edit: HWND) -> HWND {
+        if edit == self.id {
+            self.secret
+        } else if edit == self.secret {
+            self.id
+        } else if edit == self.name {
+            self.target
+        } else {
+            self.name
+        }
     }
 }
 
@@ -390,6 +464,19 @@ impl Drop for Edits {
             let _ = DeleteObject(HGDIOBJ(self.brush.0));
         }
     }
+}
+
+/// A row picked up by its drag handle.
+struct Drag {
+    list: List,
+    from: usize,
+    to: usize,
+    /// How far under the row's top the pointer took it.
+    grab: f32,
+    /// The tops of the list's rows, in unscrolled layout pixels.
+    tops: Vec<f32>,
+    /// The row's top now, in the same pixels.
+    top: f32,
 }
 
 struct Settings {
@@ -409,8 +496,9 @@ struct Settings {
     anims: Anims,
     clock: Option<FrameClock>,
     edits: Option<Edits>,
-    /// What the credential fields hold now.
-    field_text: [String; 2],
+    /// What the credential fields and the form's fields hold now, by
+    /// `Field::index`.
+    field_text: [String; 4],
     focused: Option<Field>,
     has_battery: bool,
     hooks: Option<install::HookState>,
@@ -422,6 +510,12 @@ struct Settings {
     google_advanced: bool,
     /// "Hapus riwayat" waits for its second click.
     clip_confirm: bool,
+    /// The own-shortcut form is open (Pintasan), and the message after the
+    /// last tile added.
+    tile_form: Option<TileForm>,
+    tile_note: Option<Key>,
+    /// A row held by its drag handle.
+    drag: Option<Drag>,
     /// `%APPDATA%\Vale`, or the old folder while a failed migration keeps it.
     data_label: String,
     /// Small and large window icons, owned (not shared) and destroyed with the window.
@@ -687,6 +781,8 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
     let field_text = [
         model.google_client_id.clone(),
         model.google_client_secret.clone(),
+        String::new(),
+        String::new(),
     ];
     // Someone with their own Client ID sees it straight away.
     let google_advanced = !field_text[0].trim().is_empty();
@@ -714,6 +810,9 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         confirm: false,
         google_advanced,
         clip_confirm: false,
+        tile_form: None,
+        tile_note: None,
+        drag: None,
         data_label: crate::data_dir::label(&crate::data_dir::dir()),
         icons: [HICON::default(); 2],
         styled_light: None,
@@ -743,7 +842,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
 
 fn create_edits(parent: HWND, instance: HINSTANCE, dpi: u32, model: &Model) -> Option<Edits> {
     let font = create_font(dpi);
-    let make = |id: i32, text: &str, extra: i32, cue: PCWSTR| -> Option<HWND> {
+    let make = |id: i32, text: &str, extra: i32, cue: PCWSTR, limit: usize| -> Option<HWND> {
         let style = WS_CHILD | WS_TABSTOP | WINDOW_STYLE((ES_AUTOHSCROLL | extra) as u32);
         let hwnd = unsafe {
             CreateWindowExW(
@@ -764,6 +863,9 @@ fn create_edits(parent: HWND, instance: HINSTANCE, dpi: u32, model: &Model) -> O
         };
         send(hwnd, WM_SETFONT, font.0 as usize, 0);
         send(hwnd, EM_SETCUEBANNER, 0, cue.0 as isize);
+        if limit > 0 {
+            send(hwnd, EM_SETLIMITTEXT, limit, 0);
+        }
         unsafe {
             let _ = SetWindowSubclass(hwnd, Some(edit_proc), SUBCLASS_ID, 0);
         }
@@ -774,17 +876,23 @@ fn create_edits(parent: HWND, instance: HINSTANCE, dpi: u32, model: &Model) -> O
         &model.google_client_id,
         0,
         w!("…apps.googleusercontent.com"),
+        0,
     );
     let secret = make(
         ID_CLIENT_SECRET,
         &model.google_client_secret,
         ES_PASSWORD,
         w!("GOCSPX-…"),
+        0,
     );
-    match (id, secret) {
-        (Some(id), Some(secret)) => Some(Edits {
+    let name = make(ID_TILE_NAME, "", 0, w!("Gmail"), LABEL_MAX);
+    let target = make(ID_TILE_TARGET, "", 0, cue_for(CustomKind::App), TARGET_MAX);
+    match (id, secret, name, target) {
+        (Some(id), Some(secret), Some(name), Some(target)) => Some(Edits {
             id,
             secret,
+            name,
+            target,
             font,
             line_h: line_height(parent, font),
             brush: unsafe { CreateSolidBrush(colorref(0)) },
@@ -796,6 +904,15 @@ fn create_edits(parent: HWND, instance: HINSTANCE, dpi: u32, model: &Model) -> O
             }
             None
         }
+    }
+}
+
+/// The hint a Target field shows while it is empty, by what the tile opens.
+fn cue_for(kind: CustomKind) -> PCWSTR {
+    match kind {
+        CustomKind::App => w!("C:\\Program Files\\…\\app.exe"),
+        CustomKind::Folder => w!("D:\\Proyek"),
+        CustomKind::Url => w!("https://…"),
     }
 }
 
@@ -1006,6 +1123,14 @@ impl Settings {
             shot: m.shot,
             pages: m.pages.clone(),
             tiles: m.tiles.clone(),
+            drag: self.drag.as_ref().map(|d| DragView {
+                list: d.list,
+                from: d.from,
+                to: d.to,
+                top: d.top,
+            }),
+            tile_form: self.tile_form,
+            tile_note: self.tile_note,
             version: env!("CARGO_PKG_VERSION"),
             data_dir: &self.data_label,
         }
@@ -1021,6 +1146,10 @@ impl Settings {
 
     /// The wheel over a section taller than the window scrolls it.
     fn on_wheel(&mut self, delta: i32) {
+        // A row in the pointer's hand: the list stays where it is.
+        if self.drag.is_some() {
+            return;
+        }
         let scroll = scroll_by(self.scroll, delta, self.layout.scroll_max);
         if scroll != self.scroll {
             self.scroll = scroll;
@@ -1046,30 +1175,39 @@ impl Settings {
             .content
             .is_some_and(|t| t.running(Instant::now()));
         let s = self.scale();
-        [(Field::ClientId, e.id), (Field::ClientSecret, e.secret)]
-            .into_iter()
-            .map(|(field, edit)| {
-                let rect = self
-                    .layout
-                    .fields
-                    .iter()
-                    .find(|(f, _)| *f == field)
-                    .filter(|_| !fading)
-                    .map(|(_, r)| {
-                        let px = |v: f32| (v * s).round() as i32;
-                        let left = px(r.x + 10.0);
-                        let right = px(r.right() - 10.0);
-                        let mid = px(r.y + r.h / 2.0);
-                        RECT {
-                            left,
-                            top: mid - e.line_h / 2,
-                            right,
-                            bottom: mid - e.line_h / 2 + e.line_h,
-                        }
-                    });
-                (edit, rect)
-            })
-            .collect()
+        let view = self.layout.viewport;
+        [
+            (Field::ClientId, e.id),
+            (Field::ClientSecret, e.secret),
+            (Field::TileName, e.name),
+            (Field::TileTarget, e.target),
+        ]
+        .into_iter()
+        .map(|(field, edit)| {
+            let rect = self
+                .layout
+                .fields
+                .iter()
+                .find(|(f, _)| *f == field)
+                // A field scrolled partly under the title or past the
+                // bottom hides: a native control is not clipped.
+                .filter(|(_, r)| view.is_none_or(|v| r.y >= v.y && r.bottom() <= v.bottom()))
+                .filter(|_| !fading)
+                .map(|(_, r)| {
+                    let px = |v: f32| (v * s).round() as i32;
+                    let left = px(r.x + 10.0);
+                    let right = px(r.right() - 10.0);
+                    let mid = px(r.y + r.h / 2.0);
+                    RECT {
+                        left,
+                        top: mid - e.line_h / 2,
+                        right,
+                        bottom: mid - e.line_h / 2 + e.line_h,
+                    }
+                });
+            (edit, rect)
+        })
+        .collect()
     }
 
     fn on_model(&mut self, model: Model) -> ModelChanges {
@@ -1104,6 +1242,8 @@ impl Settings {
                     .position(|v| *v == m.search_hotkey)
                     .unwrap_or(0) as f32,
                 Group::ShotIgnore => usize::from(m.shot.on_ignore == ShotIgnore::Delete) as f32,
+                // The form's own choice, not the model's.
+                Group::TileKind => 0.0,
             }
         };
         for group in [
@@ -1268,10 +1408,111 @@ impl Settings {
         }
     }
 
-    fn hit_at(&self, lparam: LPARAM) -> Option<Hit> {
+    /// A mouse message's position, in logical pixels.
+    fn point(&self, lparam: LPARAM) -> (f32, f32) {
         let x = (lparam.0 & 0xFFFF) as i16 as f32 / self.scale();
         let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 / self.scale();
+        (x, y)
+    }
+
+    fn hit_at(&self, lparam: LPARAM) -> Option<Hit> {
+        let (x, y) = self.point(lparam);
         self.layout.hit(x, y)
+    }
+
+    /// The pointer went down on the drag handle `hit` at `y`: its row is in
+    /// hand.
+    fn begin_drag(&mut self, hit: Hit, y: f32) {
+        let list = match hit {
+            Hit::PageGrip(_) => List::Pages,
+            Hit::TileGrip(_) => List::Tiles,
+            _ => return,
+        };
+        let rows: Vec<&ReorderRow> = self.layout.rows.iter().filter(|r| r.list == list).collect();
+        let Some(from) = rows.iter().position(|r| r.grip == hit) else {
+            return;
+        };
+        let tops: Vec<f32> = rows.iter().map(|r| r.rect.y + self.scroll).collect();
+        let grab = y + self.scroll - tops[from];
+        self.drag = Some(Drag {
+            list,
+            from,
+            to: from,
+            grab,
+            top: tops[from],
+            tops,
+        });
+        self.hover = None;
+    }
+
+    /// The pointer moved to `y` with a row in hand: it follows, and the
+    /// others make room.
+    fn drag_to(&mut self, y: f32) {
+        let scroll = self.scroll;
+        let Some(d) = &mut self.drag else {
+            return;
+        };
+        let (first, last) = (d.tops[0], d.tops[d.tops.len() - 1]);
+        d.top = (y + scroll - d.grab).clamp(first, last);
+        d.to = drop_index(d.top + ROW_H / 2.0, &d.tops);
+        self.relayout();
+    }
+
+    /// The row in hand is let go: put at its place (`commit`) or back where
+    /// it was (Esc, the capture lost). The list shows the new order at once;
+    /// the owner confirms it.
+    fn end_drag(&mut self, commit: bool) -> Vec<After> {
+        let Some(d) = self.drag.take() else {
+            return Vec::new();
+        };
+        let mut after = Vec::new();
+        if commit && d.from != d.to {
+            match d.list {
+                List::Pages => {
+                    if let Some(pages) = page_drop(&self.model.pages, d.from, d.to) {
+                        self.model.pages = pages.clone();
+                        after.push(After::Post(Action::PanelPages(pages)));
+                    }
+                }
+                List::Tiles => {
+                    if let Some(tiles) = tile_drop(&self.model.tiles, d.from, d.to) {
+                        self.model.tiles = tiles.clone();
+                        after.push(After::Post(Action::ShortcutTiles(tiles)));
+                    }
+                }
+            }
+        }
+        self.relayout();
+        after
+    }
+
+    /// "Tambah" in the form: the tile it describes joins the list (on when
+    /// the page has room), or the form says what is wrong.
+    fn add_tile(&mut self) -> Vec<After> {
+        let Some(form) = self.tile_form else {
+            return Vec::new();
+        };
+        let fail = |st: &mut Settings, key: Key| {
+            st.tile_form = Some(TileForm {
+                error: Some(key),
+                ..form
+            });
+            Vec::new()
+        };
+        let (name, target) = (&self.field_text[2], &self.field_text[3]);
+        let (tiles, on) = match add_tile_to(&self.model.tiles, form.kind, name, target) {
+            Ok(added) => added,
+            Err(key) => return fail(self, key),
+        };
+        self.tile_form = None;
+        self.tile_note = (!on).then_some(Key::TileAddedOff);
+        if !on {
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_TILE_NOTE, ERROR_NOTE_MS, None);
+            }
+        }
+        self.model.tiles = tiles.clone();
+        vec![After::Post(Action::ShortcutTiles(tiles)), After::ResetForm]
     }
 
     fn set_note(&mut self, google: bool, note: Option<(String, Tone)>) {
@@ -1390,16 +1631,40 @@ impl Settings {
                 }
             }
             Hit::MoleProtect => post(Action::MoleProtect(!m.mole_protect)),
-            Hit::PageOn(_) | Hit::PageMove(..) => match page_action(&m.pages, hit) {
-                Some(pages) => post(Action::PanelPages(pages)),
-                None => Vec::new(),
-            },
-            Hit::TileOn(_) | Hit::TileMove(..) | Hit::TileRemove(_) => {
+            Hit::PageOn(_) | Hit::PageMove(..) | Hit::PageReset => {
+                match page_action(&m.pages, hit) {
+                    Some(pages) => post(Action::PanelPages(pages)),
+                    None => Vec::new(),
+                }
+            }
+            Hit::TileOn(_) | Hit::TileMove(..) | Hit::TileRemove(_) | Hit::TileReset => {
                 match tile_action(&m.tiles, hit) {
                     Some(tiles) => post(Action::ShortcutTiles(tiles)),
                     None => Vec::new(),
                 }
             }
+            // The handles act on a press and a drag, not on a click.
+            Hit::PageGrip(_) | Hit::TileGrip(_) => Vec::new(),
+            Hit::TileFormOpen => {
+                self.tile_form = Some(TileForm {
+                    kind: CustomKind::App,
+                    error: None,
+                });
+                self.tile_note = None;
+                vec![After::ResetForm, After::FocusName]
+            }
+            Hit::TileFormCancel => {
+                self.tile_form = None;
+                vec![After::ResetForm]
+            }
+            Hit::TileFormKind(kind) => {
+                if let Some(form) = &mut self.tile_form {
+                    *form = TileForm { kind, error: None };
+                }
+                vec![After::Cue(kind)]
+            }
+            Hit::TileBrowse => vec![After::Browse],
+            Hit::TileFormAdd => self.add_tile(),
             Hit::DndHelp => post(Action::DndHelp),
             Hit::Pomo(field, dir) => post(Action::Pomo(field, dir)),
             Hit::GoogleSave => {
@@ -1525,6 +1790,14 @@ enum After {
     Section(Section),
     Open(String),
     OpenDataFolder,
+    /// The own-shortcut form's fields go back to empty.
+    ResetForm,
+    /// The Target field's hint follows the kind chosen.
+    Cue(CustomKind),
+    /// The form's Nama field takes the keyboard.
+    FocusName,
+    /// "Pilih…": the file or folder dialog fills the Target field.
+    Browse,
 }
 
 fn run_after(hwnd: HWND, owner: HWND, after: Vec<After>) {
@@ -1533,6 +1806,12 @@ fn run_after(hwnd: HWND, owner: HWND, after: Vec<After>) {
             After::Post(action) => post_action(owner, action),
             After::Section(section) => set_section(hwnd, section),
             After::Open(url) => shell_open(&url),
+            After::ResetForm => reset_form(),
+            After::Cue(kind) => set_cue(kind),
+            After::FocusName => unsafe {
+                let _ = PostMessageW(Some(hwnd), WM_APP_FORM, WPARAM(2), LPARAM(0));
+            },
+            After::Browse => browse(hwnd),
             After::OpenDataFolder => {
                 let dir = crate::config::path()
                     .parent()
@@ -1542,6 +1821,88 @@ fn run_after(hwnd: HWND, owner: HWND, after: Vec<After>) {
                 shell_open(&dir.display().to_string());
             }
         }
+    }
+}
+
+/// The form's two fields, when the window has them.
+fn tile_edits() -> Option<(HWND, HWND)> {
+    with(|st| st.edits.as_ref().map(|e| (e.name, e.target))).flatten()
+}
+
+/// Empties the form's fields (and shows the app hint again).
+fn reset_form() {
+    if let Some((name, target)) = tile_edits() {
+        unsafe {
+            let _ = SetWindowTextW(name, &HSTRING::new());
+            let _ = SetWindowTextW(target, &HSTRING::new());
+        }
+    }
+    set_cue(CustomKind::App);
+}
+
+fn set_cue(kind: CustomKind) {
+    if let Some((_, target)) = tile_edits() {
+        send(target, EM_SETCUEBANNER, 0, cue_for(kind).0 as isize);
+    }
+}
+
+/// "Pilih…": the file (an app) or folder dialog; what it picks goes in the
+/// Target field. Runs with the window's state released: the dialog pumps
+/// messages.
+fn browse(hwnd: HWND) {
+    let Some(kind) = with(|st| st.tile_form.map(|f| f.kind)).flatten() else {
+        return;
+    };
+    let Some(path) = pick_path(hwnd, kind) else {
+        return;
+    };
+    if let Some((_, target)) = tile_edits() {
+        unsafe {
+            let _ = SetWindowTextW(target, &HSTRING::from(path.as_os_str()));
+        }
+    }
+}
+
+/// The path the owner picks in the system dialog: an exe or any file for an
+/// app, a folder for a folder. `None` when it is cancelled or cannot open.
+fn pick_path(owner: HWND, kind: CustomKind) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{
+        FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+    };
+    let lang = crate::i18n::lang();
+    unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let mut options = dialog.GetOptions().ok()?;
+        options |= FOS_FORCEFILESYSTEM;
+        if kind == CustomKind::Folder {
+            options |= FOS_PICKFOLDERS;
+        } else {
+            let apps = HSTRING::from(text(lang, Key::TileFilterApps));
+            let all = HSTRING::from(text(lang, Key::TileFilterAll));
+            let filters = [
+                COMDLG_FILTERSPEC {
+                    pszName: PCWSTR(apps.as_ptr()),
+                    pszSpec: w!("*.exe;*.lnk;*.bat;*.cmd"),
+                },
+                COMDLG_FILTERSPEC {
+                    pszName: PCWSTR(all.as_ptr()),
+                    pszSpec: w!("*.*"),
+                },
+            ];
+            let _ = dialog.SetFileTypes(&filters);
+        }
+        dialog.SetOptions(options).ok()?;
+        // Cancelled: an error code.
+        dialog.Show(Some(owner)).ok()?;
+        let item = dialog.GetResult().ok()?;
+        let name = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(name.as_wide()));
+        CoTaskMemFree(Some(name.0 as *const c_void));
+        Some(path)
     }
 }
 
@@ -1570,10 +1931,15 @@ fn set_section(hwnd: HWND, section: Section) {
 
 fn on_mouse_move(hwnd: HWND, lparam: LPARAM) {
     let arm = with(|st| {
-        let hit = st.hit_at(lparam);
-        if hit != st.hover {
-            st.hover = hit;
-            st.invalidate();
+        if st.drag.is_some() {
+            let (_, y) = st.point(lparam);
+            st.drag_to(y);
+        } else {
+            let hit = st.hit_at(lparam);
+            if hit != st.hover {
+                st.hover = hit;
+                st.invalidate();
+            }
         }
         !std::mem::replace(&mut st.tracking, true)
     });
@@ -1602,6 +1968,11 @@ fn on_mouse_leave() {
 fn on_button_down(hwnd: HWND, lparam: LPARAM) {
     let hit = with(|st| {
         st.pressed = st.hit_at(lparam);
+        // A handle takes the row in hand at once.
+        if let Some(h @ (Hit::PageGrip(_) | Hit::TileGrip(_))) = st.pressed {
+            let (_, y) = st.point(lparam);
+            st.begin_drag(h, y);
+        }
         st.invalidate();
         st.pressed
     });
@@ -1615,6 +1986,22 @@ fn on_button_down(hwnd: HWND, lparam: LPARAM) {
 }
 
 fn on_button_up(hwnd: HWND, lparam: LPARAM) {
+    // A row in hand drops here.
+    let dropped = with(|st| {
+        st.drag.is_some().then(|| {
+            st.pressed = None;
+            (st.owner, st.end_drag(true))
+        })
+    })
+    .flatten();
+    if let Some((owner, after)) = dropped {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        run_after(hwnd, owner, after);
+        relayout_and_place();
+        return;
+    }
     let clicked = with(|st| {
         let hit = st.hit_at(lparam);
         let pressed = st.pressed.take();
@@ -1633,6 +2020,10 @@ fn on_button_up(hwnd: HWND, lparam: LPARAM) {
 }
 
 fn on_key(hwnd: HWND, key: u16) -> bool {
+    // Esc with a row in hand puts it back instead of closing the window.
+    if key == VK_ESCAPE.0 && cancel_drag() {
+        return true;
+    }
     if key == VK_ESCAPE.0 {
         unsafe {
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
@@ -1645,10 +2036,10 @@ fn on_key(hwnd: HWND, key: u16) -> bool {
         -1
     } else if key == VK_TAB.0 {
         // Tab from the window goes to the first field, when it shows.
-        let first = with(|st| {
-            (st.section == Section::Integrations)
-                .then(|| st.edits.as_ref().map(|e| e.id))
-                .flatten()
+        let first = with(|st| match st.section {
+            Section::Integrations => st.edits.as_ref().map(|e| e.id),
+            Section::Appearance if st.tile_form.is_some() => st.edits.as_ref().map(|e| e.name),
+            _ => None,
         });
         if let Some(Some(edit)) = first {
             unsafe {
@@ -1671,12 +2062,32 @@ fn on_key(hwnd: HWND, key: u16) -> bool {
     true
 }
 
+/// Puts a row in hand back; false when none was.
+fn cancel_drag() -> bool {
+    let held = with(|st| {
+        st.pressed = None;
+        let held = st.drag.is_some();
+        st.end_drag(false);
+        held
+    });
+    if held != Some(true) {
+        return false;
+    }
+    unsafe {
+        let _ = ReleaseCapture();
+    }
+    relayout_and_place();
+    true
+}
+
 fn on_command(wparam: WPARAM, lparam: LPARAM) {
     let id = (wparam.0 & 0xFFFF) as i32;
     let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
     let field = match id {
         ID_CLIENT_ID => Field::ClientId,
         ID_CLIENT_SECRET => Field::ClientSecret,
+        ID_TILE_NAME => Field::TileName,
+        ID_TILE_TARGET => Field::TileTarget,
         _ => return,
     };
     let edit = HWND(lparam.0 as *mut c_void);
@@ -1684,8 +2095,16 @@ fn on_command(wparam: WPARAM, lparam: LPARAM) {
         EN_CHANGE => {
             let value = window_text(edit);
             with(|st| {
-                st.field_text[usize::from(field == Field::ClientSecret)] = value;
-                st.google_note = None;
+                st.field_text[field.index()] = value;
+                match field {
+                    Field::ClientId | Field::ClientSecret => st.google_note = None,
+                    // Typing again clears the message about the last try.
+                    Field::TileName | Field::TileTarget => {
+                        if let Some(form) = &mut st.tile_form {
+                            form.error = None;
+                        }
+                    }
+                }
                 st.relayout();
             });
         }
@@ -1758,6 +2177,7 @@ fn on_timer(id: usize) {
             }
             TIMER_GOOGLE_NOTE => st.google_note = None,
             TIMER_HOOK_NOTE => st.hook_note = None,
+            TIMER_TILE_NOTE => st.tile_note = None,
             _ => return,
         }
         st.relayout();
@@ -1842,6 +2262,40 @@ unsafe extern "system" fn wnd_proc(
             // High word of wParam: signed delta, +120 per notch away from the user.
             let delta = i32::from((wparam.0 >> 16) as u16 as i16);
             with(|st| st.on_wheel(delta));
+            // The form's native fields follow the content.
+            relayout_and_place();
+            LRESULT(0)
+        }
+        WM_APP_FORM => {
+            match wparam.0 {
+                0 | 1 => {
+                    let hit = if wparam.0 == 0 {
+                        Hit::TileFormAdd
+                    } else {
+                        Hit::TileFormCancel
+                    };
+                    if let Some((owner, after)) = with(|st| (st.owner, st.on_click(hit))) {
+                        run_after(hwnd, owner, after);
+                    }
+                    relayout_and_place();
+                }
+                2 => {
+                    if let Some((name, _)) = tile_edits() {
+                        unsafe {
+                            let _ = SetFocus(Some(name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        // The pointer was taken from a row in hand (another window came up).
+        WM_CAPTURECHANGED => {
+            with(|st| {
+                st.pressed = None;
+                st.end_drag(false);
+            });
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -1853,9 +2307,25 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-            let link = with(|st| matches!(st.hover, Some(Hit::GoogleGuide))) == Some(true);
+            let (link, grip) = with(|st| {
+                (
+                    matches!(st.hover, Some(Hit::GoogleGuide)),
+                    st.drag.is_some()
+                        || matches!(st.hover, Some(Hit::PageGrip(_) | Hit::TileGrip(_))),
+                )
+            })
+            .unwrap_or_default();
             unsafe {
-                let cursor = LoadCursorW(None, if link { IDC_HAND } else { IDC_ARROW });
+                let cursor = LoadCursorW(
+                    None,
+                    if grip {
+                        IDC_SIZEALL
+                    } else if link {
+                        IDC_HAND
+                    } else {
+                        IDC_ARROW
+                    },
+                );
                 SetCursor(cursor.ok());
             }
             LRESULT(1)
@@ -1920,30 +2390,34 @@ unsafe extern "system" fn edit_proc(
         WM_KEYDOWN => {
             let key = (wparam.0 & 0xFFFF) as u16;
             let ctrl = key_down(VK_CONTROL.0);
+            // The form's fields: Esc closes the form, Enter adds the tile.
+            let id = unsafe { GetDlgCtrlID(hwnd) };
+            let in_form = id == ID_TILE_NAME || id == ID_TILE_TARGET;
             if key == VK_ESCAPE.0 {
                 if let Some(p) = parent() {
+                    let (msg, arg) = if in_form {
+                        (WM_APP_FORM, 1)
+                    } else {
+                        (WM_CLOSE, 0)
+                    };
                     unsafe {
-                        let _ = PostMessageW(Some(p), WM_CLOSE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(p), msg, WPARAM(arg), LPARAM(0));
                     }
                 }
                 return LRESULT(0);
             }
             if key == VK_RETURN.0 {
                 if let Some(p) = parent() {
+                    let msg = if in_form { WM_APP_FORM } else { WM_APP_SUBMIT };
                     unsafe {
-                        let _ = PostMessageW(Some(p), WM_APP_SUBMIT, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(p), msg, WPARAM(0), LPARAM(0));
                     }
                 }
                 return LRESULT(0);
             }
             if key == VK_TAB.0 {
-                let other = with(|st| {
-                    st.edits
-                        .as_ref()
-                        .map(|e| if e.id == hwnd { e.secret } else { e.id })
-                })
-                .flatten();
-                // Shift+Tab goes the same way: there are only two.
+                let other = with(|st| st.edits.as_ref().map(|e| e.partner(hwnd))).flatten();
+                // Shift+Tab goes the same way: there are only two in a pair.
                 if let Some(other) = other {
                     unsafe {
                         let _ = SetFocus(Some(other));
@@ -2086,6 +2560,13 @@ pub fn run_demo(args: &[String]) {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 
+    // The "Pilih…" dialog wants a single-threaded apartment, as the island's.
+    unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+        );
+    }
     let section = args.first().and_then(|s| Section::from_name(s));
     let window = args
         .get(1)
@@ -2214,6 +2695,153 @@ mod tests {
         }
         assert_eq!(page_action(&one, Hit::PageOn(Page::Calendar)), None);
         assert_eq!(page_action(&pages, Hit::Robot), None);
+    }
+
+    #[test]
+    fn page_clicks_move_among_the_pages_shown_and_restore_the_defaults() {
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Reminders);
+        // Pomodoro down: past the hidden Reminders, after Notes.
+        let moved = page_action(&pages, Hit::PageMove(Page::Pomodoro, 1)).expect("moved");
+        assert_eq!(
+            moved.visible()[..4],
+            [Page::Calendar, Page::Notes, Page::Pomodoro, Page::Media]
+        );
+        assert_eq!(page_action(&pages, Hit::PageMove(Page::Calendar, -1)), None);
+        // "Tampilkan" on a hidden page, "Kembalikan bawaan" on the changed one.
+        let back = page_action(&pages, Hit::PageOn(Page::Reminders)).expect("shown");
+        assert_eq!(back, PanelPages::default());
+        assert_eq!(
+            page_action(&moved, Hit::PageReset),
+            Some(PanelPages::default())
+        );
+        assert_eq!(page_action(&PanelPages::default(), Hit::PageReset), None);
+        // The handle is not a click.
+        assert_eq!(page_action(&pages, Hit::PageGrip(Page::Notes)), None);
+    }
+
+    #[test]
+    fn a_drop_puts_the_page_at_the_place_it_was_dropped_on() {
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Reminders);
+        // Shown: Calendar, Pomodoro, Notes, Media, ... Dropping Calendar on
+        // the third place (Notes) puts it after Notes.
+        let next = page_drop(&pages, 0, 2).expect("moved");
+        assert_eq!(
+            next.visible()[..4],
+            [Page::Pomodoro, Page::Notes, Page::Calendar, Page::Media]
+        );
+        // Up: Media dropped on the first place goes before Calendar.
+        let next = page_drop(&pages, 3, 0).expect("moved");
+        assert_eq!(next.visible()[0], Page::Media);
+        assert_eq!(page_drop(&pages, 2, 2), None, "same place");
+        assert_eq!(page_drop(&pages, 0, 40), None, "no such place");
+        assert_eq!(page_drop(&pages, 40, 0), None);
+    }
+
+    #[test]
+    fn tile_clicks_change_the_list_or_nothing() {
+        let tiles = ShortcutTiles::default();
+        // Screenshot hidden, then back.
+        let off = tile_action(&tiles, Hit::TileOn(0)).expect("hidden");
+        assert_eq!(off.shown(), tiles.shown() - 1);
+        assert_eq!(tile_action(&off, Hit::TileOn(0)), Some(tiles.clone()));
+        // Down among the tiles shown, never past the last.
+        let moved = tile_action(&tiles, Hit::TileMove(0, 1)).expect("moved");
+        assert_eq!(moved.visible()[1], tiles.visible()[0]);
+        assert_eq!(tile_action(&tiles, Hit::TileMove(0, -1)), None);
+        // "+ Tambah" on a tile that is off, refused while twelve show.
+        let calendar = 10;
+        let added = tile_action(&tiles, Hit::TileOn(calendar)).expect("shown");
+        assert_eq!(added.shown(), tiles.shown() + 1);
+        let mut full = tiles.clone();
+        full.toggle(11);
+        assert_eq!(tile_action(&full, Hit::TileOn(12)), None);
+        // "Hapus" only on an own tile; "Kembalikan bawaan" on a changed list.
+        assert_eq!(tile_action(&tiles, Hit::TileRemove(0)), None);
+        assert_eq!(tile_action(&tiles, Hit::TileReset), None);
+        assert_eq!(tile_action(&moved, Hit::TileReset), Some(tiles.clone()));
+        assert_eq!(tile_action(&tiles, Hit::TileGrip(0)), None);
+        assert_eq!(tile_action(&tiles, Hit::Robot), None);
+    }
+
+    #[test]
+    fn a_drop_puts_the_tile_at_the_place_it_was_dropped_on() {
+        let tiles = ShortcutTiles::default();
+        let names = |t: &ShortcutTiles| t.visible();
+        let before = names(&tiles);
+        // Shown places 0..10: Screenshot dropped on the third (Search).
+        let next = tile_drop(&tiles, 0, 2).expect("moved");
+        let after = names(&next);
+        assert_eq!(
+            after[..3],
+            [before[1].clone(), before[2].clone(), before[0].clone()]
+        );
+        // The last shown (the Shelf, far down the list of every tile) goes
+        // to the front.
+        let next = tile_drop(&tiles, before.len() - 1, 0).expect("moved");
+        assert_eq!(names(&next)[0], before[before.len() - 1]);
+        assert_eq!(tile_drop(&tiles, 3, 3), None);
+        assert_eq!(tile_drop(&tiles, 0, 99), None);
+    }
+
+    #[test]
+    fn adding_an_own_tile_checks_what_was_typed() {
+        let tiles = ShortcutTiles::default();
+        let add =
+            |t: &ShortcutTiles, kind, name: &str, target: &str| add_tile_to(t, kind, name, target);
+        let (next, on) = add(
+            &tiles,
+            CustomKind::Url,
+            " Gmail ",
+            "https://mail.google.com",
+        )
+        .expect("valid");
+        assert!(on);
+        assert_eq!(next.customs(), 1);
+        assert!(next.entries().last().unwrap().1);
+        // What is wrong is told per part, and by kind.
+        let key = |r: std::result::Result<(ShortcutTiles, bool), Key>| r.map(|_| ()).unwrap_err();
+        assert_eq!(
+            key(add(&tiles, CustomKind::Url, "", "https://x.co")),
+            Key::TileErrName
+        );
+        assert_eq!(
+            key(add(
+                &tiles,
+                CustomKind::Url,
+                "Nama yang terlalu panjang",
+                "https://x.co"
+            )),
+            Key::TileErrName
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::Url, "X", "mail.google.com")),
+            Key::TileErrUrl
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::App, "X", "calc.exe")),
+            Key::TileErrPath
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::Folder, "X", r"\\server\share")),
+            Key::TileErrPath
+        );
+        // Added off while twelve show; refused when eight own tiles exist.
+        let (full, _) = add(&tiles, CustomKind::App, "Satu", r"C:\a.exe").expect("valid");
+        assert!(full.full());
+        let (_, on) = add(&full, CustomKind::Folder, "Dua", r"D:\Proyek").expect("valid");
+        assert!(!on, "the page is full: off");
+        let mut many = tiles.clone();
+        for i in 0..crate::tiles::MAX_CUSTOM {
+            many = add(&many, CustomKind::App, &format!("T{i}"), r"C:\a.exe")
+                .expect("valid")
+                .0;
+        }
+        assert_eq!(
+            key(add(&many, CustomKind::App, "Lagi", r"C:\a.exe")),
+            Key::TileOwnFull
+        );
     }
 
     #[test]

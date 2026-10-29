@@ -247,6 +247,10 @@ thread_local! {
     /// The display on/off notification's handle (`HPOWERNOTIFY`), 0 without one.
     static DISPLAY_NOTIFY: Cell<isize> = const { Cell::new(0) };
     static DEFERRED_REPOSITION: Cell<bool> = const { Cell::new(false) };
+    /// The "Setelan Vale" tile asked for the Settings window: it opens once
+    /// the handler returns (creating a window while the app is borrowed would
+    /// find the app gone).
+    static DEFERRED_OPEN_SETTINGS: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_FRAME: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_RESULTS: RefCell<Vec<EditorResult>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_SETTINGS: RefCell<Vec<SettingsAction>> = const { RefCell::new(Vec::new()) };
@@ -1489,6 +1493,7 @@ impl App {
                 }
                 self.arm_reminders();
             }
+            Effect::OpenSettings => DEFERRED_OPEN_SETTINGS.set(true),
         }
         None
     }
@@ -5392,6 +5397,11 @@ fn run_deferred() {
     if DEFERRED_CLI_REDRAW.take() {
         with_app(App::on_input_changed);
     }
+    if DEFERRED_OPEN_SETTINGS.take()
+        && let Some(hwnd) = with_app(|app| app.hwnd)
+    {
+        open_settings(hwnd);
+    }
 }
 
 /// `deliver_cli_key` for the quick search's field.
@@ -6510,7 +6520,7 @@ mod tests {
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Pomodoro), 1.0);
         assert_eq!(slide_from(&pages, Page::Pomodoro, Page::Calendar), -1.0);
         // Shortcuts moved to the front: going to it is going back.
-        pages.move_by(Page::Shortcuts, -10);
+        pages.move_to(Page::Shortcuts, 0);
         assert_eq!(slide_from(&pages, Page::Calendar, Page::Shortcuts), -1.0);
         assert_eq!(slide_from(&pages, Page::Shortcuts, Page::Calendar), 1.0);
     }

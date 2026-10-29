@@ -106,11 +106,20 @@ pub enum Icon {
     /// The Mixer rows' speaker, and its muted twin. Line only.
     Volume,
     VolumeMute,
+    /// Vale's own Settings tile (two sliders), so it is not the Windows
+    /// Settings gear. Line only.
+    Sliders,
+    /// The System page's tile (a chip with pins). Line only.
+    Chip,
+    /// The drag handle of the Settings lists (six dots).
+    Grip,
+    /// The up chevron of the Settings lists' order buttons.
+    ChevU,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 58] = [
+    pub const ALL: [Icon; 62] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -169,6 +178,10 @@ impl Icon {
         Icon::Copy,
         Icon::Volume,
         Icon::VolumeMute,
+        Icon::Sliders,
+        Icon::Chip,
+        Icon::Grip,
+        Icon::ChevU,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -391,6 +404,26 @@ impl Icon {
                 Part::Rect(8.0, 8.0, 11.0, 11.0, 2.5),
                 Part::Path("M16 8V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h2"),
             ],
+            Icon::Sliders => &[
+                Part::Path("M4 7h8M18 7h2M4 17h2M12 17h8"),
+                Part::Circle(15.0, 7.0, 2.6),
+                Part::Circle(9.0, 17.0, 2.6),
+            ],
+            Icon::Chip => &[
+                Part::Rect(7.0, 7.0, 10.0, 10.0, 2.0),
+                Part::Path(
+                    "M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5",
+                ),
+            ],
+            Icon::Grip => &[
+                Part::Dot(9.0, 6.0),
+                Part::Dot(15.0, 6.0),
+                Part::Dot(9.0, 12.0),
+                Part::Dot(15.0, 12.0),
+                Part::Dot(9.0, 18.0),
+                Part::Dot(15.0, 18.0),
+            ],
+            Icon::ChevU => &[Part::Path("M6 15l6-6 6 6")],
         }
     }
 }

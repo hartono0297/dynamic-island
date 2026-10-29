@@ -87,7 +87,7 @@ Hover the notch to open it, scroll to change pages.
 | **Notifications** | Windows toasts and [Claude Code](https://claude.com/claude-code) prompts in the notch. |
 | **System** | CPU, memory, disks, the busiest apps and a cleaner that asks before it deletes. |
 | **CLI** | A small terminal that starts in your Explorer folder. |
-| **Shortcuts** | Your own tiles for apps, folders and links. |
+| **Shortcuts** | Tiles for Windows tools, a jump to any panel page, Vale's own Settings, and your own apps, folders and links (added in Settings). |
 
 <table>
   <tr>
@@ -104,7 +104,7 @@ Hover the notch to open it, scroll to change pages.
   </tr>
   <tr>
     <td><img src="assets/screenshots/calendar.png" alt="Calendar page in month view with today's events listed on the right"><br><b>Calendar</b> from Google, offline too</td>
-    <td><img src="assets/screenshots/shortcuts.png" alt="Shortcuts page: tiles for Screenshot, Clipboard, Search, Emoji, Explorer, Calculator, Task Manager, Windows Settings and Lock screen"><br><b>Shortcuts</b>, including your own</td>
+    <td><img src="assets/screenshots/shortcuts.png" alt="Shortcuts page: tiles for Screenshot, Clipboard, Search, Emoji, Explorer, Calculator, Task Manager, Windows Settings and Lock screen"><br><b>Shortcuts</b>: Windows tools, page jumps and your own tiles</td>
   </tr>
 </table>
 

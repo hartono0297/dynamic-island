@@ -1,6 +1,6 @@
 ---
-tags: [decision, panel, settings]
-date: 2026-10-28
+tags: [decision, panel, settings, v3.4]
+date: 2026-10-29
 ---
 
 # Panel pages: order and which ones the wheel shows
@@ -31,3 +31,24 @@ stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is th
   hover does not land on it.
 
 Related: [[settings-appearance-scroll]], [[v3-studio-overview]]
+
+## The Settings card, remade (2026-10-29)
+
+The "− n +" order stepper was confusing and is gone. Settings → Tampilan →
+Halaman panel now reads:
+
+- **Shown pages first**, in order: a drag handle at the left, up/down
+  buttons (`PanelPages::move_shown`: among the pages shown, stepping over
+  hidden ones) and *Sembunyikan*. Under a small "Tersembunyi" title come the
+  hidden pages, each with *Tampilkan*. The header says "Tampil di panel:
+  n/11" and holds *Kembalikan bawaan* (`PanelPages::default()`; off while
+  the list already is the default).
+- **The last page shown cannot be hidden:** its button is disabled and the
+  row says "Minimal satu halaman tampil".
+- **`PanelPages::move_to(page, index)`** takes a page out and puts it at a
+  place of the whole order (hidden pages count); a drag drop maps "place
+  among the shown" to the entry index of the page it lands on
+  (`settings::page_drop`). `move_by` is gone.
+- The drag, the raised row and Esc to cancel are shared with the Pintasan
+  card, see [[shortcut-tiles]]. A Shortcuts tile can now open any page,
+  including a hidden one (for that visit only, as the Clipboard tile).
