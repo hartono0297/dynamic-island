@@ -110,8 +110,43 @@ try {
     $link.TargetPath = $Exe
     $link.WorkingDirectory = $InstallDir
     $link.Description = 'Vale'
+    # Explicit: the taskbar and Start show this icon, not the window's.
+    $link.IconLocation = "$Exe,0"
     $link.Save()
     Say 'Shortcut Start Menu dibuat.'
+
+    # 4b. Explorer keeps the icon it cached for vale.exe and its shortcuts (the
+    #     Windows 11 taskbar button shows that one), and the path never changes
+    #     between versions: tell the shell the icon changed, before Vale starts.
+    #     Best effort; never kill Explorer or delete the icon cache here.
+    $Pinned = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Vale.lnk'
+    $hasPinned = $false
+    try {
+        $hasPinned = Test-Path $Pinned
+        if (-not ('ValeShellNotify' -as [type])) {
+            Add-Type -Namespace '' -Name 'ValeShellNotify' -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern void SHChangeNotify(int wEventId, uint uFlags, string dwItem1, System.IntPtr dwItem2);
+[System.Runtime.InteropServices.DllImport("shell32.dll")]
+public static extern void SHChangeNotify(int wEventId, uint uFlags, System.IntPtr dwItem1, System.IntPtr dwItem2);
+'@
+        }
+        $SHCNE_UPDATEITEM = 0x00002000
+        $SHCNE_ASSOCCHANGED = 0x08000000
+        $SHCNF_IDLIST = 0x0000
+        $SHCNF_PATHW = 0x0005
+        $SHCNF_FLUSH = 0x1000
+        $paths = @($Exe, $Shortcut)
+        if ($hasPinned) { $paths += $Pinned }
+        foreach ($path in $paths) {
+            [ValeShellNotify]::SHChangeNotify($SHCNE_UPDATEITEM, ($SHCNF_PATHW -bor $SHCNF_FLUSH), $path, [IntPtr]::Zero)
+        }
+        [ValeShellNotify]::SHChangeNotify($SHCNE_ASSOCCHANGED, $SHCNF_IDLIST, [IntPtr]::Zero, [IntPtr]::Zero)
+    } catch { }
+    try {
+        $ie4uinit = Join-Path $env:WINDIR 'System32\ie4uinit.exe'
+        if (Test-Path $ie4uinit) { & $ie4uinit -show }
+    } catch { }
 
     # 5. Claude Code hooks installed earlier (by Vale or Dynamic Island) point
     #    at the old exe: repoint them.
@@ -137,6 +172,9 @@ try {
     Start-Process -FilePath $Exe -WorkingDirectory $InstallDir
     Write-Host ''
     Say 'Selesai. Vale sudah jalan di tengah atas layar; ikonnya ada di tray.'
+    if ($hasPinned) {
+        Say 'Vale disematkan di taskbar: kalau ikonnya masih lama, keluar lalu masuk lagi ke Windows (atau mulai ulang Explorer) sekali.'
+    }
     Say 'Untuk update, jalankan perintah install yang sama lagi.'
     Say "Untuk uninstall: powershell -ExecutionPolicy Bypass -File `"$InstallDir\uninstall.ps1`""
     Write-Host ''

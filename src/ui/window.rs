@@ -6,11 +6,13 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, HWND_BOTTOM, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassExW,
-    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WNDCLASSEXW, WNDPROC, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow,
+    WINDOW_EX_STYLE, WNDCLASSEXW, WNDPROC, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, Result, w};
 
+use super::app_icon;
 use super::geometry::{TALL_WINDOW_H, WINDOW_H, WINDOW_W};
 
 /// The island's layered popup: a transparent canvas at the top-center of the
@@ -38,10 +40,15 @@ impl IslandWindow {
         let class_name = w!("ValeWindow");
         unsafe {
             let instance = GetModuleHandleW(None)?.into();
+            // The island has no taskbar button, but Task Manager and other
+            // shell surfaces ask the window's class for an icon.
+            let (icon, icon_small) = app_icon::class_icons(instance);
             let class = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
                 lpfnWndProc: wnd_proc,
                 hInstance: instance,
+                hIcon: icon,
+                hIconSm: icon_small,
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 lpszClassName: class_name,
                 ..Default::default()
