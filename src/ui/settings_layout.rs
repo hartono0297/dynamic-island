@@ -3041,7 +3041,15 @@ mod tests {
                 for list in [List::Pages, List::Tiles] {
                     out.push(State {
                         lang,
-                        drag: Some(held_row(&State { lang, ..base.clone() }, list, 1, 3)),
+                        drag: Some(held_row(
+                            &State {
+                                lang,
+                                ..base.clone()
+                            },
+                            list,
+                            1,
+                            3,
+                        )),
                         ..base.clone()
                     });
                 }
@@ -3967,9 +3975,7 @@ mod tests {
             .iter()
             .filter_map(|c| match c {
                 Control::Button(b) => Some((b.hit, b.label.clone(), b.enabled)),
-                Control::IconButton { hit, enabled, .. } => {
-                    Some((*hit, String::new(), *enabled))
-                }
+                Control::IconButton { hit, enabled, .. } => Some((*hit, String::new(), *enabled)),
                 _ => None,
             })
             .collect()
@@ -4054,10 +4060,7 @@ mod tests {
             );
             assert!(l.texts.iter().any(|t| t.text == count), "{count}");
             let title = text(s.lang, Key::PagesHidden).to_uppercase();
-            assert_eq!(
-                l.texts.iter().any(|t| t.text == title),
-                !hidden.is_empty()
-            );
+            assert_eq!(l.texts.iter().any(|t| t.text == title), !hidden.is_empty());
         }
     }
 
@@ -4134,11 +4137,7 @@ mod tests {
                 assert!(l.texts.iter().any(|t| t.text == full));
             }
             // The count against the twelve the page takes.
-            let count = format!(
-                "{}: {}/12",
-                text(s.lang, Key::TilesShown),
-                on.len().min(12)
-            );
+            let count = format!("{}: {}/12", text(s.lang, Key::TilesShown), on.len().min(12));
             assert!(l.texts.iter().any(|t| t.text == count), "{count}");
             // "Kembalikan bawaan" only when it would change something.
             let mut reset = s.tiles.clone();
@@ -4158,7 +4157,10 @@ mod tests {
                     TileGroup::Own => Key::TileGroupOwn,
                 };
                 let title = text(s.lang, key).to_uppercase();
-                let drawn = l.texts.iter().any(|t| t.text == title && t.font == Font::Eyebrow);
+                let drawn = l
+                    .texts
+                    .iter()
+                    .any(|t| t.text == title && t.font == Font::Eyebrow);
                 assert_eq!(drawn, has, "{g:?}");
             }
         }
@@ -4206,7 +4208,10 @@ mod tests {
                 assert_eq!(items[2].label, text(lang, Key::TileKindWeb));
                 // "Batal" and "Tambah", and no "+ Pintasan sendiri" meanwhile.
                 assert_eq!(button(&all, Hit::TileFormCancel).1, text(lang, Key::Cancel));
-                assert_eq!(button(&all, Hit::TileFormAdd).1, text(lang, Key::TileFormAdd));
+                assert_eq!(
+                    button(&all, Hit::TileFormAdd).1,
+                    text(lang, Key::TileFormAdd)
+                );
                 assert!(all.iter().all(|b| b.0 != Hit::TileFormOpen));
             }
             // Closed: no fields, the button to open it.
@@ -4345,8 +4350,16 @@ mod tests {
         assert_eq!(display_order(5, Some(&drag(1, 3))), [0, 2, 3, 1, 4]);
         assert_eq!(display_order(5, Some(&drag(3, 0))), [3, 0, 1, 2, 4]);
         assert_eq!(display_order(5, Some(&drag(2, 2))), [0, 1, 2, 3, 4]);
-        assert_eq!(display_order(5, Some(&drag(0, 9))), [1, 2, 3, 4, 0], "clamped");
-        assert_eq!(display_order(3, Some(&drag(7, 0))), [0, 1, 2], "no such row");
+        assert_eq!(
+            display_order(5, Some(&drag(0, 9))),
+            [1, 2, 3, 4, 0],
+            "clamped"
+        );
+        assert_eq!(
+            display_order(3, Some(&drag(7, 0))),
+            [0, 1, 2],
+            "no such row"
+        );
     }
 
     #[test]

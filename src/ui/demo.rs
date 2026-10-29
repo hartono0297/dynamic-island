@@ -2090,14 +2090,17 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
-/// The Pintasan page's tiles: the built-in eight, or a made-up own set (a
-/// few built-ins, a web address, a folder, an app) for the custom scene.
+/// The Pintasan page's tiles: the default eleven (the nine built-ins, Vale's
+/// Settings and the Shelf), or a made-up own set (a few built-ins, a page
+/// tile, a web address, a folder, an app) for the custom scene.
 fn scene_tiles(scene: &Scene) -> Vec<crate::tiles::Tile> {
     let mut tiles = ShortcutTiles::default();
     if scene.custom_tiles {
         for i in [7, 6, 5, 4] {
             tiles.toggle(i);
         }
+        // Index 10 is the Calendar page tile, off by default.
+        tiles.toggle(10);
         for (label, kind, target) in [
             ("Gmail", CustomKind::Url, "https://mail.google.com"),
             ("Proyek", CustomKind::Folder, r"D:\Proyek"),

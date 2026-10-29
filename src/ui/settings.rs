@@ -50,16 +50,16 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, EN_CHANGE, EN_KILLFOCUS,
     EN_SETFOCUS, ES_AUTOHSCROLL, ES_PASSWORD, GetClientRect, GetDlgCtrlID, GetWindowTextLengthW,
-    GetWindowTextW, HICON, HMENU, HTCLIENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND,
-    IDC_SIZEALL, IMAGE_ICON, IsIconic,
-    IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW, LoadImageW, MoveWindow, PostMessageW,
-    RegisterClassExW, SM_CXICON, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNA,
-    SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow,
-    SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT,
-    WM_SETCURSOR, WM_SETFONT, WM_SETICON, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    GetWindowTextW, HICON, HMENU, HTCLIENT, ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND, IDC_SIZEALL,
+    IMAGE_ICON, IsIconic, IsWindow, KillTimer, LR_DEFAULTCOLOR, LoadCursorW, LoadImageW,
+    MoveWindow, PostMessageW, RegisterClassExW, SM_CXICON, SM_CXSMICON, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SW_SHOWNA, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor,
+    SetForegroundWindow, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SETICON,
+    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MINIMIZEBOX,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
 };
 use windows::core::{Error, HSTRING, PCWSTR, Result, w};
 
@@ -189,6 +189,25 @@ fn tile_action(tiles: &ShortcutTiles, hit: Hit) -> Option<ShortcutTiles> {
         _ => false,
     };
     changed.then_some(next)
+}
+
+/// What "Tambah" in the form does: the tiles with the typed one at the end
+/// and whether it is on (it is not while twelve show already), or the message
+/// that says what is wrong with what was typed.
+fn add_tile_to(
+    tiles: &ShortcutTiles,
+    kind: CustomKind,
+    name: &str,
+    target: &str,
+) -> std::result::Result<(ShortcutTiles, bool), Key> {
+    let tile = CustomTile::check(name, kind, target).map_err(|problem| match problem {
+        CustomProblem::Label => Key::TileErrName,
+        CustomProblem::Target if kind == CustomKind::Url => Key::TileErrUrl,
+        CustomProblem::Target => Key::TileErrPath,
+    })?;
+    let mut next = tiles.clone();
+    let on = next.add_own(tile).ok_or(Key::TileOwnFull)?;
+    Ok((next, on))
 }
 
 /// The pages after a drag dropped the page shown at place `from` on the
@@ -867,13 +886,7 @@ fn create_edits(parent: HWND, instance: HINSTANCE, dpi: u32, model: &Model) -> O
         0,
     );
     let name = make(ID_TILE_NAME, "", 0, w!("Gmail"), LABEL_MAX);
-    let target = make(
-        ID_TILE_TARGET,
-        "",
-        0,
-        cue_for(CustomKind::App),
-        TARGET_MAX,
-    );
+    let target = make(ID_TILE_TARGET, "", 0, cue_for(CustomKind::App), TARGET_MAX);
     match (id, secret, name, target) {
         (Some(id), Some(secret), Some(name), Some(target)) => Some(Edits {
             id,
@@ -1171,29 +1184,29 @@ impl Settings {
         ]
         .into_iter()
         .map(|(field, edit)| {
-                let rect = self
-                    .layout
-                    .fields
-                    .iter()
-                    .find(|(f, _)| *f == field)
-                    // A field scrolled partly under the title or past the
-                    // bottom hides: a native control is not clipped.
-                    .filter(|(_, r)| view.is_none_or(|v| r.y >= v.y && r.bottom() <= v.bottom()))
-                    .filter(|_| !fading)
-                    .map(|(_, r)| {
-                        let px = |v: f32| (v * s).round() as i32;
-                        let left = px(r.x + 10.0);
-                        let right = px(r.right() - 10.0);
-                        let mid = px(r.y + r.h / 2.0);
-                        RECT {
-                            left,
-                            top: mid - e.line_h / 2,
-                            right,
-                            bottom: mid - e.line_h / 2 + e.line_h,
-                        }
-                    });
-                (edit, rect)
-            })
+            let rect = self
+                .layout
+                .fields
+                .iter()
+                .find(|(f, _)| *f == field)
+                // A field scrolled partly under the title or past the
+                // bottom hides: a native control is not clipped.
+                .filter(|(_, r)| view.is_none_or(|v| r.y >= v.y && r.bottom() <= v.bottom()))
+                .filter(|_| !fading)
+                .map(|(_, r)| {
+                    let px = |v: f32| (v * s).round() as i32;
+                    let left = px(r.x + 10.0);
+                    let right = px(r.right() - 10.0);
+                    let mid = px(r.y + r.h / 2.0);
+                    RECT {
+                        left,
+                        top: mid - e.line_h / 2,
+                        right,
+                        bottom: mid - e.line_h / 2 + e.line_h,
+                    }
+                });
+            (edit, rect)
+        })
         .collect()
     }
 
@@ -1487,17 +1500,9 @@ impl Settings {
             Vec::new()
         };
         let (name, target) = (&self.field_text[2], &self.field_text[3]);
-        let tile = match CustomTile::check(name, form.kind, target) {
-            Ok(tile) => tile,
-            Err(CustomProblem::Label) => return fail(self, Key::TileErrName),
-            Err(CustomProblem::Target) if form.kind == CustomKind::Url => {
-                return fail(self, Key::TileErrUrl);
-            }
-            Err(CustomProblem::Target) => return fail(self, Key::TileErrPath),
-        };
-        let mut tiles = self.model.tiles.clone();
-        let Some(on) = tiles.add_own(tile) else {
-            return fail(self, Key::TileOwnFull);
+        let (tiles, on) = match add_tile_to(&self.model.tiles, form.kind, name, target) {
+            Ok(added) => added,
+            Err(key) => return fail(self, key),
         };
         self.tile_form = None;
         self.tile_note = (!on).then_some(Key::TileAddedOff);
@@ -1507,10 +1512,7 @@ impl Settings {
             }
         }
         self.model.tiles = tiles.clone();
-        vec![
-            After::Post(Action::ShortcutTiles(tiles)),
-            After::ResetForm,
-        ]
+        vec![After::Post(Action::ShortcutTiles(tiles)), After::ResetForm]
     }
 
     fn set_note(&mut self, google: bool, note: Option<(String, Tone)>) {
@@ -2272,9 +2274,7 @@ unsafe extern "system" fn wnd_proc(
                     } else {
                         Hit::TileFormCancel
                     };
-                    if let Some((owner, after)) =
-                        with(|st| (st.owner, st.on_click(hit)))
-                    {
+                    if let Some((owner, after)) = with(|st| (st.owner, st.on_click(hit))) {
                         run_after(hwnd, owner, after);
                     }
                     relayout_and_place();
@@ -2695,6 +2695,153 @@ mod tests {
         }
         assert_eq!(page_action(&one, Hit::PageOn(Page::Calendar)), None);
         assert_eq!(page_action(&pages, Hit::Robot), None);
+    }
+
+    #[test]
+    fn page_clicks_move_among_the_pages_shown_and_restore_the_defaults() {
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Reminders);
+        // Pomodoro down: past the hidden Reminders, after Notes.
+        let moved = page_action(&pages, Hit::PageMove(Page::Pomodoro, 1)).expect("moved");
+        assert_eq!(
+            moved.visible()[..4],
+            [Page::Calendar, Page::Notes, Page::Pomodoro, Page::Media]
+        );
+        assert_eq!(page_action(&pages, Hit::PageMove(Page::Calendar, -1)), None);
+        // "Tampilkan" on a hidden page, "Kembalikan bawaan" on the changed one.
+        let back = page_action(&pages, Hit::PageOn(Page::Reminders)).expect("shown");
+        assert_eq!(back, PanelPages::default());
+        assert_eq!(
+            page_action(&moved, Hit::PageReset),
+            Some(PanelPages::default())
+        );
+        assert_eq!(page_action(&PanelPages::default(), Hit::PageReset), None);
+        // The handle is not a click.
+        assert_eq!(page_action(&pages, Hit::PageGrip(Page::Notes)), None);
+    }
+
+    #[test]
+    fn a_drop_puts_the_page_at_the_place_it_was_dropped_on() {
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Reminders);
+        // Shown: Calendar, Pomodoro, Notes, Media, ... Dropping Calendar on
+        // the third place (Notes) puts it after Notes.
+        let next = page_drop(&pages, 0, 2).expect("moved");
+        assert_eq!(
+            next.visible()[..4],
+            [Page::Pomodoro, Page::Notes, Page::Calendar, Page::Media]
+        );
+        // Up: Media dropped on the first place goes before Calendar.
+        let next = page_drop(&pages, 3, 0).expect("moved");
+        assert_eq!(next.visible()[0], Page::Media);
+        assert_eq!(page_drop(&pages, 2, 2), None, "same place");
+        assert_eq!(page_drop(&pages, 0, 40), None, "no such place");
+        assert_eq!(page_drop(&pages, 40, 0), None);
+    }
+
+    #[test]
+    fn tile_clicks_change_the_list_or_nothing() {
+        let tiles = ShortcutTiles::default();
+        // Screenshot hidden, then back.
+        let off = tile_action(&tiles, Hit::TileOn(0)).expect("hidden");
+        assert_eq!(off.shown(), tiles.shown() - 1);
+        assert_eq!(tile_action(&off, Hit::TileOn(0)), Some(tiles.clone()));
+        // Down among the tiles shown, never past the last.
+        let moved = tile_action(&tiles, Hit::TileMove(0, 1)).expect("moved");
+        assert_eq!(moved.visible()[1], tiles.visible()[0]);
+        assert_eq!(tile_action(&tiles, Hit::TileMove(0, -1)), None);
+        // "+ Tambah" on a tile that is off, refused while twelve show.
+        let calendar = 10;
+        let added = tile_action(&tiles, Hit::TileOn(calendar)).expect("shown");
+        assert_eq!(added.shown(), tiles.shown() + 1);
+        let mut full = tiles.clone();
+        full.toggle(11);
+        assert_eq!(tile_action(&full, Hit::TileOn(12)), None);
+        // "Hapus" only on an own tile; "Kembalikan bawaan" on a changed list.
+        assert_eq!(tile_action(&tiles, Hit::TileRemove(0)), None);
+        assert_eq!(tile_action(&tiles, Hit::TileReset), None);
+        assert_eq!(tile_action(&moved, Hit::TileReset), Some(tiles.clone()));
+        assert_eq!(tile_action(&tiles, Hit::TileGrip(0)), None);
+        assert_eq!(tile_action(&tiles, Hit::Robot), None);
+    }
+
+    #[test]
+    fn a_drop_puts_the_tile_at_the_place_it_was_dropped_on() {
+        let tiles = ShortcutTiles::default();
+        let names = |t: &ShortcutTiles| t.visible();
+        let before = names(&tiles);
+        // Shown places 0..10: Screenshot dropped on the third (Search).
+        let next = tile_drop(&tiles, 0, 2).expect("moved");
+        let after = names(&next);
+        assert_eq!(
+            after[..3],
+            [before[1].clone(), before[2].clone(), before[0].clone()]
+        );
+        // The last shown (the Shelf, far down the list of every tile) goes
+        // to the front.
+        let next = tile_drop(&tiles, before.len() - 1, 0).expect("moved");
+        assert_eq!(names(&next)[0], before[before.len() - 1]);
+        assert_eq!(tile_drop(&tiles, 3, 3), None);
+        assert_eq!(tile_drop(&tiles, 0, 99), None);
+    }
+
+    #[test]
+    fn adding_an_own_tile_checks_what_was_typed() {
+        let tiles = ShortcutTiles::default();
+        let add =
+            |t: &ShortcutTiles, kind, name: &str, target: &str| add_tile_to(t, kind, name, target);
+        let (next, on) = add(
+            &tiles,
+            CustomKind::Url,
+            " Gmail ",
+            "https://mail.google.com",
+        )
+        .expect("valid");
+        assert!(on);
+        assert_eq!(next.customs(), 1);
+        assert_eq!(next.entries().last().unwrap().1, true);
+        // What is wrong is told per part, and by kind.
+        let key = |r: std::result::Result<(ShortcutTiles, bool), Key>| r.map(|_| ()).unwrap_err();
+        assert_eq!(
+            key(add(&tiles, CustomKind::Url, "", "https://x.co")),
+            Key::TileErrName
+        );
+        assert_eq!(
+            key(add(
+                &tiles,
+                CustomKind::Url,
+                "Nama yang terlalu panjang",
+                "https://x.co"
+            )),
+            Key::TileErrName
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::Url, "X", "mail.google.com")),
+            Key::TileErrUrl
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::App, "X", "calc.exe")),
+            Key::TileErrPath
+        );
+        assert_eq!(
+            key(add(&tiles, CustomKind::Folder, "X", r"\\server\share")),
+            Key::TileErrPath
+        );
+        // Added off while twelve show; refused when eight own tiles exist.
+        let (full, _) = add(&tiles, CustomKind::App, "Satu", r"C:\a.exe").expect("valid");
+        assert!(full.full());
+        let (_, on) = add(&full, CustomKind::Folder, "Dua", r"D:\Proyek").expect("valid");
+        assert!(!on, "the page is full: off");
+        let mut many = tiles.clone();
+        for i in 0..crate::tiles::MAX_CUSTOM {
+            many = add(&many, CustomKind::App, &format!("T{i}"), r"C:\a.exe")
+                .expect("valid")
+                .0;
+        }
+        assert_eq!(
+            key(add(&many, CustomKind::App, "Lagi", r"C:\a.exe")),
+            Key::TileOwnFull
+        );
     }
 
     #[test]

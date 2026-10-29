@@ -411,7 +411,9 @@ impl Icon {
             ],
             Icon::Chip => &[
                 Part::Rect(7.0, 7.0, 10.0, 10.0, 2.0),
-                Part::Path("M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"),
+                Part::Path(
+                    "M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5",
+                ),
             ],
             Icon::Grip => &[
                 Part::Dot(9.0, 6.0),

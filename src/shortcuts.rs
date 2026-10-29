@@ -315,7 +315,10 @@ mod tests {
 
     #[test]
     fn vale_settings_does_not_look_like_the_windows_gear() {
-        assert_ne!(icon(Shortcut::ValeSettings), icon(Shortcut::WindowsSettings));
+        assert_ne!(
+            icon(Shortcut::ValeSettings),
+            icon(Shortcut::WindowsSettings)
+        );
         assert_ne!(
             label(Shortcut::ValeSettings),
             label(Shortcut::WindowsSettings)

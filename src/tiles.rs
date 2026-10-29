@@ -78,11 +78,7 @@ impl CustomTile {
 
     /// `new`, saying which part failed (the label is judged first), for the
     /// Settings form's message under the fields.
-    pub fn check(
-        label: &str,
-        kind: CustomKind,
-        target: &str,
-    ) -> Result<CustomTile, CustomProblem> {
+    pub fn check(label: &str, kind: CustomKind, target: &str) -> Result<CustomTile, CustomProblem> {
         let (label, target) = (label.trim(), target.trim());
         let clean = |s: &str, max: usize| {
             !s.is_empty() && s.chars().count() <= max && !s.chars().any(char::is_control)
@@ -940,7 +936,10 @@ mod tests {
     fn move_to_puts_a_tile_at_a_place_of_the_list() {
         let mut t = ShortcutTiles::default();
         assert!(t.move_to(0, 3));
-        assert_eq!(&names(&t)[..4], ["Clipboard", "Search", "Emoji", "Screenshot"]);
+        assert_eq!(
+            &names(&t)[..4],
+            ["Clipboard", "Search", "Emoji", "Screenshot"]
+        );
         assert!(t.move_to(3, 0), "and back");
         assert_eq!(&names(&t)[..2], ["Screenshot", "Clipboard"]);
         assert!(!t.move_to(2, 2), "already there");
@@ -960,7 +959,10 @@ mod tests {
     fn move_shown_steps_over_tiles_that_are_off() {
         let mut t = ShortcutTiles::default();
         // Index 9 is ValeSettings (on), 10..16 are off Go tiles, 16 is GoShelf.
-        assert!(t.move_shown(16, -1), "past the off Go tiles, onto Vale's place");
+        assert!(
+            t.move_shown(16, -1),
+            "past the off Go tiles, onto Vale's place"
+        );
         assert_eq!(names(&t)[9], "GoShelf");
         assert_eq!(names(&t)[10], "ValeSettings");
         assert!(!t.move_shown(0, -1), "first");
@@ -1045,7 +1047,10 @@ mod tests {
         // The list of own tiles has a limit too.
         let mut t = ShortcutTiles::default();
         for i in 0..MAX_CUSTOM {
-            assert!(t.add_own(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe")).is_some());
+            assert!(
+                t.add_own(custom(&format!("T{i}"), CustomKind::App, r"C:\a.exe"))
+                    .is_some()
+            );
         }
         assert_eq!(
             t.add_own(custom("Lebih", CustomKind::App, r"C:\a.exe")),

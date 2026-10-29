@@ -578,7 +578,7 @@ impl Painter<'_> {
         }
         // The row a drag holds sits on a raised plate over the others.
         if let Some(r) = l.lifted {
-            self.fill_round(r, CONTROL_RADIUS, self.p.button, 1.0);
+            self.fill_round(r, CONTROL_RADIUS, self.p.field, 1.0);
             self.stroke_round(r, CONTROL_RADIUS, self.p.border);
         }
         if let Some(r) = l.preview {
