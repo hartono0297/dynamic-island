@@ -319,13 +319,15 @@ pub fn reveal_dir(before: &SubView, after: &SubView, page: Page) -> Option<Revea
             (Some(_), Some(_))
                 if before.mole != after.mole || before.mole_log != after.mole_log =>
             {
-                Some(RevealDir::Open)
+                // Mole's next stage or its log: the content changes in
+                // place, so it only fades.
+                Some(RevealDir::Fade)
             }
             _ => None,
         },
         Page::Cli => match (before.cli_menu, after.cli_menu) {
+            // Only the menu appearing reveals; it closes at once.
             (false, true) => Some(RevealDir::Open),
-            (true, false) => Some(RevealDir::Close),
             _ => None,
         },
         _ => None,
@@ -523,7 +525,7 @@ mod tests {
         scanned.mole = mole_code(MolePhase::Running);
         assert_eq!(
             transition(&snap(true, page, mole), &snap(true, page, scanned), true),
-            Transition::Reveal(RevealDir::Open)
+            Transition::Reveal(RevealDir::Fade)
         );
         // The same stage again (an option ticked, a new dry-run) is not a view.
         assert_eq!(

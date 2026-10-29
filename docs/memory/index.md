@@ -37,6 +37,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[google-built-in-client]]
 - [[v3-1-handoff]]: where v3.1 stands, how to continue on another PC
 - [[open-mode]]: Mode buka (Hover, Hover & tetap, Klik) and notices with a button
+- [[panel-linger-and-motion]]: the panel stays open 4 s after an action; every page and sub-view change moves (slide, fade, reveal), reduced motion, budget
 - [[scroll-volume]]: the wheel over the music notch / cover turns the master volume 2 % a notch
 - [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings, own tiles (app, folder, URL) from config.json

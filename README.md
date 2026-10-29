@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\Vale\uninst
 
 ## What it does
 
-Hover the notch to open it, scroll to change pages.
+Hover the notch to open it, scroll to change pages. The panel stays open for a few seconds after you click in it or close an editor, and every page and sub-view change glides (or is instant when Windows' animation effects are off).
 
 | | |
 |---|---|

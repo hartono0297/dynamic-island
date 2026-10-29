@@ -20,6 +20,14 @@ Bata adds only one-shots (`app.rs`, planned by `robot::plan_timers`):
   the blink re-plans when the clock stops.
 - The stay-behind rise ([[stay-behind]]: 180 ms, or a 120 ms fade with
   Motion not Full) runs the same `FrameClock` only while it lasts; no timer.
+- Panel transitions ([[panel-linger-and-motion]]): the sub-view `Reveal`
+  (160 ms), the search's page cross-fade and a page slide are counted in
+  `animating_at` like the rise: the `FrameClock` starts when one begins and
+  stops when none is left, no timer. The panel's **linger** (4 s after an
+  action) adds no timer either: its deadline rides `next_deadline()` on the
+  existing `TIMER_DEADLINE`; while it runs, the click-outside poll
+  (`TIMER_OUTSIDE`, below) watches so a click outside ends it. Windows'
+  animation setting is read at start and on `WM_SETTINGCHANGE`, never polled.
 
 Motion policy (`Motion`, config `robot_animation`):
 

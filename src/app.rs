@@ -6705,6 +6705,63 @@ mod tests {
         assert!(left.offset(ms(110)) < 0.0);
     }
 
+    #[test]
+    fn a_slide_started_mid_slide_keeps_the_page_where_it_is() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let first = Slide {
+            from: 1.0,
+            from_page: Page::Calendar,
+            start: t0,
+        };
+        // Another page turned 60 ms in: the page on screen is at `offset`.
+        let offset = first.offset(ms(60));
+        assert!(offset > 0.0 && offset < 1.0);
+        for dir in [1.0, -1.0] {
+            let next = Slide {
+                from: slide_start(offset, dir),
+                from_page: Page::Pomodoro,
+                start: ms(60),
+            };
+            // The page that was sliding is drawn at `slide - signum(slide)`
+            // panel widths: its place at the new slide's first frame is
+            // where it was at the last frame of the old one.
+            let at = next.offset(ms(60));
+            assert!(
+                (at - at.signum() - offset).abs() < 1e-5,
+                "dir {dir}: {at} against {offset}"
+            );
+            // And it ends at rest like any slide.
+            assert_eq!(next.offset(ms(60 + SLIDE_MS as u64)), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_morph_without_windows_animations_never_overshoots() {
+        let t0 = Instant::now();
+        let plain = Anim {
+            plain: true,
+            ..morph(t0)
+        };
+        let target = plain.to;
+        for ms in (0..=ANIM_MS).step_by(8) {
+            let (shape, _) = plain.frame(t0 + Duration::from_millis(ms));
+            assert!(
+                shape.w <= target.w + 1e-3 && shape.h <= target.h + 1e-3,
+                "{ms} ms"
+            );
+        }
+        let overshoots = (0..=ANIM_MS).step_by(8).any(|ms| {
+            let (shape, _) = morph(t0).frame(t0 + Duration::from_millis(ms));
+            shape.h > target.h + 1e-3
+        });
+        assert!(
+            overshoots,
+            "with animations on, the spring still overshoots"
+        );
+        assert_eq!(plain.frame(t0 + Duration::from_millis(ANIM_MS)).0, target);
+    }
+
     fn temp_notes(name: &str) -> (PathBuf, NotesStore) {
         let dir = std::env::temp_dir().join(format!("vale-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

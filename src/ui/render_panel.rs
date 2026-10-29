@@ -470,6 +470,8 @@ impl Renderer {
                 }
                 // A sub-view switch: the new content fades in, a few px
                 // from where it will rest.
+                // (The CLI's folder menu reveals itself, not the terminal.)
+                let reveal = reveal.filter(|_| !matches!(layout, PageLayout::Cli(_)));
                 let (alpha, dx, dy) = reveal.map_or((1.0, 0.0, 0.0), |r| (r.alpha, r.dx, r.dy));
                 self.paint_page_at(frame, &layout, (slide * s.w + dx, dy), alpha)?;
             }
@@ -1371,7 +1373,23 @@ impl Renderer {
         }
         self.paint_cli_input(l, cli)?;
         if let (Some(m), Some(menu)) = (&l.menu, cli.menu) {
-            self.paint_cli_menu(m, menu);
+            // The menu opens with a reveal of its own: the terminal behind
+            // it keeps showing (`paint_panel_content` leaves this page out).
+            match frame.transit.reveal {
+                Some(r) => {
+                    let target = self.target.as_ref().expect("target ensured by paint");
+                    let mut at = Matrix3x2::identity();
+                    unsafe { target.rt.GetTransform(&mut at) };
+                    self.push_opacity(r.alpha.clamp(0.0, 1.0));
+                    self.set_translation(at.M31 + r.dx, at.M32 + r.dy);
+                    self.paint_cli_menu(m, menu);
+                    unsafe {
+                        target.rt.SetTransform(&at);
+                        target.rt.PopLayer();
+                    }
+                }
+                None => self.paint_cli_menu(m, menu),
+            }
         }
         Ok(())
     }
