@@ -60,7 +60,12 @@ pub fn render_bgra(base: &Shot, doc: &[Annotation]) -> Option<Vec<u8>> {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
         let target = wic
-            .CreateBitmap(base.w, base.h, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)
+            .CreateBitmap(
+                base.w,
+                base.h,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapCacheOnLoad,
+            )
             .ok()?;
         let props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
@@ -153,12 +158,7 @@ pub fn spawn_save(
                 list.push(result);
             }
             unsafe {
-                let _ = PostMessageW(
-                    Some(HWND(target as *mut _)),
-                    msg,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
+                let _ = PostMessageW(Some(HWND(target as *mut _)), msg, WPARAM(0), LPARAM(0));
             }
         })
         .is_ok()
@@ -220,7 +220,11 @@ mod tests {
         );
         let third = write_new(&dir, b"other", at()).expect("third");
         assert!(third.ends_with("Screenshot 2026-10-29 090507 (3).png"));
-        assert_eq!(std::fs::read(&first).unwrap(), png, "the first is untouched");
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            png,
+            "the first is untouched"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

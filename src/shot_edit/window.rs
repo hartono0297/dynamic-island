@@ -12,12 +12,15 @@ use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
 use windows::Win32::Foundation::{
-    COLORREF, D2DERR_RECREATE_TARGET, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    COLORREF, D2DERR_RECREATE_TARGET, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT,
+    POINT, RECT, WPARAM,
 };
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
+};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    ID2D1Bitmap, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap,
+    ID2D1RenderTarget, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -31,22 +34,24 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::EM_SETMARGINS;
-use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{
+    AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DELETE, VK_ESCAPE, VK_RETURN,
     VK_SHIFT,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowTextLengthW,
-    GetWindowTextW, HMENU, IDC_ARROW, IDC_CROSS, IDC_IBEAM, IsWindow, LoadCursorW, MINMAXINFO,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
-    WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    EN_CHANGE, ES_AUTOVSCROLL, ES_MULTILINE, SendMessageW,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE, ES_AUTOVSCROLL,
+    ES_MULTILINE, GetClientRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDC_CROSS,
+    IDC_IBEAM, IsWindow, LoadCursorW, MINMAXINFO, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor,
+    SetForegroundWindow, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_GETMINMAXINFO, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows::core::{Error, HSTRING, w};
 use windows_numerics::Vector2;
@@ -191,7 +196,10 @@ pub fn layout(cw: f32, ch: f32, ui: f32, labels: &Labels, confirm: bool) -> Layo
     let left_end = x + BTN * ui;
     // Right group, from the edge in: Tutup, Simpan, Salin.
     let mut right = cw - MARGIN * ui;
-    for (hit, label) in [Hit::Close, Hit::Save, Hit::Copy].into_iter().zip([labels[2], labels[1], labels[0]]) {
+    for (hit, label) in [Hit::Close, Hit::Save, Hit::Copy]
+        .into_iter()
+        .zip([labels[2], labels[1], labels[0]])
+    {
         let w = text_button_w(label, ui);
         items.push((hit, place(right - w, w, BTN_H * ui)));
         right -= w + 8.0 * ui;
@@ -296,9 +304,18 @@ enum Tone {
 
 enum Drag {
     /// A new annotation being drawn; `from` is where the press was.
-    Draw { idx: usize, from: Pt },
-    Move { idx: usize, last: Pt },
-    Resize { idx: usize, handle: Handle },
+    Draw {
+        idx: usize,
+        from: Pt,
+    },
+    Move {
+        idx: usize,
+        last: Pt,
+    },
+    Resize {
+        idx: usize,
+        handle: Handle,
+    },
 }
 
 /// A native EDIT over the canvas.
@@ -691,13 +708,18 @@ fn do_save(hwnd: HWND) {
         }
         e.saving = true;
         say(e, tr(Key::EditSaving), Tone::Hint);
-        let dir = e
-            .demo
-            .then(|| std::env::current_dir().unwrap_or_default().join("target").join("demo-shots"));
+        let dir = e.demo.then(|| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("target")
+                .join("demo-shots")
+        });
         Some((e.base.clone(), e.session.doc.clone(), dir, e.inbox.clone()))
     })
     .flatten();
-    let Some((base, doc, dir, inbox)) = job else { return };
+    let Some((base, doc, dir, inbox)) = job else {
+        return;
+    };
     if !export::spawn_save(base, doc, dir, inbox, hwnd, WM_APP_SAVED) {
         with(hwnd, |e| {
             e.saving = false;
@@ -723,7 +745,11 @@ fn on_saved(hwnd: HWND) {
                     say(e, msg, Tone::Ok);
                 }
                 SaveResult::Failed => {
-                    let msg = format!("{} · {}", tr(Key::ShotSaveFailed), tr(Key::ShotMaybeBlocked));
+                    let msg = format!(
+                        "{} · {}",
+                        tr(Key::ShotSaveFailed),
+                        tr(Key::ShotMaybeBlocked)
+                    );
                     say(e, msg, Tone::Error);
                 }
             }
@@ -803,7 +829,12 @@ fn begin_text(hwnd: HWND, pos: Pt, index: Option<usize>) {
                 color,
                 pos,
             }) => (text.clone(), *size, *color, *pos),
-            _ => (String::new(), text_size(e.session.stroke), e.session.color, pos),
+            _ => (
+                String::new(),
+                text_size(e.session.stroke),
+                e.session.color,
+                pos,
+            ),
         };
         let (x, y) = e.view.to_view(pos);
         Some(Plan {
@@ -822,7 +853,9 @@ fn begin_text(hwnd: HWND, pos: Pt, index: Option<usize>) {
     let px = (plan.size * plan.view_scale).round().max(8.0 * plan.ui);
     let back = contrast_back(plan.color);
     unsafe {
-        let Ok(instance) = GetModuleHandleW(None) else { return };
+        let Ok(instance) = GetModuleHandleW(None) else {
+            return;
+        };
         let font = CreateFontW(
             -(px as i32),
             0,
@@ -857,7 +890,12 @@ fn begin_text(hwnd: HWND, pos: Pt, index: Option<usize>) {
             let _ = DeleteObject(HGDIOBJ(font.0));
             return;
         };
-        SendMessageW(edit, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+        SendMessageW(
+            edit,
+            WM_SETFONT,
+            Some(WPARAM(font.0 as usize)),
+            Some(LPARAM(1)),
+        );
         SendMessageW(edit, EM_SETMARGINS, Some(WPARAM(3)), Some(LPARAM(0)));
         let _ = SetWindowSubclass(edit, Some(edit_proc), 1, 0);
         let brush = CreateSolidBrush(colorref(back));
@@ -903,7 +941,8 @@ fn fit_edit(hwnd: HWND) {
     .flatten();
     let Some((edit, px, ui)) = plan else { return };
     let text = edit_text(edit);
-    let (tw, th) = with(hwnd, |e| e.gfx.measure(&format!("{text}M"), px, 400)).unwrap_or((0.0, 0.0));
+    let (tw, th) =
+        with(hwnd, |e| e.gfx.measure(&format!("{text}M"), px, 400)).unwrap_or((0.0, 0.0));
     let w = (tw + 12.0 * ui).max(140.0 * ui);
     let h = (th + 6.0 * ui).max(px * 1.4);
     unsafe {
@@ -1191,7 +1230,10 @@ fn on_up(hwnd: HWND, lparam: LPARAM) {
         if let Some(drag) = e.drag.take() {
             // A click with a drawing tool leaves nothing behind.
             if let Drag::Draw { idx, .. } = drag
-                && e.session.doc.get(idx).is_some_and(Annotation::is_degenerate)
+                && e.session
+                    .doc
+                    .get(idx)
+                    .is_some_and(Annotation::is_degenerate)
             {
                 e.session.doc.remove(idx);
             }
@@ -1470,7 +1512,14 @@ fn fill(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, r: Rect, rgb: u32,
     }
 }
 
-fn fill_round(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, r: Rect, radius: f32, rgb: u32, a: f32) {
+fn fill_round(
+    rt: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    r: Rect,
+    radius: f32,
+    rgb: u32,
+    a: f32,
+) {
     use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
     unsafe {
         brush.SetColor(&color(rgb, a));
@@ -1485,9 +1534,22 @@ fn fill_round(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, r: Rect, rad
     }
 }
 
-fn line(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, a: (f32, f32), b: (f32, f32), w: f32) {
+fn line(
+    rt: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    gfx: &Gfx,
+    a: (f32, f32),
+    b: (f32, f32),
+    w: f32,
+) {
     unsafe {
-        rt.DrawLine(Vector2::new(a.0, a.1), Vector2::new(b.0, b.1), brush, w, &gfx.round);
+        rt.DrawLine(
+            Vector2::new(a.0, a.1),
+            Vector2::new(b.0, b.1),
+            brush,
+            w,
+            &gfx.round,
+        );
     }
 }
 
@@ -1502,7 +1564,9 @@ fn poly(
 ) {
     let Some(first) = pts.first() else { return };
     unsafe {
-        let Ok(g) = gfx.d2d.CreatePathGeometry() else { return };
+        let Ok(g) = gfx.d2d.CreatePathGeometry() else {
+            return;
+        };
         let Ok(sink) = g.Open() else { return };
         sink.BeginFigure(Vector2::new(first.0, first.1), D2D1_FIGURE_BEGIN_FILLED);
         for p in &pts[1..] {
@@ -1531,7 +1595,16 @@ enum Glyph {
 }
 
 /// A toolbar icon drawn from a few lines, centred in `r`.
-fn glyph(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, g: Glyph, r: Rect, rgb: u32, a: f32, ui: f32) {
+fn glyph(
+    rt: &ID2D1RenderTarget,
+    brush: &ID2D1SolidColorBrush,
+    gfx: &Gfx,
+    g: Glyph,
+    r: Rect,
+    rgb: u32,
+    a: f32,
+    ui: f32,
+) {
     let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
     let u = 7.5 * ui;
     let sw = 1.7 * ui;
@@ -1555,7 +1628,17 @@ fn glyph(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, g: Gly
                 true,
             ),
             Glyph::Tool(Tool::Text) => {
-                gfx.text_in(rt, brush, "T", (r.x, r.y, r.w, r.h), 18.0 * ui, 700, rgb, a, Align::Center);
+                gfx.text_in(
+                    rt,
+                    brush,
+                    "T",
+                    (r.x, r.y, r.w, r.h),
+                    18.0 * ui,
+                    700,
+                    rgb,
+                    a,
+                    Align::Center,
+                );
             }
             Glyph::Tool(Tool::Rect) => {
                 rt.DrawRectangle(
@@ -1566,7 +1649,14 @@ fn glyph(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, g: Gly
                 );
             }
             Glyph::Tool(Tool::Arrow) => {
-                line(rt, brush, gfx, (cx - u * 0.9, cy + u * 0.9), (cx + u * 0.9, cy - u * 0.9), sw);
+                line(
+                    rt,
+                    brush,
+                    gfx,
+                    (cx - u * 0.9, cy + u * 0.9),
+                    (cx + u * 0.9, cy - u * 0.9),
+                    sw,
+                );
                 poly(
                     rt,
                     brush,
@@ -1596,9 +1686,23 @@ fn glyph(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, g: Gly
             ),
             Glyph::Tool(Tool::Marker) => {
                 brush.SetColor(&color(rgb, a * 0.45));
-                line(rt, brush, gfx, (cx - u * 0.8, cy + u * 0.2), (cx + u * 0.8, cy - u * 0.5), 6.0 * ui);
+                line(
+                    rt,
+                    brush,
+                    gfx,
+                    (cx - u * 0.8, cy + u * 0.2),
+                    (cx + u * 0.8, cy - u * 0.5),
+                    6.0 * ui,
+                );
                 brush.SetColor(&color(rgb, a));
-                line(rt, brush, gfx, (cx - u * 0.9, cy + u * 0.95), (cx + u * 0.9, cy + u * 0.95), sw);
+                line(
+                    rt,
+                    brush,
+                    gfx,
+                    (cx - u * 0.9, cy + u * 0.95),
+                    (cx + u * 0.9, cy + u * 0.95),
+                    sw,
+                );
             }
             Glyph::Tool(Tool::Pixelate) => {
                 let cell = u * 0.66;
@@ -1608,7 +1712,12 @@ fn glyph(rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, gfx: &Gfx, g: Gly
                         let on = (i + j) % 2 == 0;
                         brush.SetColor(&color(rgb, if on { a } else { a * 0.35 }));
                         rt.FillRectangle(
-                            &rect_f(x0 + i as f32 * cell, y0 + j as f32 * cell, cell - 1.0 * ui, cell - 1.0 * ui),
+                            &rect_f(
+                                x0 + i as f32 * cell,
+                                y0 + j as f32 * cell,
+                                cell - 1.0 * ui,
+                                cell - 1.0 * ui,
+                            ),
                             brush,
                         );
                     }
@@ -1716,7 +1825,12 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
     let (border, ba) = rgba(p.border);
     unsafe {
         brush.SetColor(&color(border, ba.max(0.12)));
-        rt.DrawRectangle(&rect_f(img.x - 0.5, img.y - 0.5, img.w + 1.0, img.h + 1.0), brush, 1.0, None);
+        rt.DrawRectangle(
+            &rect_f(img.x - 0.5, img.y - 0.5, img.w + 1.0, img.h + 1.0),
+            brush,
+            1.0,
+            None,
+        );
     }
     if let Some(a) = session.selected.and_then(|i| session.doc.get(i))
         && editing.is_none()
@@ -1765,7 +1879,16 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
                 } else if hot {
                     fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
                 }
-                glyph(rt, brush, gfx, Glyph::Tool(tool), *r, if on { p.accent } else { p.text }, a, ui);
+                glyph(
+                    rt,
+                    brush,
+                    gfx,
+                    Glyph::Tool(tool),
+                    *r,
+                    if on { p.accent } else { p.text },
+                    a,
+                    ui,
+                );
             }
             Hit::Color(i) => {
                 let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
@@ -1818,8 +1941,21 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
                 if hot && can {
                     fill_round(rt, brush, *r, 9.0 * ui, p.hover, 1.0);
                 }
-                let g = if matches!(hit, Hit::Undo) { Glyph::Undo } else { Glyph::Redo };
-                glyph(rt, brush, gfx, g, *r, p.text, if can { a } else { 0.3 * a }, ui);
+                let g = if matches!(hit, Hit::Undo) {
+                    Glyph::Undo
+                } else {
+                    Glyph::Redo
+                };
+                glyph(
+                    rt,
+                    brush,
+                    gfx,
+                    g,
+                    *r,
+                    p.text,
+                    if can { a } else { 0.3 * a },
+                    ui,
+                );
             }
             Hit::Copy | Hit::Save | Hit::Close | Hit::Discard | Hit::Keep => {
                 let (label, primary, danger) = match hit {
@@ -1845,7 +1981,17 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
                     alpha *= 0.5;
                 }
                 fill_round(rt, brush, *r, 10.0 * ui, bg, alpha);
-                gfx.text_in(rt, brush, label, (r.x, r.y, r.w, r.h), UI_TEXT * ui, 500, fg, alpha, Align::Center);
+                gfx.text_in(
+                    rt,
+                    brush,
+                    label,
+                    (r.x, r.y, r.w, r.h),
+                    UI_TEXT * ui,
+                    500,
+                    fg,
+                    alpha,
+                    Align::Center,
+                );
             }
         }
     }
@@ -1871,7 +2017,17 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
         layout.footer.h,
     );
     if *confirm {
-        gfx.text_in(rt, brush, tr(Key::EditDiscardAsk), text_box, UI_TEXT * ui, 600, p.text, 1.0, Align::Left);
+        gfx.text_in(
+            rt,
+            brush,
+            tr(Key::EditDiscardAsk),
+            text_box,
+            UI_TEXT * ui,
+            600,
+            p.text,
+            1.0,
+            Align::Left,
+        );
     } else {
         // The button under the pointer names itself; else the last result;
         // else the hint.
@@ -1896,7 +2052,12 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
             rt,
             brush,
             &msg,
-            (text_box.0, text_box.1, (text_box.2 - info_w - 12.0 * ui).max(0.0), text_box.3),
+            (
+                text_box.0,
+                text_box.1,
+                (text_box.2 - info_w - 12.0 * ui).max(0.0),
+                text_box.3,
+            ),
             12.5 * ui,
             400,
             rgb,
@@ -1907,7 +2068,12 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
             rt,
             brush,
             &size_info,
-            (text_box.0 + text_box.2 - info_w, text_box.1, info_w, text_box.3),
+            (
+                text_box.0 + text_box.2 - info_w,
+                text_box.1,
+                info_w,
+                text_box.3,
+            ),
             12.0 * ui,
             400,
             p.tertiary,
@@ -1931,7 +2097,9 @@ fn draw(e: &mut Editor) -> windows::core::Result<()> {
 /// `target/demo-shots/`; the process ends when the window closes.
 #[cfg(debug_assertions)]
 pub fn run_demo(empty: bool) {
-    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, MSG, TranslateMessage,
+    };
 
     theme::set_system_light(theme::read_system_light());
     let shot = crate::capture::demo::picture(960, 600);
@@ -1975,7 +2143,11 @@ fn demo_doc() -> Vec<Annotation> {
             style: style(COLORS[2], STROKES[1]),
         },
         Annotation::Marker {
-            pts: vec![Pt::new(320.0, 330.0), Pt::new(470.0, 330.0), Pt::new(560.0, 336.0)],
+            pts: vec![
+                Pt::new(320.0, 330.0),
+                Pt::new(470.0, 330.0),
+                Pt::new(560.0, 336.0),
+            ],
             style: style(COLORS[1], STROKES[1]),
         },
         Annotation::Text {
@@ -2018,13 +2190,24 @@ mod tests {
             let w = min_client_w(ui, &LABELS);
             let l = layout(w, 500.0 * ui, ui, &LABELS, false);
             for (hit, r) in &l.items {
-                assert!(r.x >= 0.0 && r.right() <= w + 0.01, "{hit:?} at {ui}: {r:?}");
+                assert!(
+                    r.x >= 0.0 && r.right() <= w + 0.01,
+                    "{hit:?} at {ui}: {r:?}"
+                );
                 assert!(r.y >= 0.0 && r.bottom() <= l.toolbar.h + 0.01, "{hit:?}");
             }
-            assert!(all_overlaps(&l.items).is_empty(), "{:?}", all_overlaps(&l.items));
+            assert!(
+                all_overlaps(&l.items).is_empty(),
+                "{:?}",
+                all_overlaps(&l.items)
+            );
             let order: Vec<Hit> = l.items.iter().map(|(h, _)| *h).collect();
             let tools: Vec<Hit> = Tool::ALL.iter().map(|t| Hit::Tool(*t)).collect();
-            assert_eq!(&order[..7], tools.as_slice(), "Select first, then T R A P M B");
+            assert_eq!(
+                &order[..7],
+                tools.as_slice(),
+                "Select first, then T R A P M B"
+            );
             assert_eq!(l.seps.len(), 3);
             // The two groups apart at the least width.
             let copy = l.rect_of(Hit::Copy).expect("copy");
@@ -2050,7 +2233,10 @@ mod tests {
         let undo = l.rect_of(Hit::Undo).expect("undo");
         assert_eq!(l.hit(undo.x + 2.0, undo.y + 2.0), Some(Hit::Undo));
         let save = l.rect_of(Hit::Save).expect("save");
-        assert_eq!(l.hit(save.x + save.w / 2.0, save.y + save.h / 2.0), Some(Hit::Save));
+        assert_eq!(
+            l.hit(save.x + save.w / 2.0, save.y + save.h / 2.0),
+            Some(Hit::Save)
+        );
         assert_eq!(l.hit(450.0, 400.0), None, "the canvas is no button");
         assert!(l.rect_of(Hit::Discard).is_none());
     }
@@ -2065,7 +2251,11 @@ mod tests {
             assert!(r.right() <= 1000.0);
         }
         assert!(discard.right() <= keep.x, "Buang left of Batal");
-        assert!(all_overlaps(&l.items).is_empty(), "{:?}", all_overlaps(&l.items));
+        assert!(
+            all_overlaps(&l.items).is_empty(),
+            "{:?}",
+            all_overlaps(&l.items)
+        );
     }
 
     #[test]
@@ -2099,7 +2289,10 @@ mod tests {
     fn a_button_under_the_pointer_names_itself_with_its_shortcut() {
         crate::i18n::set_lang(crate::i18n::Lang::En);
         assert_eq!(tip(Hit::Tool(Tool::Text)).as_deref(), Some("Text (T)"));
-        assert_eq!(tip(Hit::Tool(Tool::Pixelate)).as_deref(), Some("Pixelate (B)"));
+        assert_eq!(
+            tip(Hit::Tool(Tool::Pixelate)).as_deref(),
+            Some("Pixelate (B)")
+        );
         assert_eq!(tip(Hit::Undo).as_deref(), Some("Undo (Ctrl+Z)"));
         assert_eq!(tip(Hit::Redo).as_deref(), Some("Redo (Ctrl+Y)"));
         assert_eq!(tip(Hit::Save).as_deref(), Some("Save (Ctrl+S)"));

@@ -135,9 +135,7 @@ pub unsafe fn take_result(lparam: LPARAM) -> Option<Vec<Candidate>> {
 /// bounding rectangle cached (one cross-process call for the lot).
 unsafe fn boxes_of(uia: &IUIAutomation, window: &TopWindow) -> Option<Vec<Candidate>> {
     unsafe {
-        let root = uia
-            .ElementFromHandle(HWND(window.hwnd as *mut _))
-            .ok()?;
+        let root = uia.ElementFromHandle(HWND(window.hwnd as *mut _)).ok()?;
         let cache = uia.CreateCacheRequest().ok()?;
         cache.AddProperty(UIA_BoundingRectanglePropertyId).ok()?;
         let on_screen = uia

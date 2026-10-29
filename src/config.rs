@@ -178,9 +178,7 @@ impl Default for ScreenshotSettings {
 /// reads as Vale, so a bad value never makes the whole config invalid.
 fn shot_tool<'de, D: Deserializer<'de>>(d: D) -> Result<ShotTool, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
-    Ok(v.as_str()
-        .and_then(ShotTool::from_name)
-        .unwrap_or_default())
+    Ok(v.as_str().and_then(ShotTool::from_name).unwrap_or_default())
 }
 
 /// Any number, kept in `SHOT_SECS_RANGE`; a non-number is the default.

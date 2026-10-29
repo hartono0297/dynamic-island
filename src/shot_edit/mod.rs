@@ -94,11 +94,24 @@ pub struct Style {
 /// One thing drawn over the picture.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Annotation {
-    Rect { r: FRect, style: Style },
-    Arrow { a: Pt, b: Pt, style: Style },
-    Pen { pts: Vec<Pt>, style: Style },
+    Rect {
+        r: FRect,
+        style: Style,
+    },
+    Arrow {
+        a: Pt,
+        b: Pt,
+        style: Style,
+    },
+    Pen {
+        pts: Vec<Pt>,
+        style: Style,
+    },
     /// A highlighter: the same stroke, drawn wide and translucent.
-    Marker { pts: Vec<Pt>, style: Style },
+    Marker {
+        pts: Vec<Pt>,
+        style: Style,
+    },
     /// `pos` is the top-left of the text; lines are split at '\n'.
     Text {
         pos: Pt,
@@ -107,7 +120,9 @@ pub enum Annotation {
         color: u32,
     },
     /// The part of the picture under it is blurred into blocks.
-    Pixelate { r: FRect },
+    Pixelate {
+        r: FRect,
+    },
 }
 
 /// The tools of the toolbar; Select is active when the editor opens.
@@ -162,9 +177,7 @@ impl Tool {
 }
 
 /// The six colour swatches (`0xRRGGBB`): red first, the default.
-pub const COLORS: [u32; 6] = [
-    0xE5484D, 0xF5A524, 0x30A46C, 0x3E63DD, 0x1A1A1A, 0xFFFFFF,
-];
+pub const COLORS: [u32; 6] = [0xE5484D, 0xF5A524, 0x30A46C, 0x3E63DD, 0x1A1A1A, 0xFFFFFF];
 
 /// The three stroke widths in image px (thin, medium, thick).
 pub const STROKES: [f32; 3] = [3.0, 6.0, 12.0];
@@ -368,9 +381,7 @@ impl Annotation {
         const MIN: f32 = 3.0;
         match self {
             Annotation::Rect { r, .. } | Annotation::Pixelate { r } => r.w < MIN || r.h < MIN,
-            Annotation::Arrow { a, b, .. } => {
-                (a.x - b.x).abs() < MIN && (a.y - b.y).abs() < MIN
-            }
+            Annotation::Arrow { a, b, .. } => (a.x - b.x).abs() < MIN && (a.y - b.y).abs() < MIN,
             Annotation::Pen { pts, .. } | Annotation::Marker { pts, .. } => pts.len() < 2,
             Annotation::Text { text, .. } => text.trim().is_empty(),
         }
@@ -779,7 +790,10 @@ mod tests {
     fn a_rectangle_is_hit_on_its_line_not_inside() {
         let a = rect(100.0, 100.0, 200.0, 100.0);
         assert!(a.hit(Pt::new(100.0, 150.0), 4.0), "left edge");
-        assert!(a.hit(Pt::new(200.0, 203.0), 4.0), "bottom edge, within reach");
+        assert!(
+            a.hit(Pt::new(200.0, 203.0), 4.0),
+            "bottom edge, within reach"
+        );
         assert!(!a.hit(Pt::new(200.0, 150.0), 4.0), "inside stays free");
         assert!(!a.hit(Pt::new(50.0, 50.0), 4.0));
     }
@@ -879,7 +893,14 @@ mod tests {
         assert!(matches!(a, Annotation::Arrow { a, b, .. }
             if a == Pt::new(0.0, 0.0) && b == Pt::new(200.0, 200.0)));
         assert_eq!(a.handles().len(), 2);
-        assert!(Annotation::Pen { pts: vec![], style: RED }.handles().is_empty());
+        assert!(
+            Annotation::Pen {
+                pts: vec![],
+                style: RED
+            }
+            .handles()
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1045,7 +1066,10 @@ mod tests {
             clip_to_image(FRect::new(90.0, 40.0, 50.0, 50.0), 100, 50),
             Some((90, 40, 10, 10))
         );
-        assert_eq!(clip_to_image(FRect::new(200.0, 0.0, 5.0, 5.0), 100, 50), None);
+        assert_eq!(
+            clip_to_image(FRect::new(200.0, 0.0, 5.0, 5.0), 100, 50),
+            None
+        );
     }
 
     #[test]
@@ -1071,7 +1095,10 @@ mod tests {
         assert!(part.chunks(4).all(|p| p == [200, 200, 200, 255]));
         assert!(pixelate(&img, 4, 2, (3, 0, 2, 2), 2).is_none(), "outside");
         assert!(pixelate(&img, 4, 2, (0, 0, 4, 2), 0).is_none());
-        assert!(pixelate(&img[..8], 4, 2, (0, 0, 4, 2), 2).is_none(), "short");
+        assert!(
+            pixelate(&img[..8], 4, 2, (0, 0, 4, 2), 2).is_none(),
+            "short"
+        );
     }
 
     #[test]

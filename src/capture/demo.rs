@@ -96,25 +96,57 @@ pub fn scene() -> (Frozen, Vec<Candidate>) {
         fill(&mut bgra, wu, frame, 0xF6F4F0);
         let title = Rect::new(frame.x, frame.y, frame.w, 38);
         let side = Rect::new(frame.x, frame.y + 38, frame.w / 5, frame.h - 38);
-        let body = Rect::new(frame.x + side.w, frame.y + 38, frame.w - side.w, frame.h - 38);
+        let body = Rect::new(
+            frame.x + side.w,
+            frame.y + 38,
+            frame.w - side.w,
+            frame.h - 38,
+        );
         fill(&mut bgra, wu, title, 0x3A4357);
         fill(&mut bgra, wu, side, 0xE2E6EE);
         let card1 = Rect::new(body.x + 20, body.y + 20, body.w / 2 - 30, body.h / 2 - 30);
-        let card2 = Rect::new(body.x + body.w / 2 + 10, body.y + 20, body.w / 2 - 30, body.h / 2 - 30);
-        let strip = Rect::new(body.x + 20, body.y + body.h / 2 + 10, body.w - 40, body.h / 2 - 30);
+        let card2 = Rect::new(
+            body.x + body.w / 2 + 10,
+            body.y + 20,
+            body.w / 2 - 30,
+            body.h / 2 - 30,
+        );
+        let strip = Rect::new(
+            body.x + 20,
+            body.y + body.h / 2 + 10,
+            body.w - 40,
+            body.h / 2 - 30,
+        );
         fill(&mut bgra, wu, card1, 0xFFFFFF);
         fill(&mut bgra, wu, card2, 0xFFE9C7);
         fill(&mut bgra, wu, strip, 0xD6E4FA);
         for c in [card1, card2] {
-            fill(&mut bgra, wu, Rect::new(c.x + 14, c.y + 16, c.w / 2, 12), 0x3C4A66);
-            fill(&mut bgra, wu, Rect::new(c.x + 14, c.y + 40, c.w - 28, 8), 0xB7BFCD);
+            fill(
+                &mut bgra,
+                wu,
+                Rect::new(c.x + 14, c.y + 16, c.w / 2, 12),
+                0x3C4A66,
+            );
+            fill(
+                &mut bgra,
+                wu,
+                Rect::new(c.x + 14, c.y + 40, c.w - 28, 8),
+                0xB7BFCD,
+            );
         }
         cands.push(Candidate {
             rect: frame,
             z,
             depth: 0,
         });
-        for (rect, depth) in [(title, 1), (side, 1), (body, 1), (card1, 2), (card2, 2), (strip, 2)] {
+        for (rect, depth) in [
+            (title, 1),
+            (side, 1),
+            (body, 1),
+            (card1, 2),
+            (card2, 2),
+            (strip, 2),
+        ] {
             cands.push(Candidate { rect, z, depth });
         }
     }

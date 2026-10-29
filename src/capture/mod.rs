@@ -100,9 +100,7 @@ pub fn pick(cands: &[Candidate], pt: (i32, i32)) -> Option<Rect> {
         .min()?;
     cands
         .iter()
-        .filter(|c| {
-            c.z == z && c.rect.contains(pt) && c.rect.w >= MIN_SNAP && c.rect.h >= MIN_SNAP
-        })
+        .filter(|c| c.z == z && c.rect.contains(pt) && c.rect.w >= MIN_SNAP && c.rect.h >= MIN_SNAP)
         // The smallest; of two equal boxes the deeper one.
         .min_by_key(|c| (c.rect.area(), std::cmp::Reverse(c.depth)))
         .map(|c| c.rect)
@@ -214,7 +212,10 @@ mod tests {
         ];
         // Inside the front window: its own small box, not the one behind.
         assert_eq!(pick(&cands, (125, 145)), Some(Rect::new(110, 130, 60, 30)));
-        assert_eq!(pick(&cands, (300, 250)), Some(Rect::new(100, 100, 300, 200)));
+        assert_eq!(
+            pick(&cands, (300, 250)),
+            Some(Rect::new(100, 100, 300, 200))
+        );
         // Outside it the one behind shows through.
         assert_eq!(pick(&cands, (510, 410)), Some(Rect::new(500, 400, 100, 50)));
         assert_eq!(pick(&cands, (50, 50)), Some(Rect::new(0, 0, 800, 600)));

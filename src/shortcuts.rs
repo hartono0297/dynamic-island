@@ -281,7 +281,10 @@ mod tests {
     fn vales_own_capture_waits_for_the_collapse_like_the_screen_clip() {
         let clip = shortcut_action(Shortcut::Screenshot).expect("the tile's action");
         assert_eq!(delay_ms(&Action::Capture), delay_ms(&clip));
-        assert!(u64::from(delay_ms(&Action::Capture)) > ANIM_MS, "after the morph");
+        assert!(
+            u64::from(delay_ms(&Action::Capture)) > ANIM_MS,
+            "after the morph"
+        );
     }
 
     #[test]

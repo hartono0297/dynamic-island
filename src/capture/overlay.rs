@@ -15,9 +15,7 @@ use windows::Win32::Foundation::{
     D2DERR_RECREATE_TARGET, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap,
-};
+use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -26,10 +24,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HWND_TOPMOST, IDC_CROSS,
     LoadCursorW, MSG, PM_REMOVE, PeekMessageW, PostQuitMessage, RegisterClassExW, SW_SHOWNA,
-    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowPos,
-    ShowWindow, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowPos, ShowWindow, WM_APP, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Error, w};
 use windows_numerics::Vector2;
@@ -234,8 +231,15 @@ fn finish(choice: Option<Rect>) {
         return;
     };
     state.stop.store(true, Ordering::Relaxed);
-    let shot = choice
-        .and_then(|r| crop(&state.frame.bgra, state.frame.stride(), state.frame.rect(), r).map(|s| (s, r)));
+    let shot = choice.and_then(|r| {
+        crop(
+            &state.frame.bgra,
+            state.frame.stride(),
+            state.frame.rect(),
+            r,
+        )
+        .map(|s| (s, r))
+    });
     let (hwnd, demo) = (state.hwnd, state.demo);
     // The picture, the target and the frame go now.
     drop(state);
@@ -252,11 +256,8 @@ fn finish(choice: Option<Rect>) {
 /// What a left click takes: the highlight, else the whole monitor under the
 /// pointer.
 fn click_target(s: &State) -> Rect {
-    s.hover.unwrap_or_else(|| {
-        win::monitor_at(s.cursor)
-            .0
-            .intersect(&s.frame.rect())
-    })
+    s.hover
+        .unwrap_or_else(|| win::monitor_at(s.cursor).0.intersect(&s.frame.rect()))
 }
 
 /// Recomputes the highlight for the pointer; true when what is drawn changed.
@@ -491,9 +492,22 @@ fn draw(s: &mut State) -> windows::core::Result<()> {
             let lw = s.gfx.measure(&label, 12.0 * ui, 500).0 + 16.0 * ui;
             let lh = 22.0 * ui;
             let below = y + rh + 8.0 * ui;
-            let ly = if below + lh <= full_h { below } else { (y + 8.0 * ui).max(0.0) };
+            let ly = if below + lh <= full_h {
+                below
+            } else {
+                (y + 8.0 * ui).max(0.0)
+            };
             let lx = x.min(full_w - lw).max(0.0);
-            pill(rt, brush, &s.gfx, (lx, ly, lw, lh), &label, 12.0 * ui, s.accent, ui);
+            pill(
+                rt,
+                brush,
+                &s.gfx,
+                (lx, ly, lw, lh),
+                &label,
+                12.0 * ui,
+                s.accent,
+                ui,
+            );
         }
         if s.drag.is_none() {
             let (mon, _) = win::monitor_at(s.cursor);
@@ -549,7 +563,17 @@ fn pill(
         }
         rt.DrawRoundedRectangle(&rounded, brush, 1.0 * ui, None);
     }
-    gfx.text_in(rt, brush, text, (x, y, w, h), size, 500, 0xFFFFFF, 1.0, Align::Center);
+    gfx.text_in(
+        rt,
+        brush,
+        text,
+        (x, y, w, h),
+        size,
+        500,
+        0xFFFFFF,
+        1.0,
+        Align::Center,
+    );
 }
 
 #[cfg(test)]
