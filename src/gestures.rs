@@ -6,6 +6,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::model::{Page, View};
+
 /// A swipe's shortest way, in logical pixels.
 pub const SWIPE_MIN_DIP: f32 = 56.0;
 /// A swipe's longest time from press to release.
@@ -91,6 +93,43 @@ impl HWheel {
     }
 }
 
+/// What a sideways flick does, by where it lands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HRoute {
+    /// Turns one panel page (right = next, left = previous).
+    Page,
+    /// Skips the song (right = next).
+    Song,
+    Nothing,
+}
+
+/// Where a sideways flick goes (`WM_MOUSEHWHEEL`):
+///
+/// - an open panel's page, the Music page included, on the drawn island (not
+///   the faint margin round it): one page, like the vertical wheel. This is
+///   navigation, so it does not depend on `config.gestures`. Not on the
+///   search (it is not in the order of pages), and not while the CLI folder
+///   menu is open;
+/// - the compact music notch (song or lyric line), with the gestures on and
+///   a session: the song, as ever (the margin was never excluded there);
+/// - anything else (a notice, idle, the search): nothing.
+///
+/// `gestures_media_ok` is `App::gestures_active` (setting, session, view).
+pub fn hwheel_route(
+    view: &View,
+    cli_menu_open: bool,
+    gestures_media_ok: bool,
+    over_island: bool,
+) -> HRoute {
+    match view {
+        View::Panel(Page::Search) => HRoute::Nothing,
+        View::Panel(Page::Cli) if cli_menu_open => HRoute::Nothing,
+        View::Panel(_) if over_island => HRoute::Page,
+        View::MediaCompact | View::MediaLyric if gestures_media_ok => HRoute::Song,
+        _ => HRoute::Nothing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +206,85 @@ mod tests {
         let mut w = HWheel::default();
         for i in 0..10 {
             assert_eq!(w.push(40, t0 + ms(i * 400)), None);
+        }
+    }
+
+    /// A touchpad's two-finger scroll: ~30 small deltas over a second.
+    #[test]
+    fn a_touchpad_burst_turns_one_page_and_the_next_flick_another() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        let mut fired = 0;
+        for i in 0..30 {
+            if w.push(40, t0 + ms(i * 33)).is_some() {
+                fired += 1;
+            }
+        }
+        assert_eq!(fired, 1, "one flick, one page");
+        // Still for 600 ms after the last delta, then another flick.
+        let last = t0 + ms(29 * 33);
+        let t1 = last + ms(600);
+        assert_eq!(w.push(-60, t1), None);
+        assert_eq!(w.push(-60, t1 + ms(30)), Some(Dir::Prev));
+    }
+
+    fn route(view: View, menu: bool, gestures: bool, over: bool) -> HRoute {
+        hwheel_route(&view, menu, gestures, over)
+    }
+
+    #[test]
+    fn every_panel_page_but_the_search_turns_on_a_sideways_flick() {
+        for page in Page::ALL {
+            for gestures in [false, true] {
+                assert_eq!(
+                    route(View::Panel(page), false, gestures, true),
+                    HRoute::Page,
+                    "{page:?} gestures {gestures}"
+                );
+            }
+        }
+        // Not on the faint margin.
+        assert_eq!(
+            route(View::Panel(Page::Media), false, true, false),
+            HRoute::Nothing
+        );
+        assert_eq!(
+            route(View::Panel(Page::Notes), false, false, false),
+            HRoute::Nothing
+        );
+        // Not on the search, and not over the CLI folder menu.
+        assert_eq!(
+            route(View::Panel(Page::Search), false, true, true),
+            HRoute::Nothing
+        );
+        assert_eq!(
+            route(View::Panel(Page::Cli), true, true, true),
+            HRoute::Nothing
+        );
+        assert_eq!(
+            route(View::Panel(Page::Cli), false, true, true),
+            HRoute::Page
+        );
+        // The menu flag only counts on the CLI page.
+        assert_eq!(
+            route(View::Panel(Page::Notes), true, false, true),
+            HRoute::Page
+        );
+    }
+
+    #[test]
+    fn the_compact_music_notch_skips_songs_only_with_gestures_on() {
+        for view in [View::MediaCompact, View::MediaLyric] {
+            assert_eq!(route(view.clone(), false, true, true), HRoute::Song);
+            assert_eq!(route(view.clone(), false, true, false), HRoute::Song);
+            assert_eq!(route(view, false, false, true), HRoute::Nothing);
+        }
+    }
+
+    #[test]
+    fn notices_idle_and_the_rest_do_nothing() {
+        for view in [View::Hidden, View::Idle, View::PomodoroCompact] {
+            assert_eq!(route(view, false, true, true), HRoute::Nothing);
         }
     }
 }

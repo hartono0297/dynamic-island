@@ -122,11 +122,13 @@ pub enum Icon {
     Hdd,
     Sd,
     Eject,
+    /// The quick search's back button: an arrow to the left. Line only.
+    Back,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 66] = [
+    pub const ALL: [Icon; 67] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -193,6 +195,7 @@ impl Icon {
         Icon::Hdd,
         Icon::Sd,
         Icon::Eject,
+        Icon::Back,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -447,6 +450,7 @@ impl Icon {
             ],
             Icon::Sd => &[Part::Path("M7 3h8l3 3v15H7zM10 3v3M12.5 3v3M15 3v2")],
             Icon::Eject => &[Part::Path("M12 5l7 8H5zM5 17h14")],
+            Icon::Back => &[Part::Path("M19 12H5M11 6l-6 6 6 6")],
         }
     }
 }

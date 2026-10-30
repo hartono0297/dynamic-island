@@ -560,12 +560,7 @@ impl IslandState {
                     self.search_hotkey(&mut effects);
                 }
             }
-            Event::SearchClose => {
-                if self.search_open {
-                    self.search_open = false;
-                    self.collapse();
-                }
-            }
+            Event::SearchClose => self.close_search(),
             Event::ClipCommit => {
                 if self.view() == View::Panel(Page::Clipboard) {
                     self.collapse();
@@ -594,6 +589,19 @@ impl IslandState {
                     self.wheel = 0;
                 } else {
                     self.wheel(delta)
+                }
+            }
+            Event::PageFlick { next } => {
+                // The wheel's rules: the peek over the sticky reminder spends
+                // the flick on opening the panel.
+                if self.hover_blocked && self.current.is_none() && self.open_mode != OpenMode::Click
+                {
+                    self.hover_blocked = false;
+                    self.wheel = 0;
+                } else if self.can_turn_page() {
+                    // A vertical residue must not add a second step.
+                    self.wheel = 0;
+                    self.turn_page(if next { 1 } else { -1 });
                 }
             }
             Event::Today(date) => self.set_today(date),
@@ -1143,7 +1151,7 @@ impl IslandState {
             }
             // A page turned by the wheel (a notch that did not turn one
             // arms nothing).
-            Event::Wheel(_) => LingerTrigger::PageTurn,
+            Event::Wheel(_) | Event::PageFlick { .. } => LingerTrigger::PageTurn,
             Event::CliFocus(false) | Event::ClipFocus(false) => LingerTrigger::StillOpen,
             _ => LingerTrigger::No,
         }
@@ -1534,6 +1542,9 @@ impl IslandState {
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
+            // The back button: exactly Esc (`Event::SearchClose`), so the
+            // page and the keyboard go back the same way.
+            Hit::SearchBack => self.close_search(),
             // Runs it and closes the search (Enter is this click too).
             Hit::SearchResult(i) => {
                 if self.search_open {
@@ -1706,16 +1717,35 @@ impl IslandState {
     /// Scrolling down (negative delta) moves right through the pages. Steps
     /// past either end are spent, so one notch back always moves a page.
     fn wheel(&mut self, delta: i32) {
-        // The search is not in the order of pages: the wheel stays out.
-        if !matches!(self.view(), View::Panel(_)) || self.page == Page::Search {
+        if !self.can_turn_page() {
             return;
         }
         self.wheel = self.wheel.saturating_add(delta);
         let steps = self.wheel / WHEEL_STEP;
         self.wheel -= steps * WHEEL_STEP;
         // Steps count up the wheel; later pages are down it.
+        self.turn_page(-i64::from(steps));
+    }
+
+    /// Whether the wheel or a flick may turn a page: the panel shows one,
+    /// and it is not the search (not in the order of pages).
+    fn can_turn_page(&self) -> bool {
+        matches!(self.view(), View::Panel(_)) && self.page != Page::Search
+    }
+
+    /// Closes the quick search (Esc, the back button): the page it came
+    /// over returns in the post-process of `apply`.
+    fn close_search(&mut self) {
+        if self.search_open {
+            self.search_open = false;
+            self.collapse();
+        }
+    }
+
+    /// Moves `steps` pages through the owner's order (negative: back).
+    fn turn_page(&mut self, steps: i64) {
         let from = self.page;
-        self.page = self.pages.step(self.page, -i64::from(steps));
+        self.page = self.pages.step(self.page, steps);
         // A page turned with the pointer on a dropped shelf: the panel is
         // the pointer's now (and closes when it leaves). Without hover the
         // dwell has not fired yet, so the latch stays for it.
@@ -3136,6 +3166,108 @@ mod tests {
         // Scrolling past the end is not stored up: one notch back moves one page.
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
+    }
+
+    #[test]
+    fn a_sideways_flick_turns_one_page_each_way() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.page(), Page::Calendar);
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Reminders));
+        s.apply(Event::PageFlick { next: false }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+    }
+
+    #[test]
+    fn a_sideways_flick_skips_hidden_pages_like_the_wheel() {
+        let t0 = Instant::now();
+        let mut s = st();
+        let mut pages = PanelPages::default();
+        pages.toggle(Page::Pomodoro);
+        pages.toggle(Page::Reminders);
+        s.apply(Event::PanelPages(pages), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        s.apply(Event::PageFlick { next: false }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+    }
+
+    #[test]
+    fn a_sideways_flick_clamps_at_the_ends_and_drops_wheel_residue() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::PageFlick { next: false }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        // A vertical residue of 90 must not add a second step to the flick.
+        s.apply(Event::Wheel(-90), t0);
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+        s.apply(Event::Wheel(-60), t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro), "the residue is gone");
+        for _ in 0..20 {
+            s.apply(Event::PageFlick { next: true }, t0);
+        }
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
+        s.apply(Event::PageFlick { next: false }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Cli));
+    }
+
+    #[test]
+    fn a_sideways_flick_never_turns_the_search_or_a_closed_panel() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // Idle: nothing.
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.page(), Page::Calendar);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::SearchHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        for next in [true, false] {
+            assert!(s.apply(Event::PageFlick { next }, t0).is_empty());
+            assert_eq!(s.view(), View::Panel(Page::Search));
+        }
+        s.apply(Event::SearchClose, t0);
+        assert_eq!(s.page(), Page::Calendar);
+    }
+
+    #[test]
+    fn a_sideways_flick_lingers_like_a_page_turn() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.page(), Page::Pomodoro);
+        assert_eq!(s.next_deadline(), Some(t0 + secs(4)));
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert!(s.panel_is_open());
+        // A flick that turned no page arms nothing.
+        let mut e = st();
+        e.apply(Event::Hover(true), t0);
+        e.apply(Event::PageFlick { next: false }, t0);
+        assert_eq!(e.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_flick_spent_on_the_sticky_reminder_peek_turns_no_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Click(Hit::Body), t0);
+        s.apply(Event::Notice(reminder("r2")), t0);
+        // The wheel's rule: the first one only opens the panel.
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::PageFlick { next: true }, t0);
+        assert_eq!(s.view(), View::Panel(Page::Pomodoro));
     }
 
     #[test]
@@ -5787,6 +5919,36 @@ mod tests {
         assert_eq!(s.page(), Page::Calendar);
         // Closing what is closed does nothing.
         assert!(s.apply(Event::SearchClose, t0).is_empty());
+    }
+
+    #[test]
+    fn the_back_button_is_exactly_esc() {
+        let t0 = Instant::now();
+        for page in [Page::Notes, Page::Media, Page::Shortcuts] {
+            let open = || {
+                let mut s = st();
+                open_on(&mut s, page, t0);
+                s.apply(Event::Hover(false), t0);
+                s.apply(Event::SearchHotkey, t0);
+                assert_eq!(s.view(), View::Panel(Page::Search));
+                s
+            };
+            let (mut a, mut b) = (open(), open());
+            let esc = a.apply(Event::SearchClose, t0);
+            let back = b.apply(Event::Click(Hit::SearchBack), t0);
+            assert_eq!(back, esc);
+            assert_eq!(back, vec![Effect::ReleaseSearchFocus]);
+            assert_eq!(b.view(), a.view());
+            assert_eq!(b.page(), a.page());
+            assert_eq!(b.page(), page);
+            assert_eq!(b.search_open(), a.search_open());
+            assert!(!b.search_open());
+            assert_eq!(b.panel_is_open(), a.panel_is_open());
+            assert_eq!(b.next_deadline(), a.next_deadline());
+        }
+        // Closed: a stray click does nothing.
+        let mut s = st();
+        assert!(s.apply(Event::Click(Hit::SearchBack), t0).is_empty());
     }
 
     #[test]
