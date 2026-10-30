@@ -21,16 +21,21 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   volumes, chains of 7 to 9 nodes, none removable).
 - **But a hot-plug SATA/AHCI or PCIe port flags an internal disk
   `DN_REMOVABLE`** (why Windows' tray offers to eject it). Guards in `scan`:
-  the disk holding the Windows directory and any disk with a
-  `X:\pagefile.sys` are never listed (`pinned`), and an ATA, SATA, SAS or RAID
+  the disk holding the Windows directory and any disk with a page file in use
+  are never listed (`pinned`), and an ATA, SATA, SAS or RAID
   disk with no USB, Thunderbolt, USB4 or SD node on its chain is internal
   (`internal_disk`). NVMe is deliberately not in that bus list: a Thunderbolt 3
   enclosure's chain is plain PCI nodes and would vanish.
-- **A page file in use cannot be stat'ed**: `GetFileAttributesW` on a live
-  `pagefile.sys` (or `swapfile.sys`) returns `INVALID_FILE_ATTRIBUTES` with
-  `ERROR_SHARING_VIOLATION` (32), checked live on `C:`. So
-  `page_file_present` counts error 32 and access denied as "there"; only not
-  found and the like mean absent.
+- **Only a page file IN USE hides a disk** (decision). It is read from the
+  registry value `ExistingPageFiles` (`live_page_file_letters`, once per
+  scan): its NT paths (`\??\C:\pagefile.sys` and the like) are mapped to
+  drive letters by `page_file_letters`, and an entry that maps to no letter is
+  ignored (a missed page file is harmless, Windows vetoes that eject). A
+  leftover `pagefile.sys` on an old system disk in an enclosure is therefore
+  listed. Only when the registry read fails does the file itself decide: a
+  live page file gives `INVALID_FILE_ATTRIBUTES` with `ERROR_SHARING_VIOLATION`
+  (32, checked live on `C:`) and that alone counts (`page_file_present`); a
+  readable file, access denied and not found all mean absent.
 - **The worker sets `SetThreadErrorMode(SEM_FAILCRITICALERRORS |
   SEM_NOOPENFILEERRORBOX)`** at its start: without it an empty card slot can
   raise "There is no disk in the drive" and block the thread until dismissed.
@@ -63,10 +68,13 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   with access 0 and full sharing.
 - **Eject looks the node up again** (`CM_Locate_DevNodeW(key)`) and passes a
   veto type and a 260-u16 name buffer to `CM_Request_Device_EjectW`, which also
-  stops Windows from showing its own dialog. `CR_SUCCESS` with veto 0, or veto
-  13 (`AlreadyRemoved`), is success (`devices::eject_outcome`); a key that no
-  longer locates counts as removed. Tests never eject anything real: only a
-  made-up ID is looked up.
+  stops Windows from showing its own dialog. `CR_SUCCESS` with veto 0 is
+  `Ejected::Safe`; veto 13 (`AlreadyRemoved`) and a key that no longer locates
+  are `Ejected::Gone` (`devices::eject_outcome`): the card goes but nothing was
+  ejected, so no "Aman dicabut". The notice names only what the worker knew
+  (`Option` name from its last list) or the App knew from its list
+  (`finish_eject`), never an instance ID; with no name there is no notice.
+  Tests never eject anything real: only a made-up ID is looked up.
 - **Debounce instead of polling.** `WM_DEVICECHANGE` on the island window
   (a top-level popup gets the volume broadcasts), plus
   `RegisterDeviceNotificationW` for `GUID_DEVINTERFACE_DISK`. Only

@@ -114,11 +114,21 @@ pub struct Veto {
 pub enum DevicesEvent {
     /// A scan finished: the devices now plugged in, for request `seq`.
     Listed { seq: u64, devices: Vec<Device> },
-    /// An eject finished: per device its key, its name and the outcome. A
-    /// fresh `Listed` follows.
+    /// An eject finished: per device its key, its name when the worker knew
+    /// one (never the key) and the outcome. A fresh `Listed` follows.
     Ejected {
-        results: Vec<(String, String, Result<(), Veto>)>,
+        results: Vec<(String, Option<String>, Result<Ejected, Veto>)>,
     },
+}
+
+/// How an eject that did not fail ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ejected {
+    /// Windows removed the device on request: safe to unplug.
+    Safe,
+    /// The device was gone already (unplugged, or its node no longer
+    /// locates): the card goes, but nothing was ejected, so no "safe" notice.
+    Gone,
 }
 
 // ---- Classifying ----
@@ -176,13 +186,15 @@ pub fn vendor_product_name(vendor: &str, product: &str) -> String {
 
 // ---- Eject refusals ----
 
-/// What Windows answered to an eject request: success is `CR_SUCCESS` with
-/// no veto, or a device that was gone already; anything else is a refusal
-/// with the kind and the name Windows gave.
-pub fn eject_outcome(succeeded: bool, veto_raw: i32, name: &str) -> Result<(), Veto> {
+/// What Windows answered to an eject request: `CR_SUCCESS` with no veto is
+/// `Safe`, a device that was gone already (veto `AlreadyRemoved`, whatever
+/// the call returned) is `Gone`; anything else is a refusal with the kind and
+/// the name Windows gave.
+pub fn eject_outcome(succeeded: bool, veto_raw: i32, name: &str) -> Result<Ejected, Veto> {
     let kind = VetoKind::from_raw(veto_raw);
     match (succeeded, kind) {
-        (_, VetoKind::AlreadyRemoved) | (true, VetoKind::Unknown) => Ok(()),
+        (_, VetoKind::AlreadyRemoved) => Ok(Ejected::Gone),
+        (true, VetoKind::Unknown) => Ok(Ejected::Safe),
         _ => Err(Veto {
             kind,
             name: name.to_owned(),
@@ -719,9 +731,10 @@ mod tests {
 
     #[test]
     fn an_eject_succeeds_without_a_veto_or_when_already_gone() {
-        assert_eq!(eject_outcome(true, 0, ""), Ok(()));
-        assert_eq!(eject_outcome(true, 13, ""), Ok(()));
-        assert_eq!(eject_outcome(false, 13, ""), Ok(()));
+        assert_eq!(eject_outcome(true, 0, ""), Ok(Ejected::Safe));
+        // Already removed is gone, not a safe eject, whatever the call said.
+        assert_eq!(eject_outcome(true, 13, ""), Ok(Ejected::Gone));
+        assert_eq!(eject_outcome(false, 13, ""), Ok(Ejected::Gone));
         // Refused: the kind and the name Windows gave.
         assert_eq!(
             eject_outcome(false, 3, r"C:\x\EXCEL.EXE"),
