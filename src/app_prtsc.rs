@@ -519,6 +519,17 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_thread_starts_and_stops_cleanly() {
+        // No island window: a press would post nowhere. Install and remove
+        // again at once; a machine that refuses the hook just reports None.
+        if let Some(hook) = HookThread::start(HWND::default()) {
+            hook.stop();
+        }
+        assert_eq!(ISLAND.load(Ordering::Relaxed), 0);
+        assert!(!SWALLOWING.load(Ordering::Relaxed));
+    }
+
+    #[test]
     fn the_hook_is_planned_from_the_setting_and_what_is_installed() {
         // Off: nothing installed, nothing to do; installed: remove.
         assert_eq!(plan(false, false), Plan::Nothing);
