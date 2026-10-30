@@ -207,9 +207,20 @@ New rules:
   than 16 bits). Simpan alone (review round 2) also takes the one unclaimed
   same-size file in its window when it is the only one, whatever its hash
   (a low-contrast picture's average hash can read far off; a second copy is
-  the worse mistake, and `claim_from`/`window_end`/`taken` keep other
-  screenshots' files out); two such files and no hash match: it writes. A
+  the worse mistake); two such files and no hash match: it writes. A
   browser "Copy image" (no new file of that size) still never shows.
+- **The lone guess waits for the end** (review round 3, `SaveOutcome::Lone`,
+  `screenshot::wait_for_save`). It never ends the wait: Simpan clicked
+  before Snipping Tool wrote this capture's file took an unrelated same-size
+  file on the first look and never saw the right one a moment later. Only
+  the guess of the last look (at the deadline) is kept. And it must lie past
+  the Simpan window (`SAVE_AFTER_MS`) of the image before this capture
+  (`Arrivals::before(from_ms)`): `claim_from` keeps out only that one's
+  `AFTER_MS` files, so an unanswered earlier screenshot's late (cold) file at
+  +6 s sat in the next capture's window, and a plain PrtSc 8-9 s later
+  "already saved" that picture and wrote nothing. Cost: a far-hash file of
+  this capture that lands inside the previous image's Simpan window (two
+  captures within ~10 s, low-contrast picture) makes Simpan write a copy.
 - **Simpan never writes a second copy** when Windows wrote a file for the
   shot: found at click time (`state.file`) or by the save worker's wait
   (`Strictness::Lax`, window `SAVE_AFTER_MS` 7 s, +0.5 s settle, ending
@@ -244,8 +255,16 @@ New rules:
   update, the newest update's candidate and the newest clipboard sequence
   (the clipboard holds that write). `Answer::Deleted` is remembered: a later
   update is absorbed, not pushed to `arrivals` (it cut the strict worker's
-  `AFTER_MS` wait, the file stayed), and the picture it put back goes again
-  (clipboard emptied if unchanged, its card removed unless pinned). The
+  `AFTER_MS` wait, the file stayed). The picture it put back goes again
+  (clipboard emptied if unchanged, its card removed unless pinned) only on
+  stricter proof (review round 3, `screenshot::takes_back`): both hashes
+  read and within `HASH_MAX_DIST`, at most `TAKE_BACK_MS` (1 s) after the
+  capture's last update. A looser update (lax hash only, no hash, or 1-2 s
+  later) is only kept quiet: a deliberate retake of an almost unchanged
+  screen right after Hapus was wiped from the clipboard and history on the
+  lax rule. Left: a retake strictly equal and within 1 s is still wiped (its
+  auto-saved file stays on disk); a tool's re-set later than 1 s leaves the
+  deleted picture on the clipboard and in the history (no preview). The
   strict hash rule of deletes is unchanged.
 - **An absorbed update says nothing** (review round 2). `shot_from_image`
   returns `ShotArrival` (`Nothing` / `Raised` / `Absorbed`); `read_clipboard`

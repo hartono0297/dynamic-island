@@ -95,6 +95,16 @@ pub(super) struct AnsweredCapture {
     pub answer: Answer,
 }
 
+/// An update of the capture a button answered (`Shots::answered_again`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AbsorbedUpdate {
+    pub answer: Answer,
+    /// After Hapus, surely the deleted picture put back
+    /// (`screenshot::takes_back`): it goes again. Else the update only
+    /// stays quiet.
+    pub take_back: bool,
+}
+
 /// What a new clipboard image did on the screenshot side
 /// (`App::shot_from_image`), for the clipboard's own feedback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,20 +320,25 @@ impl Shots {
     /// (`screenshot::same_capture`): Simpan or Hapus already answered it,
     /// so it is no new screenshot, and its arrival must not cut the save or
     /// delete worker's wait. It extends the answered capture (a third
-    /// update chains on). The answer it got, else `None`.
+    /// update chains on). The answer it got and, after Hapus, whether it
+    /// goes again (the stricter `screenshot::takes_back`), else `None`.
     fn answered_again(
         &mut self,
         merged: bool,
         clip: &ClipCandidate,
         entry: Option<u64>,
-    ) -> Option<Answer> {
+    ) -> Option<AbsorbedUpdate> {
         let a = self.answered.as_mut().filter(|_| !merged)?;
         if !screenshot::same_capture(&a.clip, a.entry, clip, entry) {
             return None;
         }
+        let take_back = a.answer == Answer::Deleted && screenshot::takes_back(&a.clip, clip);
         a.clip = screenshot::merge_arrival(&a.clip, *clip);
         a.entry = a.entry.or(entry);
-        Some(a.answer)
+        Some(AbsorbedUpdate {
+            answer: a.answer,
+            take_back,
+        })
     }
 }
 
@@ -550,10 +565,13 @@ impl App {
         // clipboard again (its preview is closed, so nothing above merged
         // it): no preview, no copy notice over the answer's, and no arrival
         // that would end the worker's wait before Windows' file is stamped.
-        // After Hapus the picture goes again: off the clipboard (only while
-        // it still holds this update) and its card out of the history.
-        if let Some(answer) = self.shots.answered_again(merged, &clip, entry) {
-            if answer == Answer::Deleted {
+        // After Hapus the picture goes again, only when it surely is the
+        // deleted one put back (`screenshot::takes_back`: strict hashes,
+        // within `TAKE_BACK_MS`): off the clipboard (only while it still
+        // holds this update) and its card out of the history. A looser
+        // match (a retake of an unchanged screen, say) is only kept quiet.
+        if let Some(absorbed) = self.shots.answered_again(merged, &clip, entry) {
+            if absorbed.take_back {
                 if let Some(sequence) = clipboard_win::empty_if_unchanged(self.hwnd, sequence) {
                     self.clip.own_sequence = Some(sequence);
                 }
@@ -1281,12 +1299,12 @@ mod tests {
         let b = plan_arrival(Some(prev(&first, None, false)), fresh, Some(7), false);
         assert!(b.merged && b.file.is_none() && !b.flagged);
         assert_eq!(
-            save_decision(&b.clip, std::slice::from_ref(&file), &[]),
+            save_decision(&b.clip, std::slice::from_ref(&file), &[], None),
             SaveOutcome::AlreadySaved(file.path.clone())
         );
         // A fresh candidate would have missed it (the bug).
         assert_eq!(
-            save_decision(&fresh, std::slice::from_ref(&file), &[]),
+            save_decision(&fresh, std::slice::from_ref(&file), &[], None),
             SaveOutcome::Write
         );
     }
@@ -1370,13 +1388,15 @@ mod tests {
                 to_ms: arrivals.window_end_after(plan.clip.at_ms, SAVE_AFTER_MS),
                 ..plan.clip
             };
-            save_decision(&clip, std::slice::from_ref(&file), &[])
+            save_decision(&clip, std::slice::from_ref(&file), &[], None)
         };
         // The second update is the kept capture: no new screenshot, and its
         // arrival is never pushed, so the save worker still sees the file.
         let again = clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC));
         assert_eq!(
-            shots.answered_again(false, &again, Some(7)),
+            shots
+                .answered_again(false, &again, Some(7))
+                .map(|a| a.answer),
             Some(Answer::Kept)
         );
         assert_eq!(
@@ -1386,7 +1406,9 @@ mod tests {
         // A third update chains on the second.
         let third = clip_at(T + 2_400, T + 2_400, Some(PIC));
         assert_eq!(
-            shots.answered_again(false, &third, Some(7)),
+            shots
+                .answered_again(false, &third, Some(7))
+                .map(|a| a.answer),
             Some(Answer::Kept)
         );
         // The bug: pushed as a fresh arrival, it cut the wait at T + 599,
@@ -1476,7 +1498,7 @@ mod tests {
         assert!(shots.keep_capture(5).is_none());
     }
 
-    use super::{Answer, ShotArrival};
+    use super::{AbsorbedUpdate, Answer, ShotArrival};
 
     #[test]
     fn an_update_after_simpan_says_nothing_over_the_saved_notice() {
@@ -1491,7 +1513,9 @@ mod tests {
         shots.shown = None;
         let again = clip_at(T + 400, claim_from(T + 400, Some(T)), Some(PIC));
         assert_eq!(
-            shots.answered_again(false, &again, Some(7)),
+            shots
+                .answered_again(false, &again, Some(7))
+                .map(|a| a.answer),
             Some(Answer::Kept)
         );
         // What `shot_from_image` reports for it: handled, so the clipboard
@@ -1565,8 +1589,11 @@ mod tests {
         let again = clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC));
         assert_eq!(
             shots.answered_again(false, &again, Some(7)),
-            Some(Answer::Deleted),
-            "no new screenshot, no preview of what was deleted"
+            Some(AbsorbedUpdate {
+                answer: Answer::Deleted,
+                take_back: true,
+            }),
+            "no new screenshot, no preview of what was deleted, and it goes again"
         );
         assert!(recycles(&shots.arrivals), "its arrival is never pushed");
         // The bug: a fresh arrival cut the wait at T + 599 and the file
@@ -1578,5 +1605,61 @@ mod tests {
         // Another picture soon after is a new screenshot.
         let other = clip_at(T + 900, T + 900, Some(!PIC));
         assert_eq!(shots.answered_again(false, &other, Some(8)), None);
+    }
+
+    #[test]
+    fn a_retake_after_hapus_is_kept_quiet_but_never_wiped() {
+        // PrtSc at T, Hapus; then an update of the same size whose hash is
+        // only within the lax distance (a small change on screen), or the
+        // same picture later than `TAKE_BACK_MS`: a deliberate retake may
+        // look like that. No preview (absorbed), but the clipboard and its
+        // card stay (the bug: both were wiped on the lax rule).
+        use crate::screenshot::{LAX_HASH_DIST, TAKE_BACK_MS};
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let deleted = || {
+            let first = clip_at(T, claim_from(T, None), Some(PIC));
+            let mut shots = with(Some(state(1, 1, first, None)), None);
+            assert!(shots.delete_capture(1).is_some());
+            shots
+        };
+        let off = PIC ^ 0xFFF;
+        assert!((PIC ^ off).count_ones() <= LAX_HASH_DIST);
+        let retake = clip_at(T + 500, claim_from(T + 500, Some(T)), Some(off));
+        assert_eq!(
+            deleted().answered_again(false, &retake, Some(8)),
+            Some(AbsorbedUpdate {
+                answer: Answer::Deleted,
+                take_back: false,
+            })
+        );
+        let slow = T + TAKE_BACK_MS + 500;
+        let later = clip_at(slow, claim_from(slow, Some(T)), Some(PIC));
+        assert_eq!(
+            deleted()
+                .answered_again(false, &later, Some(8))
+                .map(|a| a.take_back),
+            Some(false)
+        );
+        // No hash on the new update: no proof either.
+        let blind = clip_at(T + 300, claim_from(T + 300, Some(T)), None);
+        assert_eq!(
+            deleted()
+                .answered_again(false, &blind, Some(7))
+                .map(|a| a.take_back),
+            Some(false)
+        );
+        // After Simpan nothing is ever taken back.
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let mut kept = with(Some(state(1, 1, first, None)), None);
+        assert!(kept.keep_capture(1).is_some());
+        let again = clip_at(T + 300, claim_from(T + 300, Some(T)), Some(PIC));
+        assert_eq!(
+            kept.answered_again(false, &again, Some(7)),
+            Some(AbsorbedUpdate {
+                answer: Answer::Kept,
+                take_back: false,
+            })
+        );
     }
 }

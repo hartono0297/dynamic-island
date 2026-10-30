@@ -38,6 +38,11 @@ pub const SAVE_AFTER_MS: i64 = 7_000;
 /// waiting screenshot's is the same capture again (a tool that sets the
 /// clipboard twice), not a new screenshot.
 pub const SAME_CAPTURE_MS: i64 = 2_000;
+/// After Hapus, an update of the deleted capture is taken off the clipboard
+/// and out of the history again only this soon after its last update (and
+/// with strictly agreeing hashes, `takes_back`): a deliberate retake of an
+/// unchanged screen must not be wiped on the lax rule.
+pub const TAKE_BACK_MS: i64 = 1_000;
 
 /// The new clipboard image, as far as matching cares: when it arrived
 /// (unix ms), its size in pixels and its thumbnail's hash.
@@ -224,6 +229,13 @@ impl Arrivals {
             after_ms,
         )
     }
+
+    /// The latest arrival before `ms`: the image before a capture whose
+    /// window starts at `ms` (`save_decision`'s `earlier`).
+    pub fn before(&self, ms: i64) -> Option<i64> {
+        let v = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        v.iter().copied().filter(|&a| a < ms).max()
+    }
 }
 
 /// How often a worker that needs the file looks again while it waits.
@@ -306,6 +318,18 @@ pub fn same_capture(
         && (same_card || same_pixels)
 }
 
+/// After Hapus, whether an update the deleted capture absorbed
+/// (`same_capture` held) is surely the deleted picture put back, so it may
+/// go again (clipboard emptied, its card removed): both hashes read and
+/// within `HASH_MAX_DIST` (`confirmed`), the same size, at most
+/// `TAKE_BACK_MS` after `prev`. The card cannot prove it (Hapus removed that
+/// one). Otherwise the update only stays quiet: no preview, nothing wiped.
+pub fn takes_back(prev: &ClipCandidate, new: &ClipCandidate) -> bool {
+    (prev.w, prev.h) == (new.w, new.h)
+        && (0..=TAKE_BACK_MS).contains(&(new.at_ms - prev.at_ms))
+        && confirmed(prev.hash, new.hash)
+}
+
 /// The candidate of a re-arrival of the same capture (`same_capture`): its
 /// own arrival and end, but the files from where the first one's window began.
 pub fn merge_arrival(prev: &ClipCandidate, new: ClipCandidate) -> ClipCandidate {
@@ -321,6 +345,11 @@ pub fn merge_arrival(prev: &ClipCandidate, new: ClipCandidate) -> ClipCandidate 
 pub enum SaveOutcome {
     /// Windows wrote a file for this screenshot: nothing is written.
     AlreadySaved(PathBuf),
+    /// No lax match, only the one unclaimed same-size file in the window,
+    /// its hash far off: a guess, taken only when the wait is over
+    /// (`wait_for_save`). This screenshot's own file may still be on its
+    /// way and is the better candidate.
+    Lone(PathBuf),
     /// No file appeared: Simpan writes its own PNG.
     Write,
 }
@@ -328,31 +357,68 @@ pub enum SaveOutcome {
 /// Simpan's decision over the files listed (and hashed) in `clip`'s window:
 /// the lax match (`pick_match`: size, time, a hash that agrees within
 /// `LAX_HASH_DIST` or cannot be read) among the files no other screenshot
-/// has `taken`; with none, the one unclaimed file of the very same size in
-/// the window when it is the only one, whatever its hash says (an average
-/// hash of a low-contrast picture can read far off, and a second copy is
-/// the worse mistake; no other screenshot's file is ever in that window,
-/// `claim_from`/`window_end`). A file found is never copied again; only
-/// when none is, Simpan writes one. Deletes never use this (`pick_confirmed`).
+/// has `taken`: `AlreadySaved`. With none, the one unclaimed file of the
+/// very same size in the window when it is the only one, whatever its hash
+/// says (an average hash of a low-contrast picture can read far off, and a
+/// second copy is the worse mistake): only `Lone`, a guess the wait takes at
+/// its end (`wait_for_save`). That file must also lie past the Simpan window
+/// of the image that arrived before this capture (`earlier`, its arrival):
+/// `claim_from` keeps only that one's `AFTER_MS` files out, and a late
+/// (cold) file of it, unclaimed and unanswered, is not this one's. A file
+/// found is never copied again; only when none is, Simpan writes one.
+/// Deletes never use this (`pick_confirmed`).
 pub fn save_decision(
     clip: &ClipCandidate,
     files: &[FileCandidate],
     taken: &[PathBuf],
+    earlier: Option<i64>,
 ) -> SaveOutcome {
     let free: Vec<FileCandidate> = files
         .iter()
         .filter(|f| !taken.contains(&f.path))
         .cloned()
         .collect();
-    let lone = || {
-        let mut sized = free.iter().filter(|f| in_window(clip, f));
-        sized.next().filter(|_| sized.next().is_none())
-    };
-    pick_match(clip, &free)
-        .or_else(lone)
-        .map_or(SaveOutcome::Write, |f| {
-            SaveOutcome::AlreadySaved(f.path.clone())
-        })
+    if let Some(f) = pick_match(clip, &free) {
+        return SaveOutcome::AlreadySaved(f.path.clone());
+    }
+    let mut sized = free.iter().filter(|f| in_window(clip, f));
+    match (sized.next(), sized.next()) {
+        (Some(f), None) if earlier.is_none_or(|e| f.at_ms > e + SAVE_AFTER_MS) => {
+            SaveOutcome::Lone(f.path.clone())
+        }
+        _ => SaveOutcome::Write,
+    }
+}
+
+/// Simpan's wait (`wait_for`) over `look` (`save_decision` on the folder as
+/// of now): the first `AlreadySaved` ends it. A `Lone` guess never does,
+/// as this screenshot's own file may turn up on a later look; the guess of
+/// the last look (the one at or after the deadline) is kept when nothing
+/// better came. `None`: Simpan writes.
+pub fn wait_for_save(
+    deadline: impl Fn() -> i64,
+    now: impl Fn() -> i64,
+    mut look: impl FnMut() -> SaveOutcome,
+    sleep: impl FnMut(u64),
+) -> Option<PathBuf> {
+    let mut lone = None;
+    let found = wait_for(
+        deadline,
+        now,
+        || match look() {
+            SaveOutcome::AlreadySaved(path) => Some(path),
+            SaveOutcome::Lone(path) => {
+                lone = Some(path);
+                None
+            }
+            SaveOutcome::Write => {
+                lone = None;
+                None
+            }
+        },
+        sleep,
+    );
+    found.or(lone)
 }
 
 /// "Hapus" empties the clipboard only while it still holds this
@@ -793,7 +859,7 @@ mod tests {
         // the file is stamped before its arrival.
         assert_eq!(pick_match(&fresh, std::slice::from_ref(&file)), None);
         assert_eq!(
-            save_decision(&fresh, std::slice::from_ref(&file), &[]),
+            save_decision(&fresh, std::slice::from_ref(&file), &[], None),
             SaveOutcome::Write,
             "this is the duplicate Simpan wrote"
         );
@@ -804,7 +870,7 @@ mod tests {
         assert_eq!(merged.from_ms, first.from_ms);
         assert!(pick_match(&merged, std::slice::from_ref(&file)).is_some());
         assert_eq!(
-            save_decision(&merged, std::slice::from_ref(&file), &[]),
+            save_decision(&merged, std::slice::from_ref(&file), &[], None),
             SaveOutcome::AlreadySaved(PathBuf::from("Screenshot 235523.png"))
         );
         // The window now runs from the second arrival.
@@ -856,7 +922,7 @@ mod tests {
         // The file's hash could not be read (still locked / a decode failure).
         let unread = [file("a.png", AT + 2_100, 1280, 720)];
         assert_eq!(
-            save_decision(&clip, &unread, &[]),
+            save_decision(&clip, &unread, &[], None),
             SaveOutcome::AlreadySaved(PathBuf::from("a.png"))
         );
         // Slightly off: more than the strict distance, within the lax one.
@@ -865,12 +931,12 @@ mod tests {
         assert!((PIC ^ off).count_ones() <= LAX_HASH_DIST);
         let slightly = [hashed(file("b.png", AT + 900, 1280, 720), off)];
         assert!(matches!(
-            save_decision(&clip, &slightly, &[]),
+            save_decision(&clip, &slightly, &[], None),
             SaveOutcome::AlreadySaved(_)
         ));
         // No clipboard hash at all: size and time are enough.
         assert!(matches!(
-            save_decision(&CLIP, &unread, &[]),
+            save_decision(&CLIP, &unread, &[], None),
             SaveOutcome::AlreadySaved(_)
         ));
     }
@@ -881,7 +947,7 @@ mod tests {
             hash: Some(PIC),
             ..CLIP
         };
-        assert_eq!(save_decision(&clip, &[], &[]), SaveOutcome::Write);
+        assert_eq!(save_decision(&clip, &[], &[], None), SaveOutcome::Write);
         // Another size, outside the window, or another screenshot's file.
         let files = [
             file("small.png", AT + 100, 640, 480),
@@ -889,7 +955,7 @@ mod tests {
             file("theirs.png", AT + 100, 1280, 720),
         ];
         assert_eq!(
-            save_decision(&clip, &files, &[PathBuf::from("theirs.png")]),
+            save_decision(&clip, &files, &[PathBuf::from("theirs.png")], None),
             SaveOutcome::Write
         );
     }
@@ -908,7 +974,7 @@ mod tests {
         // 6 s after the clipboard: past the preview's window, inside Simpan's.
         let late = [hashed(file("late.png", AT + 6_000, 1280, 720), PIC)];
         assert!(matches!(
-            save_decision(&clip, &late, &[]),
+            save_decision(&clip, &late, &[], None),
             SaveOutcome::AlreadySaved(_)
         ));
         let preview = ClipCandidate {
@@ -941,15 +1007,16 @@ mod tests {
             PathBuf::from("mine.png")
         );
         assert_eq!(
-            save_decision(&clip, &files, &[]),
+            save_decision(&clip, &files, &[], None),
             SaveOutcome::AlreadySaved(PathBuf::from("mine.png"))
         );
-        // Alone, the one unclaimed same-size file in the window is taken
-        // for Simpan (a far-off hash of a low-contrast picture must never
-        // make a second copy), never for the preview or a delete.
+        // Alone, the one unclaimed same-size file in the window is Simpan's
+        // guess for the end of its wait (a far-off hash of a low-contrast
+        // picture must never make a second copy), never the preview's or a
+        // delete's.
         assert_eq!(
-            save_decision(&clip, std::slice::from_ref(&other), &[]),
-            SaveOutcome::AlreadySaved(PathBuf::from("other.png"))
+            save_decision(&clip, std::slice::from_ref(&other), &[], None),
+            SaveOutcome::Lone(PathBuf::from("other.png"))
         );
         assert_eq!(pick_match(&clip, std::slice::from_ref(&other)), None);
         assert_eq!(pick_confirmed(&clip, std::slice::from_ref(&other)), None);
@@ -957,14 +1024,15 @@ mod tests {
         // which is this one's, so Simpan writes.
         let other2 = hashed(file("other2.png", AT + 900, 1280, 720), !PIC ^ 0xF);
         assert_eq!(
-            save_decision(&clip, &[other.clone(), other2], &[]),
+            save_decision(&clip, &[other.clone(), other2], &[], None),
             SaveOutcome::Write
         );
         assert_eq!(
             save_decision(
                 &clip,
                 std::slice::from_ref(&other),
-                &[PathBuf::from("other.png")]
+                &[PathBuf::from("other.png")],
+                None
             ),
             SaveOutcome::Write
         );
@@ -976,6 +1044,126 @@ mod tests {
             pick_match(&clip, &[near, exact]).unwrap().path,
             PathBuf::from("exact.png")
         );
+    }
+
+    #[test]
+    fn a_far_hash_lone_file_never_ends_the_wait_before_the_right_one_comes() {
+        use std::cell::Cell;
+        let clip = ClipCandidate {
+            hash: Some(PIC),
+            to_ms: AT + SAVE_AFTER_MS,
+            ..CLIP
+        };
+        // An unrelated same-size picture is in the window from the start;
+        // this capture's own file is stamped at +1.5 s, seen from 1.8 s on.
+        let stray = hashed(file("stray.png", AT - 1_000, 1280, 720), !PIC);
+        let mine = hashed(file("mine.png", AT + 1_500, 1280, 720), PIC);
+        let clock = Cell::new(AT);
+        let looks = Cell::new(0u32);
+        let folder = || {
+            let mut files = vec![stray.clone()];
+            if clock.get() >= AT + 1_800 {
+                files.push(mine.clone());
+            }
+            files
+        };
+        let found = wait_for_save(
+            || clip.to_ms + SETTLE_MS,
+            || clock.get(),
+            || {
+                looks.set(looks.get() + 1);
+                save_decision(&clip, &folder(), &[], None)
+            },
+            |ms| clock.set(clock.get() + ms as i64),
+        );
+        // The bug: the first look took the stray file and the wait ended.
+        assert_eq!(found, Some(PathBuf::from("mine.png")));
+        assert!(looks.get() > 1, "{} looks", looks.get());
+        assert!(clock.get() < AT + 1_800 + LOOK_EVERY_MS, "{}", clock.get());
+        // Never a better one: the guess of the last look (at the deadline).
+        clock.set(AT);
+        let last = Cell::new(0i64);
+        let guess = wait_for_save(
+            || clip.to_ms + SETTLE_MS,
+            || clock.get(),
+            || {
+                last.set(clock.get());
+                save_decision(&clip, std::slice::from_ref(&stray), &[], None)
+            },
+            |ms| clock.set(clock.get() + ms as i64),
+        );
+        assert_eq!(guess, Some(PathBuf::from("stray.png")));
+        assert_eq!(last.get(), clip.to_ms + SETTLE_MS);
+        // A guess that is gone by the last look is none: Simpan writes.
+        clock.set(AT);
+        let gone = wait_for_save(
+            || AT + 1_000,
+            || clock.get(),
+            || {
+                if clock.get() < AT + 1_000 {
+                    SaveOutcome::Lone(PathBuf::from("stray.png"))
+                } else {
+                    SaveOutcome::Write
+                }
+            },
+            |ms| clock.set(clock.get() + ms as i64),
+        );
+        assert_eq!(gone, None);
+    }
+
+    #[test]
+    fn a_late_file_of_the_image_before_is_no_lone_guess() {
+        // Screenshot P at p, never answered; Snipping Tool stamped its file
+        // cold at p + 6 s (past P's preview window, so unclaimed). A plain
+        // PrtSc A without auto-save arrives 8.5 s after P: its window starts
+        // 3 s back and covers P's file.
+        let p = AT - 8_500;
+        let from = claim_from(AT, Some(p));
+        assert_eq!(from, AT - BEFORE_MS);
+        let clip = ClipCandidate {
+            hash: Some(PIC),
+            from_ms: from,
+            to_ms: AT + SAVE_AFTER_MS,
+            ..CLIP
+        };
+        let theirs = hashed(file("p.png", p + 6_000, 1280, 720), !PIC);
+        let arrivals = Arrivals::default();
+        arrivals.push(p);
+        arrivals.push(AT);
+        assert_eq!(arrivals.before(clip.from_ms), Some(p));
+        assert_eq!(
+            save_decision(
+                &clip,
+                std::slice::from_ref(&theirs),
+                &[],
+                arrivals.before(clip.from_ms)
+            ),
+            SaveOutcome::Write,
+            "Simpan writes A, never 'already saved' for P's picture"
+        );
+        // Past P's Simpan window, the lone file is A's guess again; a lax
+        // match is never held back by it.
+        let lone = hashed(file("a.png", p + SAVE_AFTER_MS + 1, 1280, 720), !PIC);
+        assert_eq!(
+            save_decision(&clip, std::slice::from_ref(&lone), &[], Some(p)),
+            SaveOutcome::Lone(PathBuf::from("a.png"))
+        );
+        let near = hashed(file("a.png", p + 6_000, 1280, 720), PIC);
+        assert_eq!(
+            save_decision(&clip, std::slice::from_ref(&near), &[], Some(p)),
+            SaveOutcome::AlreadySaved(PathBuf::from("a.png"))
+        );
+        // A merged update's own first arrival is no earlier image.
+        let merged = merge_arrival(
+            &clip,
+            ClipCandidate {
+                at_ms: AT + 600,
+                from_ms: AT + 600,
+                ..clip
+            },
+        );
+        arrivals.push(AT + 600);
+        assert_eq!(arrivals.before(merged.from_ms), Some(p));
     }
 
     #[test]

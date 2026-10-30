@@ -32,9 +32,9 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
 
 use super::{
-    AFTER_MS, Arrivals, ClipCandidate, FileOutcome, SAVE_AFTER_MS, SETTLE_MS, SaveOutcome,
-    confirmed, delete_outcome, find_confirmed_in, find_in, hashed_files, save_decision, thumb_hash,
-    unix_ms, wait_for,
+    AFTER_MS, Arrivals, ClipCandidate, FileOutcome, SAVE_AFTER_MS, SETTLE_MS, confirmed,
+    delete_outcome, find_confirmed_in, find_in, hashed_files, save_decision, thumb_hash, unix_ms,
+    wait_for, wait_for_save,
 };
 use crate::clipboard::image::{self, thumb_size};
 use crate::model::Event;
@@ -190,7 +190,8 @@ enum Strictness {
     /// (`find_confirmed_in`); the window is the preview's.
     Confirmed,
     /// Simpan: size and time, a hash that is unreadable or within the lax
-    /// distance (`save_decision`), over the longer `SAVE_AFTER_MS` window.
+    /// distance (`save_decision`), over the longer `SAVE_AFTER_MS` window;
+    /// the lone far-hash guess only when the wait is over (`wait_for_save`).
     Lax,
 }
 
@@ -209,29 +210,35 @@ fn wait_for_file(
         Strictness::Lax => SAVE_AFTER_MS,
     };
     let end = || arrivals.window_end_after(clip.at_ms, after);
-    wait_for(
-        || end() + SETTLE_MS,
-        || unix_ms(SystemTime::now()),
-        || {
-            let clip = ClipCandidate {
-                to_ms: end(),
-                ..clip
-            };
-            match how {
-                Strictness::Confirmed => {
-                    find_confirmed_in(&dir, &clip, taken, file_hash).map(|f| f.path)
-                }
-                Strictness::Lax => {
+    let deadline = || end() + SETTLE_MS;
+    let now = || unix_ms(SystemTime::now());
+    let sleep = |ms| std::thread::sleep(Duration::from_millis(ms));
+    let clip_now = || ClipCandidate {
+        to_ms: end(),
+        ..clip
+    };
+    match how {
+        Strictness::Confirmed => wait_for(
+            deadline,
+            now,
+            || find_confirmed_in(&dir, &clip_now(), taken, file_hash).map(|f| f.path),
+            sleep,
+        ),
+        Strictness::Lax => {
+            // The image before this capture: its late files are not ours.
+            let earlier = arrivals.before(clip.from_ms);
+            wait_for_save(
+                deadline,
+                now,
+                || {
+                    let clip = clip_now();
                     let files = hashed_files(&dir, &clip, taken, file_hash);
-                    match save_decision(&clip, &files, taken) {
-                        SaveOutcome::AlreadySaved(path) => Some(path),
-                        SaveOutcome::Write => None,
-                    }
-                }
-            }
-        },
-        |ms| std::thread::sleep(Duration::from_millis(ms)),
-    )
+                    save_decision(&clip, &files, taken, earlier)
+                },
+                sleep,
+            )
+        }
+    }
 }
 
 /// What "Simpan" hands the worker.
@@ -249,7 +256,8 @@ pub struct SaveJob {
 
 /// "Simpan" for a screenshot with no file yet, on a short-lived thread:
 /// first it waits for Snipping Tool's own file (its window, `SAVE_AFTER_MS`,
-/// the lax match); found, that is the saved file and nothing is written. Else
+/// the lax match, the lone guess only at the end); found, that is the saved
+/// file and nothing is written. Else
 /// it writes the picture as a PNG at `job.path` (the folder made if it is
 /// missing). Posts `Event::ShotSaveDone` with the path (`None` when anything
 /// failed) and whether it wrote the file. False when the thread could not
