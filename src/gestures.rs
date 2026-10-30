@@ -14,10 +14,12 @@ pub const SWIPE_MIN_DIP: f32 = 56.0;
 const SWIPE_MAX: Duration = Duration::from_millis(700);
 /// A sideways wheel's delta that counts as one flick (one notch).
 const HWHEEL_STEP: i32 = 120;
-/// Deltas further apart than this are not one scroll.
-const HWHEEL_GAP: Duration = Duration::from_millis(250);
-/// After a flick, the rest of the same scroll (a touchpad's momentum) is
-/// ignored for this long.
+/// Deltas in the same direction at most this far apart are one gesture; a
+/// longer gap, or a delta the other way, starts a new one.
+const HWHEEL_NEW_GESTURE_GAP: Duration = Duration::from_millis(150);
+/// After a flick, a new gesture in the same direction waits until this long
+/// after the flick before it may fire. Counted from the flick only; later
+/// deltas never push it out.
 const HWHEEL_COOLDOWN: Duration = Duration::from_millis(500);
 
 /// Which way a gesture asks the music to go.
@@ -58,38 +60,65 @@ impl Swipe {
 /// The sideways wheel's deltas, added up until they make one flick.
 #[derive(Default)]
 pub struct HWheel {
+    /// Sum of the current gesture's deltas.
     sum: i32,
+    /// Sign of the current gesture (0: none yet).
+    sign: i32,
+    /// When the last delta came.
     last: Option<Instant>,
+    /// The current gesture has fired; the rest of it (momentum) is ignored.
+    spent: bool,
+    /// Sign of the last flick, and when a same-direction gesture may fire
+    /// again. Set only by a flick, never extended by later deltas.
+    last_flick: i32,
     quiet_until: Option<Instant>,
 }
 
 impl HWheel {
     /// One `WM_MOUSEHWHEEL` delta (positive: scrolled right). Scrolling
-    /// right is the next song, left the one before. A flick fires once; what
-    /// follows it is spent until the scroll has been still for
-    /// `HWHEEL_COOLDOWN` (each delta meanwhile pushes the end out), so a
-    /// touchpad's long momentum tail never fires a second time.
+    /// right is the next song or page, left the one before.
+    ///
+    /// A gesture is a run of deltas the same way with gaps of at most
+    /// `HWHEEL_NEW_GESTURE_GAP`; the other way, or a longer gap, starts a new
+    /// one (sum reset, not spent). Within a gesture the deltas add up and,
+    /// at `HWHEEL_STEP`, it fires once and is spent: the rest of it, however
+    /// long (a touchpad's momentum tail), returns `None`.
+    ///
+    /// A flick sets the quiet time to `HWHEEL_COOLDOWN` after it, and nothing
+    /// extends it. A new gesture the same way as the last flick that reaches
+    /// the step before then keeps its sum and fires on its first delta at or
+    /// after the quiet time, if it is still going. One the other way fires at
+    /// once. A delta of 0 is ignored.
     pub fn push(&mut self, delta: i32, now: Instant) -> Option<Dir> {
-        if self.quiet_until.is_some_and(|t| now < t) {
-            self.last = Some(now);
-            self.quiet_until = Some(now + HWHEEL_COOLDOWN);
+        if delta == 0 {
             return None;
         }
-        if self
-            .last
-            .is_none_or(|t| now.saturating_duration_since(t) > HWHEEL_GAP)
-        {
+        let sign = delta.signum();
+        let new_gesture = sign != self.sign
+            || self
+                .last
+                .is_none_or(|t| now.saturating_duration_since(t) > HWHEEL_NEW_GESTURE_GAP);
+        if new_gesture {
             self.sum = 0;
+            self.sign = sign;
+            self.spent = false;
         }
         self.last = Some(now);
+        if self.spent {
+            return None;
+        }
         self.sum += delta;
         if self.sum.abs() < HWHEEL_STEP {
             return None;
         }
-        let dir = if self.sum > 0 { Dir::Next } else { Dir::Prev };
-        self.sum = 0;
+        let waiting = sign == self.last_flick && self.quiet_until.is_some_and(|t| now < t);
+        if waiting {
+            return None;
+        }
+        self.spent = true;
+        self.last_flick = sign;
         self.quiet_until = Some(now + HWHEEL_COOLDOWN);
-        Some(dir)
+        Some(if sign > 0 { Dir::Next } else { Dir::Prev })
     }
 }
 
@@ -185,19 +214,99 @@ mod tests {
         assert_eq!(w.push(-50, t1 + ms(60)), Some(Dir::Prev));
     }
 
+    /// (a) A burst then a long continuous tail turns exactly one page.
     #[test]
-    fn a_whole_second_of_momentum_fires_once() {
+    fn one_momentum_tail_turns_exactly_one_page() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        let mut fired = 0;
+        for i in 0..30 {
+            fired += w.push(40, t0 + ms(i * 16)).is_some() as u32;
+        }
+        let tail = t0 + ms(30 * 16);
+        for i in 0..=93 {
+            fired += w.push(40, tail + ms(i * 16)).is_some() as u32;
+        }
+        assert_eq!(fired, 1);
+    }
+
+    /// (b) A second swipe after a gap and the quiet time turns another page.
+    #[test]
+    fn a_second_swipe_after_the_gap_and_quiet_turns_another_page() {
         let t0 = Instant::now();
         let mut w = HWheel::default();
         assert_eq!(w.push(120, t0), Some(Dir::Next));
-        // A touchpad's tail: a delta every 20 ms for a full second, well past
-        // the cooldown counted from the flick.
-        for i in 1..=50 {
-            assert_eq!(w.push(40, t0 + ms(i * 20)), None, "delta {i}");
+        for i in 1..=10 {
+            assert_eq!(w.push(40, t0 + ms(i * 16)), None);
         }
-        // Once the scroll has been still for the cooldown, a flick counts.
-        let after = t0 + ms(1_000) + HWHEEL_COOLDOWN;
-        assert_eq!(w.push(120, after), Some(Dir::Next));
+        let t1 = t0 + ms(160) + ms(600);
+        assert_eq!(w.push(70, t1), None);
+        assert_eq!(w.push(70, t1 + ms(16)), Some(Dir::Next));
+    }
+
+    /// (c) The other way turns a page at once, inside the quiet time.
+    #[test]
+    fn a_direction_change_turns_the_other_way_at_once() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        assert_eq!(w.push(120, t0), Some(Dir::Next));
+        assert_eq!(w.push(-120, t0 + ms(100)), Some(Dir::Prev));
+        // And back again, still inside the quiet time of the last flick.
+        assert_eq!(w.push(120, t0 + ms(200)), Some(Dir::Next));
+    }
+
+    /// (d) Continuous deltas for seconds do not block paging for good.
+    #[test]
+    fn continuous_deltas_never_block_paging_forever() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        let mut fired = 0;
+        for i in 0..=187 {
+            fired += w.push(40, t0 + ms(i * 16)).is_some() as u32;
+        }
+        assert_eq!(fired, 1, "3 s of one scroll is one page");
+        let t1 = t0 + ms(187 * 16) + ms(200);
+        assert_eq!(w.push(70, t1), None);
+        assert_eq!(w.push(70, t1 + ms(16)), Some(Dir::Next));
+    }
+
+    /// (e) A same-way swipe inside the quiet time waits for it to end.
+    #[test]
+    fn a_same_way_swipe_inside_the_quiet_time_fires_when_it_ends() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        assert_eq!(w.push(120, t0), Some(Dir::Next));
+        // A new swipe 200 ms later (a gap over 150 ms), 40 per 20 ms.
+        let mut fired = Vec::new();
+        for i in 0..30 {
+            let at = ms(200 + i * 20);
+            if w.push(40, t0 + at).is_some() {
+                fired.push(at);
+            }
+        }
+        assert_eq!(fired, vec![ms(500)], "once, on the first delta at 500 ms");
+    }
+
+    /// (f) Small deltas still add up to one flick.
+    #[test]
+    fn small_deltas_add_up_to_one_flick() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        for i in 0..3 {
+            assert_eq!(w.push(30, t0 + ms(i * 20)), None);
+        }
+        assert_eq!(w.push(30, t0 + ms(60)), Some(Dir::Next));
+        assert_eq!(w.push(30, t0 + ms(80)), None, "the tail is spent");
+    }
+
+    #[test]
+    fn a_zero_delta_is_ignored() {
+        let t0 = Instant::now();
+        let mut w = HWheel::default();
+        assert_eq!(w.push(0, t0), None);
+        assert_eq!(w.push(60, t0 + ms(10)), None);
+        assert_eq!(w.push(0, t0 + ms(400)), None, "does not break the gesture");
+        assert_eq!(w.push(60, t0 + ms(420)), None, "gap over 150 ms resets");
     }
 
     #[test]
