@@ -18,6 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::App;
+use super::shot::ShotArrival;
 use crate::clipboard::notice::{
     NoticeCtx, NoticeGate, PREVIEW_CHARS, clip_notice_lines, clip_notice_wanted,
 };
@@ -370,7 +371,7 @@ impl App {
         // the history's rules, and nothing is kept.
         if !history {
             if let Some(img) = store::image_only(snap)
-                && self.shot_from_image(None, &img, sequence)
+                && self.shot_from_image(None, &img, sequence).raised()
             {
                 self.refresh(Instant::now());
             }
@@ -378,9 +379,10 @@ impl App {
         }
         let at = Local::now().timestamp();
         let outcome = ingest(&mut self.clip.history, snap, at);
-        let (id, shot) = match outcome {
+        let (id, arrival) = match outcome {
             Ingested::Skipped | Ingested::Nothing => return,
-            Ingested::Added { id, image } => (id, image && self.clip_image_arrived(id, sequence)),
+            Ingested::Added { id, image: true } => (id, self.clip_image_arrived(id, sequence)),
+            Ingested::Added { id, image: false } => (id, ShotArrival::Nothing),
             // The same screenshot again (PrtSc twice on an unchanged
             // screen): one card, moved up, and a preview of it.
             Ingested::Bumped { id } => {
@@ -390,17 +392,27 @@ impl App {
                     .get(id)
                     .and_then(Clip::image)
                     .is_some_and(|i| i.screenshot);
-                (id, again && self.clip_image_arrived(id, sequence))
+                let arrival = if again {
+                    self.clip_image_arrived(id, sequence)
+                } else {
+                    ShotArrival::Nothing
+                };
+                (id, arrival)
             }
         };
         self.schedule_clip_save();
         // The preview took the notice's place ("Disalin" would only be
-        // replaced by it).
-        if shot {
+        // replaced by it); an update of a capture Simpan or Hapus already
+        // answered says nothing over that answer's notice.
+        if arrival.raised() {
             self.refresh(Instant::now());
             return;
         }
-        let notice = self.copy_feedback(id, outcome, shot);
+        if !arrival.copy_feedback_due() {
+            self.redraw_clip();
+            return;
+        }
+        let notice = self.copy_feedback(id, outcome);
         match notice {
             Some(n) => self.apply_now(Event::Notice(n)),
             None => self.redraw_clip(),
@@ -412,7 +424,7 @@ impl App {
     /// salinan" even when a rule keeps it quiet), else "Disalin" with that
     /// setting, else nothing. A copy made from the island never gets here
     /// (`Read::Own`); its "Disalin" is the card's own.
-    fn copy_feedback(&mut self, id: u64, outcome: Ingested, shot: bool) -> Option<Notice> {
+    fn copy_feedback(&mut self, id: u64, outcome: Ingested) -> Option<Notice> {
         let cfg = self.config.clipboard;
         if cfg.copy_notice {
             let ctx = NoticeCtx {
@@ -420,7 +432,8 @@ impl App {
                 history: cfg.enabled,
                 outcome,
                 own: false,
-                shot,
+                // The preview's own case never gets here (`ShotArrival`).
+                shot: false,
                 clip_page_open: self.state.view() == View::Panel(Page::Clipboard),
                 fullscreen: self.state.fullscreen(),
             };
@@ -436,10 +449,10 @@ impl App {
 
     /// A new image entry `id` arrived (a screenshot, a copied picture): it
     /// becomes the screenshot preview's candidate (`app_shot`). True when
-    /// the preview went up now.
-    fn clip_image_arrived(&mut self, id: u64, sequence: u32) -> bool {
+    /// the preview went up now (`ShotArrival`).
+    fn clip_image_arrived(&mut self, id: u64, sequence: u32) -> ShotArrival {
         let Some(img) = self.clip.history.get(id).and_then(Clip::image).cloned() else {
-            return false;
+            return ShotArrival::Nothing;
         };
         self.shot_from_image(Some(id), &img, sequence)
     }

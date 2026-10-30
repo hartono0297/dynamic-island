@@ -163,3 +163,122 @@ folder access" (`Key::ShotMaybeBlocked`); README Troubleshooting has the steps.
 A new release may need the exception again (the file is replaced).
 
 See also: [[screenshot-snap]] (the Screenshot tile's own capture and editor).
+
+## Duplicate on Simpan (v3.6)
+
+Evidence (owner, PrtSc to Snipping Tool with auto-save): two identical files in
+Pictures\Screenshots, `Screenshot 2026-10-28 235523.png` (248527 B, Snipping
+Tool) and `... 235525.png` (248506 B, Vale's `spawn_save`, 2 s later). So the
+preview was up, Simpan was clicked about 2 s after the capture, and the
+file of the same pixel size existed, yet `wait_for_file` never accepted it.
+Read from the code; the Windows side was not seen live.
+
+Causes (each has a pure test):
+
+1. **Two clipboard updates for one capture.** Snipping Tool can set the
+   clipboard more than once (history "Bumped" or a second "Added"). Each
+   `WM_CLIPBOARDUPDATE` made a NEW `ShotState`, whose `from_ms` is
+   `claim_from` = its own arrival (the previous arrival is within `AFTER_MS`).
+   The file stamped before the second arrival fell outside its window, the
+   first shot's window ended at the second's arrival, and its matched file sat
+   in `taken`. The shown (second) shot then never found the file: Simpan wrote
+   a second copy; a merely waiting first shot was replaced and dropped (no
+   preview). Fix: `screenshot::same_capture` (same size, at most
+   `SAME_CAPTURE_MS` 2 s after the newest shown or waiting shot, same history
+   card or hashes within the lax distance) and `merge_arrival`: the new shot
+   keeps the first one's `from_ms`, matched file and flag
+   (`app_shot::plan_arrival`) and shows again. A real PrtSc twice on an
+   unchanged screen inside 2 s merges too: Simpan then says "already saved"
+   for the first file (no duplicate; the look for a second file continues).
+2. **Hash too strict.** Simpan needed `confirmed` hashes (both read, within
+   10 bits). An unreadable hash (file still locked, WIC failure) or a
+   low-contrast picture (average-hash cells near the mean flip; the clipboard
+   thumbnail is a box sampler, the file side WIC Fant) refused the file.
+3. **Window.** The wait ended at 5 s after the capture (+0.5 s); a cold
+   Snipping Tool can write later. `list_folder` skips a file whose header
+   cannot be read (still locked); the 300 ms looks make that only a delay.
+
+New rules:
+
+- **Lax for the preview and for Simpan** (`pick_match`, `save_decision`): same
+  size, in the window, hash unreadable or within `LAX_HASH_DIST` (16 of 64
+  bits). Ranking: hash within 10 bits, then 11..16, then unknown; then the
+  closest in time. The preview never takes a clearly different picture (more
+  than 16 bits). Simpan alone (review round 2) also takes the one unclaimed
+  same-size file in its window when it is the only one, whatever its hash
+  (a low-contrast picture's average hash can read far off; a second copy is
+  the worse mistake); two such files and no hash match: it writes. A
+  browser "Copy image" (no new file of that size) still never shows.
+- **The lone guess waits for the end** (review round 3, `SaveOutcome::Lone`,
+  `screenshot::wait_for_save`). It never ends the wait: Simpan clicked
+  before Snipping Tool wrote this capture's file took an unrelated same-size
+  file on the first look and never saw the right one a moment later. Only
+  the guess of the last look (at the deadline) is kept. And it must lie past
+  the Simpan window (`SAVE_AFTER_MS`) of the image before this capture
+  (`Arrivals::before(from_ms)`): `claim_from` keeps out only that one's
+  `AFTER_MS` files, so an unanswered earlier screenshot's late (cold) file at
+  +6 s sat in the next capture's window, and a plain PrtSc 8-9 s later
+  "already saved" that picture and wrote nothing. Cost: a far-hash file of
+  this capture that lands inside the previous image's Simpan window (two
+  captures within ~10 s, low-contrast picture) makes Simpan write a copy.
+- **Simpan never writes a second copy** when Windows wrote a file for the
+  shot: found at click time (`state.file`) or by the save worker's wait
+  (`Strictness::Lax`, window `SAVE_AFTER_MS` 7 s, +0.5 s settle, ending
+  earlier at the next screenshot's arrival). Notice "Sudah tersimpan ·
+  Pictures\Screenshots" / "Already saved" (`Key::ShotAlreadySaved`);
+  "Disimpan" only for a PNG Vale wrote (`Event::ShotSaveDone.written`). Cost:
+  with no file at all (PrtSc without auto-save) the notice comes up to 7.5 s
+  after the capture, was 5.5 s.
+- **Deletes stay strict** (`pick_confirmed`, `find_confirmed_in`,
+  `Strictness::Confirmed`, window `AFTER_MS`): both hashes read and within 10
+  bits; a looser match never recycles a file.
+- `claim_from`, `window_end` and `taken` are unchanged for different
+  pictures: never another screenshot's file.
+- **One capture, one answer** (review round 1). Every `ShotState` has a
+  `capture` (the id of the capture's first clipboard update; merged updates
+  share it). A file found for one update goes to every update of that capture
+  still without one (`Shots::give_file`): a superseded update still shown
+  while its successor waits for the overlay could otherwise put the file in
+  `taken` where the successor never claims it. Simpan answers the capture
+  (`Shots::keep_capture`): a file of any update is "already saved"; else the
+  save worker gets the newest update's candidate; a waiting update of it is
+  dropped (no second preview). The capture is remembered
+  (`Shots::answered`, `Answer::Kept`): an update of it arriving after Simpan
+  (preview already closed, so nothing to merge with) is ignored, NOT pushed
+  to `arrivals`, so it cannot cut the save worker's wait before Windows' file
+  is stamped (`answered_again`). Cost: a real second PrtSc of an unchanged
+  screen within `SAME_CAPTURE_MS` of the last update after Simpan or Hapus
+  gets no preview.
+- **Hapus answers the capture too** (review round 2, `Shots::delete_capture`):
+  a waiting update of it is dropped and `TIMER_SHOT_SHOW` stopped (it raised
+  a preview of the just-deleted shot); the delete job gets the file of any
+  update, the newest update's candidate and the newest clipboard sequence
+  (the clipboard holds that write). `Answer::Deleted` is remembered: a later
+  update is absorbed, not pushed to `arrivals` (it cut the strict worker's
+  `AFTER_MS` wait, the file stayed). The picture it put back goes again
+  (clipboard emptied if unchanged, its card removed unless pinned) only on
+  stricter proof (review round 3, `screenshot::takes_back`): both hashes
+  read and within `HASH_MAX_DIST`, at most `TAKE_BACK_MS` (1 s) after the
+  capture's last update. A looser update (lax hash only, no hash, or 1-2 s
+  later) is only kept quiet: a deliberate retake of an almost unchanged
+  screen right after Hapus was wiped from the clipboard and history on the
+  lax rule. Left: a retake strictly equal and within 1 s is still wiped (its
+  auto-saved file stays on disk); a tool's re-set later than 1 s leaves the
+  deleted picture on the clipboard and in the history (no preview). The
+  strict hash rule of deletes is unchanged.
+- **An absorbed update says nothing** (review round 2). `shot_from_image`
+  returns `ShotArrival` (`Nothing` / `Raised` / `Absorbed`); `read_clipboard`
+  sends the copy notice / "Disalin" only for `Nothing`. Before, the absorbed
+  update returned "no preview", the copy-notice gate had never seen the card
+  (the first update raised the preview), and the copy notice replaced
+  "Sudah tersimpan" a few hundred ms after Simpan.
+- **"Jika diabaikan: Hapus"** fires only when the matched file is one the
+  strict worker may accept (`screenshot::may_confirm`: confirmed, or the
+  file's hash not read yet). A lax-only match (11..16 bits) or a clipboard
+  without a hash keeps the clipboard, the card and the file.
+
+Still unverified live: which formats and how many updates Snipping Tool really
+posts for PrtSc (the merge is read from the symptom, not captured); whether
+the 16-bit lax distance is enough for the preview in the owner's low-contrast
+cases (Simpan no longer depends on it when one file is in the window); the
+file stamp of a cold-start Snipping Tool beyond 7 s.
