@@ -127,3 +127,5 @@ focused search field (a hidden EDIT) took the wheel itself.
   window (the cards, the CLI output and the pages all use it).
 - A card click still resets the scroll: the card moves to the front, so the
   top is where it is. Demo scene `clipboard-long` shows the thumb.
+
+See also [[clipboard-notice]]: the preview in the notch on every copy made in another app (v3.5).

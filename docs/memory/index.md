@@ -31,6 +31,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[cleaner]]
 - [[mole-mode]]
 - [[clipboard-history]]
+- [[clipboard-notice]]: a 3 s preview in the notch on every external copy (text lines, thumbnail, files), skip rules, supersedes "Disalin untuk semua salinan", no timer
 - [[screenshot-preview]]
 - [[screenshot-snap]]: own region capture that snaps to windows and boxes, the editor after it, UIA budget, own-copy skip
 - [[panel-pages]]
