@@ -43,6 +43,13 @@
 //! and the notices `mole-done` and `mole-failed` use the design's fixed
 //! data; they never look for Mole, let alone run it.
 //!
+//! `--demo-devices` runs only the Devices page's scenes (`devices`,
+//! `devices-detail`, `devices-ejecting`, `devices-empty`) and its notices
+//! (`device-plugged`, `device-safe`), after `docs/design/rencana-v3.5.html`
+//! p3: three made-up drives (SanDisk Ultra E:, WD Elements F: and G: refused
+//! by Excel, Kartu SD H:), never a scan of this machine's drives and never an
+//! eject. `DI_DEMO_STEP=devices` holds one in `--demo` as well.
+//!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
 //! fixed ("14:32", "23:48"), so nothing depends on the time of day.
@@ -66,8 +73,8 @@ use super::motion::{
     reveal_frame,
 };
 use super::render::{
-    CleanerView, CliView, ClipView, FolderMenuView, Frame, MoleView, Progress, Renderer,
-    RobotFrame, SearchView, ShotView, SystemView,
+    CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, MoleView, Progress,
+    Renderer, RobotFrame, SearchView, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -80,6 +87,7 @@ use crate::clipboard::image::Thumb;
 use crate::clipboard::store::ClipImage;
 use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
+use crate::devices::{self, Bus, Device, DeviceKind, Partition, Veto, VetoKind};
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
@@ -156,6 +164,8 @@ struct Scene {
     /// The page cross-fades in over this one (`PageFade`), as the search
     /// opens over a page.
     fade_from: Option<Page>,
+    /// What the Devices page shows.
+    devices: DevicesDemo,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -263,6 +273,10 @@ enum DemoNotice {
     ShotSaved,
     /// "Dihapus · clipboard dikosongkan" after Hapus.
     ShotDeleted,
+    /// A drive plugged in: SanDisk Ultra, E:, 38,9 GB free (rencana-v3.5 p3).
+    DevicePlugged,
+    /// "Aman dicabut" after Eject: SanDisk Ultra.
+    DeviceSafe,
 }
 
 /// The screenshot preview's id in the demo (`DemoNotice::Shot`).
@@ -327,6 +341,7 @@ const BASE: Scene = Scene {
     clip: ClipDemo::Design,
     reveal: None,
     fade_from: None,
+    devices: DevicesDemo::Design,
 };
 
 const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
@@ -412,7 +427,107 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 93] = [
+/// The Devices page's states (rencana-v3.5.html p3): fixed, made-up drives
+/// and never a real scan or eject.
+#[derive(Clone, Copy, PartialEq)]
+enum DevicesDemo {
+    /// The design's three drives, the WD Elements refused by Excel.
+    Design,
+    /// The WD Elements expanded: model, connection, file system, partitions.
+    Detail,
+    /// The SanDisk is being ejected: its button reads "Melepas…".
+    Ejecting,
+    /// Nothing plugged in.
+    Empty,
+}
+
+/// What the Devices page draws in a scene: the drives, the keys being
+/// ejected, the refusals and the key of the expanded card.
+type DevicesState = (
+    Vec<Device>,
+    std::collections::HashSet<String>,
+    std::collections::HashMap<String, Veto>,
+    Option<String>,
+);
+
+/// The design's three drives: a SanDisk Ultra E: (exFAT, USB 3, 18,4 of
+/// 57,3 GB), a WD Elements F: and G: (two NTFS partitions, 612 of 931 GB)
+/// and a Kartu SD H: (FAT32, 3,1 of 29,7 GB).
+fn demo_devices_list() -> Vec<Device> {
+    let gb = |x: f64| (x * GIB as f64) as u64;
+    let part = |letter: char, label: &str, fs: &str, total: f64, used: f64| Partition {
+        letter,
+        label: label.into(),
+        fs: fs.into(),
+        total: gb(total),
+        free: Some(gb(total) - gb(used)),
+    };
+    vec![
+        Device {
+            key: "USB\\VID_0781&PID_5581\\DEMO-A".into(),
+            name: "SanDisk Ultra".into(),
+            model: "SanDisk Ultra".into(),
+            kind: DeviceKind::Usb,
+            bus: Bus::Usb3,
+            partitions: vec![part('E', "SANDISK", "exFAT", 57.3, 18.4)],
+        },
+        Device {
+            key: "USB\\VID_1058&PID_2621\\DEMO-B".into(),
+            name: "WD Elements".into(),
+            model: "WD Elements 2621".into(),
+            kind: DeviceKind::Hdd,
+            bus: Bus::Usb3,
+            partitions: vec![
+                part('F', "Proyek", "NTFS", 500.0, 350.0),
+                part('G', "Arsip", "NTFS", 431.0, 262.0),
+            ],
+        },
+        Device {
+            key: "USB\\VID_058F&PID_6366\\DEMO-C".into(),
+            name: "Kartu SD".into(),
+            model: "Generic Card Reader".into(),
+            kind: DeviceKind::Sd,
+            bus: Bus::CardReader,
+            partitions: vec![part('H', "", "FAT32", 29.7, 3.1)],
+        },
+    ]
+}
+
+fn demo_devices(which: DevicesDemo) -> DevicesState {
+    let mut list = demo_devices_list();
+    let (wd, sandisk) = (list[1].key.clone(), list[0].key.clone());
+    let mut ejecting = std::collections::HashSet::new();
+    let mut vetoes = std::collections::HashMap::new();
+    let mut expanded = None;
+    match which {
+        DevicesDemo::Design => {
+            vetoes.insert(
+                wd,
+                Veto {
+                    kind: VetoKind::WindowsApp,
+                    name: "Excel (Laporan.xlsx)".into(),
+                },
+            );
+        }
+        DevicesDemo::Detail => expanded = Some(wd),
+        DevicesDemo::Ejecting => {
+            ejecting.insert(sandisk);
+        }
+        DevicesDemo::Empty => list.clear(),
+    }
+    (list, ejecting, vetoes, expanded)
+}
+
+const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
+    Scene {
+        name,
+        view: View0::Panel(Page::Devices),
+        devices: which,
+        ..BASE
+    }
+}
+
+const SCENES: [Scene; 99] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -559,6 +674,13 @@ const SCENES: [Scene; 93] = [
         system_low: true,
         ..panel("system-low", Page::System)
     },
+    // Three made-up drives (rencana-v3.5 p3); never a real scan or eject.
+    devices_page("devices", DevicesDemo::Design),
+    devices_page("devices-detail", DevicesDemo::Detail),
+    devices_page("devices-ejecting", DevicesDemo::Ejecting),
+    devices_page("devices-empty", DevicesDemo::Empty),
+    notice("device-plugged", DemoNotice::DevicePlugged),
+    notice("device-safe", DemoNotice::DeviceSafe),
     // Fixed sizes (deepclean-opsi-d.html); never a real scan.
     cleaner("cleaner", CleanDemo::Ticks),
     cleaner("cleaner-confirm", CleanDemo::Armed),
@@ -909,6 +1031,17 @@ pub fn run_robot() {
     run_scenes(&scenes);
 }
 
+/// `--demo-devices`: only the Devices page's scenes and notices, Pill then
+/// Notch; `DI_DEMO_STEP` picks one by number or name as in `--demo`.
+pub fn run_devices() {
+    let scenes: Vec<Scene> = SCENES
+        .iter()
+        .copied()
+        .filter(|s| s.name.starts_with("device"))
+        .collect();
+    run_scenes(&scenes);
+}
+
 pub fn run_cli() {
     let scenes: Vec<Scene> = SCENES
         .iter()
@@ -1113,6 +1246,13 @@ fn run_scenes(scenes: &[Scene]) {
                     },
                 }
             });
+            let (dev_list, dev_ejecting, dev_vetoes, dev_expanded) = demo_devices(scene.devices);
+            let dev_scroll = dev_expanded.as_deref().map_or(0.0, |key| {
+                let shape = super::geometry::shape_for(style, ShapeKind::Panel);
+                let shapes = super::panel_layout::device_shapes(&dev_list, &dev_vetoes, Some(key));
+                let at = dev_list.iter().position(|d| d.key == key).unwrap_or(0);
+                super::panel_layout::devices_reveal(shape, scene.strip, &shapes, 0.0, at)
+            });
             let mixer_rows = demo_mixer();
             let shelf_cards = demo_shelf(matches!(scene.name, "shelf" | "shelf-drop-files"));
             let with_files = scene.name == "search-files";
@@ -1150,6 +1290,13 @@ fn run_scenes(scenes: &[Scene]) {
                 mixer: Some(&mixer_rows),
                 shelf: &shelf_cards,
                 shelf_drag: scene.shelf_drag,
+                devices: DevicesView {
+                    list: &dev_list,
+                    ejecting: &dev_ejecting,
+                    vetoes: &dev_vetoes,
+                    expanded: dev_expanded.as_deref(),
+                    scroll: dev_scroll,
+                },
                 notes,
                 notes_page: 0,
                 reminders: if scene.reminders == 12 {
@@ -1490,6 +1637,12 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             let (title, body) =
                 crate::i18n::shot_deleted(lang, crate::screenshot::FileOutcome::Recycled, true);
             notice(tr(Key::ShotTitle), title, body, NoticeKind::ShotDeleted)
+        }
+        DemoNotice::DevicePlugged => {
+            devices::plugged_notice(crate::i18n::lang(), &demo_devices_list()[0])
+        }
+        DemoNotice::DeviceSafe => {
+            devices::safe_notice(crate::i18n::lang(), &["SanDisk Ultra".to_owned()])
         }
         DemoNotice::ClaudeWorking => notice(
             "Claude",

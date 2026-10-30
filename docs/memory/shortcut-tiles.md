@@ -51,13 +51,13 @@ switched off (the twelve-tile limit above).
 
 ## Page tiles, Vale Settings and the new Settings card (2026-10-29)
 
-- **New built-ins** in `Shortcut::ALL` (19 now, in this order): the nine,
+- **New built-ins** in `Shortcut::ALL` (20 since v3.5, in this order): the nine,
   `ValeSettings`, then `Go(Calendar|Pomodoro|Reminders|Notes|Media|Mixer|Shelf|
   System|Cli)`. No Go tile for Search, Shortcuts or Clipboard (Clipboard keeps
   its own tile, which already opens its page). Names in the file are
   `"ValeSettings"` and `"Go"` + `pages::page_name` (`"GoShelf"`), read in any
   case, written canonically (`tiles::shortcut_from_name`).
-- **`Shortcut::default_on()`**: the nine, ValeSettings and Go(Shelf) (11 shown
+- **`Shortcut::default_on()`**: the nine, ValeSettings and Go(Shelf) (v3.5 adds Go(Devices): 12 shown on a fresh install, so the page is full; 11 shown
   on a fresh install). A built-in the file does not name joins after its
   predecessor in ALL, on only when `default_on` **and** the page has room
   (the 12 rule is unchanged). An old nine-tile config therefore gets

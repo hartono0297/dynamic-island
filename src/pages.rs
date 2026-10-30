@@ -168,6 +168,7 @@ pub fn page_name(page: Page) -> &'static str {
         Page::Clipboard => "Clipboard",
         Page::Shelf => "Shelf",
         Page::System => "System",
+        Page::Devices => "Devices",
         Page::Cli => "Cli",
         Page::Shortcuts => "Shortcuts",
         // Not in the order; never saved.
@@ -195,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn default_shows_all_eleven_pages_in_the_design_order() {
+    fn default_shows_all_twelve_pages_in_the_design_order() {
         let p = PanelPages::default();
         assert_eq!(p.visible(), Page::ALL.to_vec());
         assert_eq!(
@@ -210,10 +211,43 @@ mod tests {
                 Page::Clipboard,
                 Page::Shelf,
                 Page::System,
+                Page::Devices,
                 Page::Cli,
                 Page::Shortcuts,
             ]
         );
+        assert_eq!(page_name(Page::Devices), "Devices");
+        assert_eq!(page_from_name(" devices "), Some(Page::Devices));
+    }
+
+    #[test]
+    fn a_saved_order_without_devices_gets_it_back_after_system() {
+        // A config written before the Devices page: every other page, the
+        // owner's order (Cli moved first) and one of them off.
+        let mut saved: Vec<PageEntry> = Page::ALL
+            .iter()
+            .filter(|p| **p != Page::Devices)
+            .map(|p| entry(page_name(*p), true))
+            .collect();
+        saved.rotate_right(1); // Shortcuts first
+        saved[1].on = false; // Calendar off
+        let p = PanelPages::from_saved(&saved);
+        assert_eq!(p.entries().len(), Page::ALL.len());
+        assert_eq!(
+            p.position(Page::Devices),
+            p.position(Page::System) + 1,
+            "right after System"
+        );
+        assert!(p.is_on(Page::Devices), "and shown");
+        assert!(!p.is_on(Page::Calendar), "the rest is untouched");
+        assert_eq!(p.entries()[0].0, Page::Shortcuts);
+        // The default order puts it between System and Cli.
+        let plain: Vec<PageEntry> = Page::ALL
+            .iter()
+            .filter(|p| **p != Page::Devices)
+            .map(|p| entry(page_name(*p), true))
+            .collect();
+        assert_eq!(PanelPages::from_saved(&plain).visible(), Page::ALL.to_vec());
     }
 
     #[test]
@@ -380,7 +414,7 @@ mod tests {
         // Opened by its tile while it is off.
         assert_eq!(p.step(Page::Clipboard, 1), Page::Shelf);
         assert_eq!(p.step(Page::Clipboard, -1), Page::Mixer);
-        assert_eq!(p.step(Page::System, 2), Page::Shortcuts);
+        assert_eq!(p.step(Page::System, 2), Page::Cli);
         // Nothing shown past it: it stays.
         p.toggle(Page::Shortcuts);
         p.move_to(Page::System, Page::ALL.len() - 1);

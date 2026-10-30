@@ -118,6 +118,13 @@ pub struct Config {
     /// means the eight built-ins; `tiles::ShortcutTiles` checks and fills in.
     #[serde(deserialize_with = "shortcut_tiles")]
     pub shortcut_tiles: Vec<TileEntry>,
+    /// A notice when a flash drive or disk is plugged in, and when Vale's
+    /// Eject says it is safe to remove (Settings → Umum → Perangkat). On
+    /// unless switched off here.
+    pub device_notices: bool,
+    /// "Pintasan Perangkat": the hotkey that opens the Devices page. None by
+    /// default.
+    pub devices_hotkey: DevicesHotkey,
 }
 
 crate::theme::named_enum! {
@@ -204,6 +211,12 @@ crate::theme::named_enum! {
     /// choice. Alt+Space is never offered (it is the window menu); any other
     /// name, that one included, reads as `Off`.
     SearchHotkey { Off, CtrlAltSpace, WinAltS }
+}
+
+crate::theme::named_enum! {
+    /// "Pintasan Perangkat": the hotkey that opens the Devices page, like the
+    /// Clipboard's. None by default; any other name reads as `Off`.
+    DevicesHotkey { Off, CtrlAltD }
 }
 
 /// Settings → Clipboard.
@@ -330,6 +343,8 @@ impl Default for Config {
             screenshot: ScreenshotSettings::default(),
             panel_pages: Vec::new(),
             shortcut_tiles: Vec::new(),
+            device_notices: true,
+            devices_hotkey: DevicesHotkey::Off,
         }
     }
 }
@@ -464,6 +479,8 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         screenshot: mem.screenshot,
         panel_pages: mem.panel_pages.clone(),
         shortcut_tiles: mem.shortcut_tiles.clone(),
+        device_notices: mem.device_notices,
+        devices_hotkey: mem.devices_hotkey,
         ..disk
     }
 }
@@ -809,6 +826,8 @@ mod tests {
                 page: "Media".into(),
                 on: false,
             }],
+            device_notices: false,
+            devices_hotkey: DevicesHotkey::CtrlAltD,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -1106,6 +1125,38 @@ mod tests {
             (Motion::Full, 10, None)
         );
         assert_eq!(parse(&serde_json::to_string_pretty(&c).unwrap()), c);
+    }
+
+    #[test]
+    fn device_notices_default_on_and_the_hotkey_off_even_for_an_old_file() {
+        let d = Config::default();
+        assert!(d.device_notices);
+        assert_eq!(d.devices_hotkey, DevicesHotkey::Off);
+        // A file from before the Devices page names neither.
+        let old = parse(r#"{"style":"Notch","disk_warn_gb":20}"#);
+        assert!(old.device_notices);
+        assert_eq!(old.devices_hotkey, DevicesHotkey::Off);
+        // A bad name keeps the rest of the file and reads as Off.
+        let named = |name: &str| parse(&format!(r#"{{"devices_hotkey":"{name}"}}"#)).devices_hotkey;
+        assert_eq!(named("CtrlAltD"), DevicesHotkey::CtrlAltD);
+        assert_eq!(named("ctrlaltd"), DevicesHotkey::CtrlAltD);
+        assert_eq!(named("WinAltD"), DevicesHotkey::Off);
+        assert_eq!(named(""), DevicesHotkey::Off);
+        let odd = parse(r#"{"devices_hotkey":"Nope","device_notices":false,"style":"Notch"}"#);
+        assert_eq!(
+            (odd.devices_hotkey, odd.device_notices, odd.style),
+            (DevicesHotkey::Off, false, Style::Notch)
+        );
+        // Both belong to the island: a save keeps what it chose over the file.
+        let mem = Config {
+            device_notices: false,
+            devices_hotkey: DevicesHotkey::CtrlAltD,
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert!(!merged.device_notices);
+        assert_eq!(merged.devices_hotkey, DevicesHotkey::CtrlAltD);
+        assert_eq!(parse(&serde_json::to_string_pretty(&mem).unwrap()), mem);
     }
 
     #[test]

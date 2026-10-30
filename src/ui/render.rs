@@ -65,6 +65,7 @@ use crate::cli_panel::{Echoes, RunState};
 use crate::clipboard::Clip;
 use crate::clipboard::image::Thumb;
 use crate::config::Style;
+use crate::devices::{Device, Veto};
 use crate::i18n;
 use crate::lyrics::{self, ShownLine};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page, Timeline, View};
@@ -119,6 +120,8 @@ pub struct Frame<'a> {
     pub shelf: &'a [ShelfCard],
     /// Files are being dragged over the island: the shelf's drop zone lights.
     pub shelf_drag: bool,
+    /// The Devices page.
+    pub devices: DevicesView<'a>,
     pub notes: &'a [Note],
     pub notes_page: usize,
     /// Upcoming (not done) reminders, earliest first.
@@ -448,6 +451,17 @@ pub struct CliView<'a> {
     pub from_explorer: bool,
     /// The folder menu, while it is open.
     pub menu: Option<&'a FolderMenuView>,
+}
+
+/// What the Devices page shows: the drives as last listed, which are being
+/// ejected, the refusals, the card expanded and how far the list is scrolled.
+pub struct DevicesView<'a> {
+    pub list: &'a [Device],
+    pub ejecting: &'a std::collections::HashSet<String>,
+    pub vetoes: &'a std::collections::HashMap<String, Veto>,
+    /// The key of the device whose details show.
+    pub expanded: Option<&'a str>,
+    pub scroll: f32,
 }
 
 /// What the quick search shows.
@@ -1021,6 +1035,14 @@ impl Renderer {
     pub fn over_media_art(&self, x: f32, y: f32) -> bool {
         self.regions
             .media_art
+            .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
+    }
+
+    /// Whether this client point (physical pixels) is over the Devices
+    /// page's list, where the wheel scrolls it while it overflows.
+    pub fn over_devices_list(&self, x: f32, y: f32) -> bool {
+        self.regions
+            .devices_list
             .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
     }
 

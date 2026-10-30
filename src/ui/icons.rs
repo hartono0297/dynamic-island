@@ -115,11 +115,18 @@ pub enum Icon {
     Grip,
     /// The up chevron of the Settings lists' order buttons.
     ChevU,
+    /// The Devices page (`usb`, `hdd`, `sd`, `eject` in rencana-v3.5.html,
+    /// page 03): a flash drive, an external disk, a memory card and the eject
+    /// triangle. Line only; the design's zero-length "dots" are `Dot`s.
+    Usb,
+    Hdd,
+    Sd,
+    Eject,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 62] = [
+    pub const ALL: [Icon; 66] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -182,6 +189,10 @@ impl Icon {
         Icon::Chip,
         Icon::Grip,
         Icon::ChevU,
+        Icon::Usb,
+        Icon::Hdd,
+        Icon::Sd,
+        Icon::Eject,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -424,6 +435,18 @@ impl Icon {
                 Part::Dot(15.0, 18.0),
             ],
             Icon::ChevU => &[Part::Path("M6 15l6-6 6 6")],
+            Icon::Usb => &[
+                Part::Path("M9 3h6v5H9zM7 8h10v8a5 5 0 0 1-10 0z"),
+                Part::Dot(11.0, 5.0),
+                Part::Dot(13.0, 5.0),
+            ],
+            Icon::Hdd => &[
+                Part::Path("M4 6h16v12H4zM4 13h16"),
+                Part::Dot(16.5, 15.5),
+                Part::Dot(13.5, 15.5),
+            ],
+            Icon::Sd => &[Part::Path("M7 3h8l3 3v15H7zM10 3v3M12.5 3v3M15 3v2")],
+            Icon::Eject => &[Part::Path("M12 5l7 8H5zM5 17h14")],
         }
     }
 }

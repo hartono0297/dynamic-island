@@ -36,7 +36,8 @@ use crate::ui::render::ClipView;
 pub(super) const TIMER_CLIP_RETRY: usize = 20;
 /// One-shot: write the history file once changes settle.
 pub(super) const TIMER_CLIP_SAVE: usize = 21;
-/// One-shot: the hotkey's panel was not visited; it closes.
+/// One-shot: the hotkey's panel (the Clipboard's or the Devices') was not
+/// visited; it closes.
 pub(super) const TIMER_CLIP_HOLD: usize = 22;
 const RETRY_MS: u32 = 60;
 const RETRIES: u8 = 4;
@@ -383,7 +384,7 @@ impl App {
                     persist::write_in_background(persist::path(), Write::Save(items));
                 }
             }
-            TIMER_CLIP_HOLD if self.state.clip_held() => self.apply_now(Event::ClipHoldEnd),
+            TIMER_CLIP_HOLD if self.state.hotkey_held() => self.apply_now(Event::ClipHoldEnd),
             _ => {}
         }
     }
@@ -391,7 +392,14 @@ impl App {
     /// `WM_HOTKEY`: the page opens (or closes) without taking the foreground.
     pub(super) fn on_clip_hotkey(&mut self) {
         self.apply_now(Event::ClipHotkey);
-        if self.state.clip_held() {
+        self.arm_hotkey_hold();
+    }
+
+    /// A page hotkey (the Clipboard's or the Devices') opened the panel held
+    /// open: the hold ends after `HOLD_MS` unless the pointer comes
+    /// (`TIMER_CLIP_HOLD` is shared, the reducer has one hold).
+    pub(super) fn arm_hotkey_hold(&mut self) {
+        if self.state.hotkey_held() {
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_CLIP_HOLD, HOLD_MS, None);
             }

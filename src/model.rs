@@ -8,6 +8,7 @@ use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanEvent, CleanMode};
 use crate::cli::CliEvent;
 use crate::config::OpenMode;
+use crate::devices::DevicesEvent;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pages::PanelPages;
@@ -82,6 +83,13 @@ pub enum NoticeKind {
     ShotSaved,
     /// "Dihapus · clipboard dikosongkan" after Hapus (Bata idle).
     ShotDeleted,
+    /// A flash drive or disk was plugged in: "Buka" opens Explorer on its
+    /// first drive letter.
+    DevicePlugged {
+        letter: char,
+    },
+    /// Vale's Eject finished: "Aman dicabut". Temporary; a click dismisses.
+    DeviceSafe,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +243,12 @@ pub enum Event {
     /// device), with the number of the scan that asked. `App` keeps them,
     /// the reducer ignores it.
     Audio(u64, Option<Vec<MixerRow>>),
+    /// The drive scanner's answer (`devices_win::Devices`); `App` keeps it,
+    /// the reducer ignores it.
+    Devices(DevicesEvent),
+    /// The optional Devices hotkey: opens the panel on the Devices page
+    /// (without taking the foreground), or closes it when it shows that.
+    DevicesHotkey,
     /// The pointer asks row `index` of the Mixer for this level (0..=1).
     MixerLevel(usize, f32),
     /// Files are being dragged over the island (`true`: it opens on the
@@ -332,6 +346,14 @@ pub enum Hit {
     ShelfCard(usize),
     ShelfRemove(usize),
     ShelfClear,
+    /// The Devices page, by the card's place in the list as last drawn:
+    /// "Eject" (and "Coba lagi", which asks the same again), the folder
+    /// button, the info button, and "Eject semua".
+    DeviceEject(usize),
+    DeviceOpen(usize),
+    DeviceDetail(usize),
+    DeviceRetry(usize),
+    DevicesEjectAll,
     /// The CLI page's terminal: the input takes the keyboard.
     CliInput,
     /// The CLI header's Stop button (the same as Ctrl+C).
@@ -448,6 +470,13 @@ pub enum Effect {
     ShelfOpen(usize),
     ShelfRemove(usize),
     ShelfClear,
+    /// Devices page: eject card `i`'s device / open Explorer on its first
+    /// drive (the panel has collapsed) / expand or fold its details / eject
+    /// every listed device. `App` keeps the list.
+    DeviceEject(usize),
+    DeviceOpen(usize),
+    DeviceDetail(usize),
+    DevicesEjectAll,
     /// Give the CLI input the keyboard (the island activates for it).
     FocusCliInput,
     /// The CLI input lets go of the keyboard; the window that had it
@@ -543,7 +572,7 @@ pub enum PomoField {
 }
 
 /// Panel pages, in scroll order: Kalender, Pomodoro, Pengingat, Catatan,
-/// Musik, Mixer, Clipboard, Rak, Sistem, then CLI and Pintasan.
+/// Musik, Mixer, Clipboard, Rak, Sistem, Perangkat, then CLI and Pintasan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Calendar,
@@ -559,6 +588,8 @@ pub enum Page {
     Shelf,
     /// Sistem: CPU, RAM, disks and the busiest processes.
     System,
+    /// Perangkat: flash drives and external disks, with Eject.
+    Devices,
     Cli,
     /// Pintasan, the right-most page.
     Shortcuts,
@@ -569,7 +600,7 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 11] = [
+    pub const ALL: [Page; 12] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
@@ -579,6 +610,7 @@ impl Page {
         Page::Clipboard,
         Page::Shelf,
         Page::System,
+        Page::Devices,
         Page::Cli,
         Page::Shortcuts,
     ];
@@ -603,7 +635,7 @@ pub enum Shortcut {
 }
 
 impl Shortcut {
-    pub const ALL: [Shortcut; 19] = [
+    pub const ALL: [Shortcut; 20] = [
         Shortcut::Screenshot,
         Shortcut::Clipboard,
         Shortcut::Search,
@@ -622,13 +654,15 @@ impl Shortcut {
         Shortcut::Go(Page::Mixer),
         Shortcut::Go(Page::Shelf),
         Shortcut::Go(Page::System),
+        Shortcut::Go(Page::Devices),
         Shortcut::Go(Page::Cli),
     ];
 
     /// Whether a fresh install shows this tile: the original nine, Vale's
-    /// own Settings and the Shelf. The other page tiles are there to add.
+    /// own Settings, the Shelf and Devices. The other page tiles are there to
+    /// add.
     pub fn default_on(self) -> bool {
-        !matches!(self, Shortcut::Go(p) if p != Page::Shelf)
+        !matches!(self, Shortcut::Go(p) if !matches!(p, Page::Shelf | Page::Devices))
     }
 }
 

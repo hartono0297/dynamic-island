@@ -691,6 +691,8 @@ pub struct HitRegions {
     pub clip_list: Option<Rect>,
     /// The Mixer page's slider tracks, by row: where a press sets a level.
     pub mixer_tracks: Vec<Rect>,
+    /// The Devices page's list, where the wheel scrolls it.
+    pub devices_list: Option<Rect>,
     /// The Music page's cover: where the wheel turns the volume.
     pub media_art: Option<Rect>,
     /// The faint drag margin, while it is drawn.
@@ -774,6 +776,10 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         NoticeKind::CleanDone | NoticeKind::MoleDone => tint(p.sage, Icon::Sparkle),
         // Drawn by the robot (low); the badge shows when it is off.
         NoticeKind::MoleFailed => tint(p.ochre, Icon::Activity),
+        // With the robot off: the flash drive, in the accent.
+        NoticeKind::DevicePlugged { .. } => tint(p.accent, Icon::Usb),
+        // With the robot off: a check, in sage.
+        NoticeKind::DeviceSafe => tint(p.sage, Icon::Check),
         // Drawn by the robot; this badge only shows if it is turned off meanwhile.
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         // With the robot off: the Clipboard icon, as on the Pintasan tile.
@@ -812,6 +818,8 @@ pub fn notice_action(kind: &NoticeKind, pomo: PomoStatus) -> Option<Key> {
         NoticeKind::Pomodoro if pomo == PomoStatus::Ready => Some(Key::Start),
         // The click opens the panel on the System page.
         NoticeKind::SystemLow => Some(Key::Open),
+        // The click opens Explorer on the drive.
+        NoticeKind::DevicePlugged { .. } => Some(Key::Open),
         // The click opens the cleaner on Mole's log.
         NoticeKind::MoleDone | NoticeKind::MoleFailed => Some(Key::MoleLog),
         _ => None,
@@ -1364,6 +1372,12 @@ mod tests {
         assert_eq!(fill(&mole), (0x9DB59A, 0x9DB59A, Some(Icon::Sparkle)));
         let failed = notice("Bersihkan", NoticeKind::MoleFailed);
         assert_eq!(fill(&failed), (0xD9A441, 0xD9A441, Some(Icon::Activity)));
+        // A drive plugged in: the accent's flash drive; safe to remove: sage.
+        let plugged = notice("Perangkat", NoticeKind::DevicePlugged { letter: 'E' });
+        assert_eq!(fill(&plugged), (p.accent, p.accent, Some(Icon::Usb)));
+        let safe = notice("Perangkat", NoticeKind::DeviceSafe);
+        assert_eq!(fill(&safe), (0x9DB59A, 0x9DB59A, Some(Icon::Check)));
+        assert!(style(&plugged).alpha < 0.5 && style(&safe).alpha < 0.5);
         // Pomodoro: the colour of the phase a click starts.
         let pomo = notice("Pomodoro", NoticeKind::Pomodoro);
         assert_eq!(fill(&pomo), (0x9DB59A, 0x9DB59A, Some(Icon::Timer)));
@@ -1417,6 +1431,16 @@ mod tests {
         assert_eq!(
             notice_action(&NoticeKind::SystemLow, PomoStatus::Idle),
             Some(Key::Open)
+        );
+        // A plugged-in drive: "Buka" opens Explorer on it; "Aman dicabut"
+        // only informs.
+        assert_eq!(
+            notice_action(&NoticeKind::DevicePlugged { letter: 'E' }, PomoStatus::Idle),
+            Some(Key::Open)
+        );
+        assert_eq!(
+            notice_action(&NoticeKind::DeviceSafe, PomoStatus::Idle),
+            None
         );
         // A finished clean: a click only dismisses it.
         assert_eq!(

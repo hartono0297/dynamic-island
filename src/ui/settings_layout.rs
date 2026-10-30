@@ -13,8 +13,8 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
-    ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, OpenMode, RAM_WARN_RANGE,
+    SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
@@ -294,6 +294,10 @@ pub enum Hit {
     /// "Mode buka": Hover, Hover & tetap or Klik.
     OpenMode(OpenMode),
     SearchHotkey(SearchHotkey),
+    /// "Notice perangkat": the plug-in and safe-to-remove notices.
+    DeviceNotices,
+    /// "Pintasan Perangkat".
+    DevicesHotkey(DevicesHotkey),
     /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
     CliStart(CliStart),
     Shell(Shell),
@@ -400,6 +404,7 @@ pub enum Group {
     Lang,
     OpenMode,
     SearchHotkey,
+    DevicesHotkey,
     CliStart,
     Shell,
     Motion,
@@ -784,6 +789,11 @@ pub struct State<'a> {
     pub search_hotkey: SearchHotkey,
     /// The chosen search hotkey could not be registered.
     pub search_hotkey_failed: bool,
+    /// The plug-in and safe-to-remove notices.
+    pub device_notices: bool,
+    pub devices_hotkey: DevicesHotkey,
+    /// The chosen Devices hotkey could not be registered.
+    pub devices_hotkey_failed: bool,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -1693,6 +1703,7 @@ fn page_key(p: Page) -> Key {
         Page::System => Key::PageSystem,
         Page::Cli => Key::PageCli,
         Page::Shortcuts => Key::PageShortcuts,
+        Page::Devices => Key::PageDevices,
     }
 }
 
@@ -2335,6 +2346,42 @@ fn general(b: &mut Builder, s: &State) {
     b.divider(card, rows[9]);
 
     warnings_card(b, s);
+    devices_card(b, s);
+}
+
+/// "Perangkat" (the Devices page): the plug-in and safe-to-remove notices,
+/// and the page's own hotkey (none by default; "taken" in red when another
+/// app has the one chosen), in a third card under the warnings.
+fn devices_card(b: &mut Builder, s: &State) {
+    b.eyebrow(Key::PageDevices, CONTENT_W - 4.0);
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let x = b.toggle(Hit::DeviceNotices, RIGHT, cy(rows[0]), s.device_notices);
+    let desc = Some((b.t(Key::DeviceNoticesDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::DeviceNotices), desc, false, x);
+    b.divider(card, rows[0]);
+
+    let items = vec![
+        (
+            Hit::DevicesHotkey(DevicesHotkey::Off),
+            b.t(Key::ClipHotkeyNone),
+        ),
+        (
+            Hit::DevicesHotkey(DevicesHotkey::CtrlAltD),
+            "Ctrl+Alt+D".to_owned(),
+        ),
+    ];
+    let selected = index_of(DevicesHotkey::ALL, &s.devices_hotkey);
+    let x = b.segmented(Group::DevicesHotkey, RIGHT, cy(rows[1]), items, selected);
+    let desc = if s.devices_hotkey_failed && s.devices_hotkey != DevicesHotkey::Off {
+        (b.t(Key::ClipHotkeyTaken), Tone::Bad)
+    } else {
+        (b.t(Key::DevicesHotkeyDesc), Tone::Secondary)
+    };
+    b.row_text(card, rows[1], b.t(Key::DevicesHotkey), Some(desc), false, x);
+    b.divider(card, rows[1]);
 }
 
 /// The System page's warnings (keputusan-v3.1.html p4) and the cleaner's
@@ -2918,6 +2965,13 @@ mod tests {
                             SearchHotkey::Off
                         },
                         search_hotkey_failed: locked,
+                        device_notices: !locked,
+                        devices_hotkey: if locked {
+                            DevicesHotkey::CtrlAltD
+                        } else {
+                            DevicesHotkey::Off
+                        },
+                        devices_hotkey_failed: locked,
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -3408,7 +3462,11 @@ mod tests {
             };
             let top = layout(Section::General, &base, &Estimate);
             assert!(top.viewport.is_some() && top.scrollbar().is_some());
-            assert_eq!(top.cards.len(), 2, "the warnings have their own card");
+            assert_eq!(
+                top.cards.len(),
+                3,
+                "the warnings and Perangkat have their own cards"
+            );
             // At the top the warning card runs past the window: what is
             // below it takes no click.
             assert!(top.cards[1].bottom() > CLIENT_H);
@@ -3422,7 +3480,7 @@ mod tests {
             };
             let l = layout(Section::General, &end, &Estimate);
             assert_eq!(l.scroll, l.scroll_max);
-            assert!((l.cards[1].bottom() - (CLIENT_H - PAD)).abs() < 0.01);
+            assert!((l.cards[2].bottom() - (CLIENT_H - PAD)).abs() < 0.01);
             assert_eq!(
                 warn_hits(&l),
                 [
@@ -4539,6 +4597,84 @@ mod tests {
         }
         let l = layout(Section::Appearance, &states()[0], &Estimate);
         assert!(l.segmented(Group::Shell).is_none());
+    }
+
+    #[test]
+    fn general_has_a_devices_card_with_the_notice_toggle_and_the_hotkey() {
+        for lang in [Lang::Id, Lang::En] {
+            for (on, hotkey, failed) in [
+                (true, DevicesHotkey::Off, false),
+                (false, DevicesHotkey::CtrlAltD, true),
+                (true, DevicesHotkey::CtrlAltD, false),
+            ] {
+                let s = State {
+                    lang,
+                    device_notices: on,
+                    devices_hotkey: hotkey,
+                    devices_hotkey_failed: failed,
+                    scroll: 1e6,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::General, &s, &Estimate);
+                // The last card, two rows under its own label.
+                let card = *l.cards.last().expect("cards");
+                assert_eq!(card.h, 2.0 * ROW_H);
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, Key::PageDevices).to_uppercase())
+                );
+                for key in [
+                    Key::DeviceNotices,
+                    Key::DeviceNoticesDesc,
+                    Key::DevicesHotkey,
+                ] {
+                    assert!(l.texts.iter().any(|t| t.text == text(lang, key)), "{key:?}");
+                }
+                let toggle = l.controls.iter().find_map(|c| match c {
+                    Control::Toggle {
+                        hit: Hit::DeviceNotices,
+                        on,
+                        rect,
+                        ..
+                    } => Some((*on, *rect)),
+                    _ => None,
+                });
+                let (shown_on, rect) = toggle.expect("the notices toggle");
+                assert_eq!(shown_on, on);
+                assert!(rect.y >= card.y && rect.bottom() <= card.y + ROW_H);
+                assert_eq!(
+                    l.hit(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0),
+                    Some(Hit::DeviceNotices)
+                );
+                let (track, items, selected) =
+                    l.segmented(Group::DevicesHotkey).expect("the hotkey");
+                let hits: Vec<Hit> = items.iter().map(|i| i.hit).collect();
+                assert_eq!(
+                    hits,
+                    [
+                        Hit::DevicesHotkey(DevicesHotkey::Off),
+                        Hit::DevicesHotkey(DevicesHotkey::CtrlAltD)
+                    ]
+                );
+                assert_eq!(items[selected].hit, Hit::DevicesHotkey(hotkey));
+                assert!(track.y >= card.y + ROW_H && track.bottom() <= card.bottom());
+                // "Taken by another app" replaces the description, in red.
+                let taken = l
+                    .texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::ClipHotkeyTaken));
+                let plain = l
+                    .texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::DevicesHotkeyDesc));
+                assert_eq!(taken, failed && hotkey != DevicesHotkey::Off);
+                assert_eq!(plain, !taken);
+            }
+        }
+        // Not on the other tabs.
+        let l = layout(Section::Appearance, &states()[0], &Estimate);
+        assert!(l.segmented(Group::DevicesHotkey).is_none());
     }
 
     #[test]

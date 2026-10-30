@@ -3,12 +3,15 @@
 //! trimmed by the renderer inside the rects given here, and the one width that
 //! depends on text (the calendar title, which the arrows follow) is passed in.
 
+use std::collections::HashMap;
+
 use chrono::{Days, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use super::geometry::{ExpandedLayout, Rect, ShapeRect};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
 use crate::clean::{CleanCat, CleanMode};
 use crate::cli_folders::{MenuItem, Section};
+use crate::devices::{Device, Veto};
 use crate::model::{CalView, Hit, Page, Shortcut};
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
@@ -247,6 +250,304 @@ const MIXER_NAME_W: f32 = 112.0;
 const MIXER_VALUE_W: f32 = 40.0;
 const MIXER_GAP: f32 = 10.0;
 
+/// The Devices page's header as measured: the title, the "N tersambung"
+/// chip and the "Eject semua" button, each with its padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DevicesHead {
+    pub title_w: f32,
+    pub chip_w: f32,
+    pub eject_all_w: f32,
+}
+
+/// What a card's height depends on: a refusal's row, and the details
+/// (with the number of partitions they list).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeviceCardShape {
+    pub veto: bool,
+    pub details: Option<usize>,
+}
+
+/// The Devices page: a header, then a card per device in a list that
+/// scrolls when it does not fit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DevicesLayout {
+    /// "Perangkat".
+    pub header: Rect,
+    /// "3 tersambung", right after the title.
+    pub chip: Option<Rect>,
+    /// "Eject semua", at the right; only with devices listed.
+    pub eject_all: Option<Rect>,
+    /// Where the cards are (and are clipped to); the wheel over it scrolls
+    /// them while they overflow.
+    pub list: Rect,
+    pub cards: Vec<DeviceCardLayout>,
+    /// Nothing is plugged in: the message's area.
+    pub empty: Option<Rect>,
+    /// The scroll applied in px, kept in range, and the furthest it goes.
+    pub scroll: f32,
+    pub max_scroll: f32,
+    /// The thin thumb beside the list while it scrolls.
+    pub scrollbar: Option<Rect>,
+}
+
+/// One device card. Rects are where the card sits scrolled, so some may lie
+/// outside `DevicesLayout::list` (clipped when drawn, cut in `regions`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceCardLayout {
+    pub card: Rect,
+    /// The 34 px icon well.
+    pub well: Rect,
+    pub title: Rect,
+    pub subtitle: Rect,
+    /// The folder, info and Eject buttons.
+    pub open: Rect,
+    pub detail: Rect,
+    pub eject: Rect,
+    /// The usage bar and its "used / total" at its right.
+    pub bar: Rect,
+    pub usage: Rect,
+    /// The detail rows, each a label and a value rect (Model, Jalur, Sistem
+    /// file, then one per partition).
+    pub rows: Vec<(Rect, Rect)>,
+    pub veto: Option<DeviceVetoLayout>,
+}
+
+/// The red row of a refused eject: the whole row, its text and "Coba lagi".
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeviceVetoLayout {
+    pub row: Rect,
+    pub text: Rect,
+    pub retry: Rect,
+}
+
+const DEV_HEAD_H: f32 = 24.0;
+const DEV_HEAD_GAP: f32 = 6.0;
+const DEV_CHIP_H: f32 = 20.0;
+const DEV_CARD_GAP: f32 = 5.0;
+const DEV_PAD_X: f32 = 10.0;
+const DEV_PAD_Y: f32 = 5.0;
+/// The icon well, as in the design's `dev()`.
+pub const DEV_WELL: f32 = 34.0;
+const DEV_BAR_GAP: f32 = 4.0;
+const DEV_BAR_ROW: f32 = 12.0;
+/// The usage bar's thickness.
+pub const DEV_BAR_H: f32 = 5.0;
+const DEV_USAGE_W: f32 = 118.0;
+const DEV_BTN_H: f32 = 26.0;
+const DEV_ICON_BTN_W: f32 = 28.0;
+const DEV_EJECT_W: f32 = 84.0;
+const DEV_BTN_GAP: f32 = 6.0;
+const DEV_VETO_GAP: f32 = 4.0;
+const DEV_VETO_H: f32 = 24.0;
+const DEV_VETO_PAD: f32 = 9.0;
+const DEV_RETRY_W: f32 = 66.0;
+const DEV_RETRY_H: f32 = 18.0;
+const DEV_DETAIL_GAP: f32 = 6.0;
+const DEV_DETAIL_ROW: f32 = 15.0;
+const DEV_DETAIL_LABEL_W: f32 = 78.0;
+/// A wheel notch scrolls the list this many px.
+pub const DEV_WHEEL_PX: f32 = 40.0;
+
+/// A card's height: the well's row and the bar's, the details when it is
+/// expanded (3 rows and one per partition), the refusal's row.
+pub fn device_card_h(shape: DeviceCardShape) -> f32 {
+    let mut h = DEV_PAD_Y + DEV_WELL + DEV_BAR_GAP + DEV_BAR_ROW + DEV_PAD_Y;
+    if let Some(parts) = shape.details {
+        h += DEV_DETAIL_GAP + (3 + parts) as f32 * DEV_DETAIL_ROW;
+    }
+    if shape.veto {
+        h += DEV_VETO_GAP + DEV_VETO_H;
+    }
+    h
+}
+
+/// The shape of each card for `list`: a row for a refusal kept in `vetoes`,
+/// the details for the device whose key is `expanded`.
+pub fn device_shapes(
+    list: &[Device],
+    vetoes: &HashMap<String, Veto>,
+    expanded: Option<&str>,
+) -> Vec<DeviceCardShape> {
+    list.iter()
+        .map(|d| DeviceCardShape {
+            veto: vetoes.contains_key(&d.key),
+            details: (expanded == Some(d.key.as_str())).then_some(d.partitions.len()),
+        })
+        .collect()
+}
+
+/// All the cards with their gaps.
+fn devices_content_h(shapes: &[DeviceCardShape]) -> f32 {
+    let cards: f32 = shapes.iter().map(|s| device_card_h(*s)).sum();
+    cards + shapes.len().saturating_sub(1) as f32 * DEV_CARD_GAP
+}
+
+/// Where the Devices page's cards show (under the header).
+pub fn devices_list_rect(s: ShapeRect, strip: bool) -> Rect {
+    let top = content_top(s, strip) + DEV_HEAD_H + DEV_HEAD_GAP;
+    let (l, r) = (left(s), right(s));
+    rect(l, top, r - l, content_bottom(s) - top)
+}
+
+/// The furthest the cards scroll (px); 0 when they all fit.
+pub fn devices_max_scroll(s: ShapeRect, strip: bool, shapes: &[DeviceCardShape]) -> f32 {
+    (devices_content_h(shapes) - devices_list_rect(s, strip).h).max(0.0)
+}
+
+/// The scroll that brings card `index` into view: unchanged while it shows
+/// whole, else just enough (its top first when it is taller than the list).
+pub fn devices_reveal(
+    s: ShapeRect,
+    strip: bool,
+    shapes: &[DeviceCardShape],
+    scroll: f32,
+    index: usize,
+) -> f32 {
+    let max = devices_max_scroll(s, strip, shapes);
+    let view = devices_list_rect(s, strip).h;
+    let top: f32 = shapes
+        .iter()
+        .take(index)
+        .map(|s| device_card_h(*s) + DEV_CARD_GAP)
+        .sum();
+    let bottom = top + shapes.get(index).map_or(0.0, |s| device_card_h(*s));
+    let scroll = scroll.clamp(0.0, max);
+    let wanted = if top < scroll || bottom - top > view {
+        top
+    } else if bottom > scroll + view {
+        bottom - view
+    } else {
+        scroll
+    };
+    wanted.clamp(0.0, max)
+}
+
+/// The Devices page for `shapes` (one per device), scrolled `scroll` px.
+/// Three cards, one with a refusal's row, fit without scrolling.
+pub fn devices_layout(
+    s: ShapeRect,
+    strip: bool,
+    head: &DevicesHead,
+    shapes: &[DeviceCardShape],
+    scroll: f32,
+) -> DevicesLayout {
+    let top = content_top(s, strip);
+    let (l, r) = (left(s), right(s));
+    let n = shapes.len();
+    let eject_all = (n > 0).then(|| rect(r - head.eject_all_w, top, head.eject_all_w, DEV_HEAD_H));
+    let header = rect(l, top, head.title_w, HEADER_H);
+    let chip = (n > 0).then(|| {
+        rect(
+            header.right() + 8.0,
+            top + (HEADER_H - DEV_CHIP_H) / 2.0,
+            head.chip_w,
+            DEV_CHIP_H,
+        )
+    });
+    let list = devices_list_rect(s, strip);
+    let max_scroll = devices_max_scroll(s, strip, shapes);
+    let scroll = scroll.clamp(0.0, max_scroll);
+    let mut y = list.y - scroll;
+    let cards = shapes
+        .iter()
+        .map(|shape| {
+            let h = device_card_h(*shape);
+            let card = rect(l, y, r - l, h);
+            y += h + DEV_CARD_GAP;
+            let (il, ir) = (card.x + DEV_PAD_X, card.right() - DEV_PAD_X);
+            let y0 = card.y + DEV_PAD_Y;
+            let well = rect(il, y0, DEV_WELL, DEV_WELL);
+            let cy = y0 + DEV_WELL / 2.0;
+            let button = |x: f32, w: f32| rect(x, cy - DEV_BTN_H / 2.0, w, DEV_BTN_H);
+            let eject = button(ir - DEV_EJECT_W, DEV_EJECT_W);
+            let detail = button(eject.x - DEV_BTN_GAP - DEV_ICON_BTN_W, DEV_ICON_BTN_W);
+            let open = button(detail.x - DEV_BTN_GAP - DEV_ICON_BTN_W, DEV_ICON_BTN_W);
+            let text_x = well.right() + 10.0;
+            let text_w = open.x - 8.0 - text_x;
+            let title = rect(text_x, y0 + 1.0, text_w, 16.0);
+            let subtitle = rect(text_x, y0 + 18.0, text_w, 14.0);
+            let row_y = y0 + DEV_WELL + DEV_BAR_GAP;
+            let usage = rect(ir - DEV_USAGE_W, row_y, DEV_USAGE_W, DEV_BAR_ROW);
+            let bar = rect(
+                il,
+                row_y + (DEV_BAR_ROW - DEV_BAR_H) / 2.0,
+                usage.x - 8.0 - il,
+                DEV_BAR_H,
+            );
+            let mut next = row_y + DEV_BAR_ROW;
+            let mut rows = Vec::new();
+            if let Some(parts) = shape.details {
+                next += DEV_DETAIL_GAP;
+                for i in 0..3 + parts {
+                    let ry = next + i as f32 * DEV_DETAIL_ROW;
+                    let label = rect(il, ry, DEV_DETAIL_LABEL_W, DEV_DETAIL_ROW);
+                    // The partition lines have no label: the value takes the row.
+                    let (vx, vw) = if i < 3 {
+                        (label.right() + 6.0, ir - label.right() - 6.0)
+                    } else {
+                        (il, ir - il)
+                    };
+                    rows.push((label, rect(vx, ry, vw, DEV_DETAIL_ROW)));
+                }
+                next += (3 + parts) as f32 * DEV_DETAIL_ROW;
+            }
+            let veto = shape.veto.then(|| {
+                let row = rect(il, next + DEV_VETO_GAP, ir - il, DEV_VETO_H);
+                let retry = rect(
+                    row.right() - 6.0 - DEV_RETRY_W,
+                    row.y + (DEV_VETO_H - DEV_RETRY_H) / 2.0,
+                    DEV_RETRY_W,
+                    DEV_RETRY_H,
+                );
+                let text = rect(
+                    row.x + DEV_VETO_PAD,
+                    row.y,
+                    retry.x - 8.0 - row.x - DEV_VETO_PAD,
+                    DEV_VETO_H,
+                );
+                DeviceVetoLayout { row, text, retry }
+            });
+            DeviceCardLayout {
+                card,
+                well,
+                title,
+                subtitle,
+                open,
+                detail,
+                eject,
+                bar,
+                usage,
+                rows,
+                veto,
+            }
+        })
+        .collect();
+    let scrollbar = (max_scroll > 0.0).then(|| {
+        let total = list.h + max_scroll;
+        let h = (list.h * list.h / total).clamp(24.0, list.h);
+        let y = list.y + (list.h - h) * scroll / max_scroll;
+        rect(list.right() + 6.0, y, CLIP_SCROLLBAR_W, h)
+    });
+    DevicesLayout {
+        header,
+        chip,
+        eject_all,
+        list,
+        cards,
+        empty: (n == 0).then_some(list),
+        scroll,
+        max_scroll,
+        scrollbar,
+    }
+}
+
+/// `r` cut to `clip`; `None` when nothing of it is inside.
+fn clipped(r: Rect, clip: Rect) -> Option<Rect> {
+    let (x, y) = (r.x.max(clip.x), r.y.max(clip.y));
+    let (right, bottom) = (r.right().min(clip.right()), r.bottom().min(clip.bottom()));
+    (right > x && bottom > y).then(|| rect(x, y, right - x, bottom - y))
+}
+
 /// The quick search: the field on top, the result rows under it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchLayout {
@@ -332,6 +633,7 @@ pub enum PageLayout {
     Mixer(MixerLayout),
     Search(SearchLayout),
     Shelf(ShelfLayout),
+    Devices(DevicesLayout),
 }
 
 /// The cleaner behind "Bersihkan" exists (Run 5): the button is the accent
@@ -2687,6 +2989,28 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 add(c.card, Hit::ShelfCard(i));
             }
         }
+        PageLayout::Devices(l) => {
+            if let Some(r) = l.eject_all {
+                add(r, Hit::DevicesEjectAll);
+            }
+            // The buttons of a card scrolled partly out of the list only
+            // take clicks where the list shows them.
+            for (i, c) in l.cards.iter().enumerate() {
+                let mut on_card = vec![
+                    (c.eject, Hit::DeviceEject(i)),
+                    (c.detail, Hit::DeviceDetail(i)),
+                    (c.open, Hit::DeviceOpen(i)),
+                ];
+                if let Some(v) = &c.veto {
+                    on_card.push((v.retry, Hit::DeviceRetry(i)));
+                }
+                for (r, hit) in on_card {
+                    if let Some(r) = clipped(r, l.list) {
+                        add(r, hit);
+                    }
+                }
+            }
+        }
         PageLayout::Cleaner(l) => {
             add(l.back, Hit::CleanBack);
             // The mode segment, like the rows, not while a clean runs.
@@ -2967,7 +3291,42 @@ mod tests {
             let l = system_layout(s, strip, &SYS_HEAD, drives, procs);
             out.push((format!("system {drives:?}"), PageLayout::System(l)));
         }
+        for (name, shapes, scroll) in devices_cases() {
+            let l = devices_layout(s, strip, &DEV_HEAD, &shapes, scroll);
+            out.push((format!("devices {name}"), PageLayout::Devices(l)));
+        }
         out
+    }
+
+    /// A header as the renderer would measure it.
+    const DEV_HEAD: DevicesHead = DevicesHead {
+        title_w: 96.0,
+        chip_w: 84.0,
+        eject_all_w: 108.0,
+    };
+
+    /// The Devices page with none, one, three (one refused), many and an
+    /// expanded card, at the top and scrolled.
+    fn devices_cases() -> Vec<(&'static str, Vec<DeviceCardShape>, f32)> {
+        let plain = DeviceCardShape::default();
+        let veto = DeviceCardShape {
+            veto: true,
+            details: None,
+        };
+        let open = |parts| DeviceCardShape {
+            veto: false,
+            details: Some(parts),
+        };
+        vec![
+            ("none", vec![], 0.0),
+            ("one", vec![plain], 0.0),
+            ("three, one refused", vec![plain, veto, plain], 0.0),
+            ("six", vec![plain; 6], 0.0),
+            ("six scrolled", vec![plain; 6], 120.0),
+            ("six scrolled past the end", vec![plain; 6], 9999.0),
+            ("expanded", vec![plain, open(2), plain], 0.0),
+            ("expanded, refused", vec![veto, open(3), veto], 40.0),
+        ]
     }
 
     const SIX_DRIVES: [char; 6] = ['C', 'D', 'E', 'F', 'G', 'H'];
@@ -2976,6 +3335,232 @@ mod tests {
         uptime_w: 96.0,
         clean_w: 140.0,
     };
+
+    #[test]
+    fn three_devices_with_one_refusal_fit_the_panel_without_scrolling() {
+        let plain = DeviceCardShape::default();
+        let veto = DeviceCardShape {
+            veto: true,
+            details: None,
+        };
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            let (dots, _) = page_dots(s, &Page::ALL, Page::Devices);
+            let l = devices_layout(s, false, &DEV_HEAD, &[plain, veto, plain], 0.0);
+            assert_eq!(l.max_scroll, 0.0, "{style:?}");
+            assert!(l.scrollbar.is_none());
+            assert!(l.empty.is_none());
+            assert_eq!(l.cards.len(), 3);
+            for c in &l.cards {
+                assert!(c.card.y >= l.list.y - 0.01, "{style:?} {c:?}");
+                assert!(c.card.bottom() <= l.list.bottom() + 0.01, "{style:?} {c:?}");
+            }
+            assert!(l.list.bottom() <= dots[0].y - 6.0 + 0.01);
+            // The refusal's row sits inside its card, under the bar.
+            let v = l.cards[1].veto.expect("row");
+            assert!(v.row.y >= l.cards[1].bar.bottom());
+            assert!(v.row.bottom() <= l.cards[1].card.bottom());
+            assert!(v.retry.right() <= v.row.right() && v.text.right() < v.retry.x);
+            assert!(l.cards[0].veto.is_none());
+            // Under the waiting strip the same three need to scroll.
+            let strip = devices_layout(s, true, &DEV_HEAD, &[plain, veto, plain], 0.0);
+            assert!(strip.max_scroll > 0.0, "{style:?}");
+        }
+    }
+
+    #[test]
+    fn the_header_holds_the_title_the_chip_and_eject_all() {
+        let s = panel(Style::Pill);
+        let plain = DeviceCardShape::default();
+        let l = devices_layout(s, false, &DEV_HEAD, &[plain, plain], 0.0);
+        let chip = l.chip.expect("chip");
+        let all = l.eject_all.expect("eject all");
+        assert!(l.header.right() < chip.x && chip.right() < all.x);
+        assert_eq!((chip.w, all.w, l.header.w), (84.0, 108.0, 96.0));
+        assert_eq!(all.right(), right(s));
+        // Nothing listed: no chip, no button, the message takes the list.
+        let none = devices_layout(s, false, &DEV_HEAD, &[], 0.0);
+        assert!(none.chip.is_none() && none.eject_all.is_none());
+        assert_eq!(none.empty, Some(none.list));
+        assert!(none.cards.is_empty());
+        let hits: Vec<Hit> = regions(s, &PageLayout::Devices(none), false)
+            .into_iter()
+            .map(|r| r.hit)
+            .collect();
+        assert!(hits.is_empty(), "nothing to click: {hits:?}");
+    }
+
+    #[test]
+    fn more_devices_or_an_expanded_card_scroll_the_list() {
+        let s = panel(Style::Pill);
+        let plain = DeviceCardShape::default();
+        let six = [plain; 6];
+        let top = devices_layout(s, false, &DEV_HEAD, &six, 0.0);
+        assert!(top.max_scroll > 0.0);
+        let thumb = top.scrollbar.expect("thumb");
+        assert!(thumb.x > top.list.right() && thumb.y >= top.list.y);
+        // Scrolled: the cards move up by it, kept in range.
+        let moved = devices_layout(s, false, &DEV_HEAD, &six, 50.0);
+        assert_eq!(moved.cards[0].card.y, top.cards[0].card.y - 50.0);
+        assert_eq!(moved.scroll, 50.0);
+        let end = devices_layout(s, false, &DEV_HEAD, &six, 9999.0);
+        assert_eq!(end.scroll, end.max_scroll);
+        let last = end.cards.last().unwrap().card;
+        assert!((last.bottom() - end.list.bottom()).abs() < 0.01);
+        assert!(end.scrollbar.unwrap().bottom() <= end.list.bottom() + 0.01);
+        let back = devices_layout(s, false, &DEV_HEAD, &six, -5.0);
+        assert_eq!(back.scroll, 0.0);
+        // Expanding one card is enough on its own.
+        let open = DeviceCardShape {
+            veto: false,
+            details: Some(2),
+        };
+        assert!(devices_max_scroll(s, false, &[plain, open, plain]) > 0.0);
+        assert_eq!(devices_max_scroll(s, false, &[plain, plain, plain]), 0.0);
+        // The card's rows: three fixed ones and a line per partition, in it.
+        let l = devices_layout(s, false, &DEV_HEAD, &[plain, open, plain], 0.0);
+        let card = &l.cards[1];
+        assert_eq!(card.rows.len(), 5);
+        for (label, value) in &card.rows {
+            assert!(label.y >= card.bar.bottom() && value.bottom() <= card.card.bottom());
+            assert!(label.right() <= value.right());
+        }
+        assert!(l.cards[0].rows.is_empty());
+        // Heights: the expanded one is taller by its rows.
+        assert_eq!(
+            device_card_h(open) - device_card_h(plain),
+            DEV_DETAIL_GAP + 5.0 * DEV_DETAIL_ROW
+        );
+    }
+
+    #[test]
+    fn the_buttons_of_a_card_scrolled_half_out_only_click_inside_the_list() {
+        let s = panel(Style::Pill);
+        let plain = DeviceCardShape::default();
+        for scroll in [0.0, 20.0, 45.0, 9999.0] {
+            let l = devices_layout(s, false, &DEV_HEAD, &[plain; 6], scroll);
+            let hits = regions(s, &PageLayout::Devices(l.clone()), false);
+            for r in hits.iter().filter(|r| r.hit != Hit::DevicesEjectAll) {
+                assert!(
+                    r.rect.y >= l.list.y - 0.01 && r.rect.bottom() <= l.list.bottom() + 0.01,
+                    "scroll {scroll}: {r:?} outside {:?}",
+                    l.list
+                );
+            }
+            // Each card that shows has its three buttons (or what of them shows).
+            let ejects = hits
+                .iter()
+                .filter(|r| matches!(r.hit, Hit::DeviceEject(_)))
+                .count();
+            assert!(ejects >= 3 && ejects <= 6, "scroll {scroll}: {ejects}");
+        }
+        // At the top the first card's buttons are whole and map to index 0.
+        let l = devices_layout(s, false, &DEV_HEAD, &[plain; 2], 0.0);
+        let hits = regions(s, &PageLayout::Devices(l.clone()), false);
+        let at = |r: Rect| {
+            hits.iter()
+                .find(|h| h.rect.contains(r.x + r.w / 2.0, r.y + r.h / 2.0))
+                .map(|h| h.hit.clone())
+        };
+        assert_eq!(at(l.cards[0].eject), Some(Hit::DeviceEject(0)));
+        assert_eq!(at(l.cards[0].open), Some(Hit::DeviceOpen(0)));
+        assert_eq!(at(l.cards[0].detail), Some(Hit::DeviceDetail(0)));
+        assert_eq!(at(l.cards[1].eject), Some(Hit::DeviceEject(1)));
+        assert_eq!(at(l.eject_all.unwrap()), Some(Hit::DevicesEjectAll));
+        // A refused card's "Coba lagi" asks for its own card again.
+        let veto = DeviceCardShape {
+            veto: true,
+            details: None,
+        };
+        let l = devices_layout(s, false, &DEV_HEAD, &[plain, veto], 0.0);
+        let hits = regions(s, &PageLayout::Devices(l.clone()), false);
+        let retry = l.cards[1].veto.unwrap().retry;
+        let hit = hits
+            .iter()
+            .find(|h| h.rect.contains(retry.x + 1.0, retry.y + 1.0))
+            .map(|h| h.hit.clone());
+        assert_eq!(hit, Some(Hit::DeviceRetry(1)));
+    }
+
+    #[test]
+    fn an_expanded_card_is_scrolled_into_view_and_a_shown_one_stays() {
+        let s = panel(Style::Pill);
+        let plain = DeviceCardShape::default();
+        let open = DeviceCardShape {
+            veto: false,
+            details: Some(2),
+        };
+        let shapes = [plain, plain, open, plain];
+        let view = devices_list_rect(s, false).h;
+        let max = devices_max_scroll(s, false, &shapes);
+        // The card is below the fold: scrolled until its bottom shows.
+        let at = devices_reveal(s, false, &shapes, 0.0, 2);
+        let top = 2.0 * (device_card_h(plain) + DEV_CARD_GAP);
+        let bottom = top + device_card_h(open);
+        assert!(at > 0.0 && at <= max);
+        assert!(bottom <= at + view + 0.01 || at == max, "bottom shows");
+        assert!(at <= top + 0.01, "its top stays in view");
+        // Already whole: the scroll stays.
+        let shown = devices_reveal(s, false, &shapes, at, 2);
+        assert_eq!(shown, at);
+        // Scrolled past it (its top above the view): brought back to its top.
+        let past = devices_reveal(s, false, &shapes, max, 0);
+        assert_eq!(past, 0.0);
+        // Out of range, or nothing to scroll: kept in range.
+        assert_eq!(devices_reveal(s, false, &shapes, 500.0, 9), max);
+        assert_eq!(devices_reveal(s, false, &[plain], 30.0, 0), 0.0);
+    }
+
+    #[test]
+    fn card_shapes_follow_the_refusals_and_the_expanded_key() {
+        use crate::devices::{Bus, Device, DeviceKind, Partition, VetoKind};
+        let dev = |key: &str, parts: usize| Device {
+            key: key.into(),
+            name: key.into(),
+            model: key.into(),
+            kind: DeviceKind::Hdd,
+            bus: Bus::Usb,
+            partitions: (0..parts)
+                .map(|i| Partition {
+                    letter: char::from(b'E' + i as u8),
+                    label: String::new(),
+                    fs: "NTFS".into(),
+                    total: 0,
+                    free: None,
+                })
+                .collect(),
+        };
+        let list = [dev("A", 1), dev("B", 2), dev("C", 1)];
+        let mut vetoes = HashMap::new();
+        vetoes.insert(
+            "B".to_owned(),
+            Veto {
+                kind: VetoKind::Device,
+                name: String::new(),
+            },
+        );
+        let shapes = device_shapes(&list, &vetoes, Some("B"));
+        assert_eq!(
+            shapes,
+            vec![
+                DeviceCardShape::default(),
+                DeviceCardShape {
+                    veto: true,
+                    details: Some(2)
+                },
+                DeviceCardShape::default(),
+            ]
+        );
+        assert_eq!(
+            device_shapes(&list, &HashMap::new(), None),
+            vec![DeviceCardShape::default(); 3]
+        );
+        // A key that is not listed expands nothing.
+        assert_eq!(
+            device_shapes(&list, &HashMap::new(), Some("Z")),
+            vec![DeviceCardShape::default(); 3]
+        );
+    }
 
     #[test]
     fn system_page_fits_drives_and_keeps_clear_of_the_dots() {
@@ -4841,6 +5426,13 @@ mod tests {
                                 let (glyph, label) = tile_parts(*tile);
                                 drawn.extend([glyph, label]);
                             }
+                        }
+                        // The cards of a list that scrolls reach past the panel
+                        // (clipped to `list` when drawn): only the fixed parts.
+                        PageLayout::Devices(l) => {
+                            drawn.extend([l.header, l.list]);
+                            drawn.extend(l.chip);
+                            drawn.extend(l.eject_all);
                         }
                         // On its own, taller shape: `cleaner_fits_its_panel`.
                         PageLayout::Cleaner(_) => {}

@@ -52,6 +52,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
 - [[search-files]]: files and folders by name in six user folders, own walker with caps, icons/sizes/counts from a background worker
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
+- [[devices]]: Devices page (Perangkat), safe eject of flash drives, external disks and cards through a worker thread, no polling
 
 ## Gotchas
 

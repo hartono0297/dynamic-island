@@ -76,8 +76,8 @@ use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
-    ClipHotkey, ClipboardSettings, Config, OpenMode, ScreenshotSettings, SearchHotkey, ShotIgnore,
-    ShotTool, Style,
+    ClipHotkey, ClipboardSettings, Config, DevicesHotkey, OpenMode, ScreenshotSettings,
+    SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};
@@ -125,6 +125,10 @@ pub enum Action {
     ClipHotkey(ClipHotkey),
     /// Settings → Umum → Pencarian cepat.
     SearchHotkey(SearchHotkey),
+    /// Settings → Umum → Perangkat: the plug-in and safe-to-remove notices,
+    /// and the Devices page's hotkey.
+    DeviceNotices(bool),
+    DevicesHotkey(DevicesHotkey),
     ClipFeedbackAll(bool),
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
@@ -257,6 +261,10 @@ pub struct Model {
     pub search_hotkey: SearchHotkey,
     /// The chosen search hotkey could not be registered.
     pub search_hotkey_failed: bool,
+    pub device_notices: bool,
+    pub devices_hotkey: DevicesHotkey,
+    /// The chosen Devices hotkey could not be registered.
+    pub devices_hotkey_failed: bool,
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -298,6 +306,9 @@ impl Model {
             open_mode: cfg.open_mode,
             search_hotkey: cfg.search_hotkey,
             search_hotkey_failed: false,
+            device_notices: cfg.device_notices,
+            devices_hotkey: cfg.devices_hotkey,
+            devices_hotkey_failed: false,
             robot: cfg.robot,
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
@@ -1100,6 +1111,9 @@ impl Settings {
             open_mode: m.open_mode,
             search_hotkey: m.search_hotkey,
             search_hotkey_failed: m.search_hotkey_failed,
+            device_notices: m.device_notices,
+            devices_hotkey: m.devices_hotkey,
+            devices_hotkey_failed: m.devices_hotkey_failed,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
@@ -1242,6 +1256,10 @@ impl Settings {
                     .iter()
                     .position(|v| *v == m.search_hotkey)
                     .unwrap_or(0) as f32,
+                Group::DevicesHotkey => DevicesHotkey::ALL
+                    .iter()
+                    .position(|v| *v == m.devices_hotkey)
+                    .unwrap_or(0) as f32,
                 Group::ShotIgnore => usize::from(m.shot.on_ignore == ShotIgnore::Delete) as f32,
                 // The form's own choice, not the model's.
                 Group::TileKind => 0.0,
@@ -1259,6 +1277,7 @@ impl Settings {
             Group::Motion,
             Group::ClipHotkey,
             Group::SearchHotkey,
+            Group::DevicesHotkey,
             Group::ShotIgnore,
             Group::ShotTool,
         ] {
@@ -1587,6 +1606,8 @@ impl Settings {
             Hit::ClipClearOnLock => post(Action::ClipClearOnLock(!m.clip.clear_on_lock)),
             Hit::ClipHotkey(h) if h != m.clip.hotkey => post(Action::ClipHotkey(h)),
             Hit::SearchHotkey(h) if h != m.search_hotkey => post(Action::SearchHotkey(h)),
+            Hit::DeviceNotices => post(Action::DeviceNotices(!m.device_notices)),
+            Hit::DevicesHotkey(h) if h != m.devices_hotkey => post(Action::DevicesHotkey(h)),
             Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
             Hit::ClipClear if self.clip_confirm => {
                 self.clip_confirm = false;
@@ -1748,6 +1769,7 @@ impl Settings {
             | Hit::Motion(_)
             | Hit::ClipHotkey(_)
             | Hit::SearchHotkey(_)
+            | Hit::DevicesHotkey(_)
             | Hit::ShotIgnore(_)
             | Hit::ShotTool(_) => Vec::new(),
         };
@@ -2493,6 +2515,8 @@ pub fn run_demo(args: &[String]) {
             Action::ClipClearOnLock(v) => m.clip.clear_on_lock = v,
             Action::ClipHotkey(v) => m.clip.hotkey = v,
             Action::SearchHotkey(v) => m.search_hotkey = v,
+            Action::DeviceNotices(v) => m.device_notices = v,
+            Action::DevicesHotkey(v) => m.devices_hotkey = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
             Action::ShotTool(v) => m.shot.tool = v,
@@ -2756,13 +2780,14 @@ mod tests {
         let moved = tile_action(&tiles, Hit::TileMove(0, 1)).expect("moved");
         assert_eq!(moved.visible()[1], tiles.visible()[0]);
         assert_eq!(tile_action(&tiles, Hit::TileMove(0, -1)), None);
-        // "+ Tambah" on a tile that is off, refused while twelve show.
+        // "+ Tambah" on a tile that is off, refused while twelve show (a
+        // fresh install shows twelve).
         let calendar = 10;
-        let added = tile_action(&tiles, Hit::TileOn(calendar)).expect("shown");
-        assert_eq!(added.shown(), tiles.shown() + 1);
-        let mut full = tiles.clone();
-        full.toggle(11);
-        assert_eq!(tile_action(&full, Hit::TileOn(12)), None);
+        assert_eq!(tile_action(&tiles, Hit::TileOn(calendar)), None);
+        assert_eq!(tile_action(&tiles, Hit::TileOn(12)), None);
+        let room = tile_action(&tiles, Hit::TileOn(0)).expect("hidden");
+        let added = tile_action(&room, Hit::TileOn(calendar)).expect("shown");
+        assert_eq!(added.shown(), room.shown() + 1);
         // "Hapus" only on an own tile; "Kembalikan bawaan" on a changed list.
         assert_eq!(tile_action(&tiles, Hit::TileRemove(0)), None);
         assert_eq!(tile_action(&tiles, Hit::TileReset), None);
@@ -2793,7 +2818,9 @@ mod tests {
 
     #[test]
     fn adding_an_own_tile_checks_what_was_typed() {
-        let tiles = ShortcutTiles::default();
+        // One built-in hidden: the page has room for one own tile.
+        let mut tiles = ShortcutTiles::default();
+        tiles.toggle(0);
         let add =
             |t: &ShortcutTiles, kind, name: &str, target: &str| add_tile_to(t, kind, name, target);
         let (next, on) = add(

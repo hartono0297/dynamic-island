@@ -717,6 +717,10 @@ pub enum NoticeSort {
     ShotSaved,
     /// "Dihapus" after its Hapus.
     ShotDeleted,
+    /// A drive was plugged in.
+    DevicePlugged,
+    /// A device is safe to remove.
+    DeviceSafe,
 }
 
 impl NoticeSort {
@@ -737,6 +741,8 @@ impl NoticeSort {
             NoticeKind::Screenshot { .. } => NoticeSort::Screenshot,
             NoticeKind::ShotSaved => NoticeSort::ShotSaved,
             NoticeKind::ShotDeleted => NoticeSort::ShotDeleted,
+            NoticeKind::DevicePlugged { .. } => NoticeSort::DevicePlugged,
+            NoticeKind::DeviceSafe => NoticeSort::DeviceSafe,
         }
     }
 }
@@ -833,9 +839,11 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
                 | NoticeSort::MoleDone
                 | NoticeSort::Copied
                 | NoticeSort::Screenshot
+                | NoticeSort::DeviceSafe
                 | NoticeSort::ShotSaved => Some(Expr::Happy),
-                // keputusan-v3.1 p6: "Dihapus" with Bata at rest.
-                NoticeSort::ShotDeleted => Some(Expr::Idle),
+                // keputusan-v3.1 p6: "Dihapus" with Bata at rest; a drive
+                // plugged in is news, not an event: Bata at rest as well.
+                NoticeSort::ShotDeleted | NoticeSort::DevicePlugged => Some(Expr::Idle),
                 NoticeSort::BatteryLow | NoticeSort::SystemLow | NoticeSort::MoleFailed => {
                     Some(Expr::Sad)
                 }
@@ -1435,6 +1443,8 @@ mod tests {
             (NoticeSort::Screenshot, Expr::Happy),
             (NoticeSort::ShotSaved, Expr::Happy),
             (NoticeSort::ShotDeleted, Expr::Idle),
+            (NoticeSort::DevicePlugged, Expr::Idle),
+            (NoticeSort::DeviceSafe, Expr::Happy),
         ] {
             let spot = Spot::Notice(sort);
             assert_eq!(e(RobotInputs { spot, ..busy }), Some(expr), "{sort:?}");
