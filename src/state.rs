@@ -1542,9 +1542,9 @@ impl IslandState {
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
-            // The back button: exactly Esc (`Event::SearchClose`), so the
-            // page and the keyboard go back the same way.
-            Hit::SearchBack => self.close_search(),
+            // The back button: back to the page the search came over, with
+            // the panel latched open (Esc closes the panel instead).
+            Hit::SearchBack => self.search_back(now, effects),
             // Runs it and closes the search (Enter is this click too).
             Hit::SearchResult(i) => {
                 if self.search_open {
@@ -1733,13 +1733,30 @@ impl IslandState {
         matches!(self.view(), View::Panel(_)) && self.page != Page::Search
     }
 
-    /// Closes the quick search (Esc, the back button): the page it came
-    /// over returns in the post-process of `apply`.
+    /// Closes the quick search (Esc): the panel collapses and the page it
+    /// came over returns in the post-process of `apply`. The back button is
+    /// `search_back`, which keeps the panel open.
     fn close_search(&mut self) {
         if self.search_open {
             self.search_open = false;
             self.collapse();
         }
+    }
+
+    /// The search's back button: the page it came over shows again and the
+    /// panel stays open on it, latched like a click-open (a click outside
+    /// closes it). With the notch closed when the search opened, that page is
+    /// the last one the panel showed. The keyboard goes back here: the
+    /// post-process of `apply` only releases it for a search still open or
+    /// still showing, and this one is neither, so it sends nothing twice.
+    fn search_back(&mut self, now: Instant, effects: &mut Vec<Effect>) {
+        if !self.search_open {
+            return;
+        }
+        self.search_open = false;
+        self.page = back_page(self.search_prev);
+        self.open_by_click(now);
+        effects.push(Effect::ReleaseSearchFocus);
     }
 
     /// Moves `steps` pages through the owner's order (negative: back).
@@ -2143,6 +2160,17 @@ enum Sticky<'a> {
     Reminder(&'a str),
     /// The failed Mole clean (one at a time).
     Mole,
+}
+
+/// The page the search's back button shows: the one it came over. The search
+/// is never its own way back (it should not happen), so `Shortcuts` stands in:
+/// `PanelPages::position` has no place for `Page::Search`.
+fn back_page(prev: Page) -> Page {
+    if prev == Page::Search {
+        Page::Shortcuts
+    } else {
+        prev
+    }
 }
 
 /// A transport button: previous, play/pause or next.
@@ -5922,33 +5950,104 @@ mod tests {
     }
 
     #[test]
-    fn the_back_button_is_exactly_esc() {
+    fn the_back_button_returns_to_the_page_and_keeps_the_panel_open() {
         let t0 = Instant::now();
         for page in [Page::Notes, Page::Media, Page::Shortcuts] {
-            let open = || {
-                let mut s = st();
-                open_on(&mut s, page, t0);
-                s.apply(Event::Hover(false), t0);
-                s.apply(Event::SearchHotkey, t0);
-                assert_eq!(s.view(), View::Panel(Page::Search));
-                s
-            };
-            let (mut a, mut b) = (open(), open());
-            let esc = a.apply(Event::SearchClose, t0);
-            let back = b.apply(Event::Click(Hit::SearchBack), t0);
-            assert_eq!(back, esc);
-            assert_eq!(back, vec![Effect::ReleaseSearchFocus]);
-            assert_eq!(b.view(), a.view());
-            assert_eq!(b.page(), a.page());
-            assert_eq!(b.page(), page);
-            assert_eq!(b.search_open(), a.search_open());
-            assert!(!b.search_open());
-            assert_eq!(b.panel_is_open(), a.panel_is_open());
-            assert_eq!(b.next_deadline(), a.next_deadline());
+            let mut s = st();
+            open_on(&mut s, page, t0);
+            s.apply(Event::SearchHotkey, t0);
+            assert_eq!(s.view(), View::Panel(Page::Search));
+            let effects = s.apply(Event::Click(Hit::SearchBack), t0);
+            assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+            assert_eq!(s.page(), page);
+            assert_eq!(s.view(), View::Panel(page));
+            assert!(!s.search_open());
+            assert!(s.panel_is_open());
         }
-        // Closed: a stray click does nothing.
+    }
+
+    #[test]
+    fn the_back_button_with_the_notch_closed_opens_the_last_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        leave(&mut s, t0);
+        assert!(!s.panel_is_open());
+        s.apply(Event::SearchHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+        let effects = s.apply(Event::Click(Hit::SearchBack), t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        assert!(s.panel_is_open());
+        // The latch, not the 4 s linger, holds it with the pointer away.
+        let later = t0 + ACTIVITY_LINGER + secs(1);
+        s.apply(Event::Hover(false), later);
+        s.apply(Event::Tick, later);
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+        assert!(s.panel_is_open());
+        // A fresh state: the start page.
+        let mut f = st();
+        f.apply(Event::SearchHotkey, t0);
+        f.apply(Event::Click(Hit::SearchBack), t0);
+        assert_eq!(f.view(), View::Panel(Page::Calendar));
+        assert!(f.panel_is_open());
+        let later = t0 + ACTIVITY_LINGER + secs(1);
+        f.apply(Event::Hover(false), later);
+        f.apply(Event::Tick, later);
+        assert_eq!(f.view(), View::Panel(Page::Calendar));
+    }
+
+    #[test]
+    fn after_the_back_button_a_click_outside_closes_the_panel() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Media, t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::SearchHotkey, t0);
+        s.apply(Event::Click(Hit::SearchBack), t0);
+        assert!(s.panel_is_open());
+        assert!(s.outside_click_wanted());
+        s.apply(Event::Dismiss, t0);
+        assert!(!s.panel_is_open());
+        assert_ne!(s.view(), View::Panel(Page::Media));
+    }
+
+    #[test]
+    fn esc_still_collapses_the_panel_unlike_the_back_button() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::SearchHotkey, t0);
+        let effects = s.apply(Event::SearchClose, t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert!(!s.panel_is_open());
+        assert_eq!(s.page(), Page::Notes);
+    }
+
+    #[test]
+    fn the_back_button_while_the_search_is_closed_does_nothing() {
+        let t0 = Instant::now();
         let mut s = st();
         assert!(s.apply(Event::Click(Hit::SearchBack), t0).is_empty());
+        assert!(!s.panel_is_open());
+        // Open on a page, no search: still nothing.
+        open_on(&mut s, Page::Notes, t0);
+        assert!(s.apply(Event::Click(Hit::SearchBack), t0).is_empty());
+        assert_eq!(s.view(), View::Panel(Page::Notes));
+    }
+
+    #[test]
+    fn the_back_page_is_never_the_search() {
+        assert_eq!(back_page(Page::Search), Page::Shortcuts);
+        assert_eq!(back_page(Page::Notes), Page::Notes);
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::SearchHotkey, t0);
+        s.search_prev = Page::Search;
+        let effects = s.apply(Event::Click(Hit::SearchBack), t0);
+        assert_eq!(effects, vec![Effect::ReleaseSearchFocus]);
+        assert_eq!(s.view(), View::Panel(Page::Shortcuts));
     }
 
     #[test]
