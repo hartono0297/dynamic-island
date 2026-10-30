@@ -123,3 +123,13 @@ kept when apps match), a `path` on each result for the details worker (icon,
 folder count, app install size, filled in after the rows show) and the
 highlight staying on the same result when an index arrives (`keep_selection`).
 The hint now says "Cari aplikasi, berkas, hitung…".
+
+## Back button (2026-10-30)
+
+A back arrow (`Icon::Back`, `Hit::SearchBack`, `SearchLayout::back`, 32 px
+wide, the field's height) sits left of the field. Its click runs the same
+reducer path as Esc (`close_search`, used by `Event::SearchClose` too): the
+page returns and `ReleaseSearchFocus` hands the keyboard back. The island
+window answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`, so the click does not
+blur the EDIT before the reducer closes it. Label key `SearchBack` (Kembali /
+Back); the island has no tooltip mechanism.

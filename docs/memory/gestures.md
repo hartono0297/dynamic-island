@@ -33,3 +33,29 @@ notice with a one-line preview (`app_clip::copied_notice`); nothing added.
 
 **Not verified live:** a real touchpad's horizontal scroll (does it reach the
 island window?), and whether a swipe feels right on a touch screen.
+
+## Sideways swipe turns panel pages (2026-10-30)
+
+`WM_MOUSEHWHEEL` is routed by the pure `gestures::hwheel_route(view,
+cli_menu_open, gestures_media_ok, over_island)` (`App::on_hwheel`):
+
+| Where the flick lands | Result |
+|---|---|
+| Open panel, any page incl. Music, pointer on the drawn island | one page: right = next, left = previous (`Event::PageFlick { next }`) |
+| Panel on `Page::Search`, or the CLI folder menu open | nothing |
+| Panel, pointer on the faint margin | nothing |
+| `MediaCompact` / `MediaLyric` with `gestures_active` | song skip, as before (`Click(Prev/Next)`; the margin was never excluded here) |
+| Notices, idle, anything else | nothing |
+
+- **Not behind `config.gestures`:** turning a page is navigation like the
+  vertical wheel; the setting only guards the music gestures.
+- One flick = one page: the same `HWheel` latch (accumulate to 120, fire once,
+  still 500 ms before the next; a touchpad burst of 30 deltas turns exactly
+  one page, tested). `PageFlick` steps `pages.step(page, ±1)`, so order, skips
+  and clamping equal the vertical wheel; it zeroes the vertical residue, keeps
+  the sticky-reminder peek rule, stays off the search and arms the linger as a
+  `PageTurn`. `last_paging` is set so the scroll-volume cover does not grab the
+  next vertical notch.
+- No element of the panel scrolls sideways (only hidden, owner-drawn EDITs
+  have `ES_AUTOHSCROLL`), so nothing else claims the flick.
+- Left-button swipe, middle click and the vertical wheel are unchanged.

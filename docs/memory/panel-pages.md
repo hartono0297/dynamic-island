@@ -56,3 +56,6 @@ Halaman panel now reads:
 - The drag, the raised row and Esc to cancel are shared with the Pintasan
   card, see [[shortcut-tiles]]. A Shortcuts tile can now open any page,
   including a hidden one (for that visit only, as the Clipboard tile).
+
+A sideways two-finger swipe over the open panel follows the same order and
+skips as the vertical wheel (`Event::PageFlick`, see [[gestures]]).

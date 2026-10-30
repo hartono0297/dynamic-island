@@ -5271,6 +5271,34 @@ mod tests {
     }
 
     #[test]
+    fn the_search_back_button_sits_left_of_the_field_without_touching_it() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for strip in [false, true] {
+                for n in [0, 3, crate::search::MAX_RESULTS] {
+                    let l = search_layout(s, strip, n);
+                    assert!(l.back.right() < l.field.x, "a gap, no overlap");
+                    assert_eq!(l.back.x, left(s));
+                    assert_eq!(l.field.right(), right(s));
+                    assert!(l.back.w >= 32.0 && l.back.h >= SEARCH_FIELD_H);
+                    assert_eq!((l.back.y, l.back.h), (l.field.y, l.field.h));
+                    assert!(l.back.y >= content_top(s, strip));
+                    assert!(l.field.w > 100.0, "the field keeps its room");
+                    for row in &l.rows {
+                        assert!(row.y >= l.back.bottom() && row.y >= l.field.bottom());
+                    }
+                    // Registered once.
+                    let hits: Vec<_> = regions(s, &PageLayout::Search(l.clone()), strip)
+                        .into_iter()
+                        .map(|r| r.hit)
+                        .collect();
+                    assert_eq!(hits.iter().filter(|h| **h == Hit::SearchBack).count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn regions_have_no_overlaps_within_page() {
         for style in [Style::Pill, Style::Notch] {
             let s = panel(style);
@@ -5424,7 +5452,7 @@ mod tests {
                             drawn.extend(l.buttons.iter().map(|b| b.2));
                         }
                         PageLayout::Search(l) => {
-                            drawn.push(l.field);
+                            drawn.extend([l.back, l.field]);
                             drawn.extend(l.rows.iter().copied());
                             drawn.extend(l.empty);
                         }
