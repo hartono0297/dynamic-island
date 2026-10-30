@@ -5,8 +5,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
-    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_DASH_STYLE_DASH, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_LAYER_OPTIONS_NONE,
     D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
@@ -145,6 +145,13 @@ pub struct Frame<'a> {
     pub tiles: Vec<Tile>,
     /// Island colours (surface and accent).
     pub palette: Palette,
+    /// The surface fill's alpha this frame (`notch_fill`): 1 for a solid
+    /// island and always for the open panel; less for a see-through closed
+    /// island, blended with the morph.
+    pub fill_alpha: f32,
+    /// How strong the dark text shadow is (`notch_fill::legibility`): 0 on a
+    /// solid fill, rising as it thins.
+    pub legibility: f32,
     /// "HH:MM" drawn while the view is `Idle`; `None` when the clock is off.
     pub clock: Option<String>,
     /// The line drawn while the view is `MediaLyric`.
@@ -576,6 +583,10 @@ pub struct Renderer {
     /// part of the fade: `paint_robot` keeps where it goes here, and
     /// `paint_island` draws it at full alpha once the faded layer is popped.
     robot_later: std::cell::Cell<Option<Option<(Rect, RobotFrame)>>>,
+    /// The dark shadow strength (0..1) the compact views' and notices'
+    /// text, icons, equalizer, lyric and Bata are drawn with
+    /// (`Frame::legibility`); 0 everywhere else, always for the panel.
+    legible: std::cell::Cell<f32>,
 }
 
 struct Fonts {
@@ -802,6 +813,7 @@ impl Renderer {
                 search_icons: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
                 robot_later: std::cell::Cell::new(None),
+                legible: std::cell::Cell::new(0.0),
             })
         }
     }
@@ -1199,7 +1211,11 @@ impl Renderer {
                 target.rt.FillRectangle(&d2d_rect(halo), &target.brush);
                 self.regions.halo = Some(halo);
             }
-            target.brush.SetColor(&color(self.palette.surface, 1.0));
+            // 1.0 (the same call as ever) unless the closed island is see-through.
+            target.brush.SetColor(&color(
+                self.palette.surface,
+                frame.fill_alpha.clamp(0.0, 1.0),
+            ));
             match style {
                 Style::Pill => target.rt.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
@@ -1235,6 +1251,9 @@ impl Renderer {
             Some(page) => self.paint_leaving_panel(style, shape, frame, page),
             None => Ok(()),
         };
+        // Only the compact views and notices carry the shadow, never the
+        // panel that is closing out of them.
+        self.legible.set(frame.legibility.clamp(0.0, 1.0));
         let content_alpha = frame.transit.content_alpha.clamp(0.0, 1.0);
         let faded = content_alpha < 1.0;
         if faded {
@@ -1289,6 +1308,8 @@ impl Renderer {
                 self.paint_robot(area, r);
             }
         }
+        // The volume plate is its own near-opaque surface.
+        self.legible.set(0.0);
         if let (Some(level), View::MediaCompact | View::MediaLyric) = (frame.volume, view) {
             let r = shape_rect(shape);
             let h = crate::ui::panel_layout::VOLUME_HUD_H
@@ -1306,6 +1327,7 @@ impl Renderer {
                 0.97,
             );
         }
+        self.legible.set(0.0);
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
         leaving.and(content)
@@ -1339,6 +1361,24 @@ impl Renderer {
             return;
         }
         let target = self.target.as_ref().expect("target ensured by paint");
+        // On a see-through island: a soft dark halo round the head, so the
+        // face reads on a light wallpaper.
+        let strength = self.legible.get();
+        if strength > 0.0 {
+            let (head, radius) = super::robot::head_rect(area);
+            for (grow, weight) in [(3.0, 0.10), (1.5, 0.18)] {
+                self.set_color(0x000000, weight * strength);
+                self.fill_round(
+                    Rect {
+                        x: head.x - grow,
+                        y: head.y - grow,
+                        w: head.w + 2.0 * grow,
+                        h: head.h + 2.0 * grow,
+                    },
+                    radius + grow,
+                );
+            }
+        }
         self.robot
             .paint(&target.rt, &target.brush, area, robot.expr, robot.pose, 1.0);
     }
@@ -1390,6 +1430,8 @@ impl Renderer {
                 w: BAR_W,
                 h,
             };
+            self.shadow_bar(bar, 1.0);
+            unsafe { target.brush.SetColor(&color(self.palette.accent, 1.0)) };
             self.fill_round(bar, 1.0);
         }
         Ok(())
@@ -1463,16 +1505,11 @@ impl Renderer {
             return;
         }
         let text_w = metrics.widthIncludingTrailingWhitespace;
-        unsafe { target.brush.SetColor(&color(self.palette.text, alpha)) };
-        let options = D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT;
+        let (ink, options) = (self.palette.text, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
         if !lyric_overflow(text_w, area.w) {
             // Centred; a box held wider than the line (hysteresis) centres it too.
             let x = area.x + (area.w - text_w) / 2.0;
-            unsafe {
-                target
-                    .rt
-                    .DrawTextLayout(Vector2::new(x, area.y), &layout, &target.brush, options)
-            };
+            self.text_legible(Vector2::new(x, area.y), &layout, options, ink, alpha);
             return;
         }
         // How much of the line is still hidden past the box sets how strong
@@ -1496,16 +1533,15 @@ impl Renderer {
             opacityBrush: ManuallyDrop::new(opacity),
             layerOptions: D2D1_LAYER_OPTIONS_NONE,
         };
-        unsafe {
-            target.rt.PushLayer(&params, &target.layer);
-            target.rt.DrawTextLayout(
-                Vector2::new(area.x - scroll, area.y),
-                &layout,
-                &target.brush,
-                options,
-            );
-            target.rt.PopLayer();
-        }
+        unsafe { target.rt.PushLayer(&params, &target.layer) };
+        self.text_legible(
+            Vector2::new(area.x - scroll, area.y),
+            &layout,
+            options,
+            ink,
+            alpha,
+        );
+        unsafe { target.rt.PopLayer() };
         // The layer kept its own reference while pushed.
         drop(ManuallyDrop::into_inner(params.opacityBrush));
     }
@@ -1571,14 +1607,15 @@ impl Renderer {
             None => {
                 self.set_color(badge.fill, badge.alpha);
                 self.fill_round(layout.badge, radius::BADGE);
-                match badge.icon {
+                // The badge has its own fill: no shadow on what it holds.
+                self.solid_ink(|| match badge.icon {
                     // Line only: the duotone would vanish on a tint of its own colour.
                     Some(icon) => self.icon_colored(icon, layout.badge, 20.0, badge.ink, 1.0, None),
                     None => {
                         let letter = badge_letter(&notice.source);
                         self.text_colored(&letter, &self.fonts.badge, layout.badge, badge.ink, 1.0);
                     }
-                }
+                });
             }
         }
         self.text(&notice.title, &self.fonts.title, layout.title, 1.0);
@@ -1593,7 +1630,9 @@ impl Renderer {
             self.set_color(fill, 1.0);
             self.fill_round(chip, chip.h / 2.0);
             let label = i18n::tr(key);
-            self.text_colored(label, &self.fonts.button_center, chip, ink, 1.0);
+            self.solid_ink(|| {
+                self.text_colored(label, &self.fonts.button_center, chip, ink, 1.0);
+            });
         }
         Ok(())
     }
@@ -1650,7 +1689,9 @@ impl Renderer {
                 self.set_color(badge.fill, badge.alpha);
                 self.fill_round(l.robot, radius::BADGE * l.robot.w / 40.0);
                 if let Some(icon) = badge.icon {
-                    self.icon_colored(icon, l.robot, 14.0, badge.ink, 1.0, None);
+                    self.solid_ink(|| {
+                        self.icon_colored(icon, l.robot, 14.0, badge.ink, 1.0, None);
+                    });
                 }
             }
         }
@@ -1685,13 +1726,16 @@ impl Renderer {
                 w: 13.0,
                 ..r
             };
-            self.icon_colored(icon, glyph, 13.0, ink, 1.0, None);
             let label = Rect {
                 x: glyph.right() + 6.0,
                 w: (r.right() - glyph.right() - 6.0 - SHOT_BUTTON_PAD).max(0.0),
                 ..r
             };
-            self.text_colored(i18n::text(lang, key), &self.fonts.button, label, ink, 1.0);
+            // The buttons keep their own fills.
+            self.solid_ink(|| {
+                self.icon_colored(icon, glyph, 13.0, ink, 1.0, None);
+                self.text_colored(i18n::text(lang, key), &self.fonts.button, label, ink, 1.0);
+            });
         }
         self.regions.regions = shot_regions(&l, view.id);
         Ok(())
@@ -1750,7 +1794,7 @@ impl Renderer {
         let Some(bitmap) = bitmap else {
             unsafe { target.brush.SetColor(&color(self.palette.placeholder, 1.0)) };
             self.fill_round(area, radius);
-            self.icon(Icon::Music, area, 16.0, SECONDARY_ALPHA, true);
+            self.solid_ink(|| self.icon(Icon::Music, area, 16.0, SECONDARY_ALPHA, true));
             return Ok(());
         };
         unsafe {
@@ -1915,6 +1959,32 @@ impl Renderer {
         accent: Option<u32>,
     ) {
         let target = self.target.as_ref().expect("target ensured by paint");
+        // On a see-through island: the same glyph in black, a pixel lower
+        // and (fainter) a pixel to each side.
+        let strength = self.legible.get();
+        if strength > 0.0 {
+            for (dx, dy, weight) in [
+                (-1.0, 0.0, SHADOW_OUTLINE),
+                (1.0, 0.0, SHADOW_OUTLINE),
+                (0.0, 1.0, SHADOW_DROP),
+            ] {
+                let moved = Rect {
+                    x: area.x + dx,
+                    y: area.y + dy,
+                    ..area
+                };
+                let _ = self.icons.draw(
+                    &target.rt,
+                    &target.brush,
+                    icon,
+                    moved,
+                    size,
+                    0x000000,
+                    weight * strength * alpha,
+                    None,
+                );
+            }
+        }
         // Like text, a failed icon is skipped; a lost target surfaces at EndDraw.
         let _ = self.icons.draw(
             &target.rt,
@@ -2006,22 +2076,89 @@ impl Renderer {
         if text.is_empty() || area.w <= 0.0 {
             return;
         }
-        let target = self.target.as_ref().expect("target ensured by paint");
         let wide: Vec<u16> = text.encode_utf16().collect();
         let Ok(layout) = self.layout(&wide, format, area.w, area.h) else {
             return;
         };
+        self.text_legible(
+            Vector2::new(area.x, area.y),
+            &layout,
+            D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+            rgb,
+            alpha,
+        );
+    }
+
+    /// Draws `layout` at `origin` in `rgb`. On a see-through island
+    /// (`legible` > 0) a dark shadow goes under it first, so it reads on a
+    /// light wallpaper: a 1 px black outline in four directions at 0.35 and
+    /// the text again one px lower at 0.55, both scaled by the strength and
+    /// the text's own alpha. With `legible` 0 (a solid island, every panel)
+    /// it is the one plain draw, as before.
+    fn text_legible(
+        &self,
+        origin: Vector2,
+        layout: &IDWriteTextLayout,
+        options: D2D1_DRAW_TEXT_OPTIONS,
+        rgb: u32,
+        alpha: f32,
+    ) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let strength = self.legible.get();
         unsafe {
+            if strength > 0.0 {
+                target
+                    .brush
+                    .SetColor(&color(0x000000, SHADOW_OUTLINE * strength * alpha));
+                for (dx, dy) in SHADOW_DIRS {
+                    let at = Vector2::new(origin.X + dx, origin.Y + dy);
+                    target.rt.DrawTextLayout(at, layout, &target.brush, options);
+                }
+                target
+                    .brush
+                    .SetColor(&color(0x000000, SHADOW_DROP * strength * alpha));
+                let at = Vector2::new(origin.X, origin.Y + 1.0);
+                target.rt.DrawTextLayout(at, layout, &target.brush, options);
+            }
             target.brush.SetColor(&color(rgb, alpha));
-            target.rt.DrawTextLayout(
-                Vector2::new(area.x, area.y),
-                &layout,
-                &target.brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-            );
+            target
+                .rt
+                .DrawTextLayout(origin, layout, &target.brush, options);
         }
     }
+
+    /// `f` with the shadow off: a chip, a badge or a button that has a fill
+    /// of its own, which the text on it needs no help from.
+    fn solid_ink<R>(&self, f: impl FnOnce() -> R) -> R {
+        let held = self.legible.replace(0.0);
+        let out = f();
+        self.legible.set(held);
+        out
+    }
+
+    /// A dark copy of `bar` (the equalizer's bars) one px lower, when the
+    /// island is see-through.
+    fn shadow_bar(&self, bar: Rect, radius: f32) {
+        let strength = self.legible.get();
+        if strength <= 0.0 {
+            return;
+        }
+        self.set_color(0x000000, SHADOW_DROP * strength);
+        self.fill_round(
+            Rect {
+                y: bar.y + 1.0,
+                ..bar
+            },
+            radius,
+        );
+    }
 }
+
+/// How dark the shadow under a see-through island's text is at full strength:
+/// the 1 px outline and the drop copy a pixel lower.
+const SHADOW_OUTLINE: f32 = 0.35;
+const SHADOW_DROP: f32 = 0.55;
+const SHADOW_DIRS: [(f32, f32); 4] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
 
 impl Fonts {
     /// `format` is one of the display formats (DM Sans 600), which are

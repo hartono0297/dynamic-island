@@ -13,8 +13,8 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, OpenMode, RAM_WARN_RANGE,
-    SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, NotchFill, OpenMode,
+    RAM_WARN_RANGE, SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
@@ -22,6 +22,9 @@ use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::tiles::{CustomKind, MAX_CUSTOM, MAX_SHOWN, ShortcutTiles, Tile, TileGroup, group};
+use crate::ui::geometry::{
+    NOTCH_H_DEFAULT, NOTCH_H_MAX, NOTCH_H_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX, NOTCH_W_MIN,
+};
 use crate::ui::icons::Icon;
 use crate::ui::robot::{Motion, SLEEP_MAX, SLEEP_MIN};
 
@@ -284,6 +287,13 @@ pub enum Hit {
     Style(Style),
     Accent(Accent),
     Surface(Surface),
+    /// A slider: the press and the drag are handled by the window (a press
+    /// jumps there, a drag follows), not as a click.
+    Slider(SliderId),
+    /// "Ukuran bawaan": 190 x 34 again.
+    NotchReset,
+    /// "Latar notch": Hitam or Transparan.
+    NotchFill(NotchFill),
     WindowMode(WindowTheme),
     Lang(Lang),
     Autostart,
@@ -370,6 +380,48 @@ pub enum Hit {
     DataFolder,
 }
 
+/// Which slider (Tampilan -> Notch).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SliderId {
+    NotchWidth,
+    NotchHeight,
+    NotchOpacity,
+}
+
+impl SliderId {
+    /// The slider's (min, max).
+    pub fn range(self) -> (i32, i32) {
+        match self {
+            SliderId::NotchWidth => (NOTCH_W_MIN as i32, NOTCH_W_MAX as i32),
+            SliderId::NotchHeight => (NOTCH_H_MIN as i32, NOTCH_H_MAX as i32),
+            SliderId::NotchOpacity => (0, 100),
+        }
+    }
+}
+
+/// The thumb's diameter; the track's hit area is this tall.
+pub const SLIDER_THUMB: f32 = 16.0;
+/// The slider's track length, and the value label after it.
+const SLIDER_W: f32 = 120.0;
+const SLIDER_VALUE_W: f32 = 56.0;
+
+/// The value a press at `x` on a slider `track` wide means: the thumb's
+/// centre runs from half a thumb in from the track's left to the same from
+/// its right, so `x` there gives `min` and `max`; outside it clamps.
+pub fn slider_value(track: Rect, x: f32, min: i32, max: i32) -> i32 {
+    let span = (track.w - SLIDER_THUMB).max(1.0);
+    let t = ((x - track.x - SLIDER_THUMB / 2.0) / span).clamp(0.0, 1.0);
+    (min as f32 + t * (max - min) as f32).round() as i32
+}
+
+/// Where the thumb's centre is for `value` (the inverse of `slider_value`).
+pub fn slider_x(track: Rect, value: i32, min: i32, max: i32) -> f32 {
+    let span = (track.w - SLIDER_THUMB).max(1.0);
+    let range = (max - min).max(1) as f32;
+    let t = ((value - min) as f32 / range).clamp(0.0, 1.0);
+    track.x + SLIDER_THUMB / 2.0 + t * span
+}
+
 /// Colour role of a text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
@@ -400,6 +452,7 @@ pub struct Text {
 pub enum Group {
     Style,
     Surface,
+    NotchFill,
     Window,
     Lang,
     OpenMode,
@@ -495,6 +548,17 @@ pub enum Control {
         items: Vec<(Accent, Rect)>,
         selected: Accent,
     },
+    /// A track with a round thumb; `track` is the hit area (the thumb's
+    /// height), the line is drawn through its middle. Off (`enabled` false):
+    /// faded, no clicks.
+    Slider {
+        id: SliderId,
+        track: Rect,
+        value: i32,
+        min: i32,
+        max: i32,
+        enabled: bool,
+    },
     Button(Button),
     /// A round button with only an icon (the lists' up and down chevrons),
     /// or with `bare` just the icon (a row's drag handle).
@@ -524,6 +588,13 @@ impl Control {
                 .iter()
                 .map(|(a, r)| (Hit::Accent(*a), inflate(*r, SWATCH_SLOP)))
                 .collect(),
+            Control::Slider {
+                id,
+                track,
+                enabled: true,
+                ..
+            } => vec![(Hit::Slider(*id), *track)],
+            Control::Slider { .. } => Vec::new(),
             Control::Button(b) if b.enabled => vec![(b.hit, b.rect)],
             Control::Button(_) => Vec::new(),
             Control::IconButton {
@@ -559,6 +630,7 @@ impl Control {
                     down(r);
                 }
             }
+            Control::Slider { track, .. } => down(track),
             Control::Button(b) => down(&mut b.rect),
             Control::IconButton { rect, .. } => down(rect),
         }
@@ -576,6 +648,7 @@ impl Control {
                 .map(|(_, r)| inflate(*r, SWATCH_SLOP))
                 .reduce(union)
                 .unwrap_or_default(),
+            Control::Slider { track, .. } => *track,
             Control::Button(b) => b.rect,
             Control::IconButton { rect, .. } => *rect,
         }
@@ -767,6 +840,11 @@ pub struct State<'a> {
     pub accent: Accent,
     pub surface: Surface,
     pub window: WindowTheme,
+    /// The closed island's size and background (Tampilan -> Notch).
+    pub notch_width: u32,
+    pub notch_height: u32,
+    pub notch_fill: NotchFill,
+    pub notch_opacity: u8,
     /// The idle island shows the clock.
     pub idle_clock: bool,
     /// "Di belakang jendela" (experimental).
@@ -1262,6 +1340,48 @@ impl Builder<'_> {
         rect.x
     }
 
+    /// A slider right-aligned at `right` (the value label at its end, centred
+    /// on `cy`). Returns the track's left edge.
+    fn slider(
+        &mut self,
+        right: f32,
+        cy: f32,
+        id: SliderId,
+        value: i32,
+        label: String,
+        enabled: bool,
+    ) -> f32 {
+        let (min, max) = id.range();
+        let value = value.clamp(min, max);
+        let value_rect = Rect {
+            x: right - SLIDER_VALUE_W,
+            y: cy - CONTROL_H / 2.0,
+            w: SLIDER_VALUE_W,
+            h: CONTROL_H,
+        };
+        let track = Rect {
+            x: value_rect.x - GAP - SLIDER_W,
+            y: cy - SLIDER_THUMB / 2.0,
+            w: SLIDER_W,
+            h: SLIDER_THUMB,
+        };
+        let tone = if enabled {
+            Tone::Primary
+        } else {
+            Tone::Secondary
+        };
+        self.text(value_rect, label, Font::Value, tone, Align::Center);
+        self.l.controls.push(Control::Slider {
+            id,
+            track,
+            value,
+            min,
+            max,
+            enabled,
+        });
+        track.x
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn stepper(
         &mut self,
@@ -1684,9 +1804,90 @@ fn appearance(b: &mut Builder, s: &State) {
     b.row_text(card, rows[4], b.t(Key::IdleClock), desc, false, x);
     b.divider(card, rows[4]);
 
+    notch_card(b, s);
     robot_card(b, s);
     pages_card(b, s);
     tiles_card(b, s);
+}
+
+/// "190 px": a size slider's value.
+pub fn px_value(px: u32) -> String {
+    format!("{px} px")
+}
+
+/// "30 %": the opacity slider's value.
+pub fn percent_value(pct: u8) -> String {
+    format!("{pct} %")
+}
+
+/// The closed island's size and background: width and height sliders, a
+/// reset to 190 x 34, "Hitam" or "Transparan", and the opacity slider, which
+/// fades and takes no clicks while the background is solid.
+fn notch_card(b: &mut Builder, s: &State) {
+    let card = b.card(5.0 * ROW_H);
+    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let x = b.slider(
+        RIGHT,
+        cy(rows[0]),
+        SliderId::NotchWidth,
+        s.notch_width as i32,
+        px_value(s.notch_width),
+        true,
+    );
+    b.row_text(card, rows[0], b.t(Key::NotchWidth), None, false, x);
+
+    let x = b.slider(
+        RIGHT,
+        cy(rows[1]),
+        SliderId::NotchHeight,
+        s.notch_height as i32,
+        px_value(s.notch_height),
+        true,
+    );
+    b.row_text(card, rows[1], b.t(Key::NotchHeight), None, false, x);
+    b.divider(card, rows[1]);
+
+    let changed = (s.notch_width, s.notch_height) != (NOTCH_W_DEFAULT, NOTCH_H_DEFAULT);
+    let reset = b.t(Key::NotchReset);
+    let w = b.button_w(&[&reset], ButtonKind::Secondary);
+    let x = b.buttons(
+        RIGHT,
+        cy(rows[2]),
+        vec![(Hit::NotchReset, reset, ButtonKind::Secondary, changed, w)],
+    );
+    b.row_text(card, rows[2], b.t(Key::NotchDefaultSize), None, false, x);
+    b.divider(card, rows[2]);
+
+    let items = [
+        (NotchFill::Solid, Key::NotchFillSolid),
+        (NotchFill::Transparent, Key::NotchFillTransparent),
+    ]
+    .iter()
+    .map(|(v, k)| (Hit::NotchFill(*v), b.t(*k)))
+    .collect();
+    let x = b.segmented(
+        Group::NotchFill,
+        RIGHT,
+        cy(rows[3]),
+        items,
+        index_of(NotchFill::ALL, &s.notch_fill),
+    );
+    let desc = Some((b.t(Key::NotchFillDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::NotchFill), desc, false, x);
+    b.divider(card, rows[3]);
+
+    let x = b.slider(
+        RIGHT,
+        cy(rows[4]),
+        SliderId::NotchOpacity,
+        i32::from(s.notch_opacity),
+        percent_value(s.notch_opacity),
+        s.notch_fill == NotchFill::Transparent,
+    );
+    b.row_text(card, rows[4], b.t(Key::NotchOpacity), None, false, x);
+    b.divider(card, rows[4]);
 }
 
 fn page_key(p: Page) -> Key {

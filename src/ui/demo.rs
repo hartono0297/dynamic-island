@@ -32,6 +32,14 @@
 //!   after it showed (held for the first `LYRIC_HOLD_MS`, then scrolling);
 //!   without it the line scrolls live from the step's start.
 //!
+//! - `DI_NOTCH=WxH` sizes the closed island in every scene (`160x28` to
+//!   `300x44`, clamped; 190x34 without it): the idle, music, timer and
+//!   lyric views follow it, notices and the panel do not.
+//! - `DI_NOTCH_FILL=transparent` draws the compact views and notices with the
+//!   see-through background in every scene (the panel stays solid), at
+//!   `DI_NOTCH_OPACITY=0..100` percent (30 by default); the scenes
+//!   `idle-transparent` and `media-transparent` do it on their own.
+//!
 //! The lyric scenes size the notch as the island does: the line measured
 //! by the renderer, capped by this screen's width (`lyric_max_w`).
 //!
@@ -65,13 +73,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::geometry::{
-    ANIM_MS, ShapeKind, ShapeRect, ease_out_back, lerp_shape, lyric_box_w, lyric_max_w,
-    lyric_scroll_offset, lyric_shape, lyric_width, shape_with_robot,
+    ANIM_MS, NOTCH_OPACITY_DEFAULT, NotchSize, ShapeKind, ShapeRect, ease_out_back, lerp_shape,
+    lyric_box_w, lyric_max_w, lyric_scroll_offset, lyric_shape_sized, lyric_width_min,
+    shape_with_robot_sized,
 };
 use super::motion::{
-    COMPACT_H, PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame,
-    reveal_frame,
+    PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame, reveal_frame,
 };
+use super::notch_fill::{self, fill_alpha};
 use super::render::{
     CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, MoleView, Progress,
     Renderer, RobotFrame, SearchView, ShotView, SystemView,
@@ -86,7 +95,7 @@ use crate::cli_panel::{Echoes, RunState};
 use crate::clipboard::image::Thumb;
 use crate::clipboard::store::ClipImage;
 use crate::clipboard::{Clip, ClipData, ClipKind};
-use crate::config::Style;
+use crate::config::{NotchFill, Style};
 use crate::devices::{self, Bus, Device, DeviceKind, Partition, Veto, VetoKind};
 use crate::i18n::{Key, tr};
 use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
@@ -166,6 +175,9 @@ struct Scene {
     fade_from: Option<Page>,
     /// What the Devices page shows.
     devices: DevicesDemo,
+    /// The compact view or notice has the see-through background
+    /// (`DI_NOTCH_OPACITY`, 30 % by default).
+    transparent: bool,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -342,6 +354,7 @@ const BASE: Scene = Scene {
     reveal: None,
     fade_from: None,
     devices: DevicesDemo::Design,
+    transparent: false,
 };
 
 const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
@@ -527,10 +540,17 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 99] = [
+const SCENES: [Scene; 101] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
+        ..BASE
+    },
+    // The see-through background (Settings -> Tampilan -> Notch).
+    Scene {
+        name: "idle-transparent",
+        kind: ShapeKind::Idle,
+        transparent: true,
         ..BASE
     },
     Scene {
@@ -558,6 +578,13 @@ const SCENES: [Scene; 99] = [
         name: "media-compact",
         kind: ShapeKind::MediaCompact,
         view: View0::MediaCompact,
+        ..BASE
+    },
+    Scene {
+        name: "media-transparent",
+        kind: ShapeKind::MediaCompact,
+        view: View0::MediaCompact,
+        transparent: true,
         ..BASE
     },
     // The wheel over the compact notch: the volume plate at 64 %.
@@ -1109,6 +1136,7 @@ fn run_scenes(scenes: &[Scene]) {
     let lyric_fade: Option<f32> = env("DI_DEMO_FADE");
     let lyric_scroll: Option<u64> = env("DI_LYRIC_SCROLL");
     let frozen_reveal: Option<f32> = env("DI_DEMO_REVEAL");
+    let notch = demo_notch();
     let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -1141,7 +1169,7 @@ fn run_scenes(scenes: &[Scene]) {
         let now = Instant::now();
         let at = lyric_at.unwrap_or(scene.lyric_at);
         let lyric_state = demo_lyrics(at, lyric_fade, now);
-        let to = scene_shape(&renderer, &win, style, &scene, at);
+        let to = scene_shape(&renderer, &win, style, notch, &scene, at);
         // How far a long line has scrolled: frozen, or live from the step's start.
         let scroll = match scene.view {
             View0::MediaLyric => {
@@ -1170,8 +1198,11 @@ fn run_scenes(scenes: &[Scene]) {
             }
             let (prev_style, prev) = self::scene(scenes, (step + steps - 1) % steps);
             let prev_at = lyric_at.unwrap_or(prev.lyric_at);
-            let from = scene_shape(&renderer, &win, prev_style, &prev, prev_at);
+            let from = scene_shape(&renderer, &win, prev_style, notch, &prev, prev_at);
             let shape = lerp_shape(from, to, ease_out_back(t));
+            // The fill follows the morph as the island does (`App::fill_at`).
+            let fill_alpha =
+                notch_fill::morph_fill(scene_fill(&prev), scene_fill(&scene), ease_out_back(t));
             let pomodoro = demo_pomodoro(scene.pomo, now);
             let view = match scene.view {
                 View0::Idle => View::Idle,
@@ -1328,6 +1359,8 @@ fn run_scenes(scenes: &[Scene]) {
                 pages: Page::ALL.to_vec(),
                 tiles: scene_tiles(&scene),
                 palette,
+                fill_alpha,
+                legibility: notch_fill::legibility(fill_alpha),
                 clock: match scene.clock {
                     Some(fixed) => Some(fixed.to_owned()),
                     None => clock_on.then(|| Local::now().format("%H:%M").to_string()),
@@ -1393,9 +1426,9 @@ fn run_scenes(scenes: &[Scene]) {
                         fade_floor_h: if compact {
                             to.h
                         } else if matches!(prev.view, View0::Panel(_)) {
-                            COMPACT_H
+                            notch.h
                         } else {
-                            from.h.max(COMPACT_H)
+                            from.h.max(notch.h)
                         },
                     }
                 },
@@ -1913,19 +1946,54 @@ fn scene_shape(
     renderer: &Renderer,
     win: &IslandWindow,
     style: Style,
+    notch: NotchSize,
     scene: &Scene,
     lyric_at: u64,
 ) -> ShapeRect {
     let robot = scene.robot.is_some();
     if scene.kind != ShapeKind::MediaLyric {
-        return shape_with_robot(style, scene.kind, robot);
+        return shape_with_robot_sized(style, notch, scene.kind, robot);
     }
     let state = demo_lyrics(lyric_at, None, Instant::now());
     let text_w = state
         .shown(Instant::now())
         .and_then(|l| renderer.lyric_text_width(l.text));
-    let w = lyric_width(text_w, robot, lyric_max_w(win.screen_w()));
-    lyric_shape(style, w)
+    let max_w = lyric_max_w(win.screen_w()).max(notch.w);
+    let w = lyric_width_min(text_w, robot, notch.w, max_w);
+    lyric_shape_sized(style, notch, w)
+}
+
+/// `DI_NOTCH=WxH` (e.g. `160x28`, `300x44`), clamped to the limits; the
+/// island's 190 x 34 without it.
+fn demo_notch() -> NotchSize {
+    let parsed = std::env::var("DI_NOTCH").ok().and_then(|v| {
+        let (w, h) = v
+            .trim()
+            .to_ascii_lowercase()
+            .split_once('x')
+            .map(|(w, h)| (w.trim().to_owned(), h.trim().to_owned()))?;
+        Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+    });
+    parsed.map_or(NotchSize::DEFAULT, |(w, h)| NotchSize::from_px(w, h))
+}
+
+/// The surface fill's alpha a scene's view is drawn with: the open panel
+/// always solid; the compact views and notices solid unless the scene is a
+/// `transparent` one or `DI_NOTCH_FILL=transparent` is set, then
+/// `DI_NOTCH_OPACITY` percent (30 by default).
+fn scene_fill(scene: &Scene) -> f32 {
+    if matches!(scene.view, View0::Panel(_)) {
+        return 1.0;
+    }
+    let env_transparent =
+        std::env::var("DI_NOTCH_FILL").is_ok_and(|v| v.trim().eq_ignore_ascii_case("transparent"));
+    let fill = if scene.transparent || env_transparent {
+        NotchFill::Transparent
+    } else {
+        NotchFill::Solid
+    };
+    let pct = env::<u8>("DI_NOTCH_OPACITY").unwrap_or(NOTCH_OPACITY_DEFAULT);
+    fill_alpha(fill, pct.min(100))
 }
 
 fn scene(scenes: &[Scene], step: usize) -> (Style, Scene) {

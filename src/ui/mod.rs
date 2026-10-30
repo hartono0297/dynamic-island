@@ -12,6 +12,7 @@ pub mod geometry;
 pub mod icons;
 pub mod month_grid;
 pub mod motion;
+pub mod notch_fill;
 pub mod panel_layout;
 pub mod render;
 pub mod robot;
