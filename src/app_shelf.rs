@@ -97,28 +97,27 @@ impl App {
         }
     }
 
-    /// Where the page puts `n` cards: the panel's resting shape, with the
-    /// strip as it is drawn (the same layout the renderer builds).
-    fn shelf_rects(&self, n: usize) -> Vec<Rect> {
+    /// Where the page puts `n` cards and how many lines their names get:
+    /// the panel's resting shape, with the strip as it is drawn (the same
+    /// layout the renderer builds).
+    fn shelf_rects(&self, n: usize) -> (Vec<Rect>, usize) {
         let shape = shape_for(self.config.style, ShapeKind::Panel);
         let strip = self.state.waiting_strip().is_some();
-        shelf_layout(shape, strip, n)
-            .cards
-            .iter()
-            .map(|c| c.card)
-            .collect()
+        let l = shelf_layout(shape, strip, n);
+        (l.cards.iter().map(|c| c.card).collect(), l.lines)
     }
 
     /// The cards changed from `old` to what `self.shelf.cards` is now:
     /// records the motion (when the effects are on) and starts the frame
     /// clock if something moves. `delay` holds the start back.
     fn shelf_animate(&mut self, old: &[ShelfCard], now: Instant, delay: Duration) {
-        let old_rects = self.shelf_rects(old.len());
-        let new_rects = self.shelf_rects(self.shelf.cards.len());
+        let (old_rects, old_lines) = self.shelf_rects(old.len());
+        let (new_rects, _) = self.shelf_rects(self.shelf.cards.len());
         let start = now + delay;
         self.shelf.motion.on_change(
             old,
             &old_rects,
+            old_lines,
             &self.shelf.cards,
             &new_rects,
             start,

@@ -30,7 +30,7 @@ the budget of [[bata-idle-power-budget]]: no timer.
 
 - Cards are told apart by `ShelfCard::key`, the normalised path (`key_of`:
   lower case, no trailing slash). `ShelfMotion::on_change(old_cards,
-  old_rects, new_cards, new_rects, now, enabled)` diffs by key. Rects come
+  old_rects, old_lines, new_cards, new_rects, now, enabled)` diffs by key. Rects come
   from `panel_layout::shelf_layout(shape_for(style, Panel), strip, n)`.
   `shelf_card_layout(rect, lines)` was split out of `shelf_layout` so a card
   between two places gets its parts (icon, label, X, "hilang") from the rect
@@ -66,6 +66,15 @@ the budget of [[bata-idle-power-budget]]: no timer.
   (they come from the final layout), so the frame where the last animation
   ends registers them like any other (compare the cross-fade gotcha in
   [[panel-linger-and-motion]]).
+- **Name lines follow the rect's layout.** `shelf_layout` gives one name line
+  with three rows and two with two rows, and a 2-line group (61 px) can be
+  taller than a 3-row card. So `Drawn` carries `lines`: `on_change` takes
+  `old_lines`, a ghost keeps the count it was drawn with to the end, and a
+  card sliding between counts keeps the old one until the eased move is
+  halfway (`card_at(key, rest, lines, now)` swaps at `t >= 0.5`). Before
+  this, the first exit frame rewrapped ghosts in their old short rect (the
+  `shelf-move` demo, or Kosongkan with 9 to 12 cards). The swap at the
+  midpoint is one visible rewrap, at a size between both layouts.
 - A sticky strip appearing during an animation shifts the final layout a few
   px; ghosts keep the rect they were drawn at. Accepted.
 

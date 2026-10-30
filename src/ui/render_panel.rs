@@ -2672,11 +2672,11 @@ impl Renderer {
         // a transform only: no layer, so this is safe inside a page
         // cross-fade or reveal (they hold `layer2`).
         for (card, drawn) in motion.ghosts(now) {
-            self.paint_shelf_card(card, drawn, l.lines);
+            self.paint_shelf_card(card, drawn);
         }
         for (lay, card) in l.cards.iter().zip(cards) {
-            let drawn = motion.card_at(&card.key, lay.card, now);
-            self.paint_shelf_card(card, drawn, l.lines);
+            let drawn = motion.card_at(&card.key, lay.card, l.lines, now);
+            self.paint_shelf_card(card, drawn);
         }
         // The outline last, so cards never cut it.
         if dragging {
@@ -2684,14 +2684,16 @@ impl Renderer {
         }
     }
 
-    /// One card as `drawn` says: its parts laid out in the rect it is at, all
-    /// at its opacity, scaled around its centre and shifted down by `dy`.
-    fn paint_shelf_card(&self, card: &ShelfCard, drawn: Drawn, lines: usize) {
+    /// One card as `drawn` says: its parts laid out in the rect it is at with
+    /// its name on the lines it has, all at its opacity, scaled around its
+    /// centre and shifted down by `dy`.
+    fn paint_shelf_card(&self, card: &ShelfCard, drawn: Drawn) {
         if drawn.alpha <= 0.0 {
             return;
         }
         let lang = i18n::lang();
         let p = self.palette;
+        let lines = drawn.lines;
         let lay = shelf_card_layout(drawn.rect, lines);
         let target = self.target.as_ref().expect("target ensured by paint");
         let mut at = Matrix3x2::identity();
