@@ -20,6 +20,9 @@ Bata adds only one-shots (`app.rs`, planned by `robot::plan_timers`):
   the blink re-plans when the clock stops.
 - The stay-behind rise ([[stay-behind]]: 180 ms, or a 120 ms fade with
   Motion not Full) runs the same `FrameClock` only while it lasts; no timer.
+- The page dock ([[panel-pages]], hover over the dots) runs the `FrameClock`
+  only while one of its values moves (`dock.moving()` in `animating_at`); a
+  pointer resting on an icon stops it, no timer.
 - Panel transitions ([[panel-linger-and-motion]]): the sub-view `Reveal`
   (160 ms), the search's page cross-fade and a page slide are counted in
   `animating_at` like the rise: the `FrameClock` starts when one begins and
