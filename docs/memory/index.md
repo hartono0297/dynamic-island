@@ -34,8 +34,8 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[mole-mode]]
 - [[clipboard-history]]
 - [[clipboard-notice]]: a 3 s preview in the notch on every external copy (text lines, thumbnail, files), skip rules, supersedes "Disalin untuk semua salinan", no timer
-- [[screenshot-preview]]
-- [[screenshot-snap]]: own region capture that snaps to windows and boxes, the editor after it, UIA budget, own-copy skip
+- [[screenshot-preview]]: preview matching of the Windows file; Simpan never writes a duplicate (v3.6)
+- [[screenshot-snap]]: own region capture that snaps to windows and boxes, the editor after it, UIA budget, own-copy skip, PrtSc key opens Vale's capture (id 4, Settings row, registry button)
 - [[panel-pages]]
 - [[vale-rename]]
 - [[google-built-in-client]]
@@ -46,7 +46,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[scroll-volume]]: the wheel over the music notch / cover turns the master volume 2 % a notch
 - [[lyrics-sync]]: position rate, resync tolerance, lookahead, offset buttons, lrclib title clean + search fallback
 - [[shortcut-tiles]]: Pintasan tiles chosen in Settings (page jumps, Vale Settings, own tiles added in a form), drag to reorder
-- [[gestures]]: middle click, swipe and sideways wheel on the music views
+- [[gestures]]: middle click, swipe and sideways wheel on the music views; sideways swipe turns panel pages (v3.6)
 - [[v3-2-handoff]]: where v3.2 stands, what is unverified, owner steps
 - [[v3-3-handoff]]: v3.3 (icon refresh, stay-behind rise, shelf drop, file search), owner checks, minors left
 - [[v3-5-handoff]]: v3.5 (editor close bar, Devices, notch size and fill, shelf motion, clipboard notice), what was cancelled, owner checks
@@ -54,7 +54,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge with a short fade and slide (v3.3)
 - [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory); a drop latches the panel (v3.3)
 - [[shelf-motion]]: shelf cards animate in (200 ms), out as ghosts (180 ms) and across (220 ms), no timer, per-draw alpha, reduced motion (v3.5)
-- [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web
+- [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web; back button = Esc
 - [[search-files]]: files and folders by name in six user folders, own walker with caps, icons/sizes/counts from a background worker
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 - [[devices]]: Devices page (Perangkat), safe eject of flash drives, external disks and cards through a worker thread, no polling

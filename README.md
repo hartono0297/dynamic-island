@@ -76,10 +76,10 @@ Hover the notch to open it, scroll to change pages. The panel stays open for a f
 
 | | |
 |---|---|
-| **Music** | Cover, controls, progress and synced lyrics in the notch. Scroll over the notch for volume, swipe or middle-click to skip. |
+| **Music** | Cover, controls, progress and synced lyrics in the notch. Scroll over the notch for volume, swipe or middle-click to skip. With the panel open, a sideways two-finger swipe on a touchpad turns the page. |
 | **Mixer** | Master and per-app volume sliders. |
 | **Clipboard** | Searchable history of text, links, colours, files and images, with pins, and a short preview in the notch whenever you copy something. Password managers' copies are never kept or shown. |
-| **Screenshot** | Its own capture: the Screenshot tile freezes the screen and snaps to the window, panel or box under the pointer (or drag your own rectangle), then opens an editor with text, arrows, boxes, pen, marker and pixelate. The notch also previews PrtSc and Win+Shift+S shots, with Copy again, Keep or Delete. |
+| **Screenshot** | Its own capture: the Screenshot tile freezes the screen and snaps to the window, panel or box under the pointer (or drag your own rectangle), then opens an editor with text, arrows, boxes, pen, marker and pixelate. PrtSc opens this capture too (Settings → Clipboard → Screenshot turns it off; if Windows already uses the key there, one button frees it). The notch also previews Win+Shift+S and Snipping Tool shots, with Copy again, Keep or Delete; Keep never saves a second copy of a file Windows already wrote. |
 | **File shelf** | Drop files on the notch, drag them out later. Cards animate in and out. |
 | **Search** | `Ctrl+Alt+Space`: apps, files and folders, calculator, Windows settings, web. |
 | **Calendar** | Google Calendar with day, week and month views; add and edit events. |
