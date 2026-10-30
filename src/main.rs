@@ -26,6 +26,7 @@ mod model;
 mod mole;
 mod notes;
 mod pages;
+mod pointer_watch;
 mod pomodoro;
 mod reminders;
 mod screenshot;

@@ -72,7 +72,15 @@
 //!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
-//! fixed ("14:32", "23:48"), so nothing depends on the time of day.
+//! fixed ("14:32", "23:48"), so nothing depends on the time of day. The
+//! scenes `bata-look-left` and `bata-look-right` draw the idle cat looking at
+//! a pointer at the far left and right of the screen (the largest turn: head
+//! 7 dip, tilt 6 degrees, eyes 4 dip further).
+//!
+//! The notch peek's scenes `peek-eyes` (robot on) and `peek-eyes-plain`
+//! (robot off) draw the notch shrunk to the cat's two eyes: a 34 x 14 pill,
+//! terracotta eyes, nothing else. Hold one with `DI_DEMO_STEP=peek-eyes` in
+//! `--demo`.
 
 use std::time::{Duration, Instant};
 
@@ -191,6 +199,8 @@ struct Scene {
     /// The compact view or notice has the see-through background
     /// (`DI_NOTCH_OPACITY`, 30 % by default).
     transparent: bool,
+    /// Where the idle cat looks, -1 (left edge of the screen) to 1 (right).
+    look: f32,
 }
 
 /// The cleaner's states (deepclean-opsi-d.html p10 and d1).
@@ -387,6 +397,7 @@ const BASE: Scene = Scene {
     fade_from: None,
     devices: DevicesDemo::Design,
     transparent: false,
+    look: 0.0,
 };
 
 const fn clipboard(name: &'static str, which: ClipDemo) -> Scene {
@@ -572,7 +583,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 112] = [
+const SCENES: [Scene; 116] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -936,6 +947,22 @@ const SCENES: [Scene; 112] = [
         View0::Notice(DemoNotice::System),
         Expr::Sad,
     ),
+    // The idle cat looking at a pointer at the far left / right of the screen.
+    Scene {
+        look: -1.0,
+        ..bata("bata-look-left", ShapeKind::Idle, View0::Idle, Expr::Idle)
+    },
+    Scene {
+        look: 1.0,
+        ..bata("bata-look-right", ShapeKind::Idle, View0::Idle, Expr::Idle)
+    },
+    // The notch shrunk to the cat's two eyes (`pointer_watch::Peek`): the
+    // pill alone, with the robot on and off.
+    bata("peek-eyes", ShapeKind::Eyes, View0::Idle, Expr::Idle),
+    Scene {
+        robot: None,
+        ..bata("peek-eyes-plain", ShapeKind::Eyes, View0::Idle, Expr::Idle)
+    },
     // Sub-view reveals (`DI_DEMO_REVEAL`): the new content fades in from
     // 8 px away. The week became the day; the cleaner just opened. The
     // search came over the Music page: the two pages cross-fade.
@@ -1471,8 +1498,10 @@ fn run_scenes(scenes: &[Scene]) {
                 progress: Some(DEMO_PROGRESS),
                 robot: scene.robot.map(|expr| RobotFrame {
                     expr,
-                    pose: Pose::default(),
+                    pose: Pose::default().looking(scene.look),
                 }),
+                eyes: scene.kind == ShapeKind::Eyes,
+                robot_fades: false,
                 system: Some(&system),
                 cleaner: cleaner.as_ref(),
                 shot: (scene.view == View0::Notice(DemoNotice::Shot)).then(|| {

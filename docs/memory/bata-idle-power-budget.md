@@ -77,9 +77,48 @@ calling `sync_pointer_polls`).
 | `TIMER_HALO` (30) | 50 ms whenever the island was up, not a panel | none at idle; after a trigger ([[shelf]]): 250 ms, 50 ms only with the left button down within 300 dip; stops after 3 s near without a press, or at once away |
 | `TIMER_OUTSIDE` (24) | 40 ms while a panel is kept open (can be hours) | 40 ms with input in the last second, else 120 ms (`outside_poll_ms`, `GetLastInputInfo`); a `WM_MOUSEMOVE` speeds it up at once |
 | `TIMER_BEHIND` (29) | 80 ms while "Di belakang jendela" is on | 80 ms near the top edge (150 dip) or while lowering is due, else 350 ms (`behind::poll_ms`) |
+| `TIMER_POINTER` (33) | new, 2026-10-30 | one `GetCursorPos` for the notch peek and the cat's look, see below |
 
-So an idle island, pointer elsewhere, runs none of them (with stay-behind on:
-~3 a second). Not measured again after the change.
+So an idle island, pointer elsewhere, runs none of them except
+`TIMER_POINTER` (with stay-behind on: ~3 a second). Not measured again after
+the change.
+
+### `TIMER_POINTER` (the notch peek and the cat's look)
+
+One repeating timer through `App::pace` / `SetCoalescableTimer`, handled like
+`TIMER_BEHIND`. Paces (`pointer_watch::poll_ms(follow_on, peek_on,
+near_top)`; near = the pointer within `behind::NEAR_TOP_DIP`, 150 dip, of the
+island monitor's top edge):
+
+| Cat follows (look) | Peek | near | far |
+|---|---|---|---|
+| on | any | 33 ms | 250 ms |
+| off | on | 80 ms | 350 ms (the same as `behind::POLL_MS` / `SLOW_MS`) |
+| off | off | no timer | no timer |
+
+It stops while fullscreen, while the session is locked or the display is off
+(`screen_away`), and whenever neither feature is eligible: the peek needs
+stay-behind off and a quiet compact view ([[notch-peek-eyes]]); the look needs
+the cat on, motion Full (not Energy Saver) and the idle view
+([[cat-looks-at-pointer]]). `App::sync_pointer_watch` starts, re-paces or
+stops it, called from `sync_timers` (so every `refresh`), `sync_pointer_polls`
+(lock, display), `follow_pointer_settings` (config adoption: stay_behind,
+robot, robot_animation; Energy Saver goes through `check_battery`'s refresh;
+fullscreen through the event's refresh). Each tick does one `GetCursorPos`
+and feeds both. The window walk of the peek is not part of the poll's idle
+cost: it runs only when the pointer first comes into the zone round the notch
+and at most once a second while it stays. With stay-behind on and the island
+lowered, the poll still runs (the look needs it when nothing covers the
+island), but a window over the island stops the look from setting targets:
+the tick adds at most one `WindowFromPoint` a second and starts no frames
+([[cat-looks-at-pointer]]).
+
+**The look's ease runs on the `FrameClock`**, not on this timer: a poll that
+moves the look target by 0.02 or more starts the clock (`ensure_clock`),
+`animating_at` counts `look.moving()`, and the clock stops once the ease has
+arrived. A small pointer movement costs no frame. The shrink to the eyes is a
+normal morph on the same clock (or settles at once with Motion not Full); while
+the notch is shrunk the blink timer and the equalizer timer are off.
 
 Gotcha: the System page and the clipboard were built in parallel runs and
 both took ids 17 and 18; the merge moved the clipboard's to 20–22.

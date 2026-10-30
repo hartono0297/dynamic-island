@@ -47,15 +47,15 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, SHOULDER,
-    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
+    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
+    EYES_H, ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
     corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
     lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
-    shot_regions,
+    shot_regions, shoulder_depth,
 };
 use super::icons::{Icon, IconSet};
 use super::motion::Transit;
-use super::robot::{Expr, Pose, RobotPainter};
+use super::robot::{Expr, Pose, RobotPainter, eyes_area};
 use super::shelf_motion::ShelfMotion;
 use super::window::IslandWindow;
 use crate::audio::MixerRow;
@@ -183,6 +183,13 @@ pub struct Frame<'a> {
     /// Bata in the compact island or in place of a notice's badge; `None`
     /// when it is off or the view has none (the panel, other apps' notices).
     pub robot: Option<RobotFrame>,
+    /// The closed island is shrunk to the eyes (`ShapeKind::Eyes`): the pill
+    /// holds only the cat's two open eyes, whatever the view or `robot`.
+    pub eyes: bool,
+    /// The morph between the eyes and the notch is running: the cat fades in
+    /// with the rest of the content instead of staying at full strength as
+    /// it does when one compact view replaces another.
+    pub robot_fades: bool,
     /// The System page's readings; `None` draws it without numbers.
     pub system: Option<&'a SystemView<'a>>,
     /// The cleaner, while it shows over the System page.
@@ -1215,7 +1222,7 @@ impl Renderer {
             // A nearly invisible margin around and above the small island:
             // Windows only offers a drag to the pixels a layered window
             // draws, and the top edge of the screen is where one aims.
-            if self.halo && !matches!(view, View::Panel(_) | View::Hidden) {
+            if self.halo && !frame.eyes && !matches!(view, View::Panel(_) | View::Hidden) {
                 let r = shape_rect(shape);
                 let halo = Rect {
                     x: r.x - HALO_SIDE,
@@ -1255,6 +1262,13 @@ impl Renderer {
         if let View::Panel(_) = view {
             return self.paint_panel(style, shape, frame);
         }
+        // Shrunk to the eyes: the pill and the two eyes, nothing else. Its
+        // pixels are all the island draws, so a click anywhere else reaches
+        // the window below.
+        if frame.eyes {
+            self.paint_eyes_pill(shape, frame.transit.content_alpha);
+            return Ok(());
+        }
         unsafe {
             target.rt.PushAxisAlignedClip(
                 &d2d_rect(shape_rect(shape)),
@@ -1276,7 +1290,9 @@ impl Renderer {
             self.push_opacity(content_alpha);
             // Bata shows in the view before and after: he stays, only what
             // pops in fades.
-            self.robot_later.set(Some(None));
+            if !frame.robot_fades {
+                self.robot_later.set(Some(None));
+            }
         }
         let robot = frame.robot;
         let content = match view {
@@ -1347,6 +1363,24 @@ impl Renderer {
         let target = self.target.as_ref().expect("target ensured by paint");
         unsafe { target.rt.PopAxisAlignedClip() };
         leaving.and(content)
+    }
+
+    /// The cat's two open eyes alone, in the brand terracotta, centred on the
+    /// shrunk notch's place (its top, `EYES_H` tall, however far the morph has
+    /// come), fading in with `content_alpha`. Static: no blink.
+    fn paint_eyes_pill(&self, shape: ShapeRect, content_alpha: f32) {
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let alpha = content_alpha.clamp(0.0, 1.0);
+        unsafe {
+            target.rt.PushAxisAlignedClip(
+                &d2d_rect(shape_rect(shape)),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            );
+        }
+        let area = eyes_area((shape.x + shape.w / 2.0, shape.y + EYES_H / 2.0));
+        self.robot
+            .paint_eyes(&target.rt, &target.brush, area, alpha);
+        unsafe { target.rt.PopAxisAlignedClip() };
     }
 
     /// Everything drawn until `PopLayer` is at `opacity`: a second layer, so
@@ -1951,6 +1985,7 @@ impl Renderer {
     /// rounded bottom corners.
     fn notch_path(&self, s: ShapeRect, r: f32) -> Result<ID2D1PathGeometry> {
         let (left, right, top, bottom) = (s.x, s.x + s.w, s.y, s.y + s.h);
+        let shoulder = shoulder_depth(s);
         let arc = |x: f32, y: f32, radius: f32, sweep: D2D1_SWEEP_DIRECTION| D2D1_ARC_SEGMENT {
             point: Vector2::new(x, y),
             size: D2D_SIZE_F {
@@ -1968,14 +2003,14 @@ impl Renderer {
         unsafe {
             let path = self.d2d.CreatePathGeometry()?;
             let sink = path.Open()?;
-            sink.BeginFigure(Vector2::new(left - SHOULDER, top), D2D1_FIGURE_BEGIN_FILLED);
-            sink.AddArc(&arc(left, top + SHOULDER, SHOULDER, cw));
+            sink.BeginFigure(Vector2::new(left - shoulder, top), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddArc(&arc(left, top + shoulder, shoulder, cw));
             sink.AddLine(Vector2::new(left, bottom - r));
             sink.AddArc(&arc(left + r, bottom, r, ccw));
             sink.AddLine(Vector2::new(right - r, bottom));
             sink.AddArc(&arc(right, bottom - r, r, ccw));
-            sink.AddLine(Vector2::new(right, top + SHOULDER));
-            sink.AddArc(&arc(right + SHOULDER, top, SHOULDER, cw));
+            sink.AddLine(Vector2::new(right, top + shoulder));
+            sink.AddArc(&arc(right + shoulder, top, shoulder, cw));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             sink.Close()?;
             Ok(path)

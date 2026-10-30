@@ -73,4 +73,6 @@ pure and tested; `App::rise`, `rise_frame`):
 - Games and fullscreen apps: the existing fullscreen detection hides the
   island as before; the order is reset to top when fullscreen starts.
 
-Related: [[open-mode]], [[v3-2-handoff]].
+Related: [[open-mode]], [[v3-2-handoff]]. With this setting off, the notch can
+instead shrink to the cat's eyes over a window ([[notch-peek-eyes]]); with it
+on, that peek does not run.
