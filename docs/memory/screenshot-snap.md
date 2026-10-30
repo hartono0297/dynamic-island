@@ -126,63 +126,69 @@ Vale.
 Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
 `Effect::RunCapture` in the reducer, the row in `settings_layout::screenshot_card`.
 
-- **Hotkey.** `RegisterHotKey` id 4 (`HOTKEY_PRTSC`; Clipboard 1, Search 2,
-  Devices 3), `MOD_NOREPEAT` and **no other modifier** on `VK_SNAPSHOT`, so
-  Alt+PrtSc, Win+PrtSc, Ctrl+PrtSc and Shift+PrtSc stay Windows'. Default on.
+- **Why a hotkey failed.** Windows 11 owns the bare PrtSc key (Snipping Tool)
+  while `HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled` is
+  absent (the default), so `RegisterHotKey` on it fails. The first design
+  (hotkey id 4, plus a Settings button that wrote that value = 0) was
+  dropped: Windows applied the write only after a sign-out. **Vale now writes
+  nothing to the registry** and needs no sign-out.
+- **The hook.** A `WH_KEYBOARD_LL` hook (`SetWindowsHookExW`, module handle,
+  thread 0) sees the key before Windows and swallows it. It runs on its **own
+  thread** (`HookThread`, named `vale-prtsc-hook`), not the UI thread: a
+  low-level hook is called inside its installing thread's message loop, every
+  keystroke system-wide waits for it, and Windows silently removes a slow
+  hook. The thread installs the hook, creates its queue (`PeekMessageW`),
+  reports success or failure once over a channel (the UI waits for that one
+  answer), then blocks in a plain `GetMessageW` loop. Stop =
+  `PostThreadMessageW(WM_QUIT)`, the thread unhooks and ends, the UI joins it.
+  It exists only while `screenshot.print_screen` is on: started at startup
+  and when the setting toggles on, stopped when it toggles off and in
+  `WM_DESTROY` (`prtsc_shutdown`). No timer.
+- **Fast-proc rules.** `hook_proc` allocates nothing, takes no lock, logs
+  nothing. It reads the island HWND (`ISLAND`, `AtomicIsize`) and `SWALLOWING`
+  (`AtomicBool`), calls the pure `prtsc_hook_action(vk, key_down, Mods,
+  swallowing)`, and on `SwallowAndFire` does `PostMessageW(island,
+  WM_APP_PRTSC)` (`WM_APP + 60`, a free id) and returns 1; else
+  `CallNextHookEx`. Bare key-down: swallow and fire once; auto-repeat while
+  swallowing: swallow, no second fire; key-up after a swallow: swallow and
+  clear; key-up not swallowed and other keys: pass.
+- **Modifier pass-through.** Alt (`LLKHF_ALTDOWN` or `GetAsyncKeyState`
+  VK_MENU), Win, Ctrl or Shift held: the press passes, so Alt+PrtSc,
+  Win+PrtSc, Ctrl+PrtSc and Shift+PrtSc stay Windows'. Default on.
 - **Config.** `screenshot.print_screen` (bool). Lenient like `shot_tool`:
   missing, or any non-bool (string, number, null, array), reads as on, never
-  an invalid config. Off = `UnregisterHotKey`, `failed` cleared, nothing held.
-- **What a press does.** Always Vale's own capture, whatever "Alat
-  screenshot" says (that choice is only for the tile). `on_prtsc_hotkey`
-  returns early when the setting is off or `capture::overlay::active()` (an
-  overlay is up or starting); else `Event::PrintScreen`: the reducer collapses
-  an open panel or the search (checked with `panel_open()`, not `view()`: a
-  transient notice on top hides a panel still held under it) and asks
-  `Effect::RunCapture`, which `App` queues as `Action::Capture` on
+  an invalid config. Off = hook stopped, `failed` cleared.
+- **What a press does.** `WM_APP_PRTSC` -> `on_prtsc_hotkey`: always Vale's
+  own capture, whatever "Alat screenshot" says (that choice is only for the
+  tile). Returns early when the setting is off or `capture::overlay::active()`
+  (an overlay is up or starting); else `Event::PrintScreen`: the reducer
+  collapses an open panel or the search (checked with `panel_open()`, not
+  `view()`: a transient notice on top hides a panel still held under it) and
+  asks `Effect::RunCapture`, which `App` queues as `Action::Capture` on
   `TIMER_SHORTCUT` (delay `ANIM_MS + 60`), so the panel is not in the picture.
-  It is not mapped through the `ms-screenclip:` branch of `queue_shortcut`, so
-  PrtSc never reaches Snipping Tool. Nothing takes the foreground except the
-  capture itself. Also while a game or presentation is fullscreen (the
-  capture cancels itself if it cannot take the foreground).
-- **Windows conflict.** Win 11 gives the bare key to Snipping Tool
-  (`HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`, DWORD, 0 =
-  off, 1 or absent = on), and `RegisterHotKey` then fails. Settings row
-  (`prtsc_row`: Off / Active / TakenByWindows / TakenByApp, as the brief
-  set them): failed with the value not 0 shows "Dipakai Windows" (red) and
-  the button "Matikan di Windows"; failed with a 0 Vale did not write shows
-  "Dipakai aplikasi lain" and no button. Row label is the brief's full "Tombol PrtSc
-  membuka screenshot Vale" / "PrtSc key opens Vale's screenshot": it does
-  not fit beside the button, so while Windows has the key the row is one
-  line taller (`prtsc_row_h`) and the button sits under the note, left
-  aligned (the layout test measures every text in the row with `Estimate`).
-  A sign-out note state was tried and dropped as outside the brief.
-- **Click-only registry write.** The registry is only *read* (`RegGetValueW`)
-  once per failed `RegisterHotKey` try (`PrtscState::tried`) and kept; the
-  Settings model, rebuilt on every refresh while Settings is open, never reads
-  it. The button acts only while the row is TakenByWindows (a late click after
-  a retry freed the key writes nothing), writes that value = 0
-  (`RegSetKeyValueW`, REG_DWORD, HKCU only), then tries to register again.
-  Still failing (`after_disable_click`), written or not, it opens
-  `ms-settings:easeofaccess-keyboard` for the owner. Windows may apply a
-  direct registry edit only after a sign-out, so a 0 read back after Vale's
-  own write would wrongly blame another app: `PrtscState::wrote_off` (set
-  only by a successful click write, cleared when Vale next gets the key)
-  keeps the row TakenByWindows, button included. No `WM_SETTINGCHANGE` is sent (nothing documents one
-  that frees the key). Vale writes that value nowhere else.
-- **Retry.** A failed registration is tried again only when the tray menu
-  opens and when Settings opens (`retry_hotkeys`). A config save or read
-  (`adopt_config` -> `prtsc_follow_config`) touches the key only when the
-  setting moved (`follows_config`: want != registered || failed), so a
-  toggle click is one `RegisterHotKey` and an unrelated save none;
-  `set_print_screen` only saves. Unregistered in the `WM_DESTROY` path (`prtsc_shutdown`). No timer.
-- **Untouched:** `app_shot.rs` (the clipboard preview of a PrtSc image still
-  works when Windows has the key), `src/screenshot/`, the tile's tool choice,
-  gestures, the search layout.
-- **Demo:** `DI_PRTSC=windows` or `app` with `--settings clipboard`
-  shows the two taken states without touching the registry (the demo's button click just
-  clears the state).
-- **Not verified live:** that the registry write frees the key at once on
-  every Windows 11 build (when it does not, Windows' keyboard page opens), and RegisterHotKey on PrtSc itself (tests never register it).
+  It is not mapped through the `ms-screenclip:` branch of `queue_shortcut`.
+- **Settings row.** `PrtscRow` is `Plain` (off, or on and the hook is
+  installed) or `Failed` (on, `SetWindowsHookExW` failed): a red note
+  `PrtscHookFailed` ("Tombol PrtSc tidak bisa dipasang" / "Could not hook the
+  PrtSc key"). The row is always `ROW_H` tall, no button; the layout test
+  measures every text in it with `Estimate`. The old keys
+  `PrtscTurnOffInWindows` and `PrtscUsedByWindows` are gone.
+- **Retry.** A failed install is tried again only when the tray menu opens and
+  when Settings opens (`retry_hotkeys`). A config save or read
+  (`adopt_config` -> `prtsc_follow_config`) touches the hook only when the
+  setting moved (`follows_config`: want != installed || failed), so a toggle
+  click is one try and an unrelated save none; `set_print_screen` only saves.
+- **Untouched:** `app_shot.rs` (the clipboard preview of a PrtSc image),
+  `src/screenshot/`, the tile's tool choice, gestures, the search layout.
+- **Demo:** `DI_PRTSC=failed` with `--settings clipboard` shows the red note.
+- **Tests:** the pure decision, plan / follows_config, the row mapping, the
+  `WM_APP + 60` id against every other `WM_APP + n`, the layout (always
+  `ROW_H`, note only when Failed), and a start/stop of the thread with no
+  island window. The proc itself is not driven by synthetic keys.
+- **Not verified live:** real hardware against Snipping Tool (that the swallow
+  keeps it from opening), and that a low-level hook does not see keys while
+  an elevated (admin) window has focus because of UIPI, so PrtSc then reaches
+  Windows.
 
 Related: [[screenshot-preview]], [[clipboard-privacy]], [[studio-editor-frame]],
 [[media-click-guards]], [[bata-idle-power-budget]]

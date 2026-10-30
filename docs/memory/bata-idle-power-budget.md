@@ -62,6 +62,11 @@ The screenshot preview ([[screenshot-preview]]) adds `TIMER_SHOT_RETRY`
 (23), a one-shot that runs at most twice after a new clipboard image; its
 folder looks run on short-lived threads, never a watcher.
 
+The PrtSc key ([[screenshot-snap]]) adds a thread, not a timer: a
+`WH_KEYBOARD_LL` hook thread that blocks in `GetMessageW` between keystrokes,
+exists only while the setting is on, and whose proc does no work but post one
+message.
+
 ## Pointer polls (v3.2.1 review, 2026-10-29)
 
 A measured review found ~78 main-thread wake-ups a second at idle (v3.1.0:
