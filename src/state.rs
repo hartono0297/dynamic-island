@@ -549,6 +549,7 @@ impl IslandState {
             Event::ClipHotkey => self.clip_hotkey(),
             Event::ClipHoldEnd => self.hotkey_held = None,
             Event::DevicesHotkey => self.devices_hotkey(),
+            Event::PrintScreen => self.print_screen(&mut effects),
             Event::SearchHotkey => self.search_hotkey(&mut effects),
             Event::SearchOpen => {
                 if self.search_open {
@@ -1675,6 +1676,17 @@ impl IslandState {
             }
             Hit::CliMenuDismiss => self.cli_menu = false,
         }
+    }
+
+    /// The PrtSc key: the same as the Screenshot tile with Vale's own tool.
+    /// An open panel (or the search) shuts first, so it is not in the
+    /// picture; with no panel the capture is asked for at once. `App` waits
+    /// out the collapse before it starts.
+    fn print_screen(&mut self, effects: &mut Vec<Effect>) {
+        if matches!(self.view(), View::Panel(_)) {
+            self.collapse();
+        }
+        effects.push(Effect::RunCapture);
     }
 
     /// Shuts the open panel and asks for `effect` (a shortcut, Explorer on
@@ -5807,6 +5819,29 @@ mod tests {
         s.apply(Event::SearchClose, t0);
         assert_eq!(s.page(), Page::Media);
         assert!(!s.pages().visible().contains(&Page::Search));
+    }
+
+    #[test]
+    fn print_screen_asks_for_the_capture_and_shuts_an_open_panel_or_search_first() {
+        let t0 = Instant::now();
+        // No panel: the capture is asked for, nothing else changes.
+        let mut s = st();
+        assert_eq!(s.apply(Event::PrintScreen, t0), vec![Effect::RunCapture]);
+        assert!(!matches!(s.view(), View::Panel(_)));
+        // An open panel collapses, like the Screenshot tile's click.
+        let mut s = st();
+        open_on(&mut s, Page::Notes, t0);
+        let effects = s.apply(Event::PrintScreen, t0);
+        assert_eq!(effects, vec![Effect::RunCapture]);
+        assert!(!matches!(s.view(), View::Panel(_)));
+        // The open search closes (and lets go of the keyboard) too.
+        let mut s = st();
+        s.apply(Event::SearchHotkey, t0);
+        assert!(s.search_open());
+        let effects = s.apply(Event::PrintScreen, t0);
+        assert!(effects.contains(&Effect::RunCapture));
+        assert!(!s.search_open());
+        assert!(!matches!(s.view(), View::Panel(_)));
     }
 
     #[test]

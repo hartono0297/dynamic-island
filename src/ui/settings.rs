@@ -154,6 +154,11 @@ pub enum Action {
     ShotPreview(bool),
     ShotOnIgnore(ShotIgnore),
     ShotSecs(u32),
+    /// "Tombol PrtSc membuka screenshot Vale".
+    ShotPrintScreen(bool),
+    /// "Matikan di Windows": switch off Windows' own PrtSc setting (HKCU),
+    /// then take the key.
+    PrtscTurnOffWindows,
     BatteryThreshold(u8),
     /// "Peringatan disk": GB free.
     DiskWarn(u32),
@@ -287,6 +292,10 @@ pub struct Model {
     pub devices_hotkey: DevicesHotkey,
     /// The chosen Devices hotkey could not be registered.
     pub devices_hotkey_failed: bool,
+    /// The PrtSc key is wanted but Vale could not register it, and whether
+    /// Windows' own setting still gives it to Snipping Tool.
+    pub prtsc_failed: bool,
+    pub prtsc_windows: bool,
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -335,6 +344,8 @@ impl Model {
             device_notices: cfg.device_notices,
             devices_hotkey: cfg.devices_hotkey,
             devices_hotkey_failed: false,
+            prtsc_failed: false,
+            prtsc_windows: false,
             robot: cfg.robot,
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
@@ -1155,6 +1166,8 @@ impl Settings {
             device_notices: m.device_notices,
             devices_hotkey: m.devices_hotkey,
             devices_hotkey_failed: m.devices_hotkey_failed,
+            prtsc_failed: m.prtsc_failed,
+            prtsc_windows: m.prtsc_windows,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
@@ -1370,6 +1383,11 @@ impl Settings {
                 nc.copied_feedback_all,
             ),
             (Hit::ShotPreview, old.shot.preview, new.shot.preview),
+            (
+                Hit::ShotPrintScreen,
+                old.shot.print_screen,
+                new.shot.print_screen,
+            ),
         ] {
             if from != to {
                 self.anims.slide_toggle(hit, from, to, now);
@@ -1726,6 +1744,8 @@ impl Settings {
                 Vec::new()
             }
             Hit::ShotPreview => post(Action::ShotPreview(!m.shot.preview)),
+            Hit::ShotPrintScreen => post(Action::ShotPrintScreen(!m.shot.print_screen)),
+            Hit::PrtscTurnOffWindows => post(Action::PrtscTurnOffWindows),
             Hit::ShotTool(v) if v != m.shot.tool => post(Action::ShotTool(v)),
             Hit::ShotIgnore(v) if v != m.shot.on_ignore => post(Action::ShotOnIgnore(v)),
             Hit::ShotSecs(dir) => {
@@ -2633,7 +2653,9 @@ unsafe extern "system" fn edit_proc(
 /// demo model and pushes it back, so every control works. Nothing is saved
 /// and the island is not involved; the hook buttons and links are real, so
 /// leave them alone. `DI_ACCENT`, `DI_GOOGLE` (`ok`, `needslogin`,
-/// `reconnect`, `offline`, `none`) and `DI_POMO_LOCKED=1` set the start.
+/// `reconnect`, `offline`, `none`), `DI_POMO_LOCKED=1` and `DI_PRTSC` (`windows`:
+/// the PrtSc key is Windows', with its button; `app`: another app has it) set
+/// the start.
 #[cfg(debug_assertions)]
 pub fn run_demo(args: &[String]) {
     use crate::i18n;
@@ -2687,6 +2709,9 @@ pub fn run_demo(args: &[String]) {
             Action::ClipClear => {}
             Action::ShotTool(v) => m.shot.tool = v,
             Action::ShotPreview(v) => m.shot.preview = v,
+            Action::ShotPrintScreen(v) => m.shot.print_screen = v,
+            // The demo never touches the registry: the click just frees the key.
+            Action::PrtscTurnOffWindows => m.prtsc_failed = false,
             Action::ShotOnIgnore(v) => m.shot.on_ignore = v,
             Action::ShotSecs(v) => m.shot.show_secs = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
@@ -2804,6 +2829,10 @@ pub fn run_demo(args: &[String]) {
         lang,
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
         lyrics: env("DI_LYRICS") == "1",
+        // The PrtSc row taken: by Windows' own setting (the button shows) or
+        // by another app.
+        prtsc_failed: matches!(env("DI_PRTSC").as_str(), "windows" | "app"),
+        prtsc_windows: env("DI_PRTSC") == "windows",
         calendar,
         // A build with Vale's own client signs in without one.
         google_client_id: if configured && !client::has_built_in() {

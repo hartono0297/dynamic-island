@@ -192,6 +192,10 @@ pub struct ScreenshotSettings {
     /// "Alat screenshot".
     #[serde(deserialize_with = "shot_tool")]
     pub tool: ShotTool,
+    /// "Tombol PrtSc membuka screenshot Vale": the bare PrtSc key starts
+    /// Vale's own capture (default on). Missing or any non-bool reads as on.
+    #[serde(deserialize_with = "print_screen")]
+    pub print_screen: bool,
 }
 
 impl Default for ScreenshotSettings {
@@ -201,8 +205,16 @@ impl Default for ScreenshotSettings {
             on_ignore: ShotIgnore::Keep,
             show_secs: 8,
             tool: ShotTool::Vale,
+            print_screen: true,
         }
     }
+}
+
+/// A bool; anything else (a string, a number, null) is on, so a bad value
+/// never makes the whole config invalid.
+fn print_screen<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_bool().unwrap_or(true))
 }
 
 /// A name or anything else (a number, null): any name that is not a tool
@@ -888,6 +900,7 @@ mod tests {
                 on_ignore: ShotIgnore::Delete,
                 show_secs: 12,
                 tool: ShotTool::Windows,
+                print_screen: false,
             },
             panel_pages: vec![PageEntry {
                 page: "Media".into(),
@@ -951,6 +964,33 @@ mod tests {
         assert_eq!(win.screenshot.tool, ShotTool::Windows);
         let back = parse(&serde_json::to_string(&win).unwrap());
         assert_eq!(back.screenshot.tool, ShotTool::Windows);
+    }
+
+    #[test]
+    fn the_print_screen_key_is_on_unless_the_file_says_false() {
+        assert!(ScreenshotSettings::default().print_screen);
+        // An old file without the key: on, and the rest of the file stays.
+        let old = parse(r#"{"style":"Notch","screenshot":{"preview":false}}"#);
+        assert!(old.screenshot.print_screen);
+        assert_eq!(old.style, Style::Notch);
+        // Garbage of any type is on too, never an invalid config.
+        for text in [
+            r#"{"style":"Notch","screenshot":{"print_screen":"no"}}"#,
+            r#"{"style":"Notch","screenshot":{"print_screen":0}}"#,
+            r#"{"style":"Notch","screenshot":{"print_screen":null}}"#,
+            r#"{"style":"Notch","screenshot":{"print_screen":[false]}}"#,
+        ] {
+            let c = parse(text);
+            assert_eq!(c.style, Style::Notch, "{text}");
+            assert!(c.screenshot.print_screen, "{text}");
+        }
+        // False is kept, and round-trips under screenshot.print_screen.
+        let off = parse(r#"{"screenshot":{"print_screen":false}}"#);
+        assert!(!off.screenshot.print_screen);
+        let text = serde_json::to_string(&off).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["screenshot"]["print_screen"], serde_json::json!(false));
+        assert!(!parse(&text).screenshot.print_screen);
     }
 
     #[test]
