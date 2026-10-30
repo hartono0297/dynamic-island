@@ -41,7 +41,8 @@ const SNIPPING_VALUE: windows::core::PCWSTR = w!("PrintScreenKeyForSnippingEnabl
 const WINDOWS_KEYBOARD_PAGE: &str = "ms-settings:easeofaccess-keyboard";
 
 /// What the PrtSc key holds: whether Vale has the key, whether the last
-/// registration failed, and Windows' value as read then.
+/// registration failed, Windows' value as read then, and whether that value
+/// is Vale's own write.
 #[derive(Default)]
 pub(super) struct PrtscState {
     pub registered: bool,
@@ -49,6 +50,10 @@ pub(super) struct PrtscState {
     /// `PrintScreenKeyForSnippingEnabled` read at the last failed try
     /// (`None`: absent). Not read while the key is Vale's.
     windows_value: Option<u32>,
+    /// The button's write went through this run and Vale has not had the key
+    /// since. Windows 11 usually lets go of the key only after a sign-out, so
+    /// a 0 read back then is Vale's own, not the sign of another app.
+    wrote_off: bool,
 }
 
 impl PrtscState {
@@ -57,14 +62,22 @@ impl PrtscState {
     fn tried(&mut self, ok: bool, read: impl FnOnce() -> Option<u32>) {
         self.registered = ok;
         self.failed = !ok;
-        if !ok {
+        if ok {
+            // Windows let go: a 0 on a later failure is another app's.
+            self.wrote_off = false;
+        } else {
             self.windows_value = read();
         }
     }
 
+    /// The button's registry write went through (set only by the click).
+    fn wrote_off(&mut self) {
+        self.wrote_off = true;
+    }
+
     /// The Settings row, from what is kept (no registry read).
     fn row(&self, on: bool) -> RowState {
-        prtsc_row(on, self.failed, self.windows_value)
+        prtsc_row(on, self.failed, self.windows_value, self.wrote_off)
     }
 
     /// The button writes only while its row offers it: a late click (the
@@ -82,21 +95,28 @@ pub(super) enum RowState {
     /// On and Vale has the key.
     Active,
     /// On, registration failed, and Windows' own setting still gives the key
-    /// to Snipping Tool (value 1 or absent): "Dipakai Windows" and a button.
+    /// to Snipping Tool (value 1 or absent), or the 0 is Vale's own write that
+    /// Windows has not applied yet: "Dipakai Windows" and a button.
     TakenByWindows,
-    /// On, registration failed, and Windows' setting is already off: another
-    /// app holds the key. The usual "taken" text, no button.
+    /// On, registration failed, and Windows' setting is off by someone other
+    /// than Vale: another app holds the key. The usual "taken" text, no
+    /// button.
     TakenByApp,
 }
 
-/// The row's state from the toggle, whether registration failed and the
-/// registry value (`None`: absent).
-pub(super) fn prtsc_row(on: bool, failed: bool, windows_value: Option<u32>) -> RowState {
+/// The row's state from the toggle, whether registration failed, the
+/// registry value (`None`: absent) and whether Vale wrote that value itself.
+pub(super) fn prtsc_row(
+    on: bool,
+    failed: bool,
+    windows_value: Option<u32>,
+    wrote_off: bool,
+) -> RowState {
     if !on {
         RowState::Off
     } else if !failed {
         RowState::Active
-    } else if windows_value != Some(0) {
+    } else if windows_value != Some(0) || wrote_off {
         RowState::TakenByWindows
     } else {
         RowState::TakenByApp
@@ -260,12 +280,15 @@ impl App {
     /// "Matikan di Windows", on click only and only while the row offers it:
     /// Windows' own setting is switched off (HKCU), then the registration is
     /// tried again (which reads the value back if it fails). Still taken,
-    /// written or not, Windows' keyboard settings open for the owner.
+    /// written or not, Windows' keyboard settings open for the owner, and the
+    /// row keeps saying Windows has the key (`wrote_off`).
     pub(super) fn turn_off_windows_print_screen(&mut self) {
         if !self.prtsc.click_writes(self.config.screenshot.print_screen) {
             return;
         }
-        let _ = write_windows_value_off();
+        if write_windows_value_off() {
+            self.prtsc.wrote_off();
+        }
         self.sync_prtsc_hotkey();
         if after_disable_click(self.prtsc.registered) == Next::OpenSettings {
             self.queue_shortcut(shortcuts::Action::Open(WINDOWS_KEYBOARD_PAGE));
@@ -296,16 +319,21 @@ mod tests {
     #[test]
     fn the_row_follows_the_toggle_the_registration_and_windows() {
         for value in [None, Some(0), Some(1), Some(7)] {
-            assert_eq!(prtsc_row(false, false, value), RowState::Off);
-            // Off wins even when a stale failure is left.
-            assert_eq!(prtsc_row(false, true, value), RowState::Off);
-            assert_eq!(prtsc_row(true, false, value), RowState::Active);
+            for wrote in [false, true] {
+                assert_eq!(prtsc_row(false, false, value, wrote), RowState::Off);
+                // Off wins even when a stale failure is left.
+                assert_eq!(prtsc_row(false, true, value, wrote), RowState::Off);
+                assert_eq!(prtsc_row(true, false, value, wrote), RowState::Active);
+            }
         }
         // Taken: Windows' setting on (1) or absent is Windows'.
-        assert_eq!(prtsc_row(true, true, None), RowState::TakenByWindows);
-        assert_eq!(prtsc_row(true, true, Some(1)), RowState::TakenByWindows);
-        // An explicit 0 means another app has the key.
-        assert_eq!(prtsc_row(true, true, Some(0)), RowState::TakenByApp);
+        assert_eq!(prtsc_row(true, true, None, false), RowState::TakenByWindows);
+        assert_eq!(
+            prtsc_row(true, true, Some(1), false),
+            RowState::TakenByWindows
+        );
+        // An explicit 0 Vale did not write means another app has the key.
+        assert_eq!(prtsc_row(true, true, Some(0), false), RowState::TakenByApp);
         assert_eq!(ui_row(RowState::Off), PrtscRow::Plain);
         assert_eq!(ui_row(RowState::Active), PrtscRow::Plain);
         assert_eq!(ui_row(RowState::TakenByWindows), PrtscRow::TakenByWindows);
@@ -363,6 +391,39 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_vale_wrote_itself_still_reads_as_windows_holding_the_key() {
+        // Windows 11 default: the value absent, the key Snipping Tool's.
+        let mut s = PrtscState::default();
+        s.tried(false, || None);
+        assert_eq!(s.row(true), RowState::TakenByWindows);
+        assert!(s.click_writes(true));
+        // The click's write lands, but Windows lets go only after a sign-out:
+        // the retry fails and reads Vale's own 0 back. Still Windows', with
+        // the button, not "another app".
+        s.wrote_off();
+        s.tried(false, || Some(0));
+        assert_eq!(s.row(true), RowState::TakenByWindows);
+        assert!(s.click_writes(true));
+        // Later retries (tray, Settings) read the same 0: still Windows'.
+        s.tried(false, || Some(0));
+        assert_eq!(s.row(true), RowState::TakenByWindows);
+        // Once Vale has had the key, Windows has let go: a 0 on a later
+        // failure is another app's doing.
+        s.tried(true, || panic!("a success reads nothing"));
+        s.tried(false, || Some(0));
+        assert_eq!(s.row(true), RowState::TakenByApp);
+        assert!(!s.click_writes(true));
+        // The pure helper: Vale's write keeps a 0 Windows'; off stays off.
+        assert_eq!(
+            prtsc_row(true, true, Some(0), true),
+            RowState::TakenByWindows
+        );
+        assert_eq!(prtsc_row(true, true, Some(0), false), RowState::TakenByApp);
+        assert_eq!(prtsc_row(false, true, Some(0), true), RowState::Off);
+        assert_eq!(prtsc_row(true, false, Some(0), true), RowState::Active);
+    }
+
+    #[test]
     fn the_registry_is_read_once_per_failed_try_never_for_the_row() {
         let reads = std::cell::Cell::new(0);
         let read = || {
@@ -379,8 +440,8 @@ mod tests {
             assert_eq!(s.row(true), RowState::TakenByWindows);
         }
         assert_eq!(reads.get(), 1);
-        // The next failed try (a retry, or the one after the click)
-        // refreshes it.
+        // The next failed try refreshes it (a 0 Vale did not write: another
+        // app).
         s.tried(false, || Some(0));
         assert_eq!(s.row(true), RowState::TakenByApp);
     }

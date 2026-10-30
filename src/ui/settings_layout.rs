@@ -3322,7 +3322,10 @@ mod tests {
                             } else {
                                 ShotTool::Vale
                             },
-                            print_screen: !locked,
+                            // On wherever `prtsc` is taken (the card draws a
+                            // taken row only while on), on and plain in one
+                            // unlocked state, off in the other.
+                            print_screen: locked || hooks.is_some_and(|h| !h.complete),
                         },
                         pages: if locked {
                             let mut p = PanelPages::default();
@@ -3926,6 +3929,29 @@ mod tests {
             let l = layout(Section::Clipboard, &off, &Estimate);
             assert_eq!(shot_hits(&l), [Hit::ShotPreview]);
         }
+    }
+
+    #[test]
+    fn the_layout_sweeps_draw_every_prtsc_row_with_its_toggle_on() {
+        // `screenshot_card` draws a taken row only while the toggle is on, so
+        // the general sweeps (`all_layouts`) reach the taller row with its
+        // button only if some state has both. One on and plain too.
+        let shown: Vec<PrtscRow> = states()
+            .iter()
+            .filter(|s| s.shot.print_screen)
+            .map(|s| s.prtsc)
+            .collect();
+        for row in [
+            PrtscRow::Plain,
+            PrtscRow::TakenByWindows,
+            PrtscRow::TakenByApp,
+        ] {
+            assert!(
+                shown.contains(&row),
+                "no state draws {row:?} with the toggle on"
+            );
+        }
+        assert!(states().iter().any(|s| !s.shot.print_screen));
     }
 
     #[test]

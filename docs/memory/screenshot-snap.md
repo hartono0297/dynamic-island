@@ -149,8 +149,8 @@ Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
   off, 1 or absent = on), and `RegisterHotKey` then fails. Settings row
   (`prtsc_row`: Off / Active / TakenByWindows / TakenByApp, as the brief
   set them): failed with the value not 0 shows "Dipakai Windows" (red) and
-  the button "Matikan di Windows"; failed with value 0 shows "Dipakai
-  aplikasi lain" and no button. Row label is the brief's full "Tombol PrtSc
+  the button "Matikan di Windows"; failed with a 0 Vale did not write shows
+  "Dipakai aplikasi lain" and no button. Row label is the brief's full "Tombol PrtSc
   membuka screenshot Vale" / "PrtSc key opens Vale's screenshot": it does
   not fit beside the button, so while Windows has the key the row is one
   line taller (`prtsc_row_h`) and the button sits under the note, left
@@ -164,9 +164,10 @@ Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
   (`RegSetKeyValueW`, REG_DWORD, HKCU only), then tries to register again.
   Still failing (`after_disable_click`), written or not, it opens
   `ms-settings:easeofaccess-keyboard` for the owner. Windows may apply a
-  direct registry edit only after a sign-out; until then the read-back 0
-  makes the row say "Dipakai aplikasi lain" (known, accepted with the
-  brief's state table). No `WM_SETTINGCHANGE` is sent (nothing documents one
+  direct registry edit only after a sign-out, so a 0 read back after Vale's
+  own write would wrongly blame another app: `PrtscState::wrote_off` (set
+  only by a successful click write, cleared when Vale next gets the key)
+  keeps the row TakenByWindows, button included. No `WM_SETTINGCHANGE` is sent (nothing documents one
   that frees the key). Vale writes that value nowhere else.
 - **Retry.** A failed registration is tried again only when the tray menu
   opens and when Settings opens (`retry_hotkeys`). A config save or read
