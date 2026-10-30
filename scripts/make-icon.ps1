@@ -176,39 +176,6 @@ function Get-PngBytes([System.Drawing.Bitmap]$bitmap) {
     return , $stream.ToArray()
 }
 
-function Get-DibBytes([System.Drawing.Bitmap]$bitmap) {
-    # 32 bpp BITMAPINFOHEADER image: double height, bottom-up BGRA rows, then
-    # a 1 bpp AND mask (set where fully transparent) padded to 32 bits per row.
-    $n = $bitmap.Width
-    $rect = New-Object System.Drawing.Rectangle 0, 0, $n, $n
-    $data = $bitmap.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $pixels = New-Object byte[] ($data.Stride * $n)
-    [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $pixels, 0, $pixels.Length)
-    $bitmap.UnlockBits($data)
-
-    $maskStride = [int]([math]::Floor(($n + 31) / 32) * 4)
-    $stream = New-Object System.IO.MemoryStream
-    $w = New-Object System.IO.BinaryWriter $stream
-    $w.Write([int]40); $w.Write([int]$n); $w.Write([int](2 * $n))
-    $w.Write([int16]1); $w.Write([int16]32); $w.Write([int]0)
-    $w.Write([int]($n * $n * 4 + $maskStride * $n))
-    $w.Write([int]0); $w.Write([int]0); $w.Write([int]0); $w.Write([int]0)
-    for ($y = $n - 1; $y -ge 0; $y--) {
-        $w.Write($pixels, $y * $data.Stride, $n * 4)
-    }
-    for ($y = $n - 1; $y -ge 0; $y--) {
-        $row = New-Object byte[] $maskStride
-        for ($x = 0; $x -lt $n; $x++) {
-            if ($pixels[$y * $data.Stride + $x * 4 + 3] -eq 0) {
-                $row[[math]::Floor($x / 8)] = $row[[math]::Floor($x / 8)] -bor (0x80 -shr ($x % 8))
-            }
-        }
-        $w.Write($row)
-    }
-    $w.Flush()
-    return , $stream.ToArray()
-}
-
 $images = @()
 foreach ($size in $sizes) {
     $bitmap = Render-Logo $size
@@ -216,9 +183,10 @@ foreach ($size in $sizes) {
     if ($size -eq 256) {
         $bitmap.Save((Join-Path $assets 'logo-256.png'), [System.Drawing.Imaging.ImageFormat]::Png)
     }
-    # PNG payloads for the big sizes keep the file small; classic DIBs for the
-    # rest suit every icon reader.
-    if ($size -ge 128) { $bytes = Get-PngBytes $bitmap } else { $bytes = Get-DibBytes $bitmap }
+    # PNG payloads at every size (Windows 11 reads them everywhere). The
+    # uncompressed 32 bpp DIBs of v3.5.0 cost 43 KB for the seven small sizes;
+    # the same pixels as PNG cost under 10 KB (src/ui/icon_frames.rs pins them).
+    $bytes = Get-PngBytes $bitmap
     $images += , @{ Size = $size; Bytes = $bytes }
     $bitmap.Dispose()
 }

@@ -6,9 +6,13 @@ pub mod editor;
 pub mod editor_layout;
 pub mod editor_paint;
 pub mod editor_popover;
+#[cfg(test)]
+mod font_coverage;
 pub mod fonts;
 pub mod frame_clock;
 pub mod geometry;
+#[cfg(test)]
+mod icon_frames;
 pub mod icons;
 pub mod month_grid;
 pub mod motion;

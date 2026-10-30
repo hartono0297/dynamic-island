@@ -13,6 +13,6 @@ Fonts are built by `scripts/make-fonts.ps1` and embedded as RCDATA 203-207: DM S
 - Sources are pinned by commit and SHA-256; output is byte-identical across runs. Total font size is about 189 KB (budget 370 KB).
 - The 3.0 screenshots in `assets/screenshots` still show the old italic titles; the v3.1 recapture (`src/ui/demo.rs`, `scripts/capture-screenshots.ps1`) replaces them. See [[demo-data-time-of-day]] before capturing.
 
-Related: [[studio-palette-accent-aliases]], [[studio-tabular-figures-word-gaps]]
+Related: [[studio-palette-accent-aliases]], [[studio-tabular-figures-word-gaps]], [[exe-size]] (why the subset was not trimmed further; `src/ui/font_coverage.rs` guards it)
 
 Part of [[v3-studio-overview]].
