@@ -32,6 +32,10 @@ pub enum ShapeKind {
     /// The compact media view showing a lyric line: wider, same height.
     MediaLyric,
     PomodoroCompact,
+    /// The closed island shrunk to the cat's two eyes while the pointer is
+    /// near it over a window (`pointer_watch::Peek`): `EYES_W` x `EYES_H`,
+    /// centred, at the compact shapes' top.
+    Eyes,
     Notice,
     /// The screenshot preview (keputusan-v3.1 p6): 10 px padding, a
     /// 230 × 136 thumbnail and a right column of 178 px, radius 26.
@@ -114,6 +118,7 @@ pub fn shape_sized(style: Style, size: NotchSize, kind: ShapeKind) -> ShapeRect 
     let (w, h) = match kind {
         ShapeKind::Idle | ShapeKind::MediaCompact => (size.w, size.h),
         ShapeKind::PomodoroCompact => (size.w + 20.0, size.h),
+        ShapeKind::Eyes => (EYES_W, EYES_H),
         // Sized by its line (`lyric_shape_sized`); without one, the narrowest.
         ShapeKind::MediaLyric => (LYRIC_MIN_W.max(size.w), size.h),
         ShapeKind::Notice => (360.0, 76.0),
@@ -127,6 +132,9 @@ pub fn shape_sized(style: Style, size: NotchSize, kind: ShapeKind) -> ShapeRect 
     let radius = match kind {
         ShapeKind::Panel | ShapeKind::PanelTall | ShapeKind::PanelClean => radius::PANEL,
         ShapeKind::Notice | ShapeKind::NoticeShot => radius::NOTICE,
+        // Fully rounded. In the Notch style `corner_radius` holds it to
+        // what the 12 dip shoulders leave of this height.
+        ShapeKind::Eyes => EYES_H / 2.0,
         _ if style == Style::Pill => h / 2.0,
         _ => NOTCH_COMPACT_RADIUS,
     };
@@ -142,6 +150,10 @@ pub fn shape_sized(style: Style, size: NotchSize, kind: ShapeKind) -> ShapeRect 
         radius,
     }
 }
+
+/// The shrunk notch (`ShapeKind::Eyes`): just room for the cat's two eyes.
+pub const EYES_W: f32 = 34.0;
+pub const EYES_H: f32 = 14.0;
 
 /// Bata in a compact island: this big, this far in from the left edge, and
 /// this far from what follows. On a notice it takes the badge's 40 px place.
@@ -1215,6 +1227,99 @@ mod tests {
             assert_eq!((l.badge.w, l.badge.h), (ROBOT_NOTICE, ROBOT_NOTICE));
             head_inside(n, l.badge);
             assert!(l.title.x >= l.badge.right());
+        }
+    }
+
+    /// A point of the cat (px, drawn in `area`) as `RobotPainter::paint`
+    /// moves it for `pose`: turned by the tilt about the grid point (32, 40),
+    /// then slid by the head's offset.
+    fn looked(area: Rect, pose: crate::ui::robot::Pose, (x, y): (f32, f32)) -> (f32, f32) {
+        let k = area.w / crate::ui::robot::GRID;
+        let (cx, cy) = (area.x + 32.0 * k, area.y + 40.0 * k);
+        let a = pose.tilt_deg.to_radians();
+        let (dx, dy) = (x - cx, y - cy);
+        (
+            cx + dx * a.cos() - dy * a.sin() + pose.head_dx_dip,
+            cy + dx * a.sin() + dy * a.cos(),
+        )
+    }
+
+    #[test]
+    fn the_looking_cat_stays_in_the_idle_island() {
+        use crate::ui::robot::{GRID, Pose};
+        for style in [Style::Pill, Style::Notch] {
+            for w in [NOTCH_W_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX] {
+                for h in [NOTCH_H_MIN, NOTCH_H_DEFAULT, NOTCH_H_MAX] {
+                    let size = NotchSize::from_px(w, h);
+                    let s = shape_with_robot_sized(style, size, ShapeKind::Idle, true);
+                    for clock in [true, false] {
+                        let l = idle_layout(s, true, clock);
+                        let area = l.robot.expect("the cat is drawn");
+                        let k = area.w / GRID;
+                        // The head's outline and the ear tips, and the ears'
+                        // round strokes at their outer bases.
+                        let mut points = head_outline(area);
+                        points.extend([(6.5, 37.0), (57.5, 37.0)].map(|(x, y)| {
+                            (area.x + x * k, area.y + y * k)
+                        }));
+                        for v in [-1.0, -0.5, 0.5, 1.0] {
+                            let pose = Pose::default().looking(v);
+                            for &p in &points {
+                                let (x, y) = looked(area, pose, p);
+                                assert!(
+                                    shape_contains(style, s, x, y),
+                                    "{style:?} {size:?} v {v}: ({x}, {y}) leaves the island"
+                                );
+                                if let Some(c) = l.clock {
+                                    assert!(
+                                        x < c.x,
+                                        "{style:?} {size:?} v {v}: ({x}, {y}) reaches the clock"
+                                    );
+                                }
+                            }
+                            // The eyes slide on inside the head, with room to spare.
+                            let (eye_l, eye_r) = (21.2 + pose.eye_dx_dip / k, 42.8 + pose.eye_dx_dip / k);
+                            assert!(eye_l > 11.0 && eye_r < 53.0, "v {v}: eyes {eye_l}..{eye_r}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_shrunk_notch_is_a_small_pill_that_alone_takes_clicks() {
+        for style in [Style::Pill, Style::Notch] {
+            let normal = shape_for(style, ShapeKind::Idle);
+            let eyes = shape_for(style, ShapeKind::Eyes);
+            assert_eq!((eyes.w, eyes.h), (EYES_W, EYES_H));
+            assert_eq!((EYES_W, EYES_H), (34.0, 14.0));
+            // The same top as the compact shapes, centred like them.
+            assert_eq!(eyes.y, normal.y);
+            assert_eq!(eyes.x * 2.0 + eyes.w, WINDOW_W);
+            assert_eq!(
+                shape_with_robot(style, ShapeKind::Eyes, true),
+                eyes,
+                "the robot widens nothing here"
+            );
+            let regions = HitRegions {
+                shape: Some((style, eyes)),
+                ..Default::default()
+            };
+            // On the pill: its body (a press there only restores the notch).
+            let (cx, cy) = (eyes.x + eyes.w / 2.0, eyes.y + eyes.h / 2.0);
+            assert_eq!(regions.hit(cx, cy), Some(Hit::Body));
+            assert_eq!(regions.under(cx, cy), Under::Island(Hit::Body));
+            // In the old notch but off the pill: nothing, the click goes to
+            // the window below.
+            for (x, y) in [
+                (normal.x + 10.0, normal.y + normal.h / 2.0),
+                (normal.x + normal.w - 10.0, normal.y + normal.h / 2.0),
+                (cx, normal.y + normal.h - 3.0),
+            ] {
+                assert_eq!(regions.hit(x, y), None, "{style:?} ({x}, {y})");
+                assert_eq!(regions.under(x, y), Under::Off, "{style:?} ({x}, {y})");
+            }
         }
     }
 

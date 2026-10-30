@@ -76,6 +76,7 @@ use crate::model::{Effect, Event, Hit, Notice, NoticeKind, Page, View};
 use crate::mole::{self, Confirmed, MoleEvent, MoleOpts, MoleWorker};
 use crate::notes::NotesStore;
 use crate::pages::PanelPages;
+use crate::pointer_watch::{self, LookEase, Peek, PeekInputs, PeekState, UnderCache};
 use crate::pomodoro::PomoStatus;
 use crate::reminders::{self, Reminder, RemindersStore, due_now, next_due};
 use crate::shelf_ole;
@@ -96,10 +97,11 @@ use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
-    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, NOTCH_H_DEFAULT,
-    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, lerp_shape, lyric_box_w, lyric_max_w,
-    lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape_sized, lyric_target_w, lyric_width_min,
-    panel_kind, shape_for, shape_sized, shape_with_robot_sized,
+    AA_MARGIN, ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, NOTCH_H_DEFAULT,
+    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, WINDOW_W, island_contains,
+    lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
+    lyric_shape_sized, lyric_target_w, lyric_width_min, panel_kind, shape_for, shape_sized,
+    shape_with_robot_sized,
 };
 use crate::ui::motion::{
     FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
@@ -224,6 +226,13 @@ const TIMER_BEHIND: usize = 29;
 /// a drag can be about to start (`halo`). An idle island runs no poll; nor
 /// does a locked, display-off, fullscreen or behind-windows one.
 const TIMER_HALO: usize = 30;
+/// Repeating, `pointer_watch::poll_ms`: the one pointer read the closed island
+/// shares between the notch peek (it shrinks to the cat's eyes over a window)
+/// and the cat following the pointer. 33 ms near the top edge and 250 ms far
+/// from it while the cat follows; 80 / 350 ms for the peek alone. Nothing runs
+/// when neither feature is eligible, in fullscreen, locked or with the display
+/// off; the cat's ease runs on the frame clock, never on this timer.
+const TIMER_POINTER: usize = 33;
 /// Repeating, 1 s: the Mixer page asks the audio thread for the volumes while
 /// it shows (`sync_mixer`). Nothing runs with the page shut.
 const TIMER_MIXER: usize = 26;
@@ -378,6 +387,14 @@ pub fn run(media_log_flag: bool) {
             behind_ms: 0,
             rise: None,
             halo_ms: 0,
+            peek: Peek::default(),
+            under_cache: UnderCache::default(),
+            eyes: false,
+            eyes_morph: false,
+            look: LookEase::default(),
+            look_at: None,
+            pointer_ms: 0,
+            pointer_near: true,
             display_off: false,
             halo_on: false,
             halo_armed: None,
@@ -625,6 +642,22 @@ struct App {
     /// `TIMER_HALO`'s interval now (0: not running), and the margin is drawn.
     halo_ms: u32,
     halo_on: bool,
+    /// The notch peek (`pointer_watch::Peek`), whether a window lay under the
+    /// notch when last read, and whether the island is drawn shrunk to the
+    /// eyes (set by `refresh`, so it changes together with the target shape).
+    peek: Peek,
+    under_cache: UnderCache,
+    eyes: bool,
+    /// The morph between the eyes and the notch is running: the cat fades
+    /// with the rest of the content instead of staying at full strength.
+    eyes_morph: bool,
+    /// The cat's look at the pointer, and when it was last eased.
+    look: LookEase,
+    look_at: Option<Instant>,
+    /// `TIMER_POINTER`'s interval now (0: not running), and whether the
+    /// pointer was near the top edge at the last read.
+    pointer_ms: u32,
+    pointer_near: bool,
     /// The display is off (`GUID_CONSOLE_DISPLAY_STATE`): like a locked
     /// session, the pointer polls pause.
     display_off: bool,
@@ -1352,10 +1385,14 @@ impl App {
             .brain
             .inputs(spot, now, self.sleep_after(), motion);
         let expr = choose_expr(&inputs)?;
-        let pose = self
+        let mut pose = self
             .bata
             .brain
             .pose(spot, now, motion.moves(), self.bata.blinking);
+        // The idle cat turns toward the pointer; nowhere else.
+        if spot == Spot::Idle && self.look.value() != 0.0 {
+            pose = pose.looking(self.look.value());
+        }
         Some(RobotFrame { expr, pose })
     }
 
@@ -2805,6 +2842,13 @@ impl App {
         self.sync_lyrics(now);
         self.sync_lyric_line(now);
         let view = self.state.view();
+        // The notch peek only lives on a quiet compact view; anything else
+        // (a notice, the panel, fullscreen, stay-behind) ends it at once.
+        self.peek_guard();
+        let was_eyes = std::mem::replace(&mut self.eyes, self.peek.is_shrunk());
+        let eyes_swap = was_eyes != self.eyes;
+        // The cat's look goes back to the centre when it cannot follow.
+        self.sync_look(now);
         // Bata: an alert that just appeared bounces; a lift or bounce needs frames.
         let face = self.robot_frame(&view, now).map(|r| r.expr);
         let moves = self.motion().moves();
@@ -2834,6 +2878,8 @@ impl App {
         // notch is as wide as its line (robot included).
         let (style, robot) = (self.config.style, self.config.robot);
         let target = kind.map(|kind| match kind {
+            // Shrunk to the eyes (only ever on a compact view).
+            _ if self.eyes => shape_sized(style, notch, ShapeKind::Eyes),
             ShapeKind::MediaLyric => lyric_shape_sized(style, notch, self.lyric_fit.width()),
             _ => shape_with_robot_sized(style, notch, kind, robot),
         });
@@ -2849,7 +2895,9 @@ impl App {
         // Only the width changes while the lyric view stays: a quicker morph.
         let resize = view == View::MediaLyric
             && self.drawn == View::MediaLyric
-            && self.anim.to_opacity == 1.0;
+            && self.anim.to_opacity == 1.0
+            && !eyes_swap;
+        let view_same = view == self.drawn;
         // A compact view or notice replacing another fades in with its
         // morph, and a panel closing into one fades out as the shape shrinks.
         let was_panel = match &self.drawn {
@@ -2857,7 +2905,10 @@ impl App {
             _ => None,
         };
         let is_panel = matches!(view, View::Panel(_));
-        let compact_swap = view != self.drawn && !is_panel && view != View::Hidden && !resize;
+        // Shrinking to the eyes or coming back swaps the content like a view
+        // change does: what shows fades in with the morph.
+        let compact_swap = (view != self.drawn && !is_panel && view != View::Hidden && !resize)
+            || (eyes_swap && !is_panel && view != View::Hidden);
         // A fade cut short goes on from the alpha it reached: new content
         // starts from it, and the same content keeps fading in.
         let fading = self.anim.fading(now);
@@ -2947,8 +2998,19 @@ impl App {
             }
             // The enlarged panel needs the taller canvas before it grows.
             self.sync_window_height(now);
-            self.frame_log.start(now);
-            self.ensure_clock();
+            self.eyes_morph |= eyes_swap;
+            if eyes_swap && view_same && !moves && !hiding {
+                // Motion Saver, Off or Energy Saver: no morph, the island is
+                // on the new shape at once.
+                let (to, opacity) = (self.anim.to, self.anim.to_opacity);
+                self.anim = Anim::settled(to, opacity);
+                self.fill.0 = self.fill.1;
+                self.eyes_morph = false;
+                self.draw(now);
+            } else {
+                self.frame_log.start(now);
+                self.ensure_clock();
+            }
         } else if !self.animating() {
             // Same shape, but the content (track, notice text) may have changed.
             self.draw(now);
@@ -2981,6 +3043,7 @@ impl App {
             || self.lyric_fading
             || self.lyric_scrolling
             || self.robot_moving(now)
+            || self.look.moving()
             || self.shelf.motion.running(now)
     }
 
@@ -3286,6 +3349,7 @@ impl App {
         self.sync_outside_timer();
         self.sync_behind(now);
         self.sync_halo_timer();
+        self.sync_pointer_watch(now);
         let cli = view == View::Panel(Page::Cli) && self.cli_clock.state().running();
         if cli != self.cli_timer {
             self.cli_timer = cli;
@@ -3337,6 +3401,26 @@ impl App {
         self.sync_outside_timer();
         self.sync_behind(Instant::now());
         self.sync_halo_timer();
+        self.follow_pointer_settings(Instant::now());
+    }
+
+    /// Something the notch peek and the cat's look depend on changed (the
+    /// session locked, a setting, the energy saver): the peek ends if it may
+    /// not go on, the look goes back to the centre if the cat cannot follow,
+    /// and the shared poll starts, re-paces or stops.
+    fn follow_pointer_settings(&mut self, now: Instant) {
+        if self.peek_guard() {
+            // The notch comes back; `refresh` also syncs the look and the poll.
+            self.refresh(now);
+        } else {
+            let looked = self.look.value();
+            self.sync_look(now);
+            if self.look.value() != looked && !self.animating() {
+                // The cat was snapped back to the centre: draw it there.
+                self.draw(now);
+            }
+            self.sync_pointer_watch(now);
+        }
     }
 
     /// Sets repeating timer `id` to `ms` (0 stops it), only when its interval
@@ -3347,6 +3431,7 @@ impl App {
             TIMER_HALO => &mut self.halo_ms,
             TIMER_OUTSIDE => &mut self.outside_ms,
             TIMER_BEHIND => &mut self.behind_ms,
+            TIMER_POINTER => &mut self.pointer_ms,
             _ => return,
         };
         if *current == ms {
@@ -3370,6 +3455,8 @@ impl App {
         !self.fullscreen
             && !self.screen_away()
             && !hidden_behind
+            // The eyes take a press that only brings the notch back.
+            && !self.peek.is_shrunk()
             && !matches!(self.state.view(), View::Panel(_) | View::Hidden)
     }
 
@@ -3536,6 +3623,215 @@ impl App {
     fn set_front(&mut self, front: bool) {
         if let Some(win) = self.win.as_mut() {
             win.set_front(front);
+        }
+    }
+
+    // ---- The shared pointer poll: the notch peek and the cat's look ----
+
+    /// The notch may shrink to the eyes: "Di belakang jendela" is off (that
+    /// mode has its own way of getting out of the way), nothing is fullscreen,
+    /// the screen is on, and the view is a quiet compact one.
+    fn peek_eligible(&self) -> bool {
+        !self.config.stay_behind
+            && !self.fullscreen
+            && !self.screen_away()
+            && self.win.is_some()
+            && pointer_watch::peek_view(&self.state.view())
+    }
+
+    /// Ends a peek that may not go on (the notch is whole again at once).
+    /// True when it was shrunk or restored: the shape needs retargeting.
+    fn peek_guard(&mut self) -> bool {
+        if self.peek_eligible() {
+            return false;
+        }
+        self.under_cache.clear();
+        self.peek.reset()
+    }
+
+    /// The cat follows the pointer: it is on, motion is Full (after Energy
+    /// Saver), the idle view shows it, and the notch is not shrunk. In the
+    /// compact music, lyric and timer views its slot is tight, so it stays
+    /// still there.
+    fn look_eligible(&self, now: Instant) -> bool {
+        let view = self.state.view();
+        self.config.robot
+            && self.motion().moves()
+            && view == View::Idle
+            && !self.peek.is_shrunk()
+            && !self.fullscreen
+            && !self.screen_away()
+            && self.robot_frame(&view, now).is_some()
+    }
+
+    /// The closed view's notch as it is without the peek, in logical px;
+    /// `None` for a view that never shrinks.
+    fn normal_shape(&self, view: &View) -> Option<ShapeRect> {
+        let (style, robot, notch) = (self.config.style, self.config.robot, self.notch_size());
+        let kind = match view {
+            View::Idle => ShapeKind::Idle,
+            View::MediaCompact => ShapeKind::MediaCompact,
+            View::MediaLyric => {
+                return Some(lyric_shape_sized(style, notch, self.lyric_fit.width()));
+            }
+            View::PomodoroCompact => ShapeKind::PomodoroCompact,
+            _ => return None,
+        };
+        Some(shape_with_robot_sized(style, notch, kind, robot))
+    }
+
+    /// Where the cat's look goes when it cannot follow the pointer (or has
+    /// nothing to follow): back to the centre, eased while the cat is still
+    /// on screen with Full motion, at once otherwise. Nothing to do while it
+    /// follows.
+    fn sync_look(&mut self, now: Instant) {
+        if self.look_eligible(now) {
+            return;
+        }
+        let on_screen = self.config.robot
+            && self.motion().moves()
+            && self.state.view() == View::Idle
+            && !self.peek.is_shrunk()
+            && !self.fullscreen;
+        if on_screen {
+            if self.look.release() {
+                self.look_at = None;
+                self.ensure_clock();
+            }
+        } else {
+            self.look.snap_to_centre();
+            self.look_at = None;
+        }
+    }
+
+    /// One frame-clock tick of the cat's look: eased to `now`; once it has
+    /// arrived the clock may stop.
+    fn advance_look(&mut self, now: Instant) {
+        if !self.look.moving() {
+            self.look_at = None;
+            return;
+        }
+        let dt = self
+            .look_at
+            .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
+        self.look.advance(dt);
+        self.look_at = self.look.moving().then_some(now);
+    }
+
+    /// Starts, re-paces or stops `TIMER_POINTER`: it runs only while the notch
+    /// peek or the cat's look is eligible (which also rules out fullscreen,
+    /// a locked session and a display that is off), and its pace follows
+    /// `pointer_watch::poll_ms`.
+    fn sync_pointer_watch(&mut self, now: Instant) {
+        let (follow, peek) = (self.look_eligible(now), self.peek_eligible());
+        let ms = pointer_watch::poll_ms(follow, peek, self.pointer_near);
+        if ms == 0 {
+            self.under_cache.clear();
+            // The next start reads at the quick pace first.
+            self.pointer_near = true;
+        }
+        self.pace(TIMER_POINTER, ms);
+    }
+
+    /// `TIMER_POINTER`: one `GetCursorPos`, fed to both features.
+    fn on_pointer_timer(&mut self) {
+        if self.pointer_ms == 0 {
+            return;
+        }
+        let mut pt = POINT::default();
+        if unsafe { GetCursorPos(&mut pt) }.is_err() {
+            return;
+        }
+        let now = Instant::now();
+        let Some((origin, scale, screen_w)) = self
+            .win
+            .as_ref()
+            .map(|win| (win.screen_origin(), win.scale(), win.screen_w()))
+        else {
+            return;
+        };
+        self.pointer_near = ((pt.y - origin.1) as f32) < behind::NEAR_TOP_DIP * scale;
+        if self.peek_eligible() {
+            self.peek_tick(pt, now);
+        }
+        if self.look_eligible(now) {
+            // The island is centred on the monitor: so is the notch.
+            let centre = origin.0 as f32 + WINDOW_W * scale / 2.0;
+            let half = screen_w * scale / 2.0;
+            let v = pointer_watch::look_target(pt.x as f32, centre, centre - half, centre + half);
+            if self.look.set_target(v) {
+                self.ensure_clock();
+            }
+        }
+        // Eligibility may have changed with the peek; so may the pace.
+        self.sync_pointer_watch(now);
+    }
+
+    /// Feeds the pointer to the notch peek and applies what it decides.
+    fn peek_tick(&mut self, pt: POINT, now: Instant) {
+        let view = self.state.view();
+        let Some(normal) = self.normal_shape(&view) else {
+            return;
+        };
+        let Some((origin, k)) = self
+            .win
+            .as_ref()
+            .map(|win| (win.screen_origin(), win.scale()))
+        else {
+            return;
+        };
+        let (x, y) = (
+            (pt.x - origin.0) as f32 / k,
+            (pt.y - origin.1) as f32 / k,
+        );
+        let style = self.config.style;
+        let pill = shape_sized(style, self.notch_size(), ShapeKind::Eyes);
+        let in_zone = pointer_watch::peek_zone(normal).contains(x, y);
+        let over_normal = island_contains(style, normal, x, y, AA_MARGIN);
+        let over_pill = island_contains(style, pill, x, y, AA_MARGIN);
+        let before = self.peek.state();
+        if !in_zone {
+            self.under_cache.clear();
+        }
+        // The walk over the windows only when a shrink is possible, once on
+        // the approach and at most once a second while the pointer stays.
+        let candidate = before == PeekState::Normal && in_zone && !over_normal;
+        let window_under =
+            candidate && self.under_cache.get(now, || window_under_notch(origin, k, normal));
+        let inputs = PeekInputs {
+            eligible: true,
+            in_zone,
+            over_normal,
+            over_pill,
+            window_under,
+            dragging: in_zone && left_button_down(),
+        };
+        let after = self.peek.step(inputs, now);
+        if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
+            self.on_peek_changed(before, after, now);
+        }
+    }
+
+    /// The peek went from `from` to `to`: the island morphs to the eyes or
+    /// back. A notch that comes back under a pointer that rests on it starts
+    /// the hover as if the pointer had just arrived, so it opens as usual.
+    fn on_peek_changed(&mut self, from: PeekState, to: PeekState, now: Instant) {
+        // The drag margin is off while the eyes show.
+        self.sync_halo_timer();
+        let back = matches!(from, PeekState::Shrunk { .. }) && to == PeekState::Restored;
+        if back && self.hover.needs_arming() {
+            self.begin_hover();
+        } else {
+            self.refresh(now);
+        }
+    }
+
+    /// A click on the eyes: the notch comes back at once (and that press does
+    /// nothing else).
+    fn restore_peek(&mut self) {
+        let from = self.peek.state();
+        if self.peek.restore() {
+            self.on_peek_changed(from, self.peek.state(), Instant::now());
         }
     }
 
@@ -3746,6 +4042,7 @@ impl App {
             TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BEHIND => self.on_behind_timer(),
+            TIMER_POINTER => self.on_pointer_timer(),
             TIMER_HALO => self.on_halo_poll(),
             TIMER_BLINK => self.on_blink(),
             TIMER_ROBOT => {
@@ -3768,6 +4065,9 @@ impl App {
         };
         clock.ack();
         let now = Instant::now();
+        // The cat's look eases to this frame before it is drawn, so the frame
+        // that reaches the target is the last one the clock draws for it.
+        self.advance_look(now);
         let shape_done = self.anim.progress(now) >= 1.0;
         let slide_done = self.slide.is_none_or(|s| s.progress(now) >= 1.0);
         let reveal_done = self.reveal.is_none_or(|r| r.done(now));
@@ -3779,6 +4079,7 @@ impl App {
         self.frame_log.frame(now);
         if shape_done && self.anim.running {
             self.anim.running = false;
+            self.eyes_morph = false;
             // The panel that was closing is gone with its morph.
             self.leaving = None;
             self.frame_log.finish();
@@ -3867,6 +4168,11 @@ impl App {
             self.mixer_follow(lparam);
             return;
         }
+        // Shrunk to the eyes: they only restore the notch (by a click or by
+        // resting on them). Nothing hovers, no panel dwell starts.
+        if self.peek.is_shrunk() {
+            return;
+        }
         // The faint margin round a small island takes a drag (the shelf),
         // not the pointer: nothing hovers there.
         if !self.on_island(lparam) {
@@ -3884,8 +4190,12 @@ impl App {
         if !self.hover.needs_arming() {
             return;
         }
-        // The pointer's first move over the island: Bata wakes, looks happy
-        // and lifts before the dwell opens the panel.
+        self.begin_hover();
+    }
+
+    /// The pointer's first move over the island: Bata wakes, looks happy and
+    /// lifts before the dwell opens the panel; hover and leave tracking start.
+    fn begin_hover(&mut self) {
         let now = Instant::now();
         self.bata.brain.hover(true, now);
         self.refresh(now);
@@ -3901,6 +4211,11 @@ impl App {
     }
 
     fn on_mouse_hover(&mut self, lparam: LPARAM) {
+        // The eyes open no panel.
+        if self.peek.is_shrunk() {
+            self.hover.disarm();
+            return;
+        }
         // The faint margin round a small island takes a drag, not a hover.
         if !self.on_island(lparam) {
             self.hover.disarm();
@@ -3953,6 +4268,12 @@ impl App {
     fn on_press(&mut self, lparam: LPARAM) {
         self.outside_edge.press_inside();
         let hit = self.hit_at(lparam);
+        // The eyes take the press, for the release to restore the notch.
+        if self.peek.is_shrunk() {
+            self.swipe.cancel();
+            self.click.press(hit);
+            return;
+        }
         self.shelf_press(
             match hit {
                 Some(Hit::ShelfCard(i)) => Some(i),
@@ -3974,6 +4295,15 @@ impl App {
     /// the same target. A button pressed in another window and let go over
     /// the island does nothing. A swipe is not a click: it skips the song.
     fn on_release(&mut self, lparam: LPARAM) {
+        // A click on the eyes brings the notch back and does nothing else:
+        // it never opens the panel.
+        if self.peek.is_shrunk() {
+            let hit = self.hit_at(lparam);
+            if self.click.release(hit).is_some() {
+                self.restore_peek();
+            }
+            return;
+        }
         self.shelf_release();
         if self.mixer_drag.is_some() {
             self.end_mixer_drag();
@@ -4001,6 +4331,7 @@ impl App {
     /// page is open, and the setting is on.
     fn gestures_active(&self) -> bool {
         self.config.gestures
+            && !self.peek.is_shrunk()
             && self.state.media().is_some()
             && matches!(
                 self.state.view(),
@@ -4086,6 +4417,10 @@ impl App {
     /// pages through the panel anywhere else. `lparam` holds the pointer in
     /// screen coordinates.
     fn on_wheel(&mut self, delta: i32, lparam: LPARAM) {
+        // The eyes are no notch: a wheel over them turns nothing.
+        if self.peek.is_shrunk() {
+            return;
+        }
         let mut pt = POINT {
             x: (lparam.0 & 0xFFFF) as i16 as i32,
             y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
@@ -4231,6 +4566,8 @@ impl App {
             self.calendar_asked = None;
         }
         self.apply_theme();
+        // Stay-behind, the cat and its motion decide the pointer poll.
+        self.follow_pointer_settings(Instant::now());
     }
 
     /// Puts a changed accent, surface or window mode into effect: the island
@@ -4676,6 +5013,8 @@ impl App {
             },
             progress: track_progress(state, now),
             robot,
+            eyes: self.eyes,
+            robot_fades: self.eyes_morph,
             system: Some(&system),
             cleaner: cleaner.as_ref(),
             shot: shot::shot_view(&self.shots, &self.drawn),
@@ -4869,6 +5208,19 @@ fn primary_button_vk(swapped: bool) -> VIRTUAL_KEY {
 
 /// Whether the logical left (primary) button is down right now, the one that
 /// sends `WM_LBUTTONDOWN`.
+/// An ordinary window (not the desktop, not click-through, not Vale's own)
+/// lies under the normal notch `normal` (logical px in the island's window
+/// at screen `origin`, `scale` physical px per logical px).
+fn window_under_notch(origin: (i32, i32), scale: f32, normal: ShapeRect) -> bool {
+    let bounds = crate::capture::Rect::new(
+        origin.0 + (normal.x * scale).floor() as i32,
+        origin.1 + (normal.y * scale).floor() as i32,
+        (normal.w * scale).ceil() as i32,
+        (normal.h * scale).ceil() as i32,
+    );
+    !crate::capture::win::top_windows(bounds).is_empty()
+}
+
 fn left_button_down() -> bool {
     let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
     let vk = primary_button_vk(swapped);
@@ -7105,7 +7457,9 @@ mod tests {
             TIMER_HALO,
             TIMER_LYRIC_RETRY,
             TIMER_DEVICES,
+            TIMER_POINTER,
         ];
+        assert_eq!(TIMER_POINTER, 33);
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
         }

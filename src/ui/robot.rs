@@ -106,13 +106,43 @@ impl Expr {
     }
 }
 
-/// Moment-to-moment state on top of the face: eyes shut for a blink, and
-/// how far the whole cat is raised (hover lift, alert bounce), in px.
+/// How far the idle cat turns toward a pointer at the far edge of the screen
+/// (a look of 1): the head and ears slide `LOOK_HEAD_DIP`, tilt `LOOK_TILT_DEG`
+/// degrees toward it, and the eyes slide `LOOK_EYE_DIP` further across the
+/// face. Small enough that the head, ears and eyes stay inside the idle
+/// island and clear of its clock (`the_looking_cat_stays_in_the_idle_island`).
+pub const LOOK_HEAD_DIP: f32 = 8.0;
+pub const LOOK_TILT_DEG: f32 = 6.0;
+pub const LOOK_EYE_DIP: f32 = 4.0;
+
+/// Moment-to-moment state on top of the face: eyes shut for a blink, how far
+/// the whole cat is raised (hover lift, alert bounce), in px, and where it
+/// looks (the idle cat following the pointer, `pointer_watch::LookEase`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pose {
     pub blink: bool,
     pub lift_px: f32,
     pub bounce_px: f32,
+    /// The whole cat (head and ears) slides sideways, in dip.
+    pub head_dx_dip: f32,
+    /// And tilts, in degrees clockwise, on top of the face's own tilt.
+    pub tilt_deg: f32,
+    /// The face's marks slide further across the head, in dip.
+    pub eye_dx_dip: f32,
+}
+
+impl Pose {
+    /// The cat looking `v` of the way to the right edge (-1 to 1; negative
+    /// to the left): 0 is the pose as it has always been.
+    pub fn looking(self, v: f32) -> Pose {
+        let v = v.clamp(-1.0, 1.0);
+        Pose {
+            head_dx_dip: LOOK_HEAD_DIP * v,
+            tilt_deg: LOOK_TILT_DEG * v,
+            eye_dx_dip: LOOK_EYE_DIP * v,
+            ..self
+        }
+    }
 }
 
 // ---- Shapes (pure data, in grid units) ----
@@ -388,6 +418,30 @@ pub fn face(expr: Expr, blink: bool) -> Face {
     }
 }
 
+/// The idle face's two open eyes: the pills the shrunk notch shows alone.
+pub fn eye_pills() -> Vec<Part> {
+    face(Expr::Idle, false)
+        .parts
+        .into_iter()
+        .filter(|part| matches!(part, Part::Pill { .. }))
+        .collect()
+}
+
+/// How many dip one grid unit is when the eyes alone are drawn in the shrunk
+/// notch: the 10-unit eyes become 8 dip tall in its 14 dip.
+const EYES_SCALE: f32 = 0.8;
+
+/// The square `paint_eyes` takes so that the eyes are centred on `centre`
+/// (the middle of the line between them, grid point (32, 40)).
+pub fn eyes_area(centre: (f32, f32)) -> Rect {
+    Rect {
+        x: centre.0 - 32.0 * EYES_SCALE,
+        y: centre.1 - Y * EYES_SCALE,
+        w: GRID * EYES_SCALE,
+        h: GRID * EYES_SCALE,
+    }
+}
+
 /// Head: x 7 y 24, 50 × 30, a dome on top (radius 17) and a flat base.
 pub const HEAD: (f32, f32, f32, f32, f32) = (7.0, 24.0, 50.0, 30.0, 17.0);
 /// How far an ear's stroke (width 5, round joins) reaches past its triangle.
@@ -560,10 +614,14 @@ impl RobotPainter {
         }
         let face = face(expr, pose.blink);
         let k = area.w / GRID;
-        let local = Matrix3x2::rotation_around(face.tilt, Vector2::new(32.0, 40.0))
+        // The look turns and slides the whole cat; its marks slide a little further.
+        let local = Matrix3x2::rotation_around(face.tilt + pose.tilt_deg, Vector2::new(32.0, 40.0))
             * Matrix3x2::translation(0.0, face.bob)
             * Matrix3x2::scale(k, k)
-            * Matrix3x2::translation(area.x, area.y - pose.lift_px - pose.bounce_px);
+            * Matrix3x2::translation(
+                area.x + pose.head_dx_dip,
+                area.y - pose.lift_px - pose.bounce_px,
+            );
         let color = |rgb: u32, a: f32| {
             let ch = |s: u32| ((rgb >> s) & 0xFF) as f32 / 255.0;
             D2D1_COLOR_F {
@@ -606,7 +664,7 @@ impl RobotPainter {
             if let Some(g) = self.path(Shape::Head) {
                 rt.FillGeometry(&g, brush, None);
             }
-            rt.SetTransform(&world);
+            rt.SetTransform(&(Matrix3x2::translation(pose.eye_dx_dip / k, 0.0) * world));
             for part in &face.parts {
                 match *part {
                     Part::Pill { x, y, w, h, rx, ry } => {
@@ -636,6 +694,56 @@ impl RobotPainter {
                             rt.FillGeometry(&g, brush, None);
                         }
                     }
+                }
+            }
+            rt.SetTransform(&previous);
+        }
+    }
+}
+
+impl RobotPainter {
+    /// Only the two open eyes of the idle face, in the brand terracotta (the
+    /// espresso of the cat's own eyes would vanish on the dark notch), over a
+    /// square `area` as `eyes_area` gives. The render target's transform is
+    /// restored; the brush colour is not.
+    pub fn paint_eyes(
+        &self,
+        rt: &ID2D1RenderTarget,
+        brush: &ID2D1SolidColorBrush,
+        area: Rect,
+        alpha: f32,
+    ) {
+        if area.w <= 0.0 {
+            return;
+        }
+        let k = area.w / GRID;
+        let ch = |s: u32| ((TERRACOTTA >> s) & 0xFF) as f32 / 255.0;
+        unsafe {
+            let mut previous = Matrix3x2::default();
+            rt.GetTransform(&mut previous);
+            let local = Matrix3x2::scale(k, k) * Matrix3x2::translation(area.x, area.y);
+            rt.SetTransform(&(local * previous));
+            brush.SetColor(&D2D1_COLOR_F {
+                r: ch(16),
+                g: ch(8),
+                b: ch(0),
+                a: alpha,
+            });
+            for part in eye_pills() {
+                if let Part::Pill { x, y, w, h, rx, ry } = part {
+                    rt.FillRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: x,
+                                top: y,
+                                right: x + w,
+                                bottom: y + h,
+                            },
+                            radiusX: rx,
+                            radiusY: ry,
+                        },
+                        brush,
+                    );
                 }
             }
             rt.SetTransform(&previous);
@@ -1163,6 +1271,7 @@ impl Brain {
             bounce_px: self
                 .bounce
                 .map_or(0.0, |at| bounce_offset(now.saturating_duration_since(at))),
+            ..Pose::default()
         }
     }
 
@@ -1248,6 +1357,63 @@ mod tests {
             mole_running: false,
             battery_low: false,
         }
+    }
+
+    #[test]
+    fn the_look_turns_the_idle_cat_toward_the_pointer() {
+        // No look: the pose is exactly as it was.
+        assert_eq!(Pose::default().looking(0.0), Pose::default());
+        let left = Pose::default().looking(-1.0);
+        let right = Pose::default().looking(1.0);
+        assert_eq!(
+            (right.head_dx_dip, right.tilt_deg, right.eye_dx_dip),
+            (8.0, 6.0, 4.0)
+        );
+        assert_eq!(
+            (left.head_dx_dip, left.tilt_deg, left.eye_dx_dip),
+            (-8.0, -6.0, -4.0)
+        );
+        // Half way is half the way; past the ends is clamped.
+        assert_eq!(Pose::default().looking(0.5).head_dx_dip, 4.0);
+        assert_eq!(Pose::default().looking(9.0), right);
+        // Blink, lift and bounce carry on under the look.
+        let lifted = Pose {
+            blink: true,
+            lift_px: 2.0,
+            bounce_px: 1.0,
+            ..Pose::default()
+        };
+        let looked = lifted.looking(1.0);
+        assert!(looked.blink && looked.lift_px == 2.0 && looked.bounce_px == 1.0);
+    }
+
+    #[test]
+    fn the_shrunk_notch_shows_only_the_two_open_eyes() {
+        use super::super::geometry::{EYES_H, EYES_W};
+        let pills = eye_pills();
+        assert_eq!(pills.len(), 2);
+        // The very pills of the idle face.
+        let idle = face(Expr::Idle, false).parts;
+        assert_eq!(pills, idle);
+        // Centred in the 34 x 14 pill, with room round them.
+        let centre = (100.0, 50.0);
+        let area = eyes_area(centre);
+        assert_eq!(area.w, area.h);
+        let k = area.w / GRID;
+        let (mut left, mut top, mut right, mut bottom) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for part in pills {
+            let Part::Pill { x, y, w, h, .. } = part else {
+                panic!("an eye is a pill");
+            };
+            left = left.min(area.x + x * k);
+            top = top.min(area.y + y * k);
+            right = right.max(area.x + (x + w) * k);
+            bottom = bottom.max(area.y + (y + h) * k);
+        }
+        assert!(((left + right) / 2.0 - centre.0).abs() < 0.01);
+        assert!(((top + bottom) / 2.0 - centre.1).abs() < 0.01);
+        assert!(right - left < EYES_W - 12.0, "{}", right - left);
+        assert!(bottom - top <= EYES_H - 4.0, "{}", bottom - top);
     }
 
     #[test]
