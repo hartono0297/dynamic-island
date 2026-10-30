@@ -4233,7 +4233,6 @@ impl App {
     /// What the settings window shows.
     fn settings_model(&self) -> settings::Model {
         let status = self.state.pomodoro().status();
-        let (prtsc_failed, prtsc_windows) = self.prtsc_model();
         settings::Model {
             pomodoro: self.state.pomodoro().settings(),
             pomodoro_locked: !matches!(status, PomoStatus::Idle | PomoStatus::Ready),
@@ -4241,8 +4240,7 @@ impl App {
             clip_hotkey_failed: self.clip_hotkey_failed(),
             search_hotkey_failed: self.search.hotkey_failed,
             devices_hotkey_failed: self.devices.hotkey_failed,
-            prtsc_failed,
-            prtsc_windows,
+            prtsc: self.prtsc_model(),
             ..settings::Model::from_config(&self.config)
         }
     }

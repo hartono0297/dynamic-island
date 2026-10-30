@@ -68,7 +68,7 @@ use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
     CLIENT_H, CLIENT_W, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, List,
-    RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State, TileForm, Tone,
+    PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State, TileForm, Tone,
     battery_step, clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by,
     shot_secs_step, slider_value,
 };
@@ -154,7 +154,7 @@ pub enum Action {
     ShotPreview(bool),
     ShotOnIgnore(ShotIgnore),
     ShotSecs(u32),
-    /// "Tombol PrtSc membuka screenshot Vale".
+    /// "PrtSc untuk screenshot Vale".
     ShotPrintScreen(bool),
     /// "Matikan di Windows": switch off Windows' own PrtSc setting (HKCU),
     /// then take the key.
@@ -292,10 +292,8 @@ pub struct Model {
     pub devices_hotkey: DevicesHotkey,
     /// The chosen Devices hotkey could not be registered.
     pub devices_hotkey_failed: bool,
-    /// The PrtSc key is wanted but Vale could not register it, and whether
-    /// Windows' own setting still gives it to Snipping Tool.
-    pub prtsc_failed: bool,
-    pub prtsc_windows: bool,
+    /// What the PrtSc row says when the key is wanted but taken.
+    pub prtsc: PrtscRow,
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -344,8 +342,7 @@ impl Model {
             device_notices: cfg.device_notices,
             devices_hotkey: cfg.devices_hotkey,
             devices_hotkey_failed: false,
-            prtsc_failed: false,
-            prtsc_windows: false,
+            prtsc: PrtscRow::Plain,
             robot: cfg.robot,
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
@@ -1166,8 +1163,7 @@ impl Settings {
             device_notices: m.device_notices,
             devices_hotkey: m.devices_hotkey,
             devices_hotkey_failed: m.devices_hotkey_failed,
-            prtsc_failed: m.prtsc_failed,
-            prtsc_windows: m.prtsc_windows,
+            prtsc: m.prtsc,
             battery_threshold: m.battery_threshold,
             has_battery: self.has_battery,
             disk_warn_gb: m.disk_warn_gb,
@@ -2711,7 +2707,7 @@ pub fn run_demo(args: &[String]) {
             Action::ShotPreview(v) => m.shot.preview = v,
             Action::ShotPrintScreen(v) => m.shot.print_screen = v,
             // The demo never touches the registry: the click just frees the key.
-            Action::PrtscTurnOffWindows => m.prtsc_failed = false,
+            Action::PrtscTurnOffWindows => m.prtsc = PrtscRow::Plain,
             Action::ShotOnIgnore(v) => m.shot.on_ignore = v,
             Action::ShotSecs(v) => m.shot.show_secs = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
@@ -2829,10 +2825,14 @@ pub fn run_demo(args: &[String]) {
         lang,
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
         lyrics: env("DI_LYRICS") == "1",
-        // The PrtSc row taken: by Windows' own setting (the button shows) or
-        // by another app.
-        prtsc_failed: matches!(env("DI_PRTSC").as_str(), "windows" | "app"),
-        prtsc_windows: env("DI_PRTSC") == "windows",
+        // The PrtSc row taken: by Windows' own setting (the button shows), by
+        // another app, or written by Vale and waiting for a sign-out.
+        prtsc: match env("DI_PRTSC").as_str() {
+            "windows" => PrtscRow::TakenByWindows,
+            "app" => PrtscRow::TakenByApp,
+            "signout" => PrtscRow::SignOutToApply,
+            _ => PrtscRow::Plain,
+        },
         calendar,
         // A build with Vale's own client signs in without one.
         google_client_id: if configured && !client::has_built_in() {

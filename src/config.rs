@@ -192,7 +192,7 @@ pub struct ScreenshotSettings {
     /// "Alat screenshot".
     #[serde(deserialize_with = "shot_tool")]
     pub tool: ShotTool,
-    /// "Tombol PrtSc membuka screenshot Vale": the bare PrtSc key starts
+    /// "PrtSc untuk screenshot Vale": the bare PrtSc key starts
     /// Vale's own capture (default on). Missing or any non-bool reads as on.
     #[serde(deserialize_with = "print_screen")]
     pub print_screen: bool,

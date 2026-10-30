@@ -744,9 +744,10 @@ keys! {
     ShotToolVale => "Vale", "Vale";
     ShotToolWindows => "Snipping Tool", "Snipping Tool";
     // The bare PrtSc key opens Vale's own capture (Settings → Clipboard).
-    ShotPrintScreen => "Tombol PrtSc membuka screenshot Vale", "PrtSc key opens Vale's screenshot";
+    ShotPrintScreen => "PrtSc untuk screenshot Vale", "PrtSc for Vale's screenshot";
     PrtscUsedByWindows => "Dipakai Windows", "Used by Windows";
     PrtscTurnOffInWindows => "Matikan di Windows", "Turn off in Windows";
+    PrtscSignOut => "Berlaku setelah keluar dari Windows", "Applies after you sign out";
     SnapHint => "Klik atau seret · Enter ambil · Esc batal",
         "Click or drag · Enter to capture · Esc to cancel";
     EditTitle => "Vale · Screenshot", "Vale · Screenshot";

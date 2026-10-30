@@ -136,7 +136,8 @@ Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
   screenshot" says (that choice is only for the tile). `on_prtsc_hotkey`
   returns early when the setting is off or `capture::overlay::active()` (an
   overlay is up or starting); else `Event::PrintScreen`: the reducer collapses
-  an open panel or the search (like the tile's `collapse_for`) and asks
+  an open panel or the search (checked with `panel_open()`, not `view()`: a
+  transient notice on top hides a panel still held under it) and asks
   `Effect::RunCapture`, which `App` queues as `Action::Capture` on
   `TIMER_SHORTCUT` (delay `ANIM_MS + 60`), so the panel is not in the picture.
   It is not mapped through the `ms-screenclip:` branch of `queue_shortcut`, so
@@ -146,26 +147,37 @@ Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
 - **Windows conflict.** Win 11 gives the bare key to Snipping Tool
   (`HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`, DWORD, 0 =
   off, 1 or absent = on), and `RegisterHotKey` then fails. Settings row
-  (`prtsc_row`: Off / Active / TakenByWindows / TakenByApp): failed with the
-  value not 0 shows "Dipakai Windows" (red) and the button "Matikan di
-  Windows"; failed with value 0 shows "Dipakai aplikasi lain" and no button.
+  (`prtsc_row`: Off / Active / TakenByWindows / TakenByApp / SignOutToApply):
+  failed with the value not 0 shows "Dipakai Windows" (red) and the button
+  "Matikan di Windows"; failed with value 0 shows "Dipakai aplikasi lain" and
+  no button, unless Vale wrote that 0 this session (`wrote_off`): then
+  "Berlaku setelah keluar dari Windows" (warn), no button. Windows usually
+  applies a direct registry edit only after a sign-out, so a 0 read back is
+  Vale's own write, not a sign of another app. Row label "PrtSc untuk
+  screenshot Vale" is short so it fits beside the button (the layout test
+  measures every text in the row with `Estimate`).
 - **Click-only registry write.** The registry is only *read* (`RegGetValueW`)
-  while the key is wanted and taken (building the Settings model). The button
-  writes that value = 0 (`RegSetKeyValueW`, REG_DWORD, HKCU only), then tries
-  to register again; if that still fails (`after_disable_click`) it opens
-  `ms-settings:easeofaccess-keyboard`. Vale writes that value nowhere else.
+  once per failed `RegisterHotKey` try (`PrtscState::tried`) and kept; the
+  Settings model, rebuilt on every refresh while Settings is open, never reads
+  it. The button acts only while the row is TakenByWindows (a late click after
+  a retry freed the key writes nothing), writes that value = 0
+  (`RegSetKeyValueW`, REG_DWORD, HKCU only), then tries to register again.
+  Still failing (`after_disable_click`): written means the sign-out note and
+  nothing opens (Windows' page would already show the setting off); a failed
+  write opens `ms-settings:easeofaccess-keyboard`. No `WM_SETTINGCHANGE` is
+  sent (nothing documents one that frees the key). Vale writes that value
+  nowhere else.
 - **Retry.** A failed registration is tried again on config sync, when the
   tray menu opens and when Settings opens (`retry_hotkeys`), only while
   failed. Unregistered in the `WM_DESTROY` path (`prtsc_shutdown`). No timer.
 - **Untouched:** `app_shot.rs` (the clipboard preview of a PrtSc image still
   works when Windows has the key), `src/screenshot/`, the tile's tool choice,
   gestures, the search layout.
-- **Demo:** `DI_PRTSC=windows` or `app` with `--settings clipboard` shows the
-  two taken states without touching the registry (the demo's button click just
+- **Demo:** `DI_PRTSC=windows`, `app` or `signout` with `--settings clipboard`
+  shows the three taken states without touching the registry (the demo's button click just
   clears the state).
 - **Not verified live:** that the registry write frees the key at once on
-  every Windows 11 build (the click falls back to the Settings page when it
-  does not), and RegisterHotKey on PrtSc itself (tests never register it).
+  every Windows 11 build (when it does not, the row says to sign out), and RegisterHotKey on PrtSc itself (tests never register it).
 
 Related: [[screenshot-preview]], [[clipboard-privacy]], [[studio-editor-frame]],
 [[media-click-guards]], [[bata-idle-power-budget]]
