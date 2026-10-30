@@ -2951,6 +2951,7 @@ impl App {
             || self.lyric_fading
             || self.lyric_scrolling
             || self.robot_moving(now)
+            || self.shelf.motion.running(now)
     }
 
     /// The window is `TALL_WINDOW_H` tall while the enlarged CLI panel shows
@@ -3701,6 +3702,8 @@ impl App {
         if self.rise.is_some_and(|r| !r.running(now)) {
             self.rise = None;
         }
+        // The shelf's cards likewise: the frame just drawn was their last.
+        self.shelf.motion.prune(now);
         // At the drawn frame's time, so a lift or bounce ends on its rest frame.
         if !self.animating_at(now) {
             // Dropping joins the frame thread, which wakes within one frame.
@@ -4428,6 +4431,7 @@ impl App {
             mixer: self.mixer.as_deref(),
             shelf: &self.shelf.cards,
             shelf_drag: self.shelf.dragging,
+            shelf_motion: &self.shelf.motion,
             devices: DevicesView {
                 list: &self.devices.list,
                 ejecting: &self.devices.ejecting,

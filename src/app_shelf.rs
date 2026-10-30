@@ -7,9 +7,14 @@
 //! The shelf lives in memory: a restart empties it. Nothing runs while it
 //! is closed; whether a file is still there is looked at when the page
 //! opens, after a drop and before a card is opened or dragged.
+//!
+//! Cards animate in, out and across (`ui::shelf_motion`): a drop, a removal
+//! and "Kosongkan" snapshot the cards and their places before the list
+//! changes and hand both to the motion state. It counts in `animating_at`,
+//! so the frame clock runs only while something moves.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
@@ -19,6 +24,9 @@ use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, KillTimer, SetTimer}
 use super::{App, Event, Page, View, client_xy};
 use crate::shelf::{self, Probe, Shelf, ShelfCard};
 use crate::shortcuts;
+use crate::ui::geometry::{Rect, ShapeKind, shape_for};
+use crate::ui::panel_layout::shelf_layout;
+use crate::ui::shelf_motion::ShelfMotion;
 
 /// One-shot: the drag has left the island; when it fires, the drag's hold on
 /// the panel ends (a drop kills it, the drop latches the panel itself).
@@ -28,6 +36,9 @@ pub(super) const TIMER_SHELF_HOLD: usize = 27;
 const SHELF_LEAVE_MS: u32 = 600;
 /// A press on a card turns into a drag out after this many logical pixels.
 const DRAG_START_DIP: f32 = 6.0;
+/// Files dropped while the panel is shut wait this long before the cards
+/// come in, so the panel's own opening (240 ms) is not what hides them.
+const OPEN_DELAY_MS: u64 = 120;
 
 #[derive(Default)]
 pub(super) struct ShelfState {
@@ -40,6 +51,8 @@ pub(super) struct ShelfState {
     pub dragging: bool,
     /// A left press on card `i` at this client point: it may become a drag.
     press: Option<(usize, i32, i32)>,
+    /// Cards coming in, going out or sliding; empty at rest.
+    pub motion: ShelfMotion,
 }
 
 impl App {
@@ -77,6 +90,43 @@ impl App {
             self.shelf_look();
         }
         self.shelf.shown = wanted;
+        // Nothing animates while the page is not on screen (or with
+        // Windows' animation effects off): the state is simply dropped.
+        if (!wanted || !self.animations) && !self.shelf.motion.is_empty() {
+            self.shelf.motion.clear();
+        }
+    }
+
+    /// Where the page puts `n` cards: the panel's resting shape, with the
+    /// strip as it is drawn (the same layout the renderer builds).
+    fn shelf_rects(&self, n: usize) -> Vec<Rect> {
+        let shape = shape_for(self.config.style, ShapeKind::Panel);
+        let strip = self.state.waiting_strip().is_some();
+        shelf_layout(shape, strip, n)
+            .cards
+            .iter()
+            .map(|c| c.card)
+            .collect()
+    }
+
+    /// The cards changed from `old` to what `self.shelf.cards` is now:
+    /// records the motion (when the effects are on) and starts the frame
+    /// clock if something moves. `delay` holds the start back.
+    fn shelf_animate(&mut self, old: &[ShelfCard], now: Instant, delay: Duration) {
+        let old_rects = self.shelf_rects(old.len());
+        let new_rects = self.shelf_rects(self.shelf.cards.len());
+        let start = now + delay;
+        self.shelf.motion.on_change(
+            old,
+            &old_rects,
+            &self.shelf.cards,
+            &new_rects,
+            start,
+            self.animations,
+        );
+        if self.shelf.motion.running(now) {
+            self.ensure_clock();
+        }
     }
 
     /// Files dropped on the island: they go on the shelf and the panel stays
@@ -84,8 +134,17 @@ impl App {
     /// arriving whatever the pointer does next.
     pub(super) fn on_shelf_drop(&mut self, paths: Vec<PathBuf>, now: Instant) {
         self.shelf.dragging = false;
+        let old = self.shelf.cards.clone();
         self.shelf.shelf.add(paths);
         self.shelf_look();
+        // The cards on a page that is already showing come in at once; a
+        // panel that is still opening gets them once it has grown a little.
+        let delay = if self.shelf.shown {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(OPEN_DELAY_MS)
+        };
+        self.shelf_animate(&old, now, delay);
         // The drag is over: a pending 600 ms leave must not end anything.
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SHELF_HOLD);
@@ -116,16 +175,22 @@ impl App {
     }
 
     pub(super) fn shelf_remove(&mut self, i: usize) {
+        let old = self.shelf.cards.clone();
         if self.shelf.shelf.remove(i) {
             self.shelf_look();
-            self.refresh(Instant::now());
+            let now = Instant::now();
+            self.shelf_animate(&old, now, Duration::ZERO);
+            self.refresh(now);
         }
     }
 
     pub(super) fn shelf_clear(&mut self) {
+        let old = self.shelf.cards.clone();
         if self.shelf.shelf.clear() {
             self.shelf_look();
-            self.refresh(Instant::now());
+            let now = Instant::now();
+            self.shelf_animate(&old, now, Duration::ZERO);
+            self.refresh(now);
         }
     }
 

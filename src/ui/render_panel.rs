@@ -65,10 +65,11 @@ use crate::ui::panel_layout::{
     cli_suggestions, clipboard_layout, device_shapes, devices_layout, media_panel_layout,
     media_progress_layout, mixer_layout, mole_layout, notes_layout, page_dots,
     pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
-    reminders_layout, search_layout, shelf_layout, shortcuts_layout, system_layout, tile_parts,
-    volume_hud_layout, waiting_strip,
+    reminders_layout, search_layout, shelf_card_layout, shelf_layout, shortcuts_layout,
+    system_layout, tile_parts, volume_hud_layout, waiting_strip,
 };
 use crate::ui::robot::{Expr, Pose};
+use crate::ui::shelf_motion::Drawn;
 
 /// A heading's line (DM Sans 600 20, 26 px) is taller than the 22 px header
 /// row: its box grows by this much above and below so the line, descenders
@@ -715,7 +716,7 @@ impl Renderer {
                 Ok(())
             }
             PageLayout::Shelf(l) => {
-                self.paint_shelf(l, frame.shelf, frame.shelf_drag);
+                self.paint_shelf(l, frame);
                 Ok(())
             }
             PageLayout::Search(l) => {
@@ -2610,10 +2611,16 @@ impl Renderer {
     /// The shelf: its title with the count and a quiet "Kosongkan", cards
     /// with an icon over a name of up to two lines, and a dashed zone that
     /// lights in the accent while files are dragged over the island.
-    fn paint_shelf(&self, l: &ShelfLayout, cards: &[ShelfCard], dragging: bool) {
+    fn paint_shelf(&self, l: &ShelfLayout, frame: &Frame) {
         let lang = i18n::lang();
         let p = self.palette;
-        let title = match cards.len() {
+        let (cards, dragging) = (frame.shelf, frame.shelf_drag);
+        let (motion, now) = (frame.shelf_motion, frame.now);
+        // Cards on their way out still count, and keep the empty hint away,
+        // until the last of them is gone.
+        let leaving = motion.ghost_count(now);
+        let shown = cards.len() + leaving;
+        let title = match shown {
             0 => text(lang, Key::PageShelf).to_owned(),
             n => format!("{} \u{b7} {n}", text(lang, Key::PageShelf)),
         };
@@ -2633,7 +2640,7 @@ impl Renderer {
             self.set_color(p.accent, 0.08);
             self.fill_round(l.zone, radius::TILE);
         }
-        if let Some(empty) = l.empty {
+        if let Some(empty) = l.empty.filter(|_| leaving == 0) {
             if !dragging {
                 self.stroke_dashed(empty, radius::TILE, p.track, 1.5);
             }
@@ -2661,39 +2668,82 @@ impl Renderer {
             );
             self.text_colored(hint, &self.fonts.eleven_center, text_area, ink, 1.0);
         }
-        let per_line = ((l.cards.first().map_or(100.0, |c| c.label.w)) / 6.4) as usize;
+        // The cards that left, under the ones that stay. Per-draw alpha and
+        // a transform only: no layer, so this is safe inside a page
+        // cross-fade or reveal (they hold `layer2`).
+        for (card, drawn) in motion.ghosts(now) {
+            self.paint_shelf_card(card, drawn, l.lines);
+        }
         for (lay, card) in l.cards.iter().zip(cards) {
-            let alpha = if card.stale { 0.4 } else { 1.0 };
-            self.set_color(p.raised, 1.0);
-            self.fill_round(lay.card, radius::TILE);
-            self.icon(crate::shelf::icon(card.kind), lay.glyph, 26.0, alpha, true);
-            let lines = crate::shelf::wrap_name(&card.name, per_line.max(6), l.lines);
-            for (i, line) in lines.iter().enumerate() {
-                let row = Rect {
-                    y: lay.label.y + i as f32 * (lay.label.h / l.lines as f32),
-                    h: lay.label.h / l.lines as f32,
-                    ..lay.label
-                };
-                self.text(line, &self.fonts.eleven_center, row, alpha);
-            }
-            // The X on a small round chip, so it reads on any card.
-            self.set_color(p.raised_hi, 0.9);
-            self.fill_round(lay.remove, lay.remove.h / 2.0);
-            self.icon_colored(Icon::X, lay.remove, 10.0, p.secondary, 1.0, None);
-            if card.stale {
-                self.set_color(p.track, 1.0);
-                self.fill_round(lay.missing, lay.missing.h / 2.0);
-                self.text(
-                    text(lang, Key::ShelfMissing),
-                    &self.fonts.micro_center,
-                    lay.missing,
-                    1.0,
-                );
-            }
+            let drawn = motion.card_at(&card.key, lay.card, now);
+            self.paint_shelf_card(card, drawn, l.lines);
         }
         // The outline last, so cards never cut it.
         if dragging {
             self.stroke_dashed(l.zone, radius::TILE, p.accent, 1.5);
+        }
+    }
+
+    /// One card as `drawn` says: its parts laid out in the rect it is at, all
+    /// at its opacity, scaled around its centre and shifted down by `dy`.
+    fn paint_shelf_card(&self, card: &ShelfCard, drawn: Drawn, lines: usize) {
+        if drawn.alpha <= 0.0 {
+            return;
+        }
+        let lang = i18n::lang();
+        let p = self.palette;
+        let lay = shelf_card_layout(drawn.rect, lines);
+        let target = self.target.as_ref().expect("target ensured by paint");
+        let mut at = Matrix3x2::identity();
+        let moved = !drawn.at_rest();
+        if moved {
+            // Whatever shifts the page (a slide, a reveal) is a translation:
+            // the scale is composed under it.
+            unsafe { target.rt.GetTransform(&mut at) };
+            let (cx, cy) = (lay.card.x + lay.card.w / 2.0, lay.card.y + lay.card.h / 2.0);
+            let s = drawn.scale;
+            let scaled = Matrix3x2 {
+                M11: s,
+                M12: 0.0,
+                M21: 0.0,
+                M22: s,
+                M31: at.M31 + cx * (1.0 - s),
+                M32: at.M32 + cy * (1.0 - s) + drawn.dy,
+            };
+            unsafe { target.rt.SetTransform(&scaled) };
+        }
+        let a = drawn.alpha;
+        let ink = if card.stale { 0.4 * a } else { a };
+        // As long as a name fits the card: about 6.4 px a character.
+        let per_line = (lay.label.w / 6.4) as usize;
+        self.set_color(p.raised, a);
+        self.fill_round(lay.card, radius::TILE);
+        self.icon(crate::shelf::icon(card.kind), lay.glyph, 26.0, ink, true);
+        let names = crate::shelf::wrap_name(&card.name, per_line.max(6), lines);
+        for (i, line) in names.iter().enumerate() {
+            let row = Rect {
+                y: lay.label.y + i as f32 * (lay.label.h / lines as f32),
+                h: lay.label.h / lines as f32,
+                ..lay.label
+            };
+            self.text(line, &self.fonts.eleven_center, row, ink);
+        }
+        // The X on a small round chip, so it reads on any card.
+        self.set_color(p.raised_hi, 0.9 * a);
+        self.fill_round(lay.remove, lay.remove.h / 2.0);
+        self.icon_colored(Icon::X, lay.remove, 10.0, p.secondary, a, None);
+        if card.stale {
+            self.set_color(p.track, a);
+            self.fill_round(lay.missing, lay.missing.h / 2.0);
+            self.text(
+                text(lang, Key::ShelfMissing),
+                &self.fonts.micro_center,
+                lay.missing,
+                a,
+            );
+        }
+        if moved {
+            unsafe { target.rt.SetTransform(&at) };
         }
     }
 

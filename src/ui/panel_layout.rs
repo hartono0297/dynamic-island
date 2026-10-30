@@ -2344,6 +2344,30 @@ pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsL
     ShortcutsLayout { header, tiles }
 }
 
+/// The parts of a shelf card drawn in `card` with `lines` name lines. The
+/// page lays its cards out with it, and the shelf's motion draws a card
+/// that is between two places with it.
+pub fn shelf_card_layout(card: Rect, lines: usize) -> ShelfCardLayout {
+    let group = SHELF_GLYPH_H + SHELF_GAP + lines as f32 * SHELF_LINE_H;
+    let remove = rect(card.right() - SHELF_X - 4.0, card.y + 4.0, SHELF_X, SHELF_X);
+    let top = card.y + (card.h - group) / 2.0;
+    let glyph = rect(card.x, top, card.w, SHELF_GLYPH_H);
+    let label = rect(
+        card.x + 6.0,
+        glyph.bottom() + SHELF_GAP,
+        card.w - 12.0,
+        lines as f32 * SHELF_LINE_H,
+    );
+    let missing = rect(card.x + 6.0, card.y + 6.0, 40.0, 15.0);
+    ShelfCardLayout {
+        card,
+        remove,
+        glyph,
+        label,
+        missing,
+    }
+}
+
 /// The Shelf page for `n` cards (at most twelve). Cards keep the size they
 /// have with two rows, so a single file is not a giant tile; they start at
 /// the top.
@@ -2358,28 +2382,13 @@ pub fn shelf_layout(s: ShapeRect, strip: bool, n: usize) -> ShelfLayout {
     let rows = n.div_ceil(4).max(2) as f32;
     let h = ((bottom - body - (rows - 1.0) * TILE_GAP) / rows).min(TILE_MAX_H);
     let lines = if rows > 2.0 { 1 } else { 2 };
-    let group = SHELF_GLYPH_H + SHELF_GAP + lines as f32 * SHELF_LINE_H;
     let cards = (0..n)
         .map(|i| {
             let (row, col) = ((i / 4) as f32, (i % 4) as f32);
-            let card = rect(l + col * (w + TILE_GAP), body + row * (h + TILE_GAP), w, h);
-            let remove = rect(card.right() - SHELF_X - 4.0, card.y + 4.0, SHELF_X, SHELF_X);
-            let top = card.y + (card.h - group) / 2.0;
-            let glyph = rect(card.x, top, card.w, SHELF_GLYPH_H);
-            let label = rect(
-                card.x + 6.0,
-                glyph.bottom() + SHELF_GAP,
-                card.w - 12.0,
-                lines as f32 * SHELF_LINE_H,
-            );
-            let missing = rect(card.x + 6.0, card.y + 6.0, 40.0, 15.0);
-            ShelfCardLayout {
-                card,
-                remove,
-                glyph,
-                label,
-                missing,
-            }
+            shelf_card_layout(
+                rect(l + col * (w + TILE_GAP), body + row * (h + TILE_GAP), w, h),
+                lines,
+            )
         })
         .collect();
     let zone = rect(l, body, r - l, (bottom - body).max(0.0));
