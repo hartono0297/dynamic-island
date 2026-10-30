@@ -44,6 +44,8 @@ no single thing to cut.
   demo can run inside the workflow to show the frame times are equal. Try it
   by hand (`opt-level = "z"` in `[profile.release]`), watch the page slides
   and the lyric scroll, then decide.
+  **Decided 2026-10-30: the owner keeps `"s"`.** Don't propose `z` again
+  unless size becomes a real problem.
 - **Icon.** `scripts/make-icon.ps1` now writes PNG payloads at every size (it
   wrote 32 bpp DIBs below 128 px). Same nine sizes, 50,457 -> 12,573 bytes.
   `src/ui/icon_frames.rs` decodes every frame through WIC and compares an
