@@ -155,6 +155,12 @@ pub enum Event {
     Click(Hit),
     /// Raw `WM_MOUSEWHEEL` delta: +120 per notch away from the user.
     Wheel(i32),
+    /// A sideways flick (a touchpad's two-finger swipe, a tilt wheel) over
+    /// the open panel: exactly one page, right (`next`) or left, in the
+    /// order and with the skips of the vertical wheel. `App` makes the flick
+    /// (one per scroll) and decides where it counts; the reducer applies the
+    /// wheel's own rules (the sticky reminder's peek, never the search).
+    PageFlick { next: bool },
     /// A note, event or reminder editor window opened (true) or closed (false).
     EditorOpen(bool),
     /// The local date rolled over.
@@ -346,6 +352,8 @@ pub enum Hit {
     Strip,
     /// A result row of the quick search (its place in the list).
     SearchResult(usize),
+    /// The back button left of the quick search's field: closes it, as Esc.
+    SearchBack,
     /// A built-in tile on the Pintasan page.
     Shortcut(Shortcut),
     /// A custom tile: its place in the tiles the page shows.

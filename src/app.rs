@@ -4025,14 +4025,52 @@ impl App {
         }
     }
 
-    /// `WM_MOUSEHWHEEL`: a sideways flick skips the song.
-    fn on_hwheel(&mut self, delta: i32) {
-        if !self.gestures_active() {
+    /// `WM_MOUSEHWHEEL`: a sideways flick turns one panel page over the
+    /// open panel (navigation like the vertical wheel, so not behind
+    /// `config.gestures`), or skips the song on the compact music notch
+    /// (`gestures::hwheel_route` decides). `lparam` holds the pointer in
+    /// screen coordinates. No element of the panel scrolls sideways (the
+    /// EDIT controls with `ES_AUTOHSCROLL` are hidden and owner-drawn), so
+    /// nothing else claims the flick.
+    fn on_hwheel(&mut self, delta: i32, lparam: LPARAM) {
+        let route = gestures::hwheel_route(
+            &self.state.view(),
+            self.state.cli_menu(),
+            self.gestures_active(),
+            self.screen_on_island(lparam),
+        );
+        if route == gestures::HRoute::Nothing {
             return;
         }
-        if let Some(dir) = self.hwheel.push(delta, Instant::now()) {
-            self.apply_now(Event::Click(gesture_hit(dir)));
+        let Some(dir) = self.hwheel.push(delta, Instant::now()) else {
+            return;
+        };
+        match route {
+            gestures::HRoute::Page => {
+                // Like the vertical wheel: the Music page's cover leaves the
+                // next vertical notch to the pages for a moment.
+                self.last_paging = Some(Instant::now());
+                self.apply_now(Event::PageFlick {
+                    next: dir == gestures::Dir::Next,
+                });
+            }
+            gestures::HRoute::Song => self.apply_now(Event::Click(gesture_hit(dir))),
+            gestures::HRoute::Nothing => {}
         }
+    }
+
+    /// Whether a screen position (a wheel message's `lparam`) is on a drawn
+    /// island pixel, not the faint margin round it.
+    fn screen_on_island(&self, lparam: LPARAM) -> bool {
+        let mut pt = POINT {
+            x: (lparam.0 & 0xFFFF) as i16 as i32,
+            y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+        };
+        unsafe { ScreenToClient(self.hwnd, &mut pt) }.as_bool()
+            && matches!(
+                self.renderer.under(pt.x as f32, pt.y as f32),
+                Under::Island(_)
+            )
     }
 
     /// The wheel scrolls the CLI output while the pointer is over it, and
@@ -5252,6 +5290,7 @@ fn is_activity(event: &Event) -> bool {
             | Event::ClaudeActivity { .. }
             | Event::Click(_)
             | Event::Wheel(_)
+            | Event::PageFlick { .. }
             | Event::Hover(true)
             | Event::EditorOpen(_)
             | Event::CliFocus(_)
@@ -6125,7 +6164,7 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_MOUSEHWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16;
-            with_app(|app| app.on_hwheel(i32::from(delta)));
+            with_app(|app| app.on_hwheel(i32::from(delta), lparam));
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

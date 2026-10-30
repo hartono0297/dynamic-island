@@ -551,6 +551,8 @@ fn clipped(r: Rect, clip: Rect) -> Option<Rect> {
 /// The quick search: the field on top, the result rows under it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchLayout {
+    /// The back button at the left of the field (closes the search, as Esc).
+    pub back: Rect,
     pub field: Rect,
     /// One per result, top to bottom.
     pub rows: Vec<Rect>,
@@ -563,6 +565,10 @@ pub const SEARCH_FIELD_H: f32 = 32.0;
 pub const SEARCH_ROW_H: f32 = 28.0;
 const SEARCH_ROW_GAP: f32 = 4.0;
 const SEARCH_FIELD_GAP: f32 = 8.0;
+/// The back button's width (its height is the field's) and the gap to the
+/// field.
+pub const SEARCH_BACK_W: f32 = 32.0;
+const SEARCH_BACK_GAP: f32 = 8.0;
 
 /// A button on the selected Clipboard card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2302,7 +2308,9 @@ pub fn clipboard_layout(
 pub fn search_layout(s: ShapeRect, strip: bool, n: usize) -> SearchLayout {
     let top = content_top(s, strip);
     let (l, r) = (left(s), right(s));
-    let field = rect(l, top, r - l, SEARCH_FIELD_H);
+    let back = rect(l, top, SEARCH_BACK_W, SEARCH_FIELD_H);
+    let fx = back.right() + SEARCH_BACK_GAP;
+    let field = rect(fx, top, (r - fx).max(0.0), SEARCH_FIELD_H);
     let first = field.bottom() + SEARCH_FIELD_GAP;
     let rows = (0..n.min(crate::search::MAX_RESULTS))
         .map(|i| {
@@ -2315,7 +2323,12 @@ pub fn search_layout(s: ShapeRect, strip: bool, n: usize) -> SearchLayout {
         })
         .collect();
     let empty = (n == 0).then(|| rect(l, first, r - l, (content_bottom(s) - first).max(0.0)));
-    SearchLayout { field, rows, empty }
+    SearchLayout {
+        back,
+        field,
+        rows,
+        empty,
+    }
 }
 
 pub fn shortcuts_layout(s: ShapeRect, strip: bool, tiles: &[Tile]) -> ShortcutsLayout {
@@ -2976,6 +2989,7 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             }
         }
         PageLayout::Search(l) => {
+            add(l.back, Hit::SearchBack);
             for (i, r) in l.rows.iter().enumerate() {
                 add(*r, Hit::SearchResult(i));
             }

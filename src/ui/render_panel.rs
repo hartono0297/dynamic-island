@@ -2239,6 +2239,11 @@ impl Renderer {
         let lang = i18n::lang();
         let p = self.palette;
         let hint = text(lang, Key::SearchHint);
+        // The back button: the same raised round shape as the field, the
+        // arrow in the icons' ink.
+        self.set_color(p.raised, 1.0);
+        self.fill_round(l.back, 12.0);
+        self.icon_colored(Icon::Back, l.back, 16.0, p.secondary, 1.0, None);
         let caret = self.paint_text_field(l.field, view.query, view.selection, view.focused, hint);
         if caret.is_some() {
             self.search_caret.set(caret);

@@ -559,12 +559,7 @@ impl IslandState {
                     self.search_hotkey(&mut effects);
                 }
             }
-            Event::SearchClose => {
-                if self.search_open {
-                    self.search_open = false;
-                    self.collapse();
-                }
-            }
+            Event::SearchClose => self.close_search(),
             Event::ClipCommit => {
                 if self.view() == View::Panel(Page::Clipboard) {
                     self.collapse();
@@ -593,6 +588,19 @@ impl IslandState {
                     self.wheel = 0;
                 } else {
                     self.wheel(delta)
+                }
+            }
+            Event::PageFlick { next } => {
+                // The wheel's rules: the peek over the sticky reminder spends
+                // the flick on opening the panel.
+                if self.hover_blocked && self.current.is_none() && self.open_mode != OpenMode::Click
+                {
+                    self.hover_blocked = false;
+                    self.wheel = 0;
+                } else if self.can_turn_page() {
+                    // A vertical residue must not add a second step.
+                    self.wheel = 0;
+                    self.turn_page(if next { 1 } else { -1 });
                 }
             }
             Event::Today(date) => self.set_today(date),
@@ -1142,7 +1150,7 @@ impl IslandState {
             }
             // A page turned by the wheel (a notch that did not turn one
             // arms nothing).
-            Event::Wheel(_) => LingerTrigger::PageTurn,
+            Event::Wheel(_) | Event::PageFlick { .. } => LingerTrigger::PageTurn,
             Event::CliFocus(false) | Event::ClipFocus(false) => LingerTrigger::StillOpen,
             _ => LingerTrigger::No,
         }
@@ -1533,6 +1541,9 @@ impl IslandState {
             // The panel gets out of the way first: the screenshot or picker
             // is for the window underneath. `App` waits for that.
             Hit::Shortcut(s) => self.collapse_for(Effect::RunShortcut(s), effects),
+            // The back button: exactly Esc (`Event::SearchClose`), so the
+            // page and the keyboard go back the same way.
+            Hit::SearchBack => self.close_search(),
             // Runs it and closes the search (Enter is this click too).
             Hit::SearchResult(i) => {
                 if self.search_open {
@@ -1692,16 +1703,35 @@ impl IslandState {
     /// Scrolling down (negative delta) moves right through the pages. Steps
     /// past either end are spent, so one notch back always moves a page.
     fn wheel(&mut self, delta: i32) {
-        // The search is not in the order of pages: the wheel stays out.
-        if !matches!(self.view(), View::Panel(_)) || self.page == Page::Search {
+        if !self.can_turn_page() {
             return;
         }
         self.wheel = self.wheel.saturating_add(delta);
         let steps = self.wheel / WHEEL_STEP;
         self.wheel -= steps * WHEEL_STEP;
         // Steps count up the wheel; later pages are down it.
+        self.turn_page(-i64::from(steps));
+    }
+
+    /// Whether the wheel or a flick may turn a page: the panel shows one,
+    /// and it is not the search (not in the order of pages).
+    fn can_turn_page(&self) -> bool {
+        matches!(self.view(), View::Panel(_)) && self.page != Page::Search
+    }
+
+    /// Closes the quick search (Esc, the back button): the page it came
+    /// over returns in the post-process of `apply`.
+    fn close_search(&mut self) {
+        if self.search_open {
+            self.search_open = false;
+            self.collapse();
+        }
+    }
+
+    /// Moves `steps` pages through the owner's order (negative: back).
+    fn turn_page(&mut self, steps: i64) {
         let from = self.page;
-        self.page = self.pages.step(self.page, -i64::from(steps));
+        self.page = self.pages.step(self.page, steps);
         // A page turned with the pointer on a dropped shelf: the panel is
         // the pointer's now (and closes when it leaves). Without hover the
         // dwell has not fired yet, so the latch stays for it.
