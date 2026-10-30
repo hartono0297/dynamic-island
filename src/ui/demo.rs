@@ -70,6 +70,11 @@
 //! by Excel, Kartu SD H:), never a scan of this machine's drives and never an
 //! eject. `DI_DEMO_STEP=devices` holds one in `--demo` as well.
 //!
+//! `dock-hover` and `dock-hover-edge` draw the page dots as the icon dock
+//! (`ui::dock`), settled: the pointer over the 4th icon, or over the first.
+//! `DI_DOCK_X=<dip>` puts the pointer at that x (window dip, the panel is
+//! 560 wide) instead; without it the scenes show the settled scales.
+//!
 //! `--demo-robot` runs only Bata's scenes (`bata-*`): the sheet of faces and
 //! sizes (studio-robot.html p2) and the notch states (p3). Their clocks are
 //! fixed ("14:32", "23:48"), so nothing depends on the time of day.
@@ -84,6 +89,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
+use super::dock::{self, DockFrame};
 use super::geometry::{
     ANIM_MS, NOTCH_OPACITY_DEFAULT, NotchSize, ShapeKind, ShapeRect, ease_out_back, lerp_shape,
     lyric_box_w, lyric_max_w, lyric_scroll_offset, lyric_shape_sized, lyric_width_min,
@@ -188,6 +194,8 @@ struct Scene {
     fade_from: Option<Page>,
     /// What the Devices page shows.
     devices: DevicesDemo,
+    /// The page dots as the dock, the pointer over this icon (0-based).
+    dock: Option<usize>,
     /// The compact view or notice has the see-through background
     /// (`DI_NOTCH_OPACITY`, 30 % by default).
     transparent: bool,
@@ -386,6 +394,7 @@ const BASE: Scene = Scene {
     reveal: None,
     fade_from: None,
     devices: DevicesDemo::Design,
+    dock: None,
     transparent: false,
 };
 
@@ -572,7 +581,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 112] = [
+const SCENES: [Scene; 114] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -744,6 +753,15 @@ const SCENES: [Scene; 112] = [
     devices_page("devices-empty", DevicesDemo::Empty),
     notice("device-plugged", DemoNotice::DevicePlugged),
     notice("device-safe", DemoNotice::DeviceSafe),
+    // The page dots hovered: icons, magnified around the pointer.
+    Scene {
+        dock: Some(3),
+        ..panel("dock-hover", Page::Calendar)
+    },
+    Scene {
+        dock: Some(0),
+        ..panel("dock-hover-edge", Page::Calendar)
+    },
     // Fixed sizes (deepclean-opsi-d.html); never a real scan.
     cleaner("cleaner", CleanDemo::Ticks),
     cleaner("cleaner-confirm", CleanDemo::Armed),
@@ -1207,6 +1225,7 @@ fn run_scenes(scenes: &[Scene]) {
     let frozen_reveal: Option<f32> = env("DI_DEMO_REVEAL");
     let notch = demo_notch();
     let frozen_shelf: Option<f32> = env("DI_DEMO_SHELF");
+    let dock_x: Option<f32> = env("DI_DOCK_X");
     let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -1443,6 +1462,14 @@ fn run_scenes(scenes: &[Scene]) {
                 },
                 page_from: scene.fade_from,
                 pages: Page::ALL.to_vec(),
+                dock: scene.dock.map_or_else(DockFrame::default, |icon| {
+                    let layout = dock::resting_layout(to, Page::ALL.len());
+                    let x = dock_x.unwrap_or_else(|| layout[icon].x + dock::DOCK_ICON / 2.0);
+                    DockFrame {
+                        e: 1.0,
+                        scales: dock::targets(x, &layout),
+                    }
+                }),
                 tiles: scene_tiles(&scene),
                 palette,
                 fill_alpha,

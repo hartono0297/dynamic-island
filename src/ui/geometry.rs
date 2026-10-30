@@ -1,6 +1,7 @@
 //! Layout math for the island, in logical pixels (96 DPI). Pure functions, so
 //! the renderer only draws what this module decides.
 
+use super::dock::DockZone;
 use super::icons::Icon;
 use super::panel_layout::Region;
 use crate::config::Style;
@@ -772,6 +773,8 @@ pub struct HitRegions {
     pub media_art: Option<Rect>,
     /// The faint drag margin, while it is drawn.
     pub halo: Option<Rect>,
+    /// The page dots' hover zone, on a page that shows the dots.
+    pub dock: Option<DockZone>,
 }
 
 impl HitRegions {

@@ -363,6 +363,8 @@ pub enum Hit {
     SearchBack,
     /// A built-in tile on the Pintasan page.
     Shortcut(Shortcut),
+    /// A page icon of the open panel's dock (the page dots, hovered).
+    PanelPage(Page),
     /// A custom tile: its place in the tiles the page shows.
     CustomTile(usize),
     /// The Mixer page: a row's slider (the press itself is `App`'s, which

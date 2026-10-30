@@ -858,7 +858,7 @@ const STRIP_TOP: f32 = 8.0;
 const STRIP_H: f32 = 24.0;
 const DOT: f32 = 5.0;
 const DOT_GAP: f32 = 6.0;
-const DOT_BOTTOM: f32 = 11.0;
+pub(super) const DOT_BOTTOM: f32 = 11.0;
 /// Clear space between the content and the page dots.
 const ABOVE_DOTS: f32 = 6.0;
 const HEADER_H: f32 = 22.0;
