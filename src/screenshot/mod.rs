@@ -129,6 +129,17 @@ pub fn confirmed(clip: Option<u64>, file: Option<u64>) -> bool {
     hash_tier(clip, file) == 0
 }
 
+/// A matched file the delete worker may still accept (`confirmed`): it is
+/// already, or the clipboard's hash is known and the file's was not read yet
+/// (the worker hashes it again). A lax-only match (both read, more than
+/// `HASH_MAX_DIST` apart) or a clipboard without a hash never will.
+pub fn may_confirm(clip: Option<u64>, file: Option<u64>) -> bool {
+    match (clip, file) {
+        (Some(_), None) => true,
+        _ => confirmed(clip, file),
+    }
+}
+
 /// The file that is this screenshot (the lax match, for the preview and for
 /// Simpan): from `from_ms` to `to_ms` with the very same size and a thumbnail
 /// hash that agrees within `LAX_HASH_DIST` or is unknown. A file whose hash
@@ -878,7 +889,7 @@ mod tests {
         let at = AT;
         let end = window_end_after(at, &[at], SAVE_AFTER_MS);
         assert_eq!(end, at + SAVE_AFTER_MS);
-        assert!(SAVE_AFTER_MS > AFTER_MS);
+        const { assert!(SAVE_AFTER_MS > AFTER_MS) };
         let clip = ClipCandidate {
             hash: Some(PIC),
             to_ms: end,
@@ -949,7 +960,18 @@ mod tests {
             assert_eq!(pick_confirmed(&clip, files), None, "a delete never");
         }
         assert!(!confirmed(Some(PIC), Some(off)));
-        assert!(confirmed(Some(PIC), Some(PIC ^ 0b1111_1111_11)));
+        assert!(confirmed(Some(PIC), Some(PIC ^ 0b11_1111_1111)));
+    }
+
+    #[test]
+    fn an_ignored_preview_deletes_only_what_the_strict_worker_could_accept() {
+        // Close, or the file's hash not read yet (the worker reads it again).
+        assert!(may_confirm(Some(PIC), Some(PIC ^ 0b11_1111_1111)));
+        assert!(may_confirm(Some(PIC), None));
+        // Only the lax band, or no clipboard hash: the worker always refuses.
+        assert!(!may_confirm(Some(PIC), Some(PIC ^ 0b1111_1111_1111)));
+        assert!(!may_confirm(None, Some(PIC)));
+        assert!(!may_confirm(None, None));
     }
 
     #[test]

@@ -71,6 +71,29 @@ pub(super) struct ShotState {
     /// The clipboard held a picture and nothing else (`picture_only`): its
     /// preview does not wait for a file.
     pub flagged: bool,
+    /// The capture it belongs to: the id of its first clipboard update (its
+    /// own id unless it was merged, `plan_arrival`). The updates of one
+    /// capture share one file.
+    pub capture: u64,
+}
+
+/// The capture Simpan last answered, as of its newest clipboard update: a
+/// later update of that same capture is no new screenshot.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct KeptCapture {
+    pub clip: ClipCandidate,
+    pub entry: Option<u64>,
+}
+
+/// What Simpan works from (`Shots::keep_capture`).
+pub(super) struct KeepPlan {
+    /// The file Windows wrote for any update of the capture.
+    pub file: Option<FileCandidate>,
+    /// The newest update's candidate: its window reaches back to the first.
+    pub clip: ClipCandidate,
+    pub dib: Option<Arc<Vec<u8>>>,
+    /// A waiting update of the same capture that was dropped.
+    pub dropped: Option<u64>,
 }
 
 /// The screenshots the island knows of.
@@ -100,6 +123,8 @@ pub(super) struct Shots {
     /// When the latest images arrived, shared with the workers: a
     /// screenshot's window ends where the next one's begins.
     pub arrivals: screenshot::Arrivals,
+    /// The capture Simpan last answered (`keep_capture`).
+    pub kept: Option<KeptCapture>,
 }
 
 /// How many matched files `Shots::taken` remembers.
@@ -136,6 +161,72 @@ impl Shots {
             .into_iter()
             .flatten()
             .find(|s| s.look.id == id)
+    }
+
+    /// `file` was found for `shot`: it is the file of every clipboard update
+    /// of that capture still without one. An update a merge superseded can
+    /// still be shown (its successor waits for the overlay) and its look come
+    /// back late; the file then goes to the successor too, never only into
+    /// `taken` where the successor could not claim it. The ids that got it.
+    fn give_file(&mut self, shot: u64, file: &FileCandidate) -> Vec<u64> {
+        let Some(capture) = self.get_mut(shot).map(|s| s.capture) else {
+            return Vec::new();
+        };
+        let mut got = Vec::new();
+        for s in [self.shown.as_mut(), self.waiting.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if s.capture == capture && (s.look.id == shot || s.file.is_none()) {
+                s.look.bytes = file.bytes;
+                s.file = Some(file.clone());
+                got.push(s.look.id);
+            }
+        }
+        remember_taken(&mut self.taken, file.path.clone());
+        got
+    }
+
+    /// Simpan on the shown screenshot `id` answers for its whole capture: the
+    /// file Windows wrote for any of its clipboard updates, else the newest
+    /// update's candidate (its window reaches back to the first update, and
+    /// that update's arrival does not cut it). A waiting update of the same
+    /// capture is dropped (its preview would ask again), and the capture is
+    /// remembered (`kept`): a later update of it is no new screenshot.
+    fn keep_capture(&mut self, id: u64) -> Option<KeepPlan> {
+        let shown = self.shown.as_ref().filter(|s| s.look.id == id)?;
+        let sibling = self.waiting.take_if(|w| w.capture == shown.capture);
+        let newest = sibling.as_ref().unwrap_or(shown);
+        let plan = KeepPlan {
+            file: shown
+                .file
+                .clone()
+                .or_else(|| sibling.as_ref().and_then(|s| s.file.clone())),
+            clip: newest.clip,
+            dib: shown.dib.clone(),
+            dropped: sibling.as_ref().map(|s| s.look.id),
+        };
+        self.kept = Some(KeptCapture {
+            clip: newest.clip,
+            entry: newest.entry.or(shown.entry),
+        });
+        Some(plan)
+    }
+
+    /// A new clipboard image that is the kept capture's own update again
+    /// (`screenshot::same_capture`): Simpan already answered it, so it is no
+    /// new screenshot, and its arrival must not cut the save worker's wait.
+    /// It extends the kept capture (a third update chains on).
+    fn kept_again(&mut self, clip: &ClipCandidate, entry: Option<u64>) -> bool {
+        let Some(k) = self.kept.as_mut() else {
+            return false;
+        };
+        if !screenshot::same_capture(&k.clip, k.entry, clip, entry) {
+            return false;
+        }
+        k.clip = screenshot::merge_arrival(&k.clip, *clip);
+        k.entry = k.entry.or(entry);
+        true
     }
 }
 
@@ -343,22 +434,28 @@ impl App {
         };
         // The newest screenshot still in play (waiting is newer than shown):
         // is this its own capture again?
+        let prev = self.shots.waiting.as_ref().or(self.shots.shown.as_ref());
+        let prev_capture = prev.map(|s| s.capture);
         let arrival = plan_arrival(
-            self.shots
-                .waiting
-                .as_ref()
-                .or(self.shots.shown.as_ref())
-                .map(|s| PrevShot {
-                    clip: &s.clip,
-                    entry: s.entry,
-                    file: s.file.as_ref(),
-                    flagged: s.flagged,
-                }),
+            prev.map(|s| PrevShot {
+                clip: &s.clip,
+                entry: s.entry,
+                file: s.file.as_ref(),
+                flagged: s.flagged,
+            }),
             clip,
             entry,
             img.screenshot,
         );
         let merged = arrival.merged;
+        // The capture Simpan already answered, set on the clipboard again
+        // (its preview is closed, so nothing above merged it): no preview,
+        // and no arrival that would end the save worker's wait before
+        // Windows' file is stamped.
+        if !merged && self.shots.kept_again(&clip, entry) {
+            return false;
+        }
+        let capture = prev_capture.filter(|_| merged).unwrap_or(id);
         let file = arrival.file;
         let state = ShotState {
             look: ShotLook {
@@ -377,6 +474,7 @@ impl App {
             file,
             checks: 0,
             flagged: arrival.flagged,
+            capture,
         };
         let show_now = state.flagged;
         // From now on the files are the new image's: every earlier one's
@@ -537,19 +635,21 @@ impl App {
         }
         let looking = self.shots.checking == Some(shot);
         let arrivals = self.shots.arrivals.clone();
-        let Some(state) = self.shots.get_mut(shot) else {
-            return;
-        };
         // A look that set out before a newer image arrived: a file from
         // after that arrival is the newer one's.
-        let end = arrivals.window_end(state.clip.at_ms);
+        let Some((end, checks)) = self
+            .shots
+            .get_mut(shot)
+            .map(|s| (arrivals.window_end(s.clip.at_ms), s.checks))
+        else {
+            return;
+        };
         match found.filter(|f| f.at_ms <= end) {
             Some(file) => {
-                state.look.bytes = file.bytes;
-                let path = file.path.clone();
-                state.file = Some(file);
-                remember_taken(&mut self.shots.taken, path);
-                if looking {
+                // This screenshot's file, and that of a newer update of the
+                // same capture still without one.
+                let got = self.shots.give_file(shot, &file);
+                if self.shots.checking.is_some_and(|c| got.contains(&c)) {
                     self.shots.checking = None;
                     self.stop_shot_retry();
                 }
@@ -557,7 +657,7 @@ impl App {
                     .shots
                     .waiting
                     .as_ref()
-                    .is_some_and(|s| s.look.id == shot);
+                    .is_some_and(|s| got.contains(&s.look.id));
                 if waiting {
                     if self.config.screenshot.preview {
                         self.try_show_waiting();
@@ -569,7 +669,6 @@ impl App {
                 // the file's.
             }
             None => {
-                let checks = state.checks;
                 if looking && let Some(&ms) = RETRY_MS.get(usize::from(checks) - 1) {
                     unsafe {
                         SetTimer(Some(self.hwnd), TIMER_SHOT_RETRY, ms, None);
@@ -645,17 +744,27 @@ impl App {
                 }))
             }
             ShotAction::Keep(id) => {
-                let state = self.shots.shown.as_ref().filter(|s| s.look.id == id)?;
-                let dir = state
+                // Simpan answers the whole capture: a waiting update of it
+                // never raises the preview again, and a later one is no new
+                // screenshot (`kept_again`).
+                let plan = self.shots.keep_capture(id)?;
+                if let Some(dropped) = plan.dropped {
+                    self.stop_shot_show();
+                    if self.shots.checking == Some(dropped) {
+                        self.shots.checking = None;
+                        self.stop_shot_retry();
+                    }
+                }
+                let dir = plan
                     .file
                     .as_ref()
                     .and_then(|f| f.path.parent().map(PathBuf::from))
                     .or_else(|| self.shots.dir.clone());
                 // Windows' own file: nothing to write, "Sudah tersimpan".
-                if state.file.is_some() {
+                if plan.file.is_some() {
                     return Some(Event::Notice(kept_notice(true, false, dir)));
                 }
-                let Some(dib) = state.dib.clone() else {
+                let Some(dib) = plan.dib else {
                     return Some(Event::Notice(kept_notice(false, false, dir)));
                 };
                 // No file yet: the worker waits for Snipping Tool's (it may
@@ -665,7 +774,7 @@ impl App {
                 let Some(dir) = dir.or_else(win::screenshots_dir) else {
                     return Some(Event::Notice(save_failed_notice()));
                 };
-                let clip = state.clip;
+                let clip = plan.clip;
                 let now = chrono::Local::now().naive_local();
                 let path = save_path(&dir, now, &self.shots.taken, std::path::Path::exists);
                 remember_taken(&mut self.shots.taken, path.clone());
@@ -693,11 +802,15 @@ impl App {
             }
             ShotAction::Delete(id) => self.delete_shot(id),
             ShotAction::DeleteIgnored(id) => {
-                let has_file = self
-                    .shots
-                    .shown
-                    .as_ref()
-                    .is_some_and(|s| s.look.id == id && s.file.is_some());
+                // Only a file the strict delete worker could accept: a
+                // lax-only match would empty the clipboard and drop the card
+                // while the file stays.
+                let has_file = self.shots.shown.as_ref().is_some_and(|s| {
+                    s.look.id == id
+                        && s.file
+                            .as_ref()
+                            .is_some_and(|f| screenshot::may_confirm(s.clip.hash, f.hash))
+                });
                 let id = delete_when_ignored(self.config.screenshot.on_ignore, id, has_file)?;
                 self.delete_shot(id)
             }
@@ -1076,5 +1189,159 @@ mod tests {
         let later = clip_at(T + 4_000, T + 4_000, Some(PIC));
         assert!(!plan_arrival(Some(prev()), later, Some(7), true).merged);
         assert!(!plan_arrival(None, other, None, true).merged);
+    }
+
+    fn state(id: u64, capture: u64, clip: ClipCandidate, file: Option<FileCandidate>) -> ShotState {
+        ShotState {
+            look: ShotLook {
+                id,
+                thumb: crate::clipboard::image::Thumb {
+                    w: 1,
+                    h: 1,
+                    bgra: vec![0; 4],
+                },
+                w: clip.w,
+                h: clip.h,
+                bytes: 0,
+            },
+            entry: Some(7),
+            clip,
+            sequence: 1,
+            dib: Some(std::sync::Arc::new(vec![1, 2, 3])),
+            file,
+            checks: 1,
+            flagged: true,
+            capture,
+        }
+    }
+
+    use super::{ShotLook, ShotState, Shots};
+
+    fn with(shown: Option<ShotState>, waiting: Option<ShotState>) -> Shots {
+        Shots {
+            shown,
+            waiting,
+            ..Shots::default()
+        }
+    }
+    use crate::screenshot::{SAVE_AFTER_MS, SaveOutcome, claim_from, save_decision};
+
+    #[test]
+    fn simpan_before_the_second_update_still_finds_windows_file() {
+        // PrtSc at T (preview up), Simpan at T + 300 (preview closes), the
+        // same capture set on the clipboard again at T + 600, Snipping Tool
+        // stamps its file at T + 800.
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let mut shots = with(Some(state(1, 1, first, None)), None);
+        shots.arrivals.push(T);
+        let plan = shots.keep_capture(1).expect("the shown shot");
+        assert!(plan.file.is_none() && plan.dropped.is_none());
+        shots.shown = None; // follow_shot: the preview closed
+        let file = file_at("Screenshot 235523.png", T + 800, Some(PIC));
+        let save = |arrivals: &crate::screenshot::Arrivals| {
+            let clip = ClipCandidate {
+                to_ms: arrivals.window_end_after(plan.clip.at_ms, SAVE_AFTER_MS),
+                ..plan.clip
+            };
+            save_decision(&clip, std::slice::from_ref(&file), &[])
+        };
+        // The second update is the kept capture: no new screenshot, and its
+        // arrival is never pushed, so the save worker still sees the file.
+        let again = clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC));
+        assert!(shots.kept_again(&again, Some(7)));
+        assert_eq!(
+            save(&shots.arrivals),
+            SaveOutcome::AlreadySaved(file.path.clone())
+        );
+        // A third update chains on the second.
+        let third = clip_at(T + 2_400, T + 2_400, Some(PIC));
+        assert!(shots.kept_again(&third, Some(7)));
+        // The bug: pushed as a fresh arrival, it cut the wait at T + 599,
+        // and Simpan wrote a second copy.
+        let cut = crate::screenshot::Arrivals::default();
+        cut.push(T);
+        cut.push(T + 600);
+        assert_eq!(save(&cut), SaveOutcome::Write);
+        // Another picture, or the same one much later, is a new screenshot.
+        let other = clip_at(T + 3_000, T + 3_000, Some(!PIC));
+        assert!(!shots.kept_again(&other, Some(8)));
+        let later = clip_at(T + 9_000, T + 9_000, Some(PIC));
+        assert!(!shots.kept_again(&later, Some(7)));
+    }
+
+    #[test]
+    fn a_late_look_of_a_merged_update_gives_the_file_to_its_successor() {
+        // Update 1 is shown without a file; update 2 (merged, capture 1)
+        // waits for the overlay; update 1's look comes back with the file.
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let second = crate::screenshot::merge_arrival(
+            &first,
+            clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC)),
+        );
+        let file = file_at("Screenshot 235523.png", T + 150, Some(PIC));
+        let mut shots = with(
+            Some(state(1, 1, first, None)),
+            Some(state(2, 1, second, None)),
+        );
+        let got = shots.give_file(1, &file);
+        assert_eq!(got, vec![1, 2]);
+        assert_eq!(shots.taken, vec![file.path.clone()]);
+        let waiting = shots.waiting.as_ref().expect("still waiting");
+        assert_eq!(waiting.file.as_ref(), Some(&file), "never lost to taken");
+        assert_eq!(waiting.look.bytes, file.bytes);
+        // Another capture's shot is never given it.
+        let mut other = with(
+            Some(state(1, 1, first, None)),
+            Some(state(3, 3, clip_at(T + 900, T + 900, Some(!PIC)), None)),
+        );
+        assert_eq!(other.give_file(1, &file), vec![1]);
+        assert!(other.waiting.as_ref().is_some_and(|s| s.file.is_none()));
+        // An unknown id changes nothing.
+        assert!(other.give_file(9, &file).is_empty());
+    }
+
+    #[test]
+    fn simpan_answers_the_whole_capture() {
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let second = crate::screenshot::merge_arrival(
+            &first,
+            clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC)),
+        );
+        let file = file_at("Screenshot 235523.png", T + 150, Some(PIC));
+        // The waiting update found the file: Simpan on the shown one is
+        // "already saved", and the waiting update never shows again.
+        let mut shots = with(
+            Some(state(1, 1, first, None)),
+            Some(state(2, 1, second, Some(file.clone()))),
+        );
+        let plan = shots.keep_capture(1).expect("shown");
+        assert_eq!(plan.file, Some(file.clone()));
+        assert_eq!(plan.dropped, Some(2));
+        assert!(shots.waiting.is_none());
+        // No file yet: the save works from the newest update, whose window
+        // reaches back to the first and is not cut by the second arrival.
+        let mut shots = with(
+            Some(state(1, 1, first, None)),
+            Some(state(2, 1, second, None)),
+        );
+        let plan = shots.keep_capture(1).expect("shown");
+        assert!(plan.file.is_none());
+        assert_eq!(plan.clip, second);
+        assert_eq!(plan.clip.from_ms, first.from_ms);
+        assert_eq!(shots.kept.map(|k| k.clip), Some(second));
+        // A waiting shot of another capture stays; a wrong id keeps nothing.
+        let mut shots = with(
+            Some(state(1, 1, first, None)),
+            Some(state(3, 3, clip_at(T + 900, T + 900, Some(!PIC)), None)),
+        );
+        assert_eq!(shots.keep_capture(1).and_then(|p| p.dropped), None);
+        assert!(shots.waiting.is_some());
+        assert!(shots.keep_capture(5).is_none());
     }
 }

@@ -219,6 +219,25 @@ New rules:
   bits; a looser match never recycles a file.
 - `claim_from`, `window_end` and `taken` are unchanged for different
   pictures: never another screenshot's file.
+- **One capture, one answer** (review round 1). Every `ShotState` has a
+  `capture` (the id of the capture's first clipboard update; merged updates
+  share it). A file found for one update goes to every update of that capture
+  still without one (`Shots::give_file`): a superseded update still shown
+  while its successor waits for the overlay could otherwise put the file in
+  `taken` where the successor never claims it. Simpan answers the capture
+  (`Shots::keep_capture`): a file of any update is "already saved"; else the
+  save worker gets the newest update's candidate; a waiting update of it is
+  dropped (no second preview). The capture is remembered (`Shots::kept`): an
+  update of it arriving after Simpan (preview already closed, so nothing to
+  merge with) is ignored, NOT pushed to `arrivals`, so it cannot cut the save
+  worker's wait before Windows' file is stamped (`kept_again`). Cost: a real
+  second PrtSc of an unchanged screen within `SAME_CAPTURE_MS` of the last
+  update after Simpan gets no preview. Hapus is unchanged (an update arriving
+  after Hapus still shows as a new screenshot).
+- **"Jika diabaikan: Hapus"** fires only when the matched file is one the
+  strict worker may accept (`screenshot::may_confirm`: confirmed, or the
+  file's hash not read yet). A lax-only match (11..16 bits) or a clipboard
+  without a hash keeps the clipboard, the card and the file.
 
 Still unverified live: which formats and how many updates Snipping Tool really
 posts for PrtSc (the merge is read from the symptom, not captured); whether
