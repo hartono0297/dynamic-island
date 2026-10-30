@@ -2824,25 +2824,16 @@ fn demo_shelf_motion(
         at.iter().map(|&i| files[i].clone()).collect()
     };
     let shape = super::geometry::shape_for(style, ShapeKind::Panel);
-    let rects = |n: usize| -> Vec<super::geometry::Rect> {
-        super::panel_layout::shelf_layout(shape, strip, n)
-            .cards
-            .iter()
-            .map(|c| c.card)
-            .collect()
+    let rects = |n: usize| -> (Vec<super::geometry::Rect>, usize) {
+        let l = super::panel_layout::shelf_layout(shape, strip, n);
+        (l.cards.iter().map(|c| c.card).collect(), l.lines)
     };
     let (old, new) = (pick(&before), pick(&after));
     let start = now
         .checked_sub(Duration::from_millis(elapsed_ms))
         .unwrap_or(now);
+    let ((old_rects, old_lines), (new_rects, _)) = (rects(old.len()), rects(new.len()));
     let mut motion = ShelfMotion::default();
-    motion.on_change(
-        &old,
-        &rects(old.len()),
-        &new,
-        &rects(new.len()),
-        start,
-        true,
-    );
+    motion.on_change(&old, &old_rects, old_lines, &new, &new_rects, start, true);
     Some((new, motion))
 }
