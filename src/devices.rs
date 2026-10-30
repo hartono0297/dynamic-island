@@ -225,12 +225,13 @@ pub fn veto_message(lang: Lang, veto: &Veto) -> (String, String) {
     let title = text(lang, Key::VetoTitle).to_owned();
     let name = veto.name.trim();
     let detail = match veto.kind {
-        VetoKind::WindowsApp | VetoKind::PendingClose => match app_name(name) {
+        // The only kind whose name is a program (`PNP_VETO_TYPE` remarks).
+        VetoKind::WindowsApp => match app_name(name) {
             Some(app) if !name.is_empty() => i18n::veto_in_use_by(lang, &app),
             _ => text(lang, Key::VetoInUse).to_owned(),
         },
-        // Its name is a device path: never shown.
-        VetoKind::OutstandingOpen => text(lang, Key::VetoInUse).to_owned(),
+        // Their name is a device instance path: never shown.
+        VetoKind::OutstandingOpen | VetoKind::PendingClose => text(lang, Key::VetoInUse).to_owned(),
         VetoKind::WindowsService if !name.is_empty() => i18n::veto_service(lang, name),
         VetoKind::WindowsService => text(lang, Key::VetoService).to_owned(),
         VetoKind::Device => text(lang, Key::VetoDevice).to_owned(),
@@ -636,12 +637,20 @@ mod tests {
             }
         }
         // An app, with and without a usable name.
-        for k in [WindowsApp, PendingClose] {
-            assert_eq!(id(k, r"C:\Office\EXCEL.EXE").1, "Masih dipakai: Excel");
-            assert_eq!(en(k, r"C:\Office\EXCEL.EXE").1, "Still in use: Excel");
-            assert_eq!(id(k, "").1, "Masih dipakai aplikasi lain.");
-            assert_eq!(en(k, "  ").1, "Still in use by another app.");
-            assert_eq!(id(k, r"C:\x\.exe").1, "Masih dipakai aplikasi lain.");
+        let k = WindowsApp;
+        assert_eq!(id(k, r"C:\Office\EXCEL.EXE").1, "Masih dipakai: Excel");
+        assert_eq!(en(k, r"C:\Office\EXCEL.EXE").1, "Still in use: Excel");
+        assert_eq!(id(k, "").1, "Masih dipakai aplikasi lain.");
+        assert_eq!(en(k, "  ").1, "Still in use by another app.");
+        assert_eq!(id(k, r"C:\x\.exe").1, "Masih dipakai aplikasi lain.");
+        // A pending close names a device instance path: never shown.
+        for n in [
+            "",
+            r"USBSTOR\DISK&VEN_SANDISK&PROD_ULTRA&REV_1.00\4C530001230101&0",
+            r"C:\Office\EXCEL.EXE",
+        ] {
+            assert_eq!(id(PendingClose, n).1, "Masih dipakai aplikasi lain.");
+            assert_eq!(en(PendingClose, n).1, "Still in use by another app.");
         }
         // The design's own example.
         assert_eq!(

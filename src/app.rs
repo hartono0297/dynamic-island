@@ -6164,7 +6164,9 @@ unsafe extern "system" fn wnd_proc(
         // A drive came or went: only an arrival or a removal of a volume or
         // disk starts the pause before a scan. TRUE grants the request.
         WM_DEVICECHANGE => {
-            with_app(|app| app.on_device_change(wparam.0, lparam.0));
+            // Not through `with_app`: a broadcast sent while `App` is
+            // borrowed would be dropped, and the drive would go unseen.
+            devices_page::on_device_change(hwnd, wparam.0, lparam.0);
             LRESULT(1)
         }
         WM_ACTIVATE => {

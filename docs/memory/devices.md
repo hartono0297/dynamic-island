@@ -67,9 +67,11 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   `RegisterDeviceNotificationW` for `GUID_DEVINTERFACE_DISK`. Only
   `DBT_DEVICEARRIVAL` / `DBT_DEVICEREMOVECOMPLETE` with a volume (2) or device
   interface (5) header count, `DBT_DEVNODES_CHANGED` and the rest are ignored
-  (the handler returns TRUE). Each one restarts a 400 ms one-shot
-  `TIMER_DEVICES` (32) that sends `Scan { NewOnly }`. No repeating timer
-  anywhere ([[bata-idle-power-budget]]).
+  (the handler returns TRUE). The handler is a free function on the `hwnd`,
+  not `with_app`: the broadcasts are sent synchronously and can arrive while
+  `App` is borrowed, where `with_app` would drop them. Each one restarts a
+  400 ms one-shot `TIMER_DEVICES` (32) that sends `Scan { NewOnly }`. No
+  repeating timer anywhere ([[bata-idle-power-budget]]).
 - **Capacity only when needed:** `GetDiskFreeSpaceExW` runs on the worker for
   every volume when the page opens (`All`), for a drive not in the last list
   (`NewOnly`, so its notice can say how much is free) and never for the
@@ -91,8 +93,11 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   the frame cannot redirect a click. Folding and the scroll reset when the page
   opens, not when it closes (the closing fade still draws what it showed).
 - Refusals are worked out at draw time (`veto_message`), so a language change
-  re-renders them. Windows does not always name the program, and an open
-  handle's name is a device path and never shown.
+  re-renders them. Only `WindowsApp` (3) names a program (`app_name`).
+  `PendingClose` (2) and `OutstandingOpen` (5) carry a device instance path
+  (`USBSTOR\DISK&VEN_...`, per the `PNP_VETO_TYPE` remarks), so both show the
+  plain "still in use" line and never the name. Windows does not always name
+  the program either.
 - Notices (`DevicePlugged { letter }` with "Buka", `DeviceSafe`) are on by
   default and `config.device_notices` switches both off (Settings → Umum →
   Perangkat). The safe notice is raised only after an eject started from Vale.
