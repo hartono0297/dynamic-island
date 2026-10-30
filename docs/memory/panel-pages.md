@@ -59,3 +59,61 @@ Halaman panel now reads:
 
 A sideways two-finger swipe over the open panel follows the same order and
 skips as the vertical wheel (`Event::PageFlick`, see [[gestures]]).
+
+## Page dots become a dock (hover)
+
+Hovering the page dots under the open panel turns them into a row of page
+icons with macOS-Dock magnification. Pure model in `src/ui/dock.rs` (tested),
+the pointer and the frame step in `src/app_dock.rs`, drawing in
+`render_panel::paint_page_dots`, the demo in `dock-hover` and
+`dock-hover-edge` (`DI_DOCK_X=<dip>` moves the pointer).
+
+- **Zone.** The dots' bounds grown by 10 dip vertically and 8 horizontally.
+  While expanded, the zone is the resting icon row's bounds plus the same
+  padding, reaching up over the click cells (hysteresis: a peak icon and the
+  top of its cell stand above the padded row, so the padding alone dropped a
+  pointer on a magnified icon's top; tested). Leaving the zone,
+  `WM_MOUSELEAVE`, or a page with no dots (cleaner, Mole, search: the
+  renderer registers no `DockZone`) eases the row back to dots; the panel
+  closing resets it at once (`App::dock_sync`, before every draw).
+- **The zone stands through slides.** `Renderer::draw` resets the regions
+  every frame, and the click regions wait for a settled page
+  (`panel_regions_wanted`). The `DockZone` must not wait with them: with no
+  zone, `dock_sync` collapsed the row the moment its own click (or a wheel
+  or flick) started a slide. `dock::panel_parts` builds the zone whenever the
+  page has dots (not while closing) and the icons' click regions only when
+  the page takes clicks.
+- **Resting layout** (`resting_layout`, never moves): `DOCK_ICON` 14 dip at a
+  `DOCK_PITCH` of 28 dip, centred like the dots, bottom edge on the dots'
+  line (`s.y + s.h - DOT_BOTTOM`). One icon per page of `frame.pages` (the
+  owner's order, `PanelPages::visible`), art from `shortcuts::page_icon`; the
+  active page in the accent colour, the others secondary. A backdrop pill in
+  the surface colour sits behind the row so icons growing over the content
+  stay legible. Falloff and click rects read this layout only, so an icon
+  growing under the pointer never shifts its own target (no shake).
+- **Falloff.** Target scale `1 + 0.9 * falloff(|pointer_x - centre|)`,
+  `falloff(d) = 0.5 * (1 + cos(pi d / 56))` below 56 dip, else 0. Peak 1.9x,
+  the icon grows from its bottom edge. Pitch 28 with reach 56 keeps
+  neighbours from overlapping (tested).
+- **Smoothing.** Mouse moves only set targets. The shown values (each scale
+  and the expand progress `e`) advance once per `FrameClock` frame by
+  `v += (target - v) * (1 - exp(-dt / 0.07))`: frame-rate independent, no
+  overshoot, snaps within 0.002. During the morph each dot's rect lerps to
+  its resting icon's rect by `e` (centre, bottom and size,
+  `dock::morph_rect`), magnified by its scale, and dot and icon crossfade in
+  that rect. With Windows animations off
+  (`App.animations`) the values snap.
+- **Click.** `Hit::PanelPage(page)`, active only while `e > 0.5`. Each icon
+  owns a pitch-wide cell from the baseline up to the grown height (so what
+  is seen is what is hit; hit-testing never reads the scales). The current
+  page's cell is a region too (`Hit::PanelPage(current)`, which `go_to_page`
+  ignores and which arms no linger), so a click on its magnified icon never
+  falls through to the page content under it. In `state.rs` `go_to_page` follows the flick's rules
+  (vertical residue zeroed, the sticky-reminder peek spends the click,
+  nothing on the search or a closed panel) and the linger arms as a page
+  turn (`LingerTrigger::PageTurn`, so the current page arms nothing). The
+  slide direction is the pages' places in the owner's order, as ever.
+- **Power.** No timer: see [[bata-idle-power-budget]]. `App::animating_at`
+  includes `dock.moving()`; a pointer resting on an icon stops the clock.
+
+Related: [[panel-linger-and-motion]], [[gestures]]

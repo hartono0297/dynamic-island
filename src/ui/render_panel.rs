@@ -50,6 +50,7 @@ use crate::state::MolePhase;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
 use crate::tiles::Tile;
+use crate::ui::dock::{self, DOCK_ICON};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
@@ -101,6 +102,11 @@ const CLI_LOCK_ABOVE: f32 = 16.0;
 const LOCK_H: f32 = 16.0;
 const LOCK_PAD_X: f32 = 10.0;
 const LOCK_DOT: f32 = 6.0;
+/// The dock's backdrop: room above the grown icons and below the row, at
+/// the sides, and its corner radius.
+const DOCK_PILL_PAD: f32 = 4.0;
+const DOCK_PILL_SIDE: f32 = 10.0;
+const DOCK_PILL_RADIUS: f32 = 12.0;
 const LOCK_GAP: f32 = 5.0;
 const LOCK_RADIUS: f32 = 8.0;
 /// `›` and the space after it in front of an echoed command.
@@ -500,28 +506,29 @@ impl Renderer {
         }
         // The cleaner is not a page: its footer takes the dots' place. The
         // search is not one of the pages the dots count.
-        if !matches!(
+        let has_dots = !matches!(
             layout,
             PageLayout::Cleaner(_) | PageLayout::Mole(_) | PageLayout::Search(_)
-        ) {
-            let (dots, active) = page_dots(s, &frame.pages, page);
-            for (i, dot) in dots.into_iter().enumerate() {
-                let p = &self.palette;
-                self.set_color(
-                    if Some(i) == active {
-                        p.accent
-                    } else {
-                        p.dot_off
-                    },
-                    1.0,
-                );
-                self.fill_round(dot, dot.w / 2.0);
-            }
+        );
+        if has_dots {
+            self.paint_page_dots(s, frame, page);
         }
         // No clicks on a page still sliding in: its controls are not where
         // the regions say yet, and the old page's are still under the pointer.
-        if panel_regions_wanted(settled, closing, slide, fade) {
-            let mut hits = regions(s, &layout, strip);
+        let clicks = panel_regions_wanted(settled, closing, slide, fade);
+        // The dock's zone stands through a slide or cross-fade (else the row
+        // under a still pointer collapses the moment its own click turns
+        // the page); only its clicks wait with the page's.
+        let mut dock_hits = Vec::new();
+        if has_dots && !closing {
+            let (zone, hits) = dock::panel_parts(s, &frame.pages, page, frame.dock.e, clicks);
+            self.regions.dock = Some(zone);
+            dock_hits = hits;
+        }
+        if clicks {
+            // The dock's icons sit over the page's bottom edge: they win.
+            let mut hits = dock_hits;
+            hits.extend(regions(s, &layout, strip));
             if matches!(layout, PageLayout::Media(_)) && frame.media.is_none() {
                 hits.retain(|r| !matches!(r.hit, Hit::Prev | Hit::PlayPause | Hit::Next));
             }
@@ -551,6 +558,52 @@ impl Renderer {
             };
         }
         Ok(())
+    }
+
+    /// The page dots, or, as the pointer comes to them, the dock: one icon
+    /// per page that magnifies under the pointer (`ui::dock`). `dock.e` lerps
+    /// each dot's rect to its resting icon's (`dock::morph_rect`) and
+    /// crossfades the two in it; at 0 this is the plain dots.
+    fn paint_page_dots(&self, s: ShapeRect, frame: &Frame, page: Page) {
+        let (dots, active) = page_dots(s, &frame.pages, page);
+        let e = frame.dock.e.clamp(0.0, 1.0);
+        let icons = if e > 0.0 {
+            dock::resting_layout(s, dots.len())
+        } else {
+            Vec::new()
+        };
+        let p = &self.palette;
+        if let (Some(first), Some(last)) = (icons.first(), icons.last()) {
+            // The backdrop keeps icons that grow over the content legible.
+            let peak = (0..dots.len()).fold(1.0f32, |m, i| m.max(frame.dock.scale(i)));
+            let top = first.bottom() - DOCK_ICON * peak - DOCK_PILL_PAD;
+            let pill = Rect {
+                x: first.x - DOCK_PILL_SIDE,
+                y: top,
+                w: last.right() - first.x + 2.0 * DOCK_PILL_SIDE,
+                h: first.bottom() + DOCK_PILL_PAD - top,
+            };
+            self.set_color(p.surface, e);
+            self.fill_round(pill, (pill.h / 2.0).min(DOCK_PILL_RADIUS));
+        }
+        for (i, dot) in dots.iter().enumerate() {
+            let lit = Some(i) == active;
+            let Some(icon) = icons.get(i) else {
+                self.set_color(if lit { p.accent } else { p.dot_off }, 1.0);
+                self.fill_round(*dot, dot.w / 2.0);
+                continue;
+            };
+            // Grows from its bottom edge, around its resting centre x.
+            let area = dock::morph_rect(*dot, *icon, e, frame.dock.scale(i));
+            if e < 1.0 {
+                self.set_color(if lit { p.accent } else { p.dot_off }, 1.0 - e);
+                self.fill_round(area, area.w / 2.0);
+            }
+            let ink = if lit { p.accent } else { p.secondary };
+            if let Some(page) = frame.pages.get(i) {
+                self.icon_colored(shortcuts::page_icon(*page), area, area.w, ink, e, None);
+            }
+        }
     }
 
     /// The room the calendar title takes in the header: its tracked width

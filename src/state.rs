@@ -1146,6 +1146,7 @@ impl IslandState {
             Event::EditorOpen(false) => LingerTrigger::Always,
             // A click on the panel's content. A media button the hover guard
             // drops did nothing.
+            Event::Click(Hit::PanelPage(_)) => LingerTrigger::PageTurn,
             Event::Click(hit) if !(is_media_hit(hit) && self.media_guarded(now)) => {
                 LingerTrigger::Panel
             }
@@ -1527,6 +1528,8 @@ impl IslandState {
                     self.page = Page::Clipboard;
                 }
             }
+            // A dock icon (the hovered page dots) turns to that page.
+            Hit::PanelPage(page) => self.go_to_page(page),
             // A page tile jumps there, like the Clipboard tile: no collapse,
             // and a page that is switched off opens too (it holds for this
             // visit only, `leave_hidden_page` moves off it on close).
@@ -1759,10 +1762,29 @@ impl IslandState {
         effects.push(Effect::ReleaseSearchFocus);
     }
 
+    /// A click on a dock icon: that page, with the flick's rules. The peek
+    /// over the sticky reminder spends the click on opening the panel; the
+    /// page the panel shows already does nothing. The slide's direction is
+    /// the pages' places in the owner's order (`App`).
+    fn go_to_page(&mut self, target: Page) {
+        if self.hover_blocked && self.current.is_none() && self.open_mode != OpenMode::Click {
+            self.hover_blocked = false;
+            self.wheel = 0;
+        } else if self.can_turn_page() && target != self.page {
+            // A vertical residue must not add a second step.
+            self.wheel = 0;
+            self.show_page(target);
+        }
+    }
+
     /// Moves `steps` pages through the owner's order (negative: back).
     fn turn_page(&mut self, steps: i64) {
+        self.show_page(self.pages.step(self.page, steps));
+    }
+
+    fn show_page(&mut self, to: Page) {
         let from = self.page;
-        self.page = self.pages.step(self.page, steps);
+        self.page = to;
         // A page turned with the pointer on a dropped shelf: the panel is
         // the pointer's now (and closes when it leaves). Without hover the
         // dwell has not fired yet, so the latch stays for it.
@@ -3296,6 +3318,61 @@ mod tests {
         assert_eq!(s.view(), View::Panel(Page::Calendar));
         s.apply(Event::PageFlick { next: true }, t0);
         assert_eq!(s.view(), View::Panel(Page::Pomodoro));
+    }
+
+    #[test]
+    fn a_dock_click_turns_to_that_page_and_lingers_like_a_page_turn() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        // A vertical residue must not add a step to the click.
+        s.apply(Event::Wheel(-90), t0);
+        s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(4)), "armed as a page turn");
+        s.apply(Event::Wheel(-60), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media), "the residue is gone");
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert!(s.panel_is_open(), "the linger holds the panel");
+        // Back to an earlier page is as good.
+        s.apply(Event::Click(Hit::PanelPage(Page::Calendar)), t0 + secs(2));
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+    }
+
+    #[test]
+    fn a_dock_click_on_the_current_page_does_nothing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Click(Hit::PanelPage(Page::Calendar)), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        assert_eq!(s.next_deadline(), None, "no page turned, no linger");
+    }
+
+    #[test]
+    fn a_dock_click_never_acts_on_a_closed_panel_or_the_search() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
+        assert_eq!(s.page(), Page::Calendar);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::SearchHotkey, t0);
+        s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
+        assert_eq!(s.view(), View::Panel(Page::Search));
+    }
+
+    #[test]
+    fn a_dock_click_spent_on_the_sticky_reminder_peek_turns_no_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(reminder("r1")), t0);
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Click(Hit::Body), t0);
+        s.apply(Event::Notice(reminder("r2")), t0);
+        s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
+        assert_eq!(s.view(), View::Panel(Page::Media));
     }
 
     #[test]

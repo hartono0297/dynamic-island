@@ -110,7 +110,7 @@ pub fn label(s: Shortcut) -> Key {
 }
 
 /// The icon of the tile that jumps to `page`.
-fn page_icon(page: Page) -> Icon {
+pub(crate) fn page_icon(page: Page) -> Icon {
     match page {
         Page::Calendar => Icon::Calendar,
         Page::Pomodoro => Icon::Timer,

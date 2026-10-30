@@ -45,6 +45,7 @@ use std::time::Instant;
 
 use chrono::{NaiveDate, NaiveDateTime};
 
+use super::dock::{DockFrame, DockZone};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
@@ -145,6 +146,8 @@ pub struct Frame<'a> {
     pub page_from: Option<Page>,
     /// The pages the dots show ("Halaman panel"), in order.
     pub pages: Vec<Page>,
+    /// The dots' morph into the icon dock and each icon's magnification.
+    pub dock: DockFrame,
     /// The tiles the Pintasan page shows, in order.
     pub tiles: Vec<Tile>,
     /// Island colours (surface and accent).
@@ -1038,6 +1041,17 @@ impl Renderer {
         let (_, s) = self.regions.shape?;
         let k = self.scale;
         Some((s.x * k, s.y * k, (s.x + s.w) * k, (s.y + s.h) * k))
+    }
+
+    /// The dock's hover zone on the last panel frame, `None` on a page
+    /// without dots.
+    pub fn dock_zone(&self) -> Option<&DockZone> {
+        self.regions.dock.as_ref()
+    }
+
+    /// A client point in physical pixels, in dip (the layouts' unit).
+    pub fn to_dip(&self, x: f32, y: f32) -> (f32, f32) {
+        (x / self.scale, y / self.scale)
     }
 
     /// Maps a client point in physical pixels to what the last frame drew there.

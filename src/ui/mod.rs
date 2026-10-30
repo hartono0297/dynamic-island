@@ -2,6 +2,7 @@ pub mod app_icon;
 pub mod cli_input;
 #[cfg(debug_assertions)]
 pub mod demo;
+pub mod dock;
 pub mod editor;
 pub mod editor_layout;
 pub mod editor_paint;

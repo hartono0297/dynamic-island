@@ -128,6 +128,10 @@ use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
 mod devices_page;
 use devices_page::{DevicesState, HOTKEY_DEVICES, TIMER_DEVICES};
 
+#[path = "app_dock.rs"]
+mod dock_page;
+use dock_page::DockState;
+
 #[path = "app_prtsc.rs"]
 mod prtsc;
 use prtsc::{HOTKEY_PRTSC, PrtscState};
@@ -416,6 +420,7 @@ pub fn run(media_log_flag: bool) {
             mixer_wheel_sum: None,
             mixer_drag: None,
             shelf: ShelfState::default(),
+            dock: DockState::default(),
             devices: DevicesState::default(),
             prtsc: PrtscState::default(),
             pomo_timer: false,
@@ -705,6 +710,8 @@ struct App {
     mixer_drag: Option<audio::Target>,
     /// The file shelf (`app_shelf`).
     shelf: ShelfState,
+    /// The page dots' dock: values, pointer, frame step.
+    dock: DockState,
     /// The Devices page: the drives, their worker and the page's state
     /// (`app_devices`).
     devices: DevicesState,
@@ -3056,6 +3063,7 @@ impl App {
             || self.robot_moving(now)
             || self.look.moving()
             || self.shelf.motion.running(now)
+            || self.dock.moving()
     }
 
     /// The window is `TALL_WINDOW_H` tall while the enlarged CLI panel shows
@@ -4097,6 +4105,7 @@ impl App {
         // The cat's look eases to this frame before it is drawn, so the frame
         // that reaches the target is the last one the clock draws for it.
         self.advance_look(now);
+        self.dock_step(now);
         let shape_done = self.anim.progress(now) >= 1.0;
         let slide_done = self.slide.is_none_or(|s| s.progress(now) >= 1.0);
         let reveal_done = self.reveal.is_none_or(|r| r.done(now));
@@ -4212,6 +4221,7 @@ impl App {
             }
             return;
         }
+        self.dock_follow(lparam);
         if self.state.view() == View::Panel(Page::Clipboard) {
             let hit = self.hit_at(lparam);
             self.clip_hover(client_xy(lparam), hit.as_ref());
@@ -4261,6 +4271,7 @@ impl App {
             return;
         }
         self.click.clear();
+        self.dock_leave();
         self.shelf_release();
         self.middle_down = false;
         self.bata.brain.hover(false, Instant::now());
@@ -4868,6 +4879,7 @@ impl App {
     }
 
     fn draw(&mut self, now: Instant) {
+        self.dock_sync();
         // Clicks on the Devices page mean the cards of the frame drawn here.
         self.devices_sync_drawn();
         let Some(win) = &self.win else { return };
@@ -4996,6 +5008,7 @@ impl App {
                 .map_or([None; 2], |s| s.strip.visible(s.offset(now))),
             page_from: self.page_fade.map(|f| f.from_page),
             pages: state.pages().visible(),
+            dock: self.dock.frame(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
             fill_alpha,
