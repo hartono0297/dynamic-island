@@ -32,8 +32,9 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{HSTRING, w};
 
 use super::{
-    Arrivals, ClipCandidate, FileOutcome, SETTLE_MS, confirmed, delete_outcome, find_confirmed_in,
-    find_in, thumb_hash, unix_ms, wait_for,
+    AFTER_MS, Arrivals, ClipCandidate, FileOutcome, SAVE_AFTER_MS, SETTLE_MS, SaveOutcome,
+    confirmed, delete_outcome, find_confirmed_in, find_in, hashed_files, save_decision, thumb_hash,
+    unix_ms, wait_for,
 };
 use crate::clipboard::image::{self, thumb_size};
 use crate::model::Event;
@@ -182,12 +183,32 @@ fn full_pixels(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     Some((full.w, full.h, full.bgra))
 }
 
+/// How strictly `wait_for_file` matches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Strictness {
+    /// Hapus: only a file whose hash was read and agrees closely
+    /// (`find_confirmed_in`); the window is the preview's.
+    Confirmed,
+    /// Simpan: size and time, a hash that is unreadable or within the lax
+    /// distance (`save_decision`), over the longer `SAVE_AFTER_MS` window.
+    Lax,
+}
+
 /// Looks for `clip`'s file until its window has closed (`wait_for`): Simpan
-/// and Hapus may be clicked before Snipping Tool has written it. Only a file
-/// whose hash is confirmed counts. Needs COM on the calling thread (WIC).
-fn wait_for_file(clip: ClipCandidate, taken: &[PathBuf], arrivals: &Arrivals) -> Option<PathBuf> {
+/// and Hapus may be clicked before Snipping Tool has written it. Needs COM on
+/// the calling thread (WIC).
+fn wait_for_file(
+    clip: ClipCandidate,
+    taken: &[PathBuf],
+    arrivals: &Arrivals,
+    how: Strictness,
+) -> Option<PathBuf> {
     let dir = screenshots_dir()?;
-    let end = || arrivals.window_end(clip.at_ms);
+    let after = match how {
+        Strictness::Confirmed => AFTER_MS,
+        Strictness::Lax => SAVE_AFTER_MS,
+    };
+    let end = || arrivals.window_end_after(clip.at_ms, after);
     wait_for(
         || end() + SETTLE_MS,
         || unix_ms(SystemTime::now()),
@@ -196,7 +217,18 @@ fn wait_for_file(clip: ClipCandidate, taken: &[PathBuf], arrivals: &Arrivals) ->
                 to_ms: end(),
                 ..clip
             };
-            find_confirmed_in(&dir, &clip, taken, file_hash).map(|f| f.path)
+            match how {
+                Strictness::Confirmed => {
+                    find_confirmed_in(&dir, &clip, taken, file_hash).map(|f| f.path)
+                }
+                Strictness::Lax => {
+                    let files = hashed_files(&dir, &clip, taken, file_hash);
+                    match save_decision(&clip, &files, taken) {
+                        SaveOutcome::AlreadySaved(path) => Some(path),
+                        SaveOutcome::Write => None,
+                    }
+                }
+            }
         },
         |ms| std::thread::sleep(Duration::from_millis(ms)),
     )
@@ -216,10 +248,12 @@ pub struct SaveJob {
 }
 
 /// "Simpan" for a screenshot with no file yet, on a short-lived thread:
-/// first it waits for Snipping Tool's own file (its window); found, that is
-/// the saved file. Else it writes the picture as a PNG at `job.path` (the
-/// folder made if it is missing). Posts `Event::ShotSaveDone` with the path,
-/// `None` when anything failed. False when the thread could not start.
+/// first it waits for Snipping Tool's own file (its window, `SAVE_AFTER_MS`,
+/// the lax match); found, that is the saved file and nothing is written. Else
+/// it writes the picture as a PNG at `job.path` (the folder made if it is
+/// missing). Posts `Event::ShotSaveDone` with the path (`None` when anything
+/// failed) and whether it wrote the file. False when the thread could not
+/// start.
 pub fn spawn_save(job: SaveJob, tx: Sender<Event>, wake: impl Fn() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .name("shot-save".into())
@@ -234,7 +268,11 @@ pub fn spawn_save(job: SaveJob, tx: Sender<Event>, wake: impl Fn() + Send + 'sta
                 arrivals,
             } = job;
             taken.retain(|p| *p != path);
-            let path = wait_for_file(clip, &taken, &arrivals).or_else(|| {
+            // Windows' own file first (never a second copy of it); only
+            // with none by the end of the wait does Simpan write one.
+            let found = wait_for_file(clip, &taken, &arrivals, Strictness::Lax);
+            let written = found.is_none();
+            let path = found.or_else(|| {
                 let dir = path.parent()?;
                 std::fs::create_dir_all(dir).ok()?;
                 let (w, h, bgra) = full_pixels(&dib)?;
@@ -246,7 +284,12 @@ pub fn spawn_save(job: SaveJob, tx: Sender<Event>, wake: impl Fn() + Send + 'sta
             if inited {
                 unsafe { CoUninitialize() };
             }
-            if tx.send(Event::ShotSaveDone { shot, path }).is_ok() {
+            let done = Event::ShotSaveDone {
+                shot,
+                path,
+                written,
+            };
+            if tx.send(done).is_ok() {
                 wake();
             }
         })
@@ -289,7 +332,7 @@ pub fn spawn_delete(job: DeleteJob, tx: Sender<Event>, wake: impl Fn() + Send + 
             let file = job
                 .file
                 .filter(|p| confirmed(job.clip.hash, file_hash(p)))
-                .or_else(|| wait_for_file(job.clip, &taken, &job.arrivals));
+                .or_else(|| wait_for_file(job.clip, &taken, &job.arrivals, Strictness::Confirmed));
             let outcome = match file {
                 None => FileOutcome::NoFile,
                 Some(path) => delete_outcome(path.exists(), || {

@@ -163,3 +163,64 @@ folder access" (`Key::ShotMaybeBlocked`); README Troubleshooting has the steps.
 A new release may need the exception again (the file is replaced).
 
 See also: [[screenshot-snap]] (the Screenshot tile's own capture and editor).
+
+## Duplicate on Simpan (v3.6)
+
+Evidence (owner, PrtSc to Snipping Tool with auto-save): two identical files in
+Pictures\Screenshots, `Screenshot 2026-10-28 235523.png` (248527 B, Snipping
+Tool) and `... 235525.png` (248506 B, Vale's `spawn_save`, 2 s later). So the
+preview was up, Simpan was clicked about 2 s after the capture, and the
+file of the same pixel size existed, yet `wait_for_file` never accepted it.
+Read from the code; the Windows side was not seen live.
+
+Causes (each has a pure test):
+
+1. **Two clipboard updates for one capture.** Snipping Tool can set the
+   clipboard more than once (history "Bumped" or a second "Added"). Each
+   `WM_CLIPBOARDUPDATE` made a NEW `ShotState`, whose `from_ms` is
+   `claim_from` = its own arrival (the previous arrival is within `AFTER_MS`).
+   The file stamped before the second arrival fell outside its window, the
+   first shot's window ended at the second's arrival, and its matched file sat
+   in `taken`. The shown (second) shot then never found the file: Simpan wrote
+   a second copy; a merely waiting first shot was replaced and dropped (no
+   preview). Fix: `screenshot::same_capture` (same size, at most
+   `SAME_CAPTURE_MS` 2 s after the newest shown or waiting shot, same history
+   card or hashes within the lax distance) and `merge_arrival`: the new shot
+   keeps the first one's `from_ms`, matched file and flag
+   (`app_shot::plan_arrival`) and shows again. A real PrtSc twice on an
+   unchanged screen inside 2 s merges too: Simpan then says "already saved"
+   for the first file (no duplicate; the look for a second file continues).
+2. **Hash too strict.** Simpan needed `confirmed` hashes (both read, within
+   10 bits). An unreadable hash (file still locked, WIC failure) or a
+   low-contrast picture (average-hash cells near the mean flip; the clipboard
+   thumbnail is a box sampler, the file side WIC Fant) refused the file.
+3. **Window.** The wait ended at 5 s after the capture (+0.5 s); a cold
+   Snipping Tool can write later. `list_folder` skips a file whose header
+   cannot be read (still locked); the 300 ms looks make that only a delay.
+
+New rules:
+
+- **Lax for the preview and for Simpan** (`pick_match`, `save_decision`): same
+  size, in the window, hash unreadable or within `LAX_HASH_DIST` (16 of 64
+  bits). Ranking: hash within 10 bits, then 11..16, then unknown; then the
+  closest in time. A clearly different picture (more than 16 bits) is never
+  taken, even when it is the only same-size file. A browser "Copy image" (no
+  new file of that size) still never shows.
+- **Simpan never writes a second copy** when Windows wrote a file for the
+  shot: found at click time (`state.file`) or by the save worker's wait
+  (`Strictness::Lax`, window `SAVE_AFTER_MS` 7 s, +0.5 s settle, ending
+  earlier at the next screenshot's arrival). Notice "Sudah tersimpan ·
+  Pictures\Screenshots" / "Already saved" (`Key::ShotAlreadySaved`);
+  "Disimpan" only for a PNG Vale wrote (`Event::ShotSaveDone.written`). Cost:
+  with no file at all (PrtSc without auto-save) the notice comes up to 7.5 s
+  after the capture, was 5.5 s.
+- **Deletes stay strict** (`pick_confirmed`, `find_confirmed_in`,
+  `Strictness::Confirmed`, window `AFTER_MS`): both hashes read and within 10
+  bits; a looser match never recycles a file.
+- `claim_from`, `window_end` and `taken` are unchanged for different
+  pictures: never another screenshot's file.
+
+Still unverified live: which formats and how many updates Snipping Tool really
+posts for PrtSc (the merge is read from the symptom, not captured); whether
+the 16-bit lax distance is enough for the owner's low-contrast cases; the file
+stamp of a cold-start Snipping Tool beyond 7 s.

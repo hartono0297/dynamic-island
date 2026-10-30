@@ -173,13 +173,20 @@ pub(super) fn card_to_remove(
     entry.filter(|&id| history.get(id).is_some_and(|c| !c.pinned))
 }
 
-/// The notice after "Simpan": "Disimpan · Pictures\Screenshots" when the
-/// screenshot has its file in `dir` (found, or written by Simpan); without one
-/// (no picture to write) "Belum ada file · tetap di clipboard", so no one
-/// thinks it is on disk.
-pub(super) fn kept_notice(has_file: bool, dir: Option<PathBuf>) -> Notice {
+/// The notice after "Simpan": "Disimpan · Pictures\Screenshots" when Simpan
+/// wrote the file (`written`) in `dir`, "Sudah tersimpan · ..." when Windows
+/// had already written it; without a file (no picture to write) "Belum ada
+/// file · tetap di clipboard", so no one thinks it is on disk.
+pub(super) fn kept_notice(has_file: bool, written: bool, dir: Option<PathBuf>) -> Notice {
     let (title, body) = match (has_file, dir) {
-        (true, Some(dir)) => (Key::ShotSaved, screenshot::folder_label(&dir)),
+        (true, Some(dir)) => (
+            if written {
+                Key::ShotSaved
+            } else {
+                Key::ShotAlreadySaved
+            },
+            screenshot::folder_label(&dir),
+        ),
         _ => (Key::ShotNotSaved, tr(Key::ShotOnClipboard).into()),
     };
     Notice {
@@ -215,6 +222,54 @@ fn save_failed_notice() -> Notice {
 /// stay. Simpan, the default, never deletes.
 pub(super) fn delete_when_ignored(on_ignore: ShotIgnore, id: u64, has_file: bool) -> Option<u64> {
     (on_ignore == ShotIgnore::Delete && has_file).then_some(id)
+}
+
+/// The newest screenshot in play, as far as a new arrival cares.
+pub(super) struct PrevShot<'a> {
+    pub clip: &'a ClipCandidate,
+    pub entry: Option<u64>,
+    pub file: Option<&'a FileCandidate>,
+    pub flagged: bool,
+}
+
+/// What a new clipboard image becomes.
+#[derive(Debug)]
+pub(super) struct Arrival {
+    pub clip: ClipCandidate,
+    /// The file already matched when this is the same capture again.
+    pub file: Option<FileCandidate>,
+    /// Its preview does not wait for a file.
+    pub flagged: bool,
+    /// The same capture as `prev` (`screenshot::same_capture`).
+    pub merged: bool,
+}
+
+/// A new image (`clip`, history card `entry`, the clipboard's own
+/// screenshot flag) after `prev`: a new screenshot as it is, or the same
+/// capture again, which carries over the first one's window (a file stamped
+/// before this arrival is still its file), its matched file and its flag. A
+/// tool that sets the clipboard twice would otherwise leave the shown shot
+/// without the file Windows wrote, and Simpan would write a second copy.
+pub(super) fn plan_arrival(
+    prev: Option<PrevShot<'_>>,
+    clip: ClipCandidate,
+    entry: Option<u64>,
+    flagged: bool,
+) -> Arrival {
+    match prev {
+        Some(p) if screenshot::same_capture(p.clip, p.entry, &clip, entry) => Arrival {
+            clip: screenshot::merge_arrival(p.clip, clip),
+            file: p.file.cloned(),
+            flagged: flagged || p.flagged || p.file.is_some(),
+            merged: true,
+        },
+        _ => Arrival {
+            clip,
+            file: None,
+            flagged,
+            merged: false,
+        },
+    }
 }
 
 /// What the preview does about a fullscreen report.
@@ -278,36 +333,61 @@ impl App {
                     .map(|i| image::thumbnail_fit(d, &i, PREVIEW_MAX.0, PREVIEW_MAX.1))
             })
             .unwrap_or_else(|| img.thumb.clone());
+        let clip = ClipCandidate {
+            at_ms,
+            from_ms: screenshot::claim_from(at_ms, self.shots.last_at_ms.replace(at_ms)),
+            to_ms: at_ms + screenshot::AFTER_MS,
+            w: img.width,
+            h: img.height,
+            hash: screenshot::thumb_hash(&img.thumb.bgra, img.thumb.w, img.thumb.h),
+        };
+        // The newest screenshot still in play (waiting is newer than shown):
+        // is this its own capture again?
+        let arrival = plan_arrival(
+            self.shots
+                .waiting
+                .as_ref()
+                .or(self.shots.shown.as_ref())
+                .map(|s| PrevShot {
+                    clip: &s.clip,
+                    entry: s.entry,
+                    file: s.file.as_ref(),
+                    flagged: s.flagged,
+                }),
+            clip,
+            entry,
+            img.screenshot,
+        );
+        let merged = arrival.merged;
+        let file = arrival.file;
         let state = ShotState {
             look: ShotLook {
                 id,
                 thumb,
                 w: img.width,
                 h: img.height,
-                bytes: dib.as_ref().map_or(0, |d| d.len() as u64),
+                bytes: file
+                    .as_ref()
+                    .map_or_else(|| dib.as_ref().map_or(0, |d| d.len() as u64), |f| f.bytes),
             },
             entry,
-            clip: ClipCandidate {
-                at_ms,
-                from_ms: screenshot::claim_from(at_ms, self.shots.last_at_ms.replace(at_ms)),
-                to_ms: at_ms + screenshot::AFTER_MS,
-                w: img.width,
-                h: img.height,
-                hash: screenshot::thumb_hash(&img.thumb.bgra, img.thumb.w, img.thumb.h),
-            },
+            clip: arrival.clip,
             sequence,
             dib,
-            file: None,
+            file,
             checks: 0,
-            flagged: img.screenshot,
+            flagged: arrival.flagged,
         };
+        let show_now = state.flagged;
         // From now on the files are the new image's: every earlier one's
         // window ends here (`look_for_shot_file`, the workers).
         self.shots.arrivals.push(at_ms);
         // The shown screenshot's file not found yet: one last look for it
         // now, as the new image takes over the retries (a browser's "Copy
-        // image" must not leave the preview without its file).
-        if let Some(prev) = self.shots.checking
+        // image" must not leave the preview without its file). Not for the
+        // same capture again: the new candidate's window covers it.
+        if !merged
+            && let Some(prev) = self.shots.checking
             && self
                 .shots
                 .shown
@@ -321,7 +401,7 @@ impl App {
         self.shots.waiting = Some(state);
         self.shots.checking = Some(id);
         self.look_for_shot_file(id);
-        img.screenshot && self.try_show_waiting()
+        show_now && self.try_show_waiting()
     }
 
     /// A screen clip's overlay is a fullscreen window: Windows reports a
@@ -571,11 +651,12 @@ impl App {
                     .as_ref()
                     .and_then(|f| f.path.parent().map(PathBuf::from))
                     .or_else(|| self.shots.dir.clone());
+                // Windows' own file: nothing to write, "Sudah tersimpan".
                 if state.file.is_some() {
-                    return Some(Event::Notice(kept_notice(true, dir)));
+                    return Some(Event::Notice(kept_notice(true, false, dir)));
                 }
                 let Some(dib) = state.dib.clone() else {
-                    return Some(Event::Notice(kept_notice(false, dir)));
+                    return Some(Event::Notice(kept_notice(false, false, dir)));
                 };
                 // No file yet: the worker waits for Snipping Tool's (it may
                 // still be on its way), else writes one. Its name is chosen
@@ -681,10 +762,11 @@ impl App {
         })
     }
 
-    /// The save worker is done: "Disimpan" with the folder, or why not. The
-    /// file (Snipping Tool's own, or the one written) is this screenshot's:
-    /// no later screenshot matches it.
-    pub(super) fn on_shot_save_done(&mut self, path: Option<PathBuf>, now: Instant) {
+    /// The save worker is done: "Disimpan" with the folder when it wrote the
+    /// file (`written`), "Sudah tersimpan" when Snipping Tool's own was found,
+    /// or why not. The file is this screenshot's: no later screenshot matches
+    /// it.
+    pub(super) fn on_shot_save_done(&mut self, path: Option<PathBuf>, written: bool, now: Instant) {
         let notice = match path {
             Some(path) => {
                 let dir = path.parent().map(PathBuf::from);
@@ -692,7 +774,7 @@ impl App {
                     self.shots.dir = dir.clone();
                 }
                 remember_taken(&mut self.shots.taken, path);
-                kept_notice(true, dir)
+                kept_notice(true, written, dir)
             }
             None => save_failed_notice(),
         };
@@ -873,18 +955,126 @@ mod tests {
     #[test]
     fn simpan_without_a_file_does_not_say_saved() {
         let dir = PathBuf::from(r"C:\Users\x\Pictures\Screenshots");
-        let saved = kept_notice(true, Some(dir.clone()));
+        let saved = kept_notice(true, true, Some(dir.clone()));
         assert_eq!(
             (saved.title.as_str(), saved.body.as_str()),
             ("Disimpan", r"Pictures\Screenshots")
         );
         // A PrtSc without auto-save left no file: it is only on the clipboard.
         for dir in [None, Some(dir)] {
-            let n = kept_notice(false, dir);
+            let n = kept_notice(false, false, dir);
             assert_eq!(
                 (n.title.as_str(), n.body.as_str()),
                 ("Belum ada file", "tetap di clipboard")
             );
         }
+    }
+
+    #[test]
+    fn a_file_windows_wrote_says_already_saved_and_only_ours_says_saved() {
+        let dir = PathBuf::from(r"C:\Users\x\Pictures\Screenshots");
+        let already = kept_notice(true, false, Some(dir.clone()));
+        assert_eq!(
+            (already.title.as_str(), already.body.as_str()),
+            ("Sudah tersimpan", r"Pictures\Screenshots")
+        );
+        let ours = kept_notice(true, true, Some(dir));
+        assert_eq!(ours.title, "Disimpan");
+        // Not a file written, nothing to claim: no file, no "saved" at all.
+        assert_eq!(kept_notice(false, true, None).title, "Belum ada file");
+    }
+
+    fn clip_at(at: i64, from: i64, hash: Option<u64>) -> ClipCandidate {
+        ClipCandidate {
+            at_ms: at,
+            from_ms: from,
+            to_ms: at + crate::screenshot::AFTER_MS,
+            w: 1280,
+            h: 720,
+            hash,
+        }
+    }
+
+    fn file_at(name: &str, at: i64, hash: Option<u64>) -> FileCandidate {
+        FileCandidate {
+            path: name.into(),
+            at_ms: at,
+            bytes: 248_527,
+            w: 1280,
+            h: 720,
+            hash,
+        }
+    }
+
+    #[test]
+    fn a_second_clipboard_update_of_one_capture_keeps_the_first_ones_file_and_window() {
+        use super::{PrevShot, plan_arrival};
+        use crate::screenshot::{SaveOutcome, claim_from, save_decision};
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let file = file_at("Screenshot 235523.png", T + 150, Some(PIC));
+        // The same picture again 600 ms later (a Bumped entry, same card).
+        let at = T + 600;
+        let fresh = clip_at(at, claim_from(at, Some(T)), Some(PIC));
+        fn prev<'a>(
+            clip: &'a ClipCandidate,
+            file: Option<&'a FileCandidate>,
+            flagged: bool,
+        ) -> PrevShot<'a> {
+            PrevShot {
+                clip,
+                entry: Some(7),
+                file,
+                flagged,
+            }
+        }
+        // The shown shot had matched the file: the second carries it over,
+        // and Simpan on it is "already saved", never a write.
+        let a = plan_arrival(Some(prev(&first, Some(&file), true)), fresh, Some(7), false);
+        assert!(a.merged);
+        assert_eq!(
+            a.file.as_ref().map(|f| f.path.clone()),
+            Some(file.path.clone())
+        );
+        assert!(a.flagged, "the first was a screenshot: this one shows too");
+        // The shot had only been waiting (no file yet): the window now
+        // reaches back to the first arrival, so the file is found.
+        let b = plan_arrival(Some(prev(&first, None, false)), fresh, Some(7), false);
+        assert!(b.merged && b.file.is_none() && !b.flagged);
+        assert_eq!(
+            save_decision(&b.clip, std::slice::from_ref(&file), &[]),
+            SaveOutcome::AlreadySaved(file.path.clone())
+        );
+        // A fresh candidate would have missed it (the bug).
+        assert_eq!(
+            save_decision(&fresh, std::slice::from_ref(&file), &[]),
+            SaveOutcome::Write
+        );
+    }
+
+    #[test]
+    fn another_picture_or_a_later_screenshot_is_a_new_candidate() {
+        use super::{PrevShot, plan_arrival};
+        use crate::screenshot::claim_from;
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let file = file_at("a.png", T + 150, Some(PIC));
+        let prev = || PrevShot {
+            clip: &first,
+            entry: Some(7),
+            file: Some(&file),
+            flagged: true,
+        };
+        // Another picture 1 s later: its files start at its own arrival.
+        let other = clip_at(T + 1_000, T + 1_000, Some(!PIC));
+        let a = plan_arrival(Some(prev()), other, Some(8), false);
+        assert!(!a.merged && a.file.is_none() && !a.flagged);
+        assert_eq!(a.clip.from_ms, T + 1_000);
+        // The same picture long after, or with nothing before: new too.
+        let later = clip_at(T + 4_000, T + 4_000, Some(PIC));
+        assert!(!plan_arrival(Some(prev()), later, Some(7), true).merged);
+        assert!(!plan_arrival(None, other, None, true).merged);
     }
 }

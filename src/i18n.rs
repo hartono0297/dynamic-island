@@ -722,6 +722,7 @@ keys! {
     ShotKeep => "Simpan", "Keep";
     ShotDelete => "Hapus", "Delete";
     ShotSaved => "Disimpan", "Saved";
+    ShotAlreadySaved => "Sudah tersimpan", "Already saved";
     ShotNotSaved => "Belum ada file", "No file yet";
     ShotOnClipboard => "tetap di clipboard", "still on the clipboard";
     ShotMaybeBlocked => "mungkin diblokir Controlled folder access",

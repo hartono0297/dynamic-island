@@ -290,11 +290,14 @@ pub enum Event {
         dir: Option<PathBuf>,
         found: Option<FileCandidate>,
     },
-    /// "Simpan" wrote screenshot `shot` as a PNG: its path, `None` when it
-    /// could not be written. `App` raises the notice; the reducer ignores it.
+    /// "Simpan" for screenshot `shot` ended: the saved file's path, `None`
+    /// when it failed. `written` is true when Simpan wrote that PNG itself,
+    /// false when Windows' own file was found ("Sudah tersimpan"). `App`
+    /// raises the notice; the reducer ignores it.
     ShotSaveDone {
         shot: u64,
         path: Option<PathBuf>,
+        written: bool,
     },
     /// "Hapus" ran for `shot`: what became of the file, and whether the
     /// clipboard was emptied. `App` raises the notice; the reducer ignores it.

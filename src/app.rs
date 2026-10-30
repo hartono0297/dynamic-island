@@ -1040,8 +1040,8 @@ impl App {
                     self.on_shot_folder(shot, dir, found);
                     continue;
                 }
-                Event::ShotSaveDone { path, .. } => {
-                    self.on_shot_save_done(path, now);
+                Event::ShotSaveDone { path, written, .. } => {
+                    self.on_shot_save_done(path, written, now);
                     continue;
                 }
                 Event::ShotRecycled { file, emptied, .. } => {
