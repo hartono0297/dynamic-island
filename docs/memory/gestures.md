@@ -16,11 +16,11 @@ wheel, `WM_MBUTTONDOWN/UP` for the middle button.
 - Swipe: ≥ 56 logical px sideways (scaled by the window's dpi), at least
   twice as far across as up/down, within 700 ms. Left = next, right = prev. A
   swipe clears the pending click so it never opens the panel in Click mode.
-- Sideways wheel: deltas add up to one notch (120); a flick fires once and
-  the rest of the same scroll (touchpad momentum) is ignored until it has
-  been still for 500 ms: each delta meanwhile pushes the end out, so a
-  momentum tail longer than 500 ms still fires once (tested with 1 s).
-  Right = next.
+- Sideways wheel (reworked 2026-10-30, see below): a gesture is a run of
+  deltas the same way with gaps of at most 150 ms (`HWHEEL_NEW_GESTURE_GAP`);
+  deltas add up to one notch (120), the gesture fires once and is spent, so
+  its whole momentum tail, however long, is ignored. The 500 ms quiet time is
+  counted from the flick only and never extended. Right = next.
 - Middle button over the drawn island = play/pause, only when the press
   (`WM_MBUTTONDOWN`) was on the island too (`middle_click`); a press that
   began elsewhere, or a pointer that left in between, does nothing.
@@ -49,9 +49,16 @@ cli_menu_open, gestures_media_ok, over_island)` (`App::on_hwheel`):
 
 - **Not behind `config.gestures`:** turning a page is navigation like the
   vertical wheel; the setting only guards the music gestures.
-- One flick = one page: the same `HWheel` latch (accumulate to 120, fire once,
-  still 500 ms before the next; a touchpad burst of 30 deltas turns exactly
-  one page, tested). `PageFlick` steps `pages.step(page, ±1)`, so order, skips
+- One flick = one page: the same `HWheel` rules (2026-10-30). A gesture = same
+  sign, gaps <= 150 ms; the other sign or a longer gap starts a new gesture
+  (sum reset, not spent). Accumulate to 120, fire once, then the gesture is
+  spent (momentum tail returns `None`). `quiet_until` = flick + 500 ms, set
+  only by a flick, never extended by later deltas (the old rule extended it
+  on every delta, so a continuous touchpad tail blocked paging until the
+  cursor moved: the stutter). A new same-direction gesture reaching 120
+  inside the quiet window keeps its sum and fires on its first delta at or
+  after `quiet_until`; the opposite direction fires at once. A touchpad burst
+  of 30 deltas turns exactly one page (tested), as does a 1.5 s tail. `PageFlick` steps `pages.step(page, ±1)`, so order, skips
   and clamping equal the vertical wheel; it zeroes the vertical residue, keeps
   the sticky-reminder peek rule, stays off the search and arms the linger as a
   `PageTurn`. `last_paging` is set so the scroll-volume cover does not grab the
