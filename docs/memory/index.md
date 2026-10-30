@@ -58,6 +58,8 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[search-files]]: files and folders by name in six user folders, own walker with caps, icons/sizes/counts from a background worker
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 - [[devices]]: Devices page (Perangkat), safe eject of flash drives, external disks and cards through a worker thread, no polling
+- [[notch-peek-eyes]]: with stay-behind off, the notch shrinks to the cat's two eyes while the pointer is near it over a window, comes back on a 500 ms rest or a click; shares TIMER_POINTER (33)
+- [[cat-looks-at-pointer]]: the idle cat turns head, ears and eyes toward the pointer sideways, eased on the frame clock, clamp checked by a test
 
 ## Gotchas
 

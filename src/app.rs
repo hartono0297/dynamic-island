@@ -1410,7 +1410,9 @@ impl App {
     /// Arms or stops Bata's one-shot timers for what shows now.
     fn sync_robot_timers(&mut self, now: Instant) {
         let face = self.robot_frame(&self.state.view(), now).map(|r| r.expr);
-        let plan = plan_timers(face, self.motion(), self.animating_at(now));
+        let mut plan = plan_timers(face, self.motion(), self.animating_at(now));
+        // The eyes alone are static: no blink while the notch is shrunk.
+        plan.blink &= !self.eyes;
         if plan.blink != self.bata.blink_timer {
             self.bata.blink_timer = plan.blink;
             self.bata.blinking = false;
@@ -3305,7 +3307,10 @@ impl App {
     /// is on screen and moving.
     fn sync_timers(&mut self, now: Instant) {
         let view = self.state.view();
-        let eq = view == View::MediaCompact && self.state.media().is_some_and(|m| m.playing);
+        // The shrunk notch shows no equalizer: nothing to redraw 30 times a second.
+        let eq = !self.eyes
+            && view == View::MediaCompact
+            && self.state.media().is_some_and(|m| m.playing);
         if eq != self.eq_timer {
             self.eq_timer = eq;
             unsafe {

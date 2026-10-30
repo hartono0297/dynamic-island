@@ -127,10 +127,6 @@ impl Peek {
         matches!(self.state, PeekState::Shrunk { .. })
     }
 
-    pub fn is_normal(&self) -> bool {
-        self.state == PeekState::Normal
-    }
-
     /// Back to `Normal` at once. True when it was something else.
     pub fn reset(&mut self) -> bool {
         std::mem::replace(&mut self.state, PeekState::Normal) != PeekState::Normal
