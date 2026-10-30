@@ -50,7 +50,7 @@ use crate::state::MolePhase;
 use crate::system::{self, SystemSample};
 use crate::theme::{self, Palette, radius};
 use crate::tiles::Tile;
-use crate::ui::dock::{self, DOCK_ICON, DockZone};
+use crate::ui::dock::{self, DOCK_ICON};
 use crate::ui::geometry::{CLAUDE, ExpandedLayout, Rect, ShapeRect, panel_kind, shape_for};
 use crate::ui::icons::Icon;
 use crate::ui::month_grid::{CellCanvas, CellLook, DayState, Filled, day_geometry, paint_day};
@@ -515,19 +515,20 @@ impl Renderer {
         }
         // No clicks on a page still sliding in: its controls are not where
         // the regions say yet, and the old page's are still under the pointer.
-        if panel_regions_wanted(settled, closing, slide, fade) {
-            let mut hits = regions(s, &layout, strip);
+        let clicks = panel_regions_wanted(settled, closing, slide, fade);
+        // The dock's zone stands through a slide or cross-fade (else the row
+        // under a still pointer collapses the moment its own click turns
+        // the page); only its clicks wait with the page's.
+        let mut dock_hits = Vec::new();
+        if has_dots && !closing {
+            let (zone, hits) = dock::panel_parts(s, &frame.pages, page, frame.dock.e, clicks);
+            self.regions.dock = Some(zone);
+            dock_hits = hits;
+        }
+        if clicks {
             // The dock's icons sit over the page's bottom edge: they win.
-            self.regions.dock = has_dots.then(|| {
-                let icons = dock::resting_layout(s, frame.pages.len());
-                let mut over = dock::regions(&icons, &frame.pages, page, frame.dock.e);
-                over.append(&mut hits);
-                hits = over;
-                DockZone {
-                    dots: page_dots(s, &frame.pages, page).0,
-                    icons,
-                }
-            });
+            let mut hits = dock_hits;
+            hits.extend(regions(s, &layout, strip));
             if matches!(layout, PageLayout::Media(_)) && frame.media.is_none() {
                 hits.retain(|r| !matches!(r.hit, Hit::Prev | Hit::PlayPause | Hit::Next));
             }
@@ -560,9 +561,9 @@ impl Renderer {
     }
 
     /// The page dots, or, as the pointer comes to them, the dock: one icon
-    /// per page that magnifies under the pointer (`ui::dock`). `dock.e` morphs
-    /// each dot to its resting icon and crossfades the two; at 0 this is the
-    /// plain dots.
+    /// per page that magnifies under the pointer (`ui::dock`). `dock.e` lerps
+    /// each dot's rect to its resting icon's (`dock::morph_rect`) and
+    /// crossfades the two in it; at 0 this is the plain dots.
     fn paint_page_dots(&self, s: ShapeRect, frame: &Frame, page: Page) {
         let (dots, active) = page_dots(s, &frame.pages, page);
         let e = frame.dock.e.clamp(0.0, 1.0);
@@ -592,26 +593,15 @@ impl Renderer {
                 self.fill_round(*dot, dot.w / 2.0);
                 continue;
             };
-            let cx = dot.x + dot.w / 2.0 + ((icon.x + icon.w / 2.0) - (dot.x + dot.w / 2.0)) * e;
+            // Grows from its bottom edge, around its resting centre x.
+            let area = dock::morph_rect(*dot, *icon, e, frame.dock.scale(i));
             if e < 1.0 {
                 self.set_color(if lit { p.accent } else { p.dot_off }, 1.0 - e);
-                let fading = Rect {
-                    x: cx - dot.w / 2.0,
-                    ..*dot
-                };
-                self.fill_round(fading, dot.w / 2.0);
+                self.fill_round(area, area.w / 2.0);
             }
-            // Grows from its bottom edge, around its resting centre x.
-            let size = DOCK_ICON * frame.dock.scale(i);
-            let area = Rect {
-                x: cx - size / 2.0,
-                y: icon.bottom() - size,
-                w: size,
-                h: size,
-            };
             let ink = if lit { p.accent } else { p.secondary };
             if let Some(page) = frame.pages.get(i) {
-                self.icon_colored(shortcuts::page_icon(*page), area, size, ink, e, None);
+                self.icon_colored(shortcuts::page_icon(*page), area, area.w, ink, e, None);
             }
         }
     }

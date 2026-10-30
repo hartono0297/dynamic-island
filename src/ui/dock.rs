@@ -15,7 +15,7 @@
 use std::f32::consts::PI;
 
 use super::geometry::{Rect, ShapeRect};
-use super::panel_layout::{DOT_BOTTOM, Region};
+use super::panel_layout::{DOT_BOTTOM, Region, page_dots};
 use crate::model::{Hit, Page};
 
 /// An icon at rest, in dip.
@@ -107,11 +107,58 @@ pub struct DockZone {
 
 impl DockZone {
     /// The pointer is in the zone: the dots' bounds grown by the padding,
-    /// or, once expanded, the resting icons' bounds grown by the same
-    /// (the hysteresis).
+    /// or, once expanded, the resting icons' bounds grown by the same and
+    /// reaching up over the click cells (the hysteresis). An icon at its
+    /// peak and the top of its cell stand above the padded row, so without
+    /// the cells a pointer on a magnified icon's top would collapse it.
     pub fn contains(&self, x: f32, y: f32, expanded: bool) -> bool {
-        let row = if expanded { &self.icons } else { &self.dots };
-        bounds(row).is_some_and(|b| grown(b).contains(x, y))
+        if !expanded {
+            return bounds(&self.dots).is_some_and(|b| grown(b).contains(x, y));
+        }
+        bounds(&self.icons).is_some_and(|b| grown(b).contains(x, y))
+            || cells(&self.icons).any(|c| c.contains(x, y))
+    }
+}
+
+/// The dock's part of a panel frame: its zone, and its click regions only
+/// when the page takes clicks (`clicks`). The zone stands also while a page
+/// slides or cross-fades in, so the row under a still pointer stays icons
+/// through the slide its own click (or the wheel) started.
+pub fn panel_parts(
+    s: ShapeRect,
+    pages: &[Page],
+    current: Page,
+    e: f32,
+    clicks: bool,
+) -> (DockZone, Vec<Region>) {
+    let icons = resting_layout(s, pages.len());
+    let hits = if clicks {
+        regions(&icons, pages, e)
+    } else {
+        Vec::new()
+    };
+    let zone = DockZone {
+        dots: page_dots(s, pages, current).0,
+        icons,
+    };
+    (zone, hits)
+}
+
+/// Where item `i` of the row is drawn: its dot rect lerped to its resting
+/// icon rect by `e`, then magnified by `scale` from its bottom edge around
+/// its centre x. At `e` 0 and scale 1 this is the dot.
+pub fn morph_rect(dot: Rect, icon: Rect, e: f32, scale: f32) -> Rect {
+    let e = e.clamp(0.0, 1.0);
+    let lerp = |a: f32, b: f32| a + (b - a) * e;
+    let cx = lerp(dot.x + dot.w / 2.0, icon.x + icon.w / 2.0);
+    let bottom = lerp(dot.bottom(), icon.bottom());
+    let w = lerp(dot.w, icon.w) * scale;
+    let h = lerp(dot.h, icon.h) * scale;
+    Rect {
+        x: cx - w / 2.0,
+        y: bottom - h,
+        w,
+        h,
     }
 }
 
@@ -251,14 +298,15 @@ fn cells(layout: &[Rect]) -> impl Iterator<Item = Rect> + '_ {
 }
 
 /// The icons' click regions, one per page, while the row is more icons than
-/// dots; the page the panel shows takes no click (it is already there).
-pub fn regions(layout: &[Rect], pages: &[Page], current: Page, e: f32) -> Vec<Region> {
+/// dots. The page the panel shows has its cell too, so a click on its icon
+/// never falls through to the page content under it; `go_to_page` ignores
+/// it (and the linger arms nothing for a page that did not turn).
+pub fn regions(layout: &[Rect], pages: &[Page], e: f32) -> Vec<Region> {
     if e <= CLICK_FROM {
         return Vec::new();
     }
     cells(layout)
         .zip(pages)
-        .filter(|(_, p)| **p != current)
         .map(|(rect, p)| Region {
             rect,
             hit: Hit::PanelPage(*p),
@@ -363,7 +411,10 @@ mod tests {
         ] {
             assert_eq!(flat.hit(x, y, &layout), big.hit(x, y, &layout));
         }
-        assert_eq!(flat.hit(layout[0].x - 20.0, layout[0].y + 7.0, &layout), None);
+        assert_eq!(
+            flat.hit(layout[0].x - 20.0, layout[0].y + 7.0, &layout),
+            None
+        );
     }
 
     #[test]
@@ -466,10 +517,104 @@ mod tests {
             for (i, pair) in layout.windows(2).enumerate() {
                 let right = pair[0].x + 7.0 + DOCK_ICON * t[i] / 2.0;
                 let left = pair[1].x + 7.0 - DOCK_ICON * t[i + 1] / 2.0;
-                assert!(right <= left + 1e-4, "icons {i} and {} overlap at {x}", i + 1);
+                assert!(
+                    right <= left + 1e-4,
+                    "icons {i} and {} overlap at {x}",
+                    i + 1
+                );
             }
         }
         assert!((targets(layout[3].x + 7.0, &layout)[3] - (1.0 + PEAK)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_expanded_zone_holds_the_peak_icons_and_their_cells() {
+        let s = panel();
+        let shown = vec![Page::Calendar; 6];
+        let icons = resting_layout(s, 6);
+        let zone = DockZone {
+            dots: page_dots(s, &shown, Page::Calendar).0,
+            icons: icons.clone(),
+        };
+        for (i, icon) in icons.iter().enumerate() {
+            let cx = icon.x + icon.w / 2.0;
+            // The top of an icon at its peak, and of its click cell.
+            let peak_top = icon.bottom() - DOCK_ICON * (1.0 + PEAK);
+            assert!(zone.contains(cx, peak_top + 0.1, true), "peak top of {i}");
+            for c in cells(&icons) {
+                for (x, y) in [
+                    (c.x + 0.1, c.y + 0.1),
+                    (c.right() - 0.1, c.y + 0.1),
+                    (c.x + 0.1, c.bottom() - 0.1),
+                ] {
+                    assert!(zone.contains(x, y, true), "cell corner ({x}, {y})");
+                }
+            }
+        }
+        // Collapsed, the dots' zone is as small as before.
+        let top = icons[0].bottom() - DOCK_ICON * (1.0 + PEAK);
+        assert!(!zone.contains(icons[0].x + 7.0, top, false));
+    }
+
+    #[test]
+    fn the_zone_stands_while_a_page_slides_and_only_the_clicks_wait() {
+        let s = panel();
+        let shown = [Page::Calendar, Page::Media, Page::Clipboard];
+        let (zone, hits) = panel_parts(s, &shown, Page::Media, 1.0, false);
+        assert!(hits.is_empty(), "no clicks on a page still sliding in");
+        let icon = zone.icons[1];
+        assert!(zone.contains(icon.x + 7.0, icon.y + 7.0, true));
+        assert_eq!(zone.dots, page_dots(s, &shown, Page::Media).0);
+        let (settled, hits) = panel_parts(s, &shown, Page::Media, 1.0, true);
+        assert_eq!(settled, zone);
+        assert_eq!(hits.len(), shown.len());
+    }
+
+    #[test]
+    fn the_current_icon_shadows_the_content_under_it() {
+        // A click anywhere on the current page's cell (its magnified icon)
+        // is the dock's, never the page content behind it.
+        let s = panel();
+        let shown = [Page::Calendar, Page::Clipboard, Page::Media];
+        let (zone, hits) = panel_parts(s, &shown, Page::Clipboard, 1.0, true);
+        let icon = zone.icons[1];
+        let top = icon.bottom() - DOCK_ICON * (1.0 + PEAK);
+        for (x, y) in [(icon.x + 7.0, top + 0.5), (icon.x + 7.0, icon.y + 7.0)] {
+            let hit = hits
+                .iter()
+                .find(|r| r.rect.contains(x, y))
+                .map(|r| r.hit.clone());
+            assert_eq!(hit, Some(Hit::PanelPage(Page::Clipboard)));
+        }
+    }
+
+    #[test]
+    fn morph_lerps_the_dot_rect_to_the_icon_rect() {
+        let s = panel();
+        let shown = vec![Page::Calendar; 4];
+        let dots = page_dots(s, &shown, Page::Calendar).0;
+        let icons = resting_layout(s, 4);
+        let (dot, icon) = (dots[1], icons[1]);
+        assert_eq!(morph_rect(dot, icon, 0.0, 1.0), dot);
+        let at_rest = morph_rect(dot, icon, 1.0, 1.0);
+        for (a, b) in [
+            (at_rest.x, icon.x),
+            (at_rest.y, icon.y),
+            (at_rest.w, icon.w),
+            (at_rest.h, icon.h),
+        ] {
+            assert!((a - b).abs() < 1e-4);
+        }
+        let half = morph_rect(dot, icon, 0.5, 1.0);
+        assert!((half.w - (dot.w + icon.w) / 2.0).abs() < 1e-4);
+        assert!((half.bottom() - icon.bottom()).abs() < 1e-4);
+        let mid = |r: Rect| r.x + r.w / 2.0;
+        assert!((mid(half) - (mid(dot) + mid(icon)) / 2.0).abs() < 1e-4);
+        // Magnified: from the bottom edge, around the centre.
+        let big = morph_rect(dot, icon, 1.0, 1.9);
+        assert!((big.w - DOCK_ICON * 1.9).abs() < 1e-4);
+        assert!((big.bottom() - icon.bottom()).abs() < 1e-4);
+        assert!((mid(big) - mid(icon)).abs() < 1e-4);
     }
 
     #[test]
@@ -507,18 +652,14 @@ mod tests {
         assert!(!shown.contains(&Page::Notes));
         let layout = resting_layout(panel(), shown.len());
         let d = Dock::new();
-        let regs = regions(&layout, &shown, Page::Calendar, 1.0);
-        assert_eq!(regs.len(), shown.len() - 1, "the current page takes no click");
+        let regs = regions(&layout, &shown, 1.0);
+        assert_eq!(regs.len(), shown.len());
         for (i, page) in shown.iter().enumerate() {
             let (x, y) = (layout[i].x + 7.0, layout[i].y + 7.0);
             let hit = d.hit(x, y, &layout).map(|i| shown[i]);
             assert_eq!(hit, Some(*page));
             let region = regs.iter().find(|r| r.rect.contains(x, y));
-            if *page == Page::Calendar {
-                assert!(region.is_none());
-            } else {
-                assert_eq!(region.map(|r| r.hit.clone()), Some(Hit::PanelPage(*page)));
-            }
+            assert_eq!(region.map(|r| r.hit.clone()), Some(Hit::PanelPage(*page)));
         }
     }
 
@@ -526,8 +667,8 @@ mod tests {
     fn clicks_wait_until_the_row_is_mostly_icons() {
         let shown = [Page::Calendar, Page::Notes];
         let layout = resting_layout(panel(), 2);
-        assert!(regions(&layout, &shown, Page::Calendar, 0.5).is_empty());
-        assert!(regions(&layout, &shown, Page::Calendar, 0.0).is_empty());
-        assert_eq!(regions(&layout, &shown, Page::Calendar, 0.51).len(), 1);
+        assert!(regions(&layout, &shown, 0.5).is_empty());
+        assert!(regions(&layout, &shown, 0.0).is_empty());
+        assert_eq!(regions(&layout, &shown, 0.51).len(), 2);
     }
 }

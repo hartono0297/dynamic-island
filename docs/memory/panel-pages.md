@@ -70,10 +70,19 @@ the pointer and the frame step in `src/app_dock.rs`, drawing in
 
 - **Zone.** The dots' bounds grown by 10 dip vertically and 8 horizontally.
   While expanded, the zone is the resting icon row's bounds plus the same
-  padding (hysteresis, so the growing icons do not drop the pointer). Leaving
-  the zone, `WM_MOUSELEAVE`, or a page with no dots (cleaner, Mole, search:
-  the renderer registers no `DockZone`) eases the row back to dots; the panel
+  padding, reaching up over the click cells (hysteresis: a peak icon and the
+  top of its cell stand above the padded row, so the padding alone dropped a
+  pointer on a magnified icon's top; tested). Leaving the zone,
+  `WM_MOUSELEAVE`, or a page with no dots (cleaner, Mole, search: the
+  renderer registers no `DockZone`) eases the row back to dots; the panel
   closing resets it at once (`App::dock_sync`, before every draw).
+- **The zone stands through slides.** `Renderer::draw` resets the regions
+  every frame, and the click regions wait for a settled page
+  (`panel_regions_wanted`). The `DockZone` must not wait with them: with no
+  zone, `dock_sync` collapsed the row the moment its own click (or a wheel
+  or flick) started a slide. `dock::panel_parts` builds the zone whenever the
+  page has dots (not while closing) and the icons' click regions only when
+  the page takes clicks.
 - **Resting layout** (`resting_layout`, never moves): `DOCK_ICON` 14 dip at a
   `DOCK_PITCH` of 28 dip, centred like the dots, bottom edge on the dots'
   line (`s.y + s.h - DOT_BOTTOM`). One icon per page of `frame.pages` (the
@@ -89,13 +98,17 @@ the pointer and the frame step in `src/app_dock.rs`, drawing in
 - **Smoothing.** Mouse moves only set targets. The shown values (each scale
   and the expand progress `e`) advance once per `FrameClock` frame by
   `v += (target - v) * (1 - exp(-dt / 0.07))`: frame-rate independent, no
-  overshoot, snaps within 0.002. During the morph each dot lerps to its
-  resting icon by `e` and the two crossfade. With Windows animations off
+  overshoot, snaps within 0.002. During the morph each dot's rect lerps to
+  its resting icon's rect by `e` (centre, bottom and size,
+  `dock::morph_rect`), magnified by its scale, and dot and icon crossfade in
+  that rect. With Windows animations off
   (`App.animations`) the values snap.
 - **Click.** `Hit::PanelPage(page)`, active only while `e > 0.5`. Each icon
   owns a pitch-wide cell from the baseline up to the grown height (so what
   is seen is what is hit; hit-testing never reads the scales). The current
-  page takes no region. In `state.rs` `go_to_page` follows the flick's rules
+  page's cell is a region too (`Hit::PanelPage(current)`, which `go_to_page`
+  ignores and which arms no linger), so a click on its magnified icon never
+  falls through to the page content under it. In `state.rs` `go_to_page` follows the flick's rules
   (vertical residue zeroed, the sticky-reminder peek spends the click,
   nothing on the search or a closed panel) and the linger arms as a page
   turn (`LingerTrigger::PageTurn`, so the current page arms nothing). The
