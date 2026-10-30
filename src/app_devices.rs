@@ -16,7 +16,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::time::Instant;
 
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::System::Ioctl::GUID_DEVINTERFACE_DISK;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
@@ -29,9 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{App, poster};
 use crate::config::DevicesHotkey;
-use crate::devices::{self, Change, Device, DevicesEvent, Veto};
+use crate::devices::{self, Change, Device, DevicesEvent, Ejected, Veto};
 use crate::devices_win::{Capacity, Devices, Req};
-use crate::i18n;
+use crate::i18n::{self, Lang};
 use crate::model::{Event, Page};
 use crate::shortcuts;
 use crate::ui::geometry::{ShapeKind, ShapeRect, shape_for};
@@ -93,6 +93,24 @@ pub(super) fn relevant_device_change(wparam: usize, device_type: Option<u32>) ->
         )
 }
 
+/// `WM_DEVICECHANGE`: an arrival or a removal of a volume or disk starts (or
+/// restarts) the pause before the scan. `lparam` is a `DEV_BROADCAST_HDR` for
+/// those messages. Needs no `App`: the system sends these synchronously, so
+/// one can arrive while a handler holds `App`, and the timer is armed anyway.
+pub(super) fn on_device_change(hwnd: HWND, wparam: usize, lparam: isize) {
+    // Only the two messages that carry a header have one to read: for the
+    // others `lparam` is not a pointer (or not ours to follow).
+    let device_type = (matches!(wparam, ARRIVAL | REMOVED) && lparam != 0).then(|| {
+        let header = lparam as *const DEV_BROADCAST_HDR;
+        unsafe { (*header).dbch_devicetype.0 }
+    });
+    if relevant_device_change(wparam, device_type) {
+        unsafe {
+            SetTimer(Some(hwnd), TIMER_DEVICES, DEBOUNCE_MS, None);
+        }
+    }
+}
+
 /// The list's scroll after a wheel turn of `delta` (120 a notch, positive
 /// away from the user: up), kept in `0..=max`.
 pub(super) fn wheel_scroll(scroll: f32, delta: i32, max: f32) -> f32 {
@@ -139,16 +157,32 @@ impl DevicesState {
         })
     }
 
-    /// An eject finished: the names that went (for the notice); a refusal is
-    /// kept for its card, a success drops what was kept.
-    fn finish_eject(&mut self, results: Vec<(String, String, Result<(), Veto>)>) -> Vec<String> {
+    /// An eject finished: the names that were safely ejected (for the notice);
+    /// a refusal is kept for its card, a success drops what was kept. A
+    /// device that was gone already clears its card but is not named, and a
+    /// safe one the worker had no name for is named from `list` or not at
+    /// all: an instance ID is never a name.
+    fn finish_eject(
+        &mut self,
+        lang: Lang,
+        results: Vec<(String, Option<String>, Result<Ejected, Veto>)>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         for (key, name, outcome) in results {
             self.ejecting.remove(&key);
             match outcome {
-                Ok(()) => {
+                Ok(Ejected::Gone) => {
                     self.vetoes.remove(&key);
-                    names.push(name);
+                }
+                Ok(Ejected::Safe) => {
+                    self.vetoes.remove(&key);
+                    let named = name.or_else(|| {
+                        self.list
+                            .iter()
+                            .find(|d| d.key == key)
+                            .map(|d| devices::display_name(lang, d))
+                    });
+                    names.extend(named);
                 }
                 Err(veto) => {
                     self.vetoes.insert(key, veto);
@@ -209,23 +243,6 @@ impl App {
         }
     }
 
-    /// `WM_DEVICECHANGE`: an arrival or a removal of a volume or disk starts
-    /// (or restarts) the pause before the scan. `lparam` is a
-    /// `DEV_BROADCAST_HDR` for those messages.
-    pub(super) fn on_device_change(&mut self, wparam: usize, lparam: isize) {
-        // Only the two messages that carry a header have one to read: for
-        // the others `lparam` is not a pointer (or not ours to follow).
-        let device_type = (matches!(wparam, ARRIVAL | REMOVED) && lparam != 0).then(|| {
-            let header = lparam as *const DEV_BROADCAST_HDR;
-            unsafe { (*header).dbch_devicetype.0 }
-        });
-        if relevant_device_change(wparam, device_type) {
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_DEVICES, DEBOUNCE_MS, None);
-            }
-        }
-    }
-
     /// `TIMER_DEVICES`: the pause is over; scan, reading the size of what is
     /// new only.
     pub(super) fn on_devices_timer(&mut self) {
@@ -255,7 +272,7 @@ impl App {
                 was != self.devices.list || !change.removed.is_empty()
             }
             DevicesEvent::Ejected { results } => {
-                let names = self.devices.finish_eject(results);
+                let names = self.devices.finish_eject(i18n::lang(), results);
                 if self.config.device_notices && !names.is_empty() {
                     self.raise_device_notice(devices::safe_notice(i18n::lang(), &names), now);
                 }
@@ -586,10 +603,13 @@ mod tests {
                 name: String::new(),
             },
         );
-        let names = s.finish_eject(vec![
-            ("A".into(), "SanDisk".into(), Ok(())),
-            ("B".into(), "WD".into(), Err(veto())),
-        ]);
+        let names = s.finish_eject(
+            Lang::En,
+            vec![
+                ("A".into(), Some("SanDisk".into()), Ok(Ejected::Safe)),
+                ("B".into(), Some("WD".into()), Err(veto())),
+            ],
+        );
         assert_eq!(names, vec!["SanDisk".to_owned()]);
         assert!(s.ejecting.is_empty());
         assert!(
@@ -598,8 +618,39 @@ mod tests {
         );
         assert_eq!(s.vetoes.get("B"), Some(&veto()));
         // Nothing went: no names, so no notice.
-        let none = s.finish_eject(vec![("B".into(), "WD".into(), Err(veto()))]);
+        let none = s.finish_eject(Lang::En, vec![("B".into(), Some("WD".into()), Err(veto()))]);
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_device_that_was_gone_clears_its_card_without_a_name() {
+        let mut s = DevicesState::default();
+        s.accept(1, vec![dev("A", "SanDisk")]);
+        s.ejecting.insert("A".into());
+        s.vetoes.insert("A".into(), veto());
+        let names = s.finish_eject(
+            Lang::En,
+            vec![("A".into(), Some("SanDisk".into()), Ok(Ejected::Gone))],
+        );
+        assert!(names.is_empty());
+        assert!(s.ejecting.is_empty());
+        assert!(s.vetoes.is_empty());
+    }
+
+    #[test]
+    fn a_safe_eject_without_a_worker_name_is_named_from_the_list_or_not_at_all() {
+        let mut s = DevicesState::default();
+        let known = dev(r"USBSTOR\DISK&VEN_TEST", "SanDisk");
+        s.accept(1, vec![known.clone()]);
+        let names = s.finish_eject(Lang::En, vec![(known.key.clone(), None, Ok(Ejected::Safe))]);
+        assert_eq!(names, vec![devices::display_name(Lang::En, &known)]);
+        assert!(names.iter().all(|n| *n != known.key));
+        // Not in the list either: nothing to name, so nothing is pushed.
+        let names = s.finish_eject(
+            Lang::En,
+            vec![(r"USBSTOR\DISK&VEN_OTHER".into(), None, Ok(Ejected::Safe))],
+        );
+        assert!(names.is_empty());
     }
 
     #[test]

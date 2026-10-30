@@ -8,12 +8,16 @@
 //! A drive is listed when it has a drive letter and sits under a device node
 //! the system calls removable (`DN_REMOVABLE`): that node is what Eject
 //! requests removal of, and its instance ID is the device's key. Internal
-//! disks have no removable ancestor and never show. Every handle is closed
+//! disks have no removable ancestor and never show; one behind a hot-plug
+//! SATA or PCIe port does, so the disk holding Windows or a page file in use
+//! (the registry's `ExistingPageFiles`), and a SATA, ATA, SAS or RAID disk
+//! with nothing external on its chain, are left out too (`scan`,
+//! `internal_disk`). Every handle is closed
 //! as soon as it has answered (`Handle`): one kept open would veto our own
 //! eject. Everything that can be decided without Windows (the names, the
 //! sizes, the sentences, what changed) is `devices.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::mem::{size_of, size_of_val};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -31,10 +35,17 @@ use windows::Win32::Devices::Usb::{
     GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
     USB_NODE_CONNECTION_INFORMATION_EX_V2, USB_PROTOCOLS,
 };
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY, ERROR_SHARING_VIOLATION, GetLastError,
+    HANDLE, WIN32_ERROR,
+};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
-    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+    GetDriveTypeW, GetFileAttributesW, GetLogicalDrives, GetVolumeInformationW,
+    INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
+};
+use windows::Win32::System::Diagnostics::Debug::{
+    SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX, SetThreadErrorMode,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -42,10 +53,12 @@ use windows::Win32::System::Ioctl::{
     PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER,
     STORAGE_PROPERTY_QUERY, StorageDeviceProperty,
 };
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_MULTI_SZ, RegGetValueW};
+use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::core::{HSTRING, PCWSTR};
 
 use crate::devices::{
-    self, BUS_TYPE_USB, Bus, Device, DeviceKind, DevicesEvent, Partition, Veto, classify,
+    self, BUS_TYPE_USB, Bus, Device, DeviceKind, DevicesEvent, Ejected, Partition, Veto, classify,
     eject_outcome, vendor_product_name,
 };
 use crate::i18n;
@@ -56,10 +69,11 @@ use crate::model::Event;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capacity {
     /// None: the figures of the last list are kept for the drives still
-    /// there (the startup scan, the scan after an eject).
+    /// there (the startup scan).
     Keep,
     /// Only for a device that was not in the last list: the one just plugged
-    /// in, for its notice.
+    /// in, for its notice (also the scan after an eject, which may be the
+    /// first to see a drive plugged in while it ran).
     NewOnly,
     /// Every volume: the page opened.
     All,
@@ -120,6 +134,12 @@ impl Devices {
 }
 
 fn serve(rx: &Receiver<Req>, tx: &Sender<Event>, wake: impl Fn()) {
+    // A removable drive with no media (an empty card slot) must answer "not
+    // ready" to the scan, never raise Windows' "There is no disk in the
+    // drive" dialog, which would block this thread until someone closed it.
+    unsafe {
+        let _ = SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, None);
+    }
     // What the last scan found: capacity is read for what is not in it, and
     // kept for what is.
     let mut last: Vec<Device> = Vec::new();
@@ -153,10 +173,11 @@ fn serve(rx: &Receiver<Req>, tx: &Sender<Event>, wake: impl Fn()) {
                     let results = keys
                         .into_iter()
                         .map(|key| {
+                            // Named now, for the notice raised right after.
                             let name = last
                                 .iter()
                                 .find(|d| d.key == key)
-                                .map_or_else(|| key.clone(), |d| d.name.clone());
+                                .map(|d| devices::display_name(i18n::lang(), d));
                             let outcome = eject(&key);
                             (key, name, outcome)
                         })
@@ -165,8 +186,10 @@ fn serve(rx: &Receiver<Req>, tx: &Sender<Event>, wake: impl Fn()) {
                         return;
                     }
                     // What is left, under the number of the newest scan
-                    // asked for, so it is never taken for a stale one.
-                    last = scan(Capacity::Keep, &last);
+                    // asked for, so it is never taken for a stale one. A
+                    // drive plugged in meanwhile has its size read here: the
+                    // debounced scan after it would find it known already.
+                    last = scan(Capacity::NewOnly, &last);
                     if !send(DevicesEvent::Listed {
                         seq,
                         devices: last.clone(),
@@ -618,6 +641,134 @@ fn bus_of(kind: DeviceKind, bus_type: u32, resolved: &Resolved) -> Bus {
     Bus::Other
 }
 
+/// `STORAGE_BUS_TYPE` values of disks built into the machine: ATA, RAID, SAS
+/// and SATA. NVMe (0x11) is not among them: a Thunderbolt 3 enclosure's chain
+/// is plain PCI nodes with no ID that says so, and it would vanish.
+const INTERNAL_BUSES: [u32; 4] = [0x3, 0x8, 0xA, 0xB];
+
+/// A disk on an internal bus with nothing external (USB, Thunderbolt, USB4,
+/// an SD host) on its chain: a hot-plug SATA port flags it removable (why
+/// Windows' own tray offers to eject it), but it is still inside the machine.
+/// `ids` are upper case.
+fn internal_disk(bus_type: u32, ids: &[String]) -> bool {
+    INTERNAL_BUSES.contains(&bus_type)
+        && !ids.iter().any(|id| {
+            id.starts_with("USB")
+                || id.starts_with("SD\\")
+                || id.starts_with("SDBUS\\")
+                || id.contains("THUNDERBOLT")
+                || id.contains("USB4")
+        })
+}
+
+/// The disk holding the Windows directory, by its disk number.
+fn system_disk(vols: &[Volume]) -> Option<u32> {
+    let mut buf = [0u16; 261];
+    let len = unsafe { GetWindowsDirectoryW(Some(&mut buf)) } as usize;
+    if len == 0 || len >= buf.len() {
+        return None;
+    }
+    let letter = char::from_u32(u32::from(buf[0]))?.to_ascii_uppercase();
+    vols.iter().find(|v| v.letter == letter).map(|v| v.number)
+}
+
+/// Whether the volume at `letter` has a page file in use, judged from the
+/// file itself. Only a fallback for when the registry list cannot be read
+/// (`live_page_file_letters`).
+fn holds_page_file(letter: char) -> bool {
+    let path = HSTRING::from(format!("{letter}:\\pagefile.sys"));
+    let attributes = unsafe { GetFileAttributesW(&path) };
+    // Read at once: nothing in between may reset the thread's last error.
+    let error = unsafe { GetLastError() };
+    page_file_present(attributes, error)
+}
+
+/// What `GetFileAttributesW` on `X:\pagefile.sys` says about a page file in
+/// use. One in use is refused with a sharing violation (checked live:
+/// `C:\pagefile.sys` gives `INVALID_FILE_ATTRIBUTES` and error 32 while
+/// Windows pages to it). Anything else means absent: a readable file is a
+/// leftover (an old system disk in an enclosure), and access denied, not
+/// found, path not found and not ready say nothing about a live page file.
+fn page_file_present(attributes: u32, error: WIN32_ERROR) -> bool {
+    attributes == INVALID_FILE_ATTRIBUTES && error == ERROR_SHARING_VIOLATION
+}
+
+/// The drive letters of the page files Windows is using now, from the NT
+/// paths of `ExistingPageFiles` (`\??\C:\pagefile.sys`, `\\?\C:\...`,
+/// `\DosDevices\C:\...` or a bare `C:\pagefile.sys`; prefixes in any case).
+/// An empty entry or one with no drive letter (`\Device\HarddiskVolume3\...`)
+/// is ignored: a missed page file is harmless, Windows vetoes that eject.
+fn page_file_letters(entries: &[String]) -> HashSet<char> {
+    const PREFIXES: [&str; 3] = [r"\??\", r"\\?\", r"\DosDevices\"];
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let rest = PREFIXES
+                .iter()
+                .find_map(|p| {
+                    let head = entry.get(..p.len())?;
+                    head.eq_ignore_ascii_case(p).then(|| &entry[p.len()..])
+                })
+                .unwrap_or(entry);
+            let mut chars = rest.chars();
+            let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+            (chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())
+        })
+        .collect()
+}
+
+/// The strings of a `REG_MULTI_SZ` buffer: separated by NUL, ending at a
+/// double NUL or at the end of the buffer.
+fn multi_sz(buf: &[u16]) -> Vec<String> {
+    let mut out = Vec::new();
+    for part in buf.split(|&c| c == 0) {
+        if part.is_empty() {
+            // An empty string is the terminator (or padding after it).
+            break;
+        }
+        out.push(String::from_utf16_lossy(part));
+    }
+    out
+}
+
+/// The drive letters holding a page file in use, read from the registry
+/// (`ExistingPageFiles`, the paging files the system actually opened).
+/// `None` when it cannot be read.
+fn live_page_file_letters() -> Option<HashSet<char>> {
+    let sub = HSTRING::from(r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management");
+    let value = HSTRING::from("ExistingPageFiles");
+    let mut bytes = 0u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            &sub,
+            &value,
+            RRF_RT_REG_MULTI_SZ,
+            None,
+            None,
+            Some(&mut bytes),
+        )
+        .ok()
+        .ok()?;
+    }
+    let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
+    unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            &sub,
+            &value,
+            RRF_RT_REG_MULTI_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut bytes),
+        )
+        .ok()
+        .ok()?;
+    }
+    Some(page_file_letters(&multi_sz(&buf)))
+}
+
 /// The drives plugged in now. Capacity is read as `capacity` says; what is
 /// not read is carried over from `last` for the same device and letter.
 fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
@@ -626,21 +777,50 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
         return Vec::new();
     }
     let nodes = disk_nodes();
+    // Disks never listed, whatever their nodes say: the one Windows runs
+    // from, and any holding a page file in use (found below). The live list
+    // is read once; only when it cannot be, each volume's file is asked.
+    let page_files = live_page_file_letters();
+    let mut pinned: HashSet<u32> = system_disk(&vols).into_iter().collect();
     // Per disk: where to eject and how it is connected, worked out once.
     let mut resolved: HashMap<u32, Option<Resolved>> = HashMap::new();
-    let mut devices: Vec<Device> = Vec::new();
+    // The volumes to list, with their label and file system. A page file in
+    // use on any volume pins its whole disk, so the list is built after all of them.
+    let mut listed: Vec<(Volume, String, String)> = Vec::new();
     for vol in vols {
+        if pinned.contains(&vol.number) {
+            continue;
+        }
         let entry = resolved.entry(vol.number).or_insert_with(|| {
             let node = *nodes.get(&vol.number)?;
             resolve(node, vol.desc.bus_type == BUS_TYPE_USB)
+                .filter(|found| !internal_disk(vol.desc.bus_type, &found.ids))
         });
-        let Some(found) = entry.as_ref() else {
+        if entry.is_none() {
             continue;
-        };
-        // Only a listed drive is asked for its label: a card slot with no
-        // card says "not ready" and is left out.
+        }
+        // Only a candidate is asked for its label: a card slot with no card
+        // says "not ready" and is left out.
         let root = HSTRING::from(format!("{}:\\", vol.letter));
         let Ok((label, fs)) = volume_info(&root) else {
+            continue;
+        };
+        let in_use = match &page_files {
+            Some(letters) => letters.contains(&vol.letter),
+            None => holds_page_file(vol.letter),
+        };
+        if in_use {
+            pinned.insert(vol.number);
+            continue;
+        }
+        listed.push((vol, label, fs));
+    }
+    let mut devices: Vec<Device> = Vec::new();
+    for (vol, label, fs) in listed {
+        if pinned.contains(&vol.number) {
+            continue;
+        }
+        let Some(Some(found)) = resolved.get(&vol.number) else {
             continue;
         };
         let known = last.iter().find(|d| d.key == found.key);
@@ -669,12 +849,11 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
         }
         let kind = classify(vol.desc.bus_type, vol.desc.removable, &vol.desc.product);
         let model = vendor_product_name(&vol.desc.vendor, &vol.desc.product);
-        let name = if !model.is_empty() {
-            model.clone()
-        } else if !label.is_empty() {
+        // Empty when there is neither: the kind is named when drawn.
+        let name = if model.is_empty() {
             label
         } else {
-            devices::kind_name(i18n::lang(), kind).to_owned()
+            model.clone()
         };
         devices.push(Device {
             key: found.key.clone(),
@@ -693,14 +872,14 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
 /// Asks Windows to remove the device node `key` (its instance ID), looked up
 /// again now: a node number kept from a scan may belong to another device by
 /// the time of the click. Passing a veto type and a name buffer also keeps
-/// Windows from showing its own dialog. A device that is no longer there
-/// counts as removed.
+/// Windows from showing its own dialog. A device that is no longer there is
+/// `Gone` (removed, but not ejected by us).
 ///
 /// Two guards keep a wrong key from reaching Windows' eject. An empty ID
 /// would be looked up as the *root* of the device tree, so it is refused
 /// before any call; and only a node that is still flagged removable is ever
 /// asked (the root and every internal node are not).
-fn eject(key: &str) -> Result<(), Veto> {
+fn eject(key: &str) -> Result<Ejected, Veto> {
     let refused = || Veto {
         kind: devices::VetoKind::Unknown,
         name: String::new(),
@@ -713,7 +892,7 @@ fn eject(key: &str) -> Result<(), Veto> {
         unsafe { CM_Locate_DevNodeW(&mut inst, &HSTRING::from(key), CM_LOCATE_DEVNODE_NORMAL) };
     if located != CR_SUCCESS {
         // CR_NO_SUCH_DEVNODE and CR_NO_SUCH_VALUE: gone already.
-        return Ok(());
+        return Ok(Ejected::Gone);
     }
     if !is_removable(inst) {
         return Err(refused());
@@ -727,6 +906,85 @@ fn eject(key: &str) -> Result<(), Veto> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS,
+    };
+
+    #[test]
+    fn only_a_page_file_in_use_counts_as_present() {
+        // A live page file: Windows refuses the call with a sharing violation.
+        assert!(page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_SHARING_VIOLATION
+        ));
+        // A readable file is a leftover (an old system disk), not in use.
+        assert!(!page_file_present(0x6, ERROR_SUCCESS));
+        assert!(!page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_ACCESS_DENIED
+        ));
+        // No page file on that volume.
+        assert!(!page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_FILE_NOT_FOUND
+        ));
+        assert!(!page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_PATH_NOT_FOUND
+        ));
+        assert!(!page_file_present(INVALID_FILE_ATTRIBUTES, ERROR_NOT_READY));
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn page_file_paths_map_to_upper_case_drive_letters() {
+        assert_eq!(
+            page_file_letters(&strings(&[r"\??\C:\pagefile.sys"])),
+            HashSet::from(['C'])
+        );
+        assert_eq!(
+            page_file_letters(&strings(&[r"\??\C:\pagefile.sys", r"\??\e:\pagefile.sys"])),
+            HashSet::from(['C', 'E'])
+        );
+        assert_eq!(
+            page_file_letters(&strings(&[
+                r"\\?\d:\pagefile.sys",
+                r"\dosdevices\F:\pagefile.sys",
+                r"\DOSDEVICES\g:\x",
+                r"h:\pagefile.sys",
+            ])),
+            HashSet::from(['D', 'F', 'G', 'H'])
+        );
+    }
+
+    #[test]
+    fn page_file_entries_with_no_drive_letter_are_ignored() {
+        assert!(page_file_letters(&strings(&[r"\Device\HarddiskVolume3\pagefile.sys"])).is_empty());
+        assert!(page_file_letters(&strings(&["", "  "])).is_empty());
+        assert!(page_file_letters(&[]).is_empty());
+        // A multibyte start must not panic.
+        assert!(page_file_letters(&strings(&["\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}"])).is_empty());
+    }
+
+    #[test]
+    fn a_multi_string_splits_at_nul_and_ends_at_a_double_nul_or_the_end() {
+        let wide = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            multi_sz(&wide("ab\0cd\0\0")),
+            vec!["ab".to_owned(), "cd".to_owned()]
+        );
+        assert_eq!(
+            multi_sz(&wide("ab\0cd")),
+            vec!["ab".to_owned(), "cd".to_owned()]
+        );
+        // Padding after the terminator is not read.
+        assert_eq!(multi_sz(&wide("ab\0\0\0xx")), vec!["ab".to_owned()]);
+        assert!(multi_sz(&[]).is_empty());
+        assert!(multi_sz(&[0, 0]).is_empty());
+    }
 
     fn scan_req(seq: u64, capacity: Capacity) -> Req {
         Req::Scan { seq, capacity }
@@ -775,7 +1033,10 @@ mod tests {
     /// Windows beyond looking the made-up ID up, so this ejects nothing real.
     #[test]
     fn ejecting_a_device_that_is_not_there_counts_as_removed() {
-        assert_eq!(eject("USB\\VID_0000&PID_0000\\NO-SUCH-DEVICE-0000"), Ok(()));
+        assert_eq!(
+            eject("USB\\VID_0000&PID_0000\\NO-SUCH-DEVICE-0000"),
+            Ok(Ejected::Gone)
+        );
     }
 
     /// An empty ID is the root of the device tree to `CM_Locate_DevNodeW`:
@@ -822,6 +1083,33 @@ mod tests {
         let again = scan(Capacity::Keep, &found);
         assert_eq!(found, again);
         println!("{} removable drive(s)", found.len());
+    }
+
+    #[test]
+    fn a_hot_plug_sata_disk_with_nothing_external_above_it_is_internal() {
+        let ids = |list: &[&str]| -> Vec<String> { list.iter().map(|s| (*s).to_owned()).collect() };
+        let (sata, nvme) = (0xB, 0x11);
+        let inside = ids(&[
+            "SCSI\\DISK&VEN_WDC",
+            "PCIIDE\\IDECHANNEL",
+            "PCI\\VEN_8086&DEV_A352",
+        ]);
+        assert!(internal_disk(sata, &inside));
+        assert!(internal_disk(0x3, &inside));
+        // Behind USB (an eSATA-to-USB bridge), Thunderbolt or USB4: external.
+        assert!(!internal_disk(
+            sata,
+            &ids(&["USBSTOR\\DISK", "USB\\VID_152D"])
+        ));
+        assert!(!internal_disk(
+            sata,
+            &ids(&["SCSI\\DISK", "PCI\\THUNDERBOLT_NHI"])
+        ));
+        assert!(!internal_disk(sata, &ids(&["SCSI\\DISK", "USB4\\ROUTER"])));
+        // USB and SD buses are never internal; NVMe is left to the node flag.
+        assert!(!internal_disk(BUS_TYPE_USB, &inside));
+        assert!(!internal_disk(devices::BUS_TYPE_SD, &inside));
+        assert!(!internal_disk(nvme, &inside));
     }
 
     #[test]
