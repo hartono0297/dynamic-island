@@ -126,6 +126,10 @@ use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
 mod devices_page;
 use devices_page::{DevicesState, HOTKEY_DEVICES, TIMER_DEVICES};
 
+#[path = "app_prtsc.rs"]
+mod prtsc;
+use prtsc::{HOTKEY_PRTSC, PrtscState};
+
 #[path = "app_search.rs"]
 mod quick;
 use quick::{HOTKEY_SEARCH, QUERY_LIMIT, SearchState};
@@ -395,6 +399,7 @@ pub fn run(media_log_flag: bool) {
             mixer_drag: None,
             shelf: ShelfState::default(),
             devices: DevicesState::default(),
+            prtsc: PrtscState::default(),
             pomo_timer: false,
             clock_timer: false,
             progress_timer: false,
@@ -459,6 +464,7 @@ pub fn run(media_log_flag: bool) {
         app.clip_start();
         app.sync_search_hotkey();
         app.devices_start();
+        app.sync_prtsc_hotkey();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
         // An empty notes list would otherwise look like the notes were deleted.
@@ -665,6 +671,8 @@ struct App {
     /// The Devices page: the drives, their worker and the page's state
     /// (`app_devices`).
     devices: DevicesState,
+    /// The PrtSc key and whether Vale holds it (`app_prtsc`).
+    prtsc: PrtscState,
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
@@ -1504,6 +1512,7 @@ impl App {
             // The Clipboard tile has no action: the reducer opened its page.
             Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)?),
             Effect::RunCustom(tile) => self.queue_shortcut(shortcuts::Action::Custom(tile)),
+            Effect::RunCapture => self.queue_shortcut(shortcuts::Action::Capture),
             Effect::OpenDrive(letter) => self.queue_shortcut(shortcuts::Action::Drive(letter)),
             Effect::MixerLevel(i, level) => self.mixer_set_level(i, level),
             Effect::MixerMute(i) => self.mixer_toggle_mute(i),
@@ -4176,6 +4185,8 @@ impl App {
             self.sync_search_hotkey();
         }
         self.devices_follow_config();
+        // The PrtSc setting may have been edited by hand too (or toggled).
+        self.prtsc_follow_config();
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -4229,6 +4240,7 @@ impl App {
             clip_hotkey_failed: self.clip_hotkey_failed(),
             search_hotkey_failed: self.search.hotkey_failed,
             devices_hotkey_failed: self.devices.hotkey_failed,
+            prtsc: self.prtsc_model(),
             ..settings::Model::from_config(&self.config)
         }
     }
@@ -4418,6 +4430,8 @@ impl App {
             SettingsAction::ShotPreview(on) => self.on_shot_setting(ShotSetting::Preview(on)),
             SettingsAction::ShotOnIgnore(v) => self.on_shot_setting(ShotSetting::OnIgnore(v)),
             SettingsAction::ShotSecs(n) => self.on_shot_setting(ShotSetting::Secs(n)),
+            SettingsAction::ShotPrintScreen(on) => self.set_print_screen(on),
+            SettingsAction::PrtscTurnOffWindows => self.turn_off_windows_print_screen(),
             // Handled outside the app borrow (`deliver_settings_action`).
             SettingsAction::DndHelp | SettingsAction::Closed => {}
         }
@@ -6158,6 +6172,8 @@ unsafe extern "system" fn wnd_proc(
                 with_app(App::on_search_hotkey);
             } else if wparam.0 as i32 == HOTKEY_DEVICES {
                 with_app(App::on_devices_hotkey);
+            } else if wparam.0 as i32 == HOTKEY_PRTSC {
+                with_app(App::on_prtsc_hotkey);
             }
             LRESULT(0)
         }
@@ -6257,6 +6273,7 @@ unsafe extern "system" fn wnd_proc(
             with_app(App::clip_shutdown);
             with_app(App::search_shutdown);
             with_app(App::devices_shutdown);
+            with_app(App::prtsc_shutdown);
             unsafe {
                 let _ = WTSUnRegisterSessionNotification(hwnd);
                 let note = DISPLAY_NOTIFY.replace(0);

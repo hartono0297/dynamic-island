@@ -156,6 +156,9 @@ impl App {
         if self.clip.hotkey_failed {
             self.sync_clip_hotkey();
         }
+        if self.prtsc.failed {
+            self.sync_prtsc_hotkey();
+        }
     }
 
     /// `WM_DESTROY`: the hotkey goes.

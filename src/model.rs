@@ -262,6 +262,10 @@ pub enum Event {
     /// The optional Devices hotkey: opens the panel on the Devices page
     /// (without taking the foreground), or closes it when it shows that.
     DevicesHotkey,
+    /// The PrtSc key (when Settings lets Vale have it): Vale's own capture
+    /// starts once an open panel has collapsed. A press with an overlay up
+    /// is dropped by `App`, which knows the overlay.
+    PrintScreen,
     /// The pointer asks row `index` of the Mixer for this level (0..=1).
     MixerLevel(usize, f32),
     /// Files are being dragged over the island (`true`: it opens on the
@@ -473,6 +477,9 @@ pub enum Effect {
     LyricOffset(Option<i32>),
     /// Run a shortcut once the panel has collapsed.
     RunShortcut(Shortcut),
+    /// Vale's own capture, whatever the "Alat screenshot" choice is (the
+    /// PrtSc key), once the panel has collapsed.
+    RunCapture,
     /// The same for a custom tile.
     RunCustom(CustomTile),
     /// Set the Mixer row's level / toggle its mute; `App` knows the rows.

@@ -121,6 +121,69 @@ Vale.
   Save writes to `target/demo-shots/`; the process ends when the window closes.
   Screenshots of them: `PrintWindow` with flag 2 on the demo's main window.
 
+## PrtSc key opens Vale's capture
+
+Code: `src/app_prtsc.rs` (a child of `app`), `Event::PrintScreen` /
+`Effect::RunCapture` in the reducer, the row in `settings_layout::screenshot_card`.
+
+- **Hotkey.** `RegisterHotKey` id 4 (`HOTKEY_PRTSC`; Clipboard 1, Search 2,
+  Devices 3), `MOD_NOREPEAT` and **no other modifier** on `VK_SNAPSHOT`, so
+  Alt+PrtSc, Win+PrtSc, Ctrl+PrtSc and Shift+PrtSc stay Windows'. Default on.
+- **Config.** `screenshot.print_screen` (bool). Lenient like `shot_tool`:
+  missing, or any non-bool (string, number, null, array), reads as on, never
+  an invalid config. Off = `UnregisterHotKey`, `failed` cleared, nothing held.
+- **What a press does.** Always Vale's own capture, whatever "Alat
+  screenshot" says (that choice is only for the tile). `on_prtsc_hotkey`
+  returns early when the setting is off or `capture::overlay::active()` (an
+  overlay is up or starting); else `Event::PrintScreen`: the reducer collapses
+  an open panel or the search (checked with `panel_open()`, not `view()`: a
+  transient notice on top hides a panel still held under it) and asks
+  `Effect::RunCapture`, which `App` queues as `Action::Capture` on
+  `TIMER_SHORTCUT` (delay `ANIM_MS + 60`), so the panel is not in the picture.
+  It is not mapped through the `ms-screenclip:` branch of `queue_shortcut`, so
+  PrtSc never reaches Snipping Tool. Nothing takes the foreground except the
+  capture itself. Also while a game or presentation is fullscreen (the
+  capture cancels itself if it cannot take the foreground).
+- **Windows conflict.** Win 11 gives the bare key to Snipping Tool
+  (`HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`, DWORD, 0 =
+  off, 1 or absent = on), and `RegisterHotKey` then fails. Settings row
+  (`prtsc_row`: Off / Active / TakenByWindows / TakenByApp, as the brief
+  set them): failed with the value not 0 shows "Dipakai Windows" (red) and
+  the button "Matikan di Windows"; failed with a 0 Vale did not write shows
+  "Dipakai aplikasi lain" and no button. Row label is the brief's full "Tombol PrtSc
+  membuka screenshot Vale" / "PrtSc key opens Vale's screenshot": it does
+  not fit beside the button, so while Windows has the key the row is one
+  line taller (`prtsc_row_h`) and the button sits under the note, left
+  aligned (the layout test measures every text in the row with `Estimate`).
+  A sign-out note state was tried and dropped as outside the brief.
+- **Click-only registry write.** The registry is only *read* (`RegGetValueW`)
+  once per failed `RegisterHotKey` try (`PrtscState::tried`) and kept; the
+  Settings model, rebuilt on every refresh while Settings is open, never reads
+  it. The button acts only while the row is TakenByWindows (a late click after
+  a retry freed the key writes nothing), writes that value = 0
+  (`RegSetKeyValueW`, REG_DWORD, HKCU only), then tries to register again.
+  Still failing (`after_disable_click`), written or not, it opens
+  `ms-settings:easeofaccess-keyboard` for the owner. Windows may apply a
+  direct registry edit only after a sign-out, so a 0 read back after Vale's
+  own write would wrongly blame another app: `PrtscState::wrote_off` (set
+  only by a successful click write, cleared when Vale next gets the key)
+  keeps the row TakenByWindows, button included. No `WM_SETTINGCHANGE` is sent (nothing documents one
+  that frees the key). Vale writes that value nowhere else.
+- **Retry.** A failed registration is tried again only when the tray menu
+  opens and when Settings opens (`retry_hotkeys`). A config save or read
+  (`adopt_config` -> `prtsc_follow_config`) touches the key only when the
+  setting moved (`follows_config`: want != registered || failed), so a
+  toggle click is one `RegisterHotKey` and an unrelated save none;
+  `set_print_screen` only saves. Unregistered in the `WM_DESTROY` path (`prtsc_shutdown`). No timer.
+- **Untouched:** `app_shot.rs` (the clipboard preview of a PrtSc image still
+  works when Windows has the key), `src/screenshot/`, the tile's tool choice,
+  gestures, the search layout.
+- **Demo:** `DI_PRTSC=windows` or `app` with `--settings clipboard`
+  shows the two taken states without touching the registry (the demo's button click just
+  clears the state).
+- **Not verified live:** that the registry write frees the key at once on
+  every Windows 11 build (when it does not, Windows' keyboard page opens), and RegisterHotKey on PrtSc itself (tests never register it).
+
 Related: [[screenshot-preview]], [[clipboard-privacy]], [[studio-editor-frame]],
 [[media-click-guards]], [[bata-idle-power-budget]]
 

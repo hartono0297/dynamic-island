@@ -337,6 +337,10 @@ pub enum Hit {
     ShotSecs(i32),
     /// "Alat screenshot" (Vale / Snipping Tool).
     ShotTool(ShotTool),
+    /// "Tombol PrtSc membuka screenshot Vale", and its "Matikan di Windows"
+    /// button (only while Windows' own setting holds the key).
+    ShotPrintScreen,
+    PrtscTurnOffWindows,
     Battery(i32),
     /// "Peringatan disk" / "Peringatan RAM", one step down (−1) or up.
     DiskWarn(i32),
@@ -874,6 +878,8 @@ pub struct State<'a> {
     pub devices_hotkey: DevicesHotkey,
     /// The chosen Devices hotkey could not be registered.
     pub devices_hotkey_failed: bool,
+    /// What the PrtSc row says when the key is wanted but taken.
+    pub prtsc: PrtscRow,
     pub autostart: bool,
     pub battery_threshold: u8,
     pub has_battery: bool,
@@ -2769,8 +2775,19 @@ pub fn shot_secs_step(n: u32, dir: i32) -> u32 {
 fn screenshot_card(b: &mut Builder, s: &State) {
     let c = s.shot;
     b.eyebrow(Key::SecScreenshot, CONTENT_W);
-    let card = b.card(4.0 * ROW_H);
-    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    // The toggle just switched off is plain at once, before `App` catches up.
+    let prtsc = if c.print_screen {
+        s.prtsc
+    } else {
+        PrtscRow::Plain
+    };
+    // Taken by Windows, the PrtSc row is one line taller: "Matikan di
+    // Windows" sits under its note, so the label keeps the row's full width.
+    let prtsc_h = prtsc_row_h(prtsc);
+    let card = b.card(4.0 * ROW_H + prtsc_h);
+    let rows: [f32; 5] = std::array::from_fn(|i| {
+        card.y + i as f32 * ROW_H + if i >= 2 { prtsc_h - ROW_H } else { 0.0 }
+    });
     let cy = |y: f32| y + ROW_H / 2.0;
     let on = c.preview;
 
@@ -2784,33 +2801,82 @@ fn screenshot_card(b: &mut Builder, s: &State) {
     let x = b.segmented(Group::ShotTool, RIGHT, cy(rows[0]), items, selected);
     b.row_text(card, rows[0], b.t(Key::ShotToolSetting), None, false, x);
 
-    let x = b.toggle(Hit::ShotPreview, RIGHT, cy(rows[1]), on);
-    b.row_text(card, rows[1], b.t(Key::ShotPreviewSetting), None, false, x);
+    // The PrtSc key, right after the tool and never faded by the preview:
+    // it starts Vale's capture whatever the tool is. Taken by Windows' own
+    // setting: a red note and, on a line of its own under it, the button
+    // that turns that off; taken by another app: the usual red note, no
+    // button.
+    let x = b.toggle(Hit::ShotPrintScreen, RIGHT, cy(rows[1]), c.print_screen);
+    let desc = match prtsc {
+        PrtscRow::TakenByWindows => {
+            let label = b.t(Key::PrtscTurnOffInWindows);
+            let w = b.button_w(&[&label], ButtonKind::Secondary);
+            let item = (
+                Hit::PrtscTurnOffWindows,
+                label,
+                ButtonKind::Secondary,
+                true,
+                w,
+            );
+            let button_cy = rows[1] + ROW_H - 2.0 + BUTTON_H / 2.0;
+            b.buttons(card.x + INSET + w, button_cy, vec![item]);
+            Some((b.t(Key::PrtscUsedByWindows), Tone::Bad))
+        }
+        PrtscRow::TakenByApp => Some((b.t(Key::ClipHotkeyTaken), Tone::Bad)),
+        PrtscRow::Plain => None,
+    };
+    b.row_text(card, rows[1], b.t(Key::ShotPrintScreen), desc, false, x);
     b.divider(card, rows[1]);
+
+    let x = b.toggle(Hit::ShotPreview, RIGHT, cy(rows[2]), on);
+    b.row_text(card, rows[2], b.t(Key::ShotPreviewSetting), None, false, x);
+    b.divider(card, rows[2]);
 
     let items = vec![
         (Hit::ShotIgnore(ShotIgnore::Keep), b.t(Key::ShotKeep)),
         (Hit::ShotIgnore(ShotIgnore::Delete), b.t(Key::ShotDelete)),
     ];
     let selected = index_of(ShotIgnore::ALL, &c.on_ignore);
-    let x = b.segmented_if(Group::ShotIgnore, RIGHT, cy(rows[2]), items, selected, on);
+    let x = b.segmented_if(Group::ShotIgnore, RIGHT, cy(rows[3]), items, selected, on);
     let desc = Some((b.t(Key::ShotIgnoreDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::ShotIgnoreSetting), desc, false, x);
-    b.divider(card, rows[2]);
+    b.row_text(card, rows[3], b.t(Key::ShotIgnoreSetting), desc, false, x);
+    b.divider(card, rows[3]);
 
     let (min, max, _) = SHOT_SECS_RANGE;
     let n = c.show_secs;
     let x = b.stepper(
         RIGHT,
-        cy(rows[3]),
+        cy(rows[4]),
         crate::i18n::seconds_short(b.lang, n),
         Hit::ShotSecs(-1),
         Hit::ShotSecs(1),
         (n > min, n < max),
         on,
     );
-    b.row_text(card, rows[3], b.t(Key::ShotShowFor), None, false, x);
-    b.divider(card, rows[3]);
+    b.row_text(card, rows[4], b.t(Key::ShotShowFor), None, false, x);
+    b.divider(card, rows[4]);
+}
+
+/// The PrtSc row's height: one line more for the button while Windows holds
+/// the key (`BUTTON_H` under the note, 10 px under it to the next row).
+fn prtsc_row_h(row: PrtscRow) -> f32 {
+    match row {
+        PrtscRow::TakenByWindows => ROW_H - 2.0 + BUTTON_H + 10.0,
+        PrtscRow::TakenByApp | PrtscRow::Plain => ROW_H,
+    }
+}
+
+/// What the PrtSc row shows (`App` fills it from `app_prtsc::RowState`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrtscRow {
+    /// Off, or on and Vale has the key.
+    #[default]
+    Plain,
+    /// On, taken, and Windows' own setting still holds the key: a red note
+    /// and the "Matikan di Windows" button.
+    TakenByWindows,
+    /// On, taken, and Windows' setting is off: another app has it.
+    TakenByApp,
 }
 
 fn pomodoro_page(b: &mut Builder, s: &State) {
@@ -3202,6 +3268,11 @@ mod tests {
                             DevicesHotkey::Off
                         },
                         devices_hotkey_failed: locked,
+                        prtsc: match (locked, battery) {
+                            (false, _) => PrtscRow::Plain,
+                            (true, false) => PrtscRow::TakenByWindows,
+                            (true, true) => PrtscRow::TakenByApp,
+                        },
                         autostart: true,
                         battery_threshold: 50,
                         has_battery: battery,
@@ -3251,6 +3322,10 @@ mod tests {
                             } else {
                                 ShotTool::Vale
                             },
+                            // On wherever `prtsc` is taken (the card draws a
+                            // taken row only while on), on and plain in one
+                            // unlocked state, off in the other.
+                            print_screen: locked || hooks.is_some_and(|h| !h.complete),
                         },
                         pages: if locked {
                             let mut p = PanelPages::default();
@@ -3853,6 +3928,131 @@ mod tests {
             };
             let l = layout(Section::Clipboard, &off, &Estimate);
             assert_eq!(shot_hits(&l), [Hit::ShotPreview]);
+        }
+    }
+
+    #[test]
+    fn the_layout_sweeps_draw_every_prtsc_row_with_its_toggle_on() {
+        // `screenshot_card` draws a taken row only while the toggle is on, so
+        // the general sweeps (`all_layouts`) reach the taller row with its
+        // button only if some state has both. One on and plain too.
+        let shown: Vec<PrtscRow> = states()
+            .iter()
+            .filter(|s| s.shot.print_screen)
+            .map(|s| s.prtsc)
+            .collect();
+        for row in [
+            PrtscRow::Plain,
+            PrtscRow::TakenByWindows,
+            PrtscRow::TakenByApp,
+        ] {
+            assert!(
+                shown.contains(&row),
+                "no state draws {row:?} with the toggle on"
+            );
+        }
+        assert!(states().iter().any(|s| !s.shot.print_screen));
+    }
+
+    #[test]
+    fn the_prtsc_row_sits_after_the_tool_and_shows_a_button_only_when_windows_has_the_key() {
+        let hits_of =
+            |l: &Layout, want: Hit| l.hits().into_iter().filter(|(h, _)| *h == want).count();
+        let shown = |l: &Layout, text_: &str| l.texts.iter().any(|t| t.text == text_);
+        for lang in [Lang::Id, Lang::En] {
+            // (toggle on, what `App` says about the key)
+            for (on, row) in [
+                (true, PrtscRow::Plain),
+                (false, PrtscRow::Plain),
+                // A stale taken state with the toggle just switched off.
+                (false, PrtscRow::TakenByWindows),
+                (true, PrtscRow::TakenByWindows),
+                (true, PrtscRow::TakenByApp),
+            ] {
+                let s = State {
+                    lang,
+                    shot: ScreenshotSettings {
+                        print_screen: on,
+                        ..ScreenshotSettings::default()
+                    },
+                    prtsc: row,
+                    scroll: 1e6,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Clipboard, &s, &Estimate);
+                let ctx = format!("{lang:?} on={on} row={row:?}");
+                let shows = if on { row } else { PrtscRow::Plain };
+                let taken_by_windows = shows == PrtscRow::TakenByWindows;
+                // The card grew to five rows (the PrtSc row one line taller
+                // while Windows has the key), ending at the bottom edge.
+                let card = l.cards[1];
+                let row_h = prtsc_row_h(shows);
+                assert_eq!(row_h > ROW_H, taken_by_windows, "{ctx}");
+                assert_eq!(card.h, 4.0 * ROW_H + row_h, "{ctx}");
+                assert!((card.bottom() - (CLIENT_H - PAD)).abs() < 0.01, "{ctx}");
+                let (row_top, row_bottom) = (card.y + ROW_H, card.y + ROW_H + row_h);
+                // The row has the brief's full label and a toggle that follows
+                // the setting, placed right after the tool row (the second row).
+                let label_text = text(lang, Key::ShotPrintScreen);
+                let brief = match lang {
+                    Lang::Id => "Tombol PrtSc membuka screenshot Vale",
+                    Lang::En => "PrtSc key opens Vale's screenshot",
+                };
+                assert_eq!(label_text, brief);
+                assert!(shown(&l, label_text), "{ctx}");
+                let (is_on, enabled, y) = clip_toggle(&l, Hit::ShotPrintScreen).expect(&ctx);
+                assert_eq!((is_on, enabled), (on, true), "{ctx}");
+                assert!(y >= row_top && y < card.y + 2.0 * ROW_H, "{ctx}");
+                let (_, _, preview_y) = clip_toggle(&l, Hit::ShotPreview).expect(&ctx);
+                assert!(preview_y >= row_bottom, "{ctx}");
+                assert_eq!(hits_of(&l, Hit::ShotPrintScreen), 1, "{ctx}");
+                // The label and the note fit their room in every state.
+                let in_row = |t: &&Text| t.rect.y >= row_top && t.rect.bottom() <= row_bottom;
+                assert!(l.texts.iter().filter(in_row).count() >= 1, "{ctx}");
+                for t in l.texts.iter().filter(in_row) {
+                    let w = Estimate.width(&t.text, t.font);
+                    assert!(w <= t.rect.w, "{ctx}: {:?} is {w} in {}", t.text, t.rect.w);
+                }
+                // Each taken state has its own note; only Windows' has the
+                // button.
+                assert_eq!(
+                    hits_of(&l, Hit::PrtscTurnOffWindows),
+                    usize::from(taken_by_windows),
+                    "{ctx}"
+                );
+                for (key, state) in [
+                    (Key::PrtscUsedByWindows, PrtscRow::TakenByWindows),
+                    (Key::ClipHotkeyTaken, PrtscRow::TakenByApp),
+                ] {
+                    assert_eq!(shown(&l, text(lang, key)), shows == state, "{ctx} {key:?}");
+                }
+                if taken_by_windows {
+                    // The button is in the PrtSc row, on its own line under
+                    // the label and the note, left of the toggle.
+                    let (_, button_rect) = l
+                        .hits()
+                        .into_iter()
+                        .find(|(h, _)| *h == Hit::PrtscTurnOffWindows)
+                        .expect(&ctx);
+                    assert!(
+                        button_rect.y >= row_top && button_rect.bottom() <= row_bottom,
+                        "{ctx}"
+                    );
+                    let (_, toggle) = l
+                        .hits()
+                        .into_iter()
+                        .find(|(h, _)| *h == Hit::ShotPrintScreen)
+                        .expect(&ctx);
+                    assert!(button_rect.right() <= toggle.x, "{ctx}");
+                    for t in l.texts.iter().filter(in_row) {
+                        assert!(t.rect.bottom() <= button_rect.y, "{ctx}: {:?}", t.text);
+                    }
+                    let all = buttons_of(&l);
+                    let b = button(&all, Hit::PrtscTurnOffWindows);
+                    assert_eq!(b.1, text(lang, Key::PrtscTurnOffInWindows), "{ctx}");
+                    assert!(b.2, "{ctx}");
+                }
+            }
         }
     }
 
