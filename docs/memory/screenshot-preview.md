@@ -203,9 +203,13 @@ New rules:
 - **Lax for the preview and for Simpan** (`pick_match`, `save_decision`): same
   size, in the window, hash unreadable or within `LAX_HASH_DIST` (16 of 64
   bits). Ranking: hash within 10 bits, then 11..16, then unknown; then the
-  closest in time. A clearly different picture (more than 16 bits) is never
-  taken, even when it is the only same-size file. A browser "Copy image" (no
-  new file of that size) still never shows.
+  closest in time. The preview never takes a clearly different picture (more
+  than 16 bits). Simpan alone (review round 2) also takes the one unclaimed
+  same-size file in its window when it is the only one, whatever its hash
+  (a low-contrast picture's average hash can read far off; a second copy is
+  the worse mistake, and `claim_from`/`window_end`/`taken` keep other
+  screenshots' files out); two such files and no hash match: it writes. A
+  browser "Copy image" (no new file of that size) still never shows.
 - **Simpan never writes a second copy** when Windows wrote a file for the
   shot: found at click time (`state.file`) or by the save worker's wait
   (`Strictness::Lax`, window `SAVE_AFTER_MS` 7 s, +0.5 s settle, ending
@@ -227,13 +231,28 @@ New rules:
   `taken` where the successor never claims it. Simpan answers the capture
   (`Shots::keep_capture`): a file of any update is "already saved"; else the
   save worker gets the newest update's candidate; a waiting update of it is
-  dropped (no second preview). The capture is remembered (`Shots::kept`): an
-  update of it arriving after Simpan (preview already closed, so nothing to
-  merge with) is ignored, NOT pushed to `arrivals`, so it cannot cut the save
-  worker's wait before Windows' file is stamped (`kept_again`). Cost: a real
-  second PrtSc of an unchanged screen within `SAME_CAPTURE_MS` of the last
-  update after Simpan gets no preview. Hapus is unchanged (an update arriving
-  after Hapus still shows as a new screenshot).
+  dropped (no second preview). The capture is remembered
+  (`Shots::answered`, `Answer::Kept`): an update of it arriving after Simpan
+  (preview already closed, so nothing to merge with) is ignored, NOT pushed
+  to `arrivals`, so it cannot cut the save worker's wait before Windows' file
+  is stamped (`answered_again`). Cost: a real second PrtSc of an unchanged
+  screen within `SAME_CAPTURE_MS` of the last update after Simpan or Hapus
+  gets no preview.
+- **Hapus answers the capture too** (review round 2, `Shots::delete_capture`):
+  a waiting update of it is dropped and `TIMER_SHOT_SHOW` stopped (it raised
+  a preview of the just-deleted shot); the delete job gets the file of any
+  update, the newest update's candidate and the newest clipboard sequence
+  (the clipboard holds that write). `Answer::Deleted` is remembered: a later
+  update is absorbed, not pushed to `arrivals` (it cut the strict worker's
+  `AFTER_MS` wait, the file stayed), and the picture it put back goes again
+  (clipboard emptied if unchanged, its card removed unless pinned). The
+  strict hash rule of deletes is unchanged.
+- **An absorbed update says nothing** (review round 2). `shot_from_image`
+  returns `ShotArrival` (`Nothing` / `Raised` / `Absorbed`); `read_clipboard`
+  sends the copy notice / "Disalin" only for `Nothing`. Before, the absorbed
+  update returned "no preview", the copy-notice gate had never seen the card
+  (the first update raised the preview), and the copy notice replaced
+  "Sudah tersimpan" a few hundred ms after Simpan.
 - **"Jika diabaikan: Hapus"** fires only when the matched file is one the
   strict worker may accept (`screenshot::may_confirm`: confirmed, or the
   file's hash not read yet). A lax-only match (11..16 bits) or a clipboard
@@ -241,5 +260,6 @@ New rules:
 
 Still unverified live: which formats and how many updates Snipping Tool really
 posts for PrtSc (the merge is read from the symptom, not captured); whether
-the 16-bit lax distance is enough for the owner's low-contrast cases; the file
-stamp of a cold-start Snipping Tool beyond 7 s.
+the 16-bit lax distance is enough for the preview in the owner's low-contrast
+cases (Simpan no longer depends on it when one file is in the window); the
+file stamp of a cold-start Snipping Tool beyond 7 s.

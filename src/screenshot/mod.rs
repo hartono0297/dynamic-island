@@ -328,8 +328,12 @@ pub enum SaveOutcome {
 /// Simpan's decision over the files listed (and hashed) in `clip`'s window:
 /// the lax match (`pick_match`: size, time, a hash that agrees within
 /// `LAX_HASH_DIST` or cannot be read) among the files no other screenshot
-/// has `taken`. A file found is never copied again; only when none is,
-/// Simpan writes one.
+/// has `taken`; with none, the one unclaimed file of the very same size in
+/// the window when it is the only one, whatever its hash says (an average
+/// hash of a low-contrast picture can read far off, and a second copy is
+/// the worse mistake; no other screenshot's file is ever in that window,
+/// `claim_from`/`window_end`). A file found is never copied again; only
+/// when none is, Simpan writes one. Deletes never use this (`pick_confirmed`).
 pub fn save_decision(
     clip: &ClipCandidate,
     files: &[FileCandidate],
@@ -340,9 +344,15 @@ pub fn save_decision(
         .filter(|f| !taken.contains(&f.path))
         .cloned()
         .collect();
-    pick_match(clip, &free).map_or(SaveOutcome::Write, |f| {
-        SaveOutcome::AlreadySaved(f.path.clone())
-    })
+    let lone = || {
+        let mut sized = free.iter().filter(|f| in_window(clip, f));
+        sized.next().filter(|_| sized.next().is_none())
+    };
+    pick_match(clip, &free)
+        .or_else(lone)
+        .map_or(SaveOutcome::Write, |f| {
+            SaveOutcome::AlreadySaved(f.path.clone())
+        })
 }
 
 /// "Hapus" empties the clipboard only while it still holds this
@@ -934,8 +944,30 @@ mod tests {
             save_decision(&clip, &files, &[]),
             SaveOutcome::AlreadySaved(PathBuf::from("mine.png"))
         );
-        // Alone it is not taken either: the picture is clearly another one.
-        assert_eq!(save_decision(&clip, &[other], &[]), SaveOutcome::Write);
+        // Alone, the one unclaimed same-size file in the window is taken
+        // for Simpan (a far-off hash of a low-contrast picture must never
+        // make a second copy), never for the preview or a delete.
+        assert_eq!(
+            save_decision(&clip, std::slice::from_ref(&other), &[]),
+            SaveOutcome::AlreadySaved(PathBuf::from("other.png"))
+        );
+        assert_eq!(pick_match(&clip, std::slice::from_ref(&other)), None);
+        assert_eq!(pick_confirmed(&clip, std::slice::from_ref(&other)), None);
+        // Two of them, or the lone one another screenshot's: nothing to say
+        // which is this one's, so Simpan writes.
+        let other2 = hashed(file("other2.png", AT + 900, 1280, 720), !PIC ^ 0xF);
+        assert_eq!(
+            save_decision(&clip, &[other.clone(), other2], &[]),
+            SaveOutcome::Write
+        );
+        assert_eq!(
+            save_decision(
+                &clip,
+                std::slice::from_ref(&other),
+                &[PathBuf::from("other.png")]
+            ),
+            SaveOutcome::Write
+        );
         // A slightly-off file loses to an exact one, which loses to nothing
         // but time: tiers are hash first.
         let near = hashed(file("near.png", AT + 100, 1280, 720), PIC ^ 0xFFF);

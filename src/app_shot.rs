@@ -77,12 +77,48 @@ pub(super) struct ShotState {
     pub capture: u64,
 }
 
-/// The capture Simpan last answered, as of its newest clipboard update: a
-/// later update of that same capture is no new screenshot.
+/// How a button answered a capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Answer {
+    /// Simpan.
+    Kept,
+    /// Hapus (or "Jika diabaikan: Hapus").
+    Deleted,
+}
+
+/// The capture Simpan or Hapus last answered, as of its newest clipboard
+/// update: a later update of that same capture is no new screenshot.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct KeptCapture {
+pub(super) struct AnsweredCapture {
     pub clip: ClipCandidate,
     pub entry: Option<u64>,
+    pub answer: Answer,
+}
+
+/// What a new clipboard image did on the screenshot side
+/// (`App::shot_from_image`), for the clipboard's own feedback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ShotArrival {
+    /// Nothing yet: no preview now (off, Vale's own copy, waiting for its
+    /// file or for an overlay). The copy feedback goes as usual.
+    Nothing,
+    /// The preview went up now (the caller refreshes).
+    Raised,
+    /// An update of a capture Simpan or Hapus already answered: no preview
+    /// and no copy feedback (it would replace "Sudah tersimpan"/"Dihapus").
+    Absorbed,
+}
+
+impl ShotArrival {
+    pub fn raised(self) -> bool {
+        self == Self::Raised
+    }
+
+    /// Whether the clipboard's "Disalin"/copy notice may follow: not when the
+    /// preview took its place, nor for a capture a button answered.
+    pub fn copy_feedback_due(self) -> bool {
+        self == Self::Nothing
+    }
 }
 
 /// What Simpan works from (`Shots::keep_capture`).
@@ -92,6 +128,23 @@ pub(super) struct KeepPlan {
     /// The newest update's candidate: its window reaches back to the first.
     pub clip: ClipCandidate,
     pub dib: Option<Arc<Vec<u8>>>,
+    /// A waiting update of the same capture that was dropped.
+    pub dropped: Option<u64>,
+}
+
+/// What Hapus works from (`Shots::delete_capture`).
+pub(super) struct DeletePlan {
+    /// The shown update's look, for the fade-out.
+    pub look: ShotLook,
+    /// The file Windows wrote for any update of the capture.
+    pub file: Option<FileCandidate>,
+    /// The newest update's candidate: its window reaches back to the first.
+    pub clip: ClipCandidate,
+    /// The clipboard sequence of the newest write of the capture: the
+    /// clipboard is emptied only while it still holds that.
+    pub sequence: u32,
+    /// The history cards of its updates (one, unless they differed).
+    pub entries: Vec<u64>,
     /// A waiting update of the same capture that was dropped.
     pub dropped: Option<u64>,
 }
@@ -123,8 +176,9 @@ pub(super) struct Shots {
     /// When the latest images arrived, shared with the workers: a
     /// screenshot's window ends where the next one's begins.
     pub arrivals: screenshot::Arrivals,
-    /// The capture Simpan last answered (`keep_capture`).
-    pub kept: Option<KeptCapture>,
+    /// The capture Simpan or Hapus last answered (`keep_capture`,
+    /// `delete_capture`).
+    pub answered: Option<AnsweredCapture>,
 }
 
 /// How many matched files `Shots::taken` remembers.
@@ -192,7 +246,7 @@ impl Shots {
     /// update's candidate (its window reaches back to the first update, and
     /// that update's arrival does not cut it). A waiting update of the same
     /// capture is dropped (its preview would ask again), and the capture is
-    /// remembered (`kept`): a later update of it is no new screenshot.
+    /// remembered (`answered`): a later update of it is no new screenshot.
     fn keep_capture(&mut self, id: u64) -> Option<KeepPlan> {
         let shown = self.shown.as_ref().filter(|s| s.look.id == id)?;
         let sibling = self.waiting.take_if(|w| w.capture == shown.capture);
@@ -206,27 +260,70 @@ impl Shots {
             dib: shown.dib.clone(),
             dropped: sibling.as_ref().map(|s| s.look.id),
         };
-        self.kept = Some(KeptCapture {
+        self.answered = Some(AnsweredCapture {
             clip: newest.clip,
             entry: newest.entry.or(shown.entry),
+            answer: Answer::Kept,
         });
         Some(plan)
     }
 
-    /// A new clipboard image that is the kept capture's own update again
-    /// (`screenshot::same_capture`): Simpan already answered it, so it is no
-    /// new screenshot, and its arrival must not cut the save worker's wait.
-    /// It extends the kept capture (a third update chains on).
-    fn kept_again(&mut self, clip: &ClipCandidate, entry: Option<u64>) -> bool {
-        let Some(k) = self.kept.as_mut() else {
-            return false;
+    /// Hapus on the shown screenshot `id`, like Simpan, answers its whole
+    /// capture: the shown update goes, and so does a waiting update of the
+    /// same capture (its overlay timer would raise a preview of what was
+    /// just deleted). The delete works from the file of any update, the
+    /// newest update's candidate (the strict match and `AFTER_MS` are
+    /// unchanged) and the newest clipboard write. The capture is remembered
+    /// (`answered`): a later update of it is no new screenshot and does not
+    /// cut the delete worker's wait.
+    fn delete_capture(&mut self, id: u64) -> Option<DeletePlan> {
+        let shown = self.shown.take_if(|s| s.look.id == id)?;
+        let sibling = self.waiting.take_if(|w| w.capture == shown.capture);
+        let newest = sibling.as_ref().unwrap_or(&shown);
+        let mut entries: Vec<u64> = [shown.entry, newest.entry].into_iter().flatten().collect();
+        entries.dedup();
+        let plan = DeletePlan {
+            file: shown
+                .file
+                .clone()
+                .or_else(|| sibling.as_ref().and_then(|s| s.file.clone())),
+            clip: newest.clip,
+            // "Salin lagi" on the shown one can be the newest write.
+            sequence: shown.sequence.max(newest.sequence),
+            entries,
+            dropped: sibling.as_ref().map(|s| s.look.id),
+            look: ShotLook {
+                thumb: shown.look.thumb.clone(),
+                ..shown.look
+            },
         };
-        if !screenshot::same_capture(&k.clip, k.entry, clip, entry) {
-            return false;
+        self.answered = Some(AnsweredCapture {
+            clip: newest.clip,
+            entry: newest.entry.or(shown.entry),
+            answer: Answer::Deleted,
+        });
+        Some(plan)
+    }
+
+    /// A new clipboard image that `plan_arrival` did not merge (`merged`
+    /// false) and that is the answered capture's own update again
+    /// (`screenshot::same_capture`): Simpan or Hapus already answered it,
+    /// so it is no new screenshot, and its arrival must not cut the save or
+    /// delete worker's wait. It extends the answered capture (a third
+    /// update chains on). The answer it got, else `None`.
+    fn answered_again(
+        &mut self,
+        merged: bool,
+        clip: &ClipCandidate,
+        entry: Option<u64>,
+    ) -> Option<Answer> {
+        let a = self.answered.as_mut().filter(|_| !merged)?;
+        if !screenshot::same_capture(&a.clip, a.entry, clip, entry) {
+            return None;
         }
-        k.clip = screenshot::merge_arrival(&k.clip, *clip);
-        k.entry = k.entry.or(entry);
-        true
+        a.clip = screenshot::merge_arrival(&a.clip, *clip);
+        a.entry = a.entry.or(entry);
+        Some(a.answer)
     }
 }
 
@@ -398,20 +495,21 @@ impl App {
     /// history off). The flag (only bitmap formats) shows the preview at
     /// once; otherwise it shows only if the folder holds its file. Nothing
     /// with the preview off or over a fullscreen app (then it is simply
-    /// kept). True when the preview was raised now (the caller refreshes).
+    /// kept). `Raised` when the preview went up now (the caller refreshes),
+    /// `Absorbed` for an update of a capture a button already answered.
     pub(super) fn shot_from_image(
         &mut self,
         entry: Option<u64>,
         img: &ClipImage,
         sequence: u32,
-    ) -> bool {
+    ) -> ShotArrival {
         if !self.config.screenshot.preview {
-            return false;
+            return ShotArrival::Nothing;
         }
         // The editor's own Copy (Vale's screenshot editor): that one image
         // is no new screenshot, whatever formats it carries.
         if crate::shot_edit::is_own_copy(sequence, crate::shot_edit::own_copy_seq()) {
-            return false;
+            return ShotArrival::Nothing;
         }
         self.shots.next_id += 1;
         let id = self.shots.next_id;
@@ -448,12 +546,20 @@ impl App {
             img.screenshot,
         );
         let merged = arrival.merged;
-        // The capture Simpan already answered, set on the clipboard again
-        // (its preview is closed, so nothing above merged it): no preview,
-        // and no arrival that would end the save worker's wait before
-        // Windows' file is stamped.
-        if !merged && self.shots.kept_again(&clip, entry) {
-            return false;
+        // The capture Simpan or Hapus already answered, set on the
+        // clipboard again (its preview is closed, so nothing above merged
+        // it): no preview, no copy notice over the answer's, and no arrival
+        // that would end the worker's wait before Windows' file is stamped.
+        // After Hapus the picture goes again: off the clipboard (only while
+        // it still holds this update) and its card out of the history.
+        if let Some(answer) = self.shots.answered_again(merged, &clip, entry) {
+            if answer == Answer::Deleted {
+                if let Some(sequence) = clipboard_win::empty_if_unchanged(self.hwnd, sequence) {
+                    self.clip.own_sequence = Some(sequence);
+                }
+                self.remove_shot_cards(entry.into_iter());
+            }
+            return ShotArrival::Absorbed;
         }
         let capture = prev_capture.filter(|_| merged).unwrap_or(id);
         let file = arrival.file;
@@ -499,7 +605,11 @@ impl App {
         self.shots.waiting = Some(state);
         self.shots.checking = Some(id);
         self.look_for_shot_file(id);
-        show_now && self.try_show_waiting()
+        if show_now && self.try_show_waiting() {
+            ShotArrival::Raised
+        } else {
+            ShotArrival::Nothing
+        }
     }
 
     /// A screen clip's overlay is a fullscreen window: Windows reports a
@@ -746,7 +856,7 @@ impl App {
             ShotAction::Keep(id) => {
                 // Simpan answers the whole capture: a waiting update of it
                 // never raises the preview again, and a later one is no new
-                // screenshot (`kept_again`).
+                // screenshot (`answered_again`).
                 let plan = self.shots.keep_capture(id)?;
                 if let Some(dropped) = plan.dropped {
                     self.stop_shot_show();
@@ -823,40 +933,35 @@ impl App {
     /// confirmed yet: the worker waits for it until the match window has
     /// closed). The notice follows in `on_shot_recycled`.
     fn delete_shot(&mut self, id: u64) -> Option<Event> {
-        if self.shots.shown.as_ref().is_none_or(|s| s.look.id != id) {
-            return None;
+        // Hapus answers the whole capture: a waiting update of it never
+        // raises a preview of the deleted picture, and a later one is no new
+        // screenshot (`answered_again`).
+        let plan = self.shots.delete_capture(id)?;
+        self.shots.faded = Some(plan.look);
+        if plan.dropped.is_some() {
+            self.stop_shot_show();
         }
-        let state = self.shots.shown.take()?;
-        self.shots.faded = Some(ShotLook {
-            thumb: state.look.thumb.clone(),
-            ..state.look
-        });
-        if self.shots.checking == Some(id) {
+        if self
+            .shots
+            .checking
+            .is_some_and(|c| c == id || Some(c) == plan.dropped)
+        {
             self.shots.checking = None;
             self.stop_shot_retry();
         }
-        let emptied = match clipboard_win::empty_if_unchanged(self.hwnd, state.sequence) {
+        let emptied = match clipboard_win::empty_if_unchanged(self.hwnd, plan.sequence) {
             Some(sequence) => {
                 self.clip.own_sequence = Some(sequence);
                 true
             }
             None => false,
         };
-        if let Some(entry) = card_to_remove(&self.clip.history, state.entry)
-            && self.clip.history.delete(entry)
-        {
-            if self.clip.selected == Some(entry) {
-                self.clip.selected = None;
-            }
-            self.clamp_clip_scroll();
-            self.schedule_clip_save();
-            self.redraw_clip();
-        }
-        let had_file = state.file.is_some();
+        self.remove_shot_cards(plan.entries.into_iter());
+        let had_file = plan.file.is_some();
         let job = DeleteJob {
             shot: id,
-            file: state.file.map(|f| f.path),
-            clip: state.clip,
+            file: plan.file.map(|f| f.path),
+            clip: plan.clip,
             taken: self.shots.taken.clone(),
             arrivals: self.shots.arrivals.clone(),
             emptied,
@@ -873,6 +978,26 @@ impl App {
             },
             emptied,
         })
+    }
+
+    /// A deleted screenshot's history cards go (never a pinned one).
+    fn remove_shot_cards(&mut self, entries: impl Iterator<Item = u64>) {
+        let mut removed = false;
+        for entry in entries {
+            if let Some(entry) = card_to_remove(&self.clip.history, Some(entry))
+                && self.clip.history.delete(entry)
+            {
+                if self.clip.selected == Some(entry) {
+                    self.clip.selected = None;
+                }
+                removed = true;
+            }
+        }
+        if removed {
+            self.clamp_clip_scroll();
+            self.schedule_clip_save();
+            self.redraw_clip();
+        }
     }
 
     /// The save worker is done: "Disimpan" with the folder when it wrote the
@@ -1250,14 +1375,20 @@ mod tests {
         // The second update is the kept capture: no new screenshot, and its
         // arrival is never pushed, so the save worker still sees the file.
         let again = clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC));
-        assert!(shots.kept_again(&again, Some(7)));
+        assert_eq!(
+            shots.answered_again(false, &again, Some(7)),
+            Some(Answer::Kept)
+        );
         assert_eq!(
             save(&shots.arrivals),
             SaveOutcome::AlreadySaved(file.path.clone())
         );
         // A third update chains on the second.
         let third = clip_at(T + 2_400, T + 2_400, Some(PIC));
-        assert!(shots.kept_again(&third, Some(7)));
+        assert_eq!(
+            shots.answered_again(false, &third, Some(7)),
+            Some(Answer::Kept)
+        );
         // The bug: pushed as a fresh arrival, it cut the wait at T + 599,
         // and Simpan wrote a second copy.
         let cut = crate::screenshot::Arrivals::default();
@@ -1266,9 +1397,9 @@ mod tests {
         assert_eq!(save(&cut), SaveOutcome::Write);
         // Another picture, or the same one much later, is a new screenshot.
         let other = clip_at(T + 3_000, T + 3_000, Some(!PIC));
-        assert!(!shots.kept_again(&other, Some(8)));
+        assert_eq!(shots.answered_again(false, &other, Some(8)), None);
         let later = clip_at(T + 9_000, T + 9_000, Some(PIC));
-        assert!(!shots.kept_again(&later, Some(7)));
+        assert_eq!(shots.answered_again(false, &later, Some(7)), None);
     }
 
     #[test]
@@ -1334,7 +1465,7 @@ mod tests {
         assert!(plan.file.is_none());
         assert_eq!(plan.clip, second);
         assert_eq!(plan.clip.from_ms, first.from_ms);
-        assert_eq!(shots.kept.map(|k| k.clip), Some(second));
+        assert_eq!(shots.answered.map(|k| k.clip), Some(second));
         // A waiting shot of another capture stays; a wrong id keeps nothing.
         let mut shots = with(
             Some(state(1, 1, first, None)),
@@ -1343,5 +1474,109 @@ mod tests {
         assert_eq!(shots.keep_capture(1).and_then(|p| p.dropped), None);
         assert!(shots.waiting.is_some());
         assert!(shots.keep_capture(5).is_none());
+    }
+
+    use super::{Answer, ShotArrival};
+
+    #[test]
+    fn an_update_after_simpan_says_nothing_over_the_saved_notice() {
+        // PrtSc (preview raised, so the copy notice's gate never saw this
+        // card), Simpan ("Sudah tersimpan" up), then Snipping Tool's second
+        // update of the same capture.
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let mut shots = with(Some(state(1, 1, first, None)), None);
+        assert!(shots.keep_capture(1).is_some());
+        shots.shown = None;
+        let again = clip_at(T + 400, claim_from(T + 400, Some(T)), Some(PIC));
+        assert_eq!(
+            shots.answered_again(false, &again, Some(7)),
+            Some(Answer::Kept)
+        );
+        // What `shot_from_image` reports for it: handled, so the clipboard
+        // side neither raises nor sends its copy notice (the bug: it said
+        // "no preview" and the copy notice replaced "Sudah tersimpan").
+        assert!(!ShotArrival::Absorbed.copy_feedback_due());
+        assert!(!ShotArrival::Absorbed.raised());
+        assert!(!ShotArrival::Raised.copy_feedback_due());
+        assert!(ShotArrival::Raised.raised());
+        assert!(ShotArrival::Nothing.copy_feedback_due());
+        // An update `plan_arrival` merged is the shown shot's, never this.
+        assert_eq!(shots.answered_again(true, &again, Some(7)), None);
+    }
+
+    #[test]
+    fn hapus_answers_the_whole_capture() {
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let second = crate::screenshot::merge_arrival(
+            &first,
+            clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC)),
+        );
+        let file = file_at("Screenshot 235523.png", T + 150, Some(PIC));
+        // Shot 1 shown; shot 2 (the same capture) waits for the overlay and
+        // holds the newest clipboard write.
+        let mut newer = state(2, 1, second, Some(file.clone()));
+        newer.sequence = 5;
+        let mut shots = with(Some(state(1, 1, first, None)), Some(newer));
+        let plan = shots.delete_capture(1).expect("the shown shot");
+        assert_eq!(plan.dropped, Some(2), "no preview of the deleted shot");
+        assert!(shots.shown.is_none() && shots.waiting.is_none());
+        assert_eq!(plan.file, Some(file.clone()));
+        assert_eq!(plan.clip, second);
+        assert_eq!(plan.sequence, 5, "the clipboard holds the newest write");
+        assert_eq!(plan.entries, vec![7]);
+        assert_eq!(plan.look.id, 1);
+        assert_eq!(shots.answered.map(|a| a.answer), Some(Answer::Deleted));
+        // Another capture's waiting shot stays; a wrong id deletes nothing.
+        let mut shots = with(
+            Some(state(1, 1, first, None)),
+            Some(state(3, 3, clip_at(T + 900, T + 900, Some(!PIC)), None)),
+        );
+        assert!(shots.delete_capture(5).is_none());
+        assert!(shots.shown.is_some());
+        let plan = shots.delete_capture(1).expect("shown");
+        assert_eq!(plan.dropped, None);
+        assert!(shots.waiting.as_ref().is_some_and(|s| s.look.id == 3));
+    }
+
+    #[test]
+    fn an_update_after_hapus_neither_shows_again_nor_cuts_the_delete_wait() {
+        use crate::screenshot::{Arrivals, pick_confirmed};
+        // PrtSc at T, Hapus at T + 300 (no file yet), the same capture set
+        // on the clipboard again at T + 600, Snipping Tool's file at T + 800.
+        const T: i64 = 1_800_000_000_000;
+        const PIC: u64 = 0x00FF_00FF_F0F0_0F0F;
+        let first = clip_at(T, claim_from(T, None), Some(PIC));
+        let mut shots = with(Some(state(1, 1, first, None)), None);
+        shots.arrivals.push(T);
+        let plan = shots.delete_capture(1).expect("the shown shot");
+        let file = file_at("Screenshot 235523.png", T + 800, Some(PIC));
+        // The delete worker's strict look (`AFTER_MS` window, as of now).
+        let recycles = |arrivals: &Arrivals| {
+            let clip = ClipCandidate {
+                to_ms: arrivals.window_end(plan.clip.at_ms),
+                ..plan.clip
+            };
+            pick_confirmed(&clip, std::slice::from_ref(&file)).is_some()
+        };
+        let again = clip_at(T + 600, claim_from(T + 600, Some(T)), Some(PIC));
+        assert_eq!(
+            shots.answered_again(false, &again, Some(7)),
+            Some(Answer::Deleted),
+            "no new screenshot, no preview of what was deleted"
+        );
+        assert!(recycles(&shots.arrivals), "its arrival is never pushed");
+        // The bug: a fresh arrival cut the wait at T + 599 and the file
+        // stayed.
+        let cut = Arrivals::default();
+        cut.push(T);
+        cut.push(T + 600);
+        assert!(!recycles(&cut));
+        // Another picture soon after is a new screenshot.
+        let other = clip_at(T + 900, T + 900, Some(!PIC));
+        assert_eq!(shots.answered_again(false, &other, Some(8)), None);
     }
 }
