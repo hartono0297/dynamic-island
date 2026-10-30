@@ -23,6 +23,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[bata-idle-power-budget]]
 - [[bata-morning-greeting]]
 - [[lyric-notch-width]]
+- [[notch-size-and-fill]]: Tampilan -> Notch: width/height sliders (160-300 x 28-44), solid or see-through background, the panel stays solid
 - [[settings-appearance-scroll]]
 - [[media-click-guards]]
 - [[media-diagnosis-log]]

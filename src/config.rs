@@ -11,6 +11,10 @@ use crate::pages::PageEntry;
 use crate::pomodoro::PomoSettings;
 use crate::theme::{Accent, Surface, WindowTheme};
 use crate::tiles::TileEntry;
+use crate::ui::geometry::{
+    NOTCH_H_DEFAULT, NOTCH_H_MAX, NOTCH_H_MIN, NOTCH_OPACITY_DEFAULT, NOTCH_W_DEFAULT, NOTCH_W_MAX,
+    NOTCH_W_MIN,
+};
 use crate::ui::robot::{Motion, clamp_sleep};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +40,19 @@ pub struct Config {
     pub accent: Accent,
     /// The island's fill; the island itself is always dark.
     pub surface: Surface,
+    /// The closed island's width in logical px, kept in `NOTCH_W_MIN..=NOTCH_W_MAX`
+    /// (Settings -> Tampilan -> Notch).
+    #[serde(deserialize_with = "notch_width")]
+    pub notch_width: u32,
+    /// The closed island's height, kept in `NOTCH_H_MIN..=NOTCH_H_MAX`.
+    #[serde(deserialize_with = "notch_height")]
+    pub notch_height: u32,
+    /// "Latar notch": a solid black closed island or a see-through one (a typo
+    /// reads as Solid). The open panel is always solid.
+    pub notch_fill: NotchFill,
+    /// How opaque the see-through fill is, in percent (0..=100, default 30).
+    #[serde(deserialize_with = "notch_opacity")]
+    pub notch_opacity: u8,
     /// Editors and settings window: follow Windows, or always dark / light.
     pub window_theme: WindowTheme,
     /// The idle island shows the local time instead of an empty shape.
@@ -125,6 +142,13 @@ pub struct Config {
     /// "Pintasan Perangkat": the hotkey that opens the Devices page. None by
     /// default.
     pub devices_hotkey: DevicesHotkey,
+}
+
+crate::theme::named_enum! {
+    /// "Latar notch": what the closed island's background is. Solid is the
+    /// island as always; Transparent lets the desktop show through at
+    /// `notch_opacity`. Any other name reads as `Solid`.
+    NotchFill { Solid, Transparent }
 }
 
 crate::theme::named_enum! {
@@ -260,6 +284,31 @@ fn clip_items<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
         }))
 }
 
+/// Any number, kept in `NOTCH_W_MIN..=NOTCH_W_MAX`; a non-number is the default.
+fn notch_width<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64().map_or(NOTCH_W_DEFAULT, |n| {
+        n.clamp(f64::from(NOTCH_W_MIN), f64::from(NOTCH_W_MAX))
+            .round() as u32
+    }))
+}
+
+/// Any number, kept in `NOTCH_H_MIN..=NOTCH_H_MAX`; a non-number is the default.
+fn notch_height<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64().map_or(NOTCH_H_DEFAULT, |n| {
+        n.clamp(f64::from(NOTCH_H_MIN), f64::from(NOTCH_H_MAX))
+            .round() as u32
+    }))
+}
+
+/// Any number, kept in 0..=100; a non-number is the default.
+fn notch_opacity<'de, D: Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64()
+        .map_or(NOTCH_OPACITY_DEFAULT, |n| n.clamp(0.0, 100.0).round() as u8))
+}
+
 /// The disk limit's (min, max, step) in GB.
 pub const DISK_WARN_RANGE: (u32, u32, u32) = (5, 100, 5);
 /// The RAM limit's (min, max, step) in percent.
@@ -317,6 +366,10 @@ impl Default for Config {
             language: Lang::Id,
             accent: Accent::Terracotta,
             surface: Surface::Espresso,
+            notch_width: NOTCH_W_DEFAULT,
+            notch_height: NOTCH_H_DEFAULT,
+            notch_fill: NotchFill::Solid,
+            notch_opacity: NOTCH_OPACITY_DEFAULT,
             window_theme: WindowTheme::System,
             idle_clock: true,
             stay_behind: false,
@@ -458,6 +511,10 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         language: mem.language,
         accent: mem.accent,
         surface: mem.surface,
+        notch_width: mem.notch_width,
+        notch_height: mem.notch_height,
+        notch_fill: mem.notch_fill,
+        notch_opacity: mem.notch_opacity,
         window_theme: mem.window_theme,
         idle_clock: mem.idle_clock,
         stay_behind: mem.stay_behind,
@@ -789,6 +846,10 @@ mod tests {
             language: Lang::En,
             accent: Accent::Ochre,
             surface: Surface::Graphite,
+            notch_width: 250,
+            notch_height: 40,
+            notch_fill: NotchFill::Transparent,
+            notch_opacity: 65,
             window_theme: WindowTheme::Light,
             idle_clock: false,
             stay_behind: true,
@@ -1639,5 +1700,80 @@ mod tests {
                 ..PomoSettings::default()
             }
         );
+    }
+
+    #[test]
+    fn notch_defaults_and_old_files() {
+        let c = Config::default();
+        assert_eq!(
+            (c.notch_width, c.notch_height, c.notch_fill, c.notch_opacity),
+            (190, 34, NotchFill::Solid, 30)
+        );
+        // A file from before these fields loads unchanged.
+        let old = parse(r#"{"style":"Notch","accent":"Plum"}"#);
+        assert_eq!(
+            (
+                old.notch_width,
+                old.notch_height,
+                old.notch_fill,
+                old.notch_opacity
+            ),
+            (190, 34, NotchFill::Solid, 30)
+        );
+    }
+
+    #[test]
+    fn notch_values_are_clamped_or_fall_back() {
+        let c = parse(r#"{"notch_width":9999,"notch_height":-5,"notch_opacity":250}"#);
+        assert_eq!(
+            (c.notch_width, c.notch_height, c.notch_opacity),
+            (300, 28, 100)
+        );
+        let c = parse(r#"{"notch_width":10,"notch_height":500,"notch_opacity":-3}"#);
+        assert_eq!(
+            (c.notch_width, c.notch_height, c.notch_opacity),
+            (160, 44, 0)
+        );
+        let c = parse(r#"{"notch_width":"wide","notch_height":null,"notch_opacity":"x"}"#);
+        assert_eq!(
+            (c.notch_width, c.notch_height, c.notch_opacity),
+            (190, 34, 30)
+        );
+        let c = parse(r#"{"notch_width":200.6,"notch_height":30.2,"notch_opacity":55.5}"#);
+        assert_eq!(
+            (c.notch_width, c.notch_height, c.notch_opacity),
+            (201, 30, 56)
+        );
+        assert_eq!(
+            parse(r#"{"notch_fill":"Transparent"}"#).notch_fill,
+            NotchFill::Transparent
+        );
+        assert_eq!(
+            parse(r#"{"notch_fill":"Glass"}"#).notch_fill,
+            NotchFill::Solid
+        );
+    }
+
+    #[test]
+    fn merge_owned_keeps_the_notch_settings() {
+        let mem = Config {
+            notch_width: 250,
+            notch_height: 40,
+            notch_fill: NotchFill::Transparent,
+            notch_opacity: 70,
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert_eq!(
+            (
+                merged.notch_width,
+                merged.notch_height,
+                merged.notch_fill,
+                merged.notch_opacity
+            ),
+            (250, 40, NotchFill::Transparent, 70)
+        );
+        let back = parse(&serde_json::to_string_pretty(&mem).unwrap());
+        assert_eq!(back, mem);
     }
 }

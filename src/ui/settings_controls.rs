@@ -35,15 +35,17 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_COUNT, BAR_GAP, BAR_W, SHOULDER, ShapeKind, compact_layout, compact_layout_robot,
-    shape_with_robot,
+    BAR_COUNT, BAR_GAP, BAR_W, NotchSize, SHOULDER, ShapeKind, compact_layout,
+    compact_layout_robot, shape_with_robot_sized,
 };
 use super::icons::{Icon, IconSet};
+use super::notch_fill::legibility;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
     FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect, SEGMENT_RADIUS,
-    SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone, accent_key,
+    SLIDER_THUMB, SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone, accent_key,
+    slider_x,
 };
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
@@ -56,6 +58,8 @@ const LOGO_EYE: u32 = 0x17120F;
 /// The equalizer of the preview, frozen mid-beat (the design's sample
 /// heights; the tallest is `BAR_MAX_H`).
 const PREVIEW_BARS: [f32; BAR_COUNT] = [5.0, 11.0, 8.0, 13.0, 6.0];
+/// A slider rail's thickness.
+const SLIDER_RAIL_H: f32 = 4.0;
 
 /// One frame's worth of what to draw.
 pub struct Scene<'a> {
@@ -63,6 +67,10 @@ pub struct Scene<'a> {
     pub p: WindowPalette,
     pub island: Palette,
     pub style: Style,
+    /// The closed island's size and fill alpha (`notch_fill::fill_alpha`):
+    /// the preview draws it that big, see-through when the alpha is below 1.
+    pub notch: NotchSize,
+    pub notch_alpha: f32,
     /// Bata is on: the preview shows it in the album art's place.
     pub robot: bool,
     pub lang: Lang,
@@ -659,6 +667,20 @@ impl Painter<'_> {
                         );
                     }
                 }
+                Control::Slider {
+                    id,
+                    track,
+                    value,
+                    min,
+                    max,
+                    enabled,
+                } => {
+                    let hit = Hit::Slider(*id);
+                    let hovered = *enabled && s.hover == Some(hit);
+                    let held = hovered && s.pressed == Some(hit);
+                    self.dimmed(*enabled)
+                        .slider(*track, (*value, *min, *max), hovered, held);
+                }
                 Control::Button(b) => self.button(b, s),
                 Control::IconButton {
                     hit,
@@ -729,6 +751,32 @@ impl Painter<'_> {
     /// and a smaller knob, both in the secondary text colour. Cross-faded by `v`.
     fn toggle(&self, r: Rect, v: f32, hover: bool) {
         draw_toggle(self.rt, self.brush, &self.p, r, v, hover, self.alpha);
+    }
+
+    /// A slider: a rail with the part up to the thumb in the accent, and a
+    /// round accent thumb that grows a pixel under the pointer or while held.
+    /// `range` is (value, min, max).
+    fn slider(&self, track: Rect, range: (i32, i32, i32), hovered: bool, held: bool) {
+        let (value, min, max) = range;
+        let cy = track.y + track.h / 2.0;
+        let x = slider_x(track, value, min, max);
+        let rail = Rect {
+            x: track.x + SLIDER_THUMB / 2.0,
+            y: cy - SLIDER_RAIL_H / 2.0,
+            w: track.w - SLIDER_THUMB,
+            h: SLIDER_RAIL_H,
+        };
+        self.fill_round(rail, FULL_RADIUS, self.p.secondary, 0.3);
+        let filled = Rect {
+            w: (x - rail.x).max(0.0),
+            ..rail
+        };
+        self.fill_round(filled, FULL_RADIUS, self.p.accent, 1.0);
+        let grow = if held || hovered { 1.0 } else { 0.0 };
+        let r = SLIDER_THUMB / 2.0 - 1.5 + grow;
+        // A card-coloured halo, so the thumb stands off the accent part.
+        self.circle(x, cy, r + 1.5, self.p.card, 1.0);
+        self.circle(x, cy, r, self.p.accent, 1.0);
     }
 
     /// A round `−` / `+` button: card fill and hairline, darker on hover.
@@ -907,15 +955,26 @@ impl Painter<'_> {
         self.gradient_round(screen, CONTROL_RADIUS, top, bottom);
         self.stroke_round(screen, CONTROL_RADIUS, self.p.border);
 
-        // The island, at its real size, centered at the top of the "screen".
-        let base = shape_with_robot(s.style, ShapeKind::MediaCompact, s.robot);
+        // The island, at its real size (the sliders' width and height; they
+        // top out well inside the card), centered at the top of the "screen".
+        let base = shape_with_robot_sized(s.style, s.notch, ShapeKind::MediaCompact, s.robot);
         let shape = super::geometry::ShapeRect {
             x: screen.x + (screen.w - base.w) / 2.0,
             y: screen.y + base.y,
             ..base
         };
         let pal = s.island;
-        self.set(pal.surface, 1.0);
+        // A see-through fill needs something behind it to show: a checker
+        // strip across the top of the "screen".
+        if s.notch_alpha < 1.0 {
+            self.checker(Rect {
+                x: shape.x - 24.0,
+                y: screen.y,
+                w: shape.w + 48.0,
+                h: shape.y - screen.y + shape.h + 8.0,
+            });
+        }
+        self.set(pal.surface, s.notch_alpha);
         unsafe {
             match s.style {
                 Style::Pill => {
@@ -975,6 +1034,15 @@ impl Painter<'_> {
             tabular: false,
             tracked: None,
         };
+        // The island's own shadow under its text and bars when it is thin.
+        let shadow = legibility(s.notch_alpha);
+        if shadow > 0.0 {
+            let lower = Rect {
+                y: l.text.y + 1.0,
+                ..l.text
+            };
+            self.draw_str(label, style, lower, 0x000000, 0.55 * shadow);
+        }
         self.draw_str(label, style, l.text, pal.text, 0.7);
         for (i, h) in PREVIEW_BARS.into_iter().enumerate() {
             let bar = Rect {
@@ -983,7 +1051,43 @@ impl Painter<'_> {
                 w: BAR_W,
                 h,
             };
+            if shadow > 0.0 {
+                let lower = Rect {
+                    y: bar.y + 1.0,
+                    ..bar
+                };
+                self.fill_round(lower, 1.0, 0x000000, 0.55 * shadow);
+            }
             self.fill_round(bar, 1.0, pal.accent, 1.0);
+        }
+    }
+
+    /// Light and dark squares over `r`, cut at its edges.
+    fn checker(&self, r: Rect) {
+        const CELL: f32 = 8.0;
+        let (light, dark) = (
+            mix(self.p.bg, self.p.text, 0.30),
+            mix(self.p.bg, self.p.text, 0.10),
+        );
+        let mut row = 0;
+        let mut y = r.y;
+        while y < r.bottom() {
+            let h = CELL.min(r.bottom() - y);
+            let mut x = r.x;
+            let mut col = 0;
+            while x < r.right() {
+                let w = CELL.min(r.right() - x);
+                let rgb = if (row + col) % 2 == 0 { light } else { dark };
+                self.set(rgb, 1.0);
+                unsafe {
+                    self.rt
+                        .FillRectangle(&d2d_rect(Rect { x, y, w, h }), self.brush)
+                };
+                x += w;
+                col += 1;
+            }
+            y += h;
+            row += 1;
         }
     }
 }

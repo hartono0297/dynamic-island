@@ -470,6 +470,15 @@ keys! {
     AccentPlum => "Plum", "Plum";
     IslandSurface => "Latar island", "Island fill";
     IslandSurfaceDesc => "Warna dasar island", "The island's base color";
+    NotchWidth => "Lebar notch", "Notch width";
+    NotchHeight => "Tinggi notch", "Notch height";
+    NotchDefaultSize => "Ukuran bawaan", "Default size";
+    NotchReset => "Atur ulang", "Reset";
+    NotchFill => "Latar notch", "Notch background";
+    NotchFillDesc => "Panel tetap solid", "The open panel stays solid";
+    NotchFillSolid => "Hitam", "Solid";
+    NotchFillTransparent => "Transparan", "Transparent";
+    NotchOpacity => "Opasitas latar", "Background opacity";
     SurfaceEspresso => "Espresso", "Espresso";
     SurfaceGraphite => "Grafit", "Graphite";
     WindowMode => "Mode jendela", "Window mode";

@@ -34,6 +34,15 @@ layout's width estimate, so it wraps (`Builder::wrap`, `row_text_lines`)
 and the Animasi row grows by `DESC_LINE_H` per extra line
 (`wrapped_row_h`). Do not shorten design copy to fit; wrap it.
 
-Related: [[bata-robot-expressions]], [[bata-idle-power-budget]]
+**Notch card (v3.5):** a card of five rows (width slider, height slider,
+"Ukuran bawaan" with Reset, "Latar notch" Hitam/Transparan, opacity slider)
+sits between the first card and Bata's, so Bata's card is lower and the section
+scrolls further. At scroll 0 only the width slider's row peeks into the window
+(the scroll test asserts that, no longer the robot toggle). The sliders are the
+section's first drag control besides the list handles. Details in
+[[notch-size-and-fill]].
+
+Related: [[bata-robot-expressions]], [[bata-idle-power-budget]],
+[[notch-size-and-fill]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

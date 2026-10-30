@@ -67,16 +67,17 @@ use super::frame_clock::{FrameClock, WM_APP_FRAME};
 use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
-    CLIENT_H, CLIENT_W, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, List,
-    RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, State, TileForm, Tone, battery_step,
-    clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by, shot_secs_step,
+    CLIENT_H, CLIENT_W, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, List,
+    RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State, TileForm, Tone,
+    battery_step, clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by,
+    shot_secs_step, slider_value,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
-    ClipHotkey, ClipboardSettings, Config, DevicesHotkey, OpenMode, ScreenshotSettings,
+    ClipHotkey, ClipboardSettings, Config, DevicesHotkey, NotchFill, OpenMode, ScreenshotSettings,
     SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::google::client;
@@ -104,6 +105,21 @@ pub enum Action {
     Style(Style),
     Accent(Accent),
     Surface(Surface),
+    /// Settings → Tampilan → Notch. The sliders post `commit: false` while
+    /// the thumb moves (the island follows live, nothing is saved) and
+    /// `commit: true` once on release (saved).
+    NotchSize {
+        w: u32,
+        h: u32,
+        commit: bool,
+    },
+    NotchOpacity {
+        pct: u8,
+        commit: bool,
+    },
+    NotchFill(NotchFill),
+    /// "Ukuran bawaan": back to 190 × 34.
+    NotchReset,
     WindowMode(WindowTheme),
     Lang(Lang),
     Autostart(bool),
@@ -249,6 +265,11 @@ pub struct Model {
     pub style: Style,
     pub accent: Accent,
     pub surface: Surface,
+    /// The closed island's size and background.
+    pub notch_width: u32,
+    pub notch_height: u32,
+    pub notch_fill: NotchFill,
+    pub notch_opacity: u8,
     pub window: WindowTheme,
     pub lang: Lang,
     pub autostart: bool,
@@ -295,6 +316,10 @@ impl Model {
             style: cfg.style,
             accent: cfg.accent,
             surface: cfg.surface,
+            notch_width: cfg.notch_width,
+            notch_height: cfg.notch_height,
+            notch_fill: cfg.notch_fill,
+            notch_opacity: cfg.notch_opacity,
             window: cfg.window_theme,
             lang: cfg.language,
             autostart: cfg.start_with_windows,
@@ -503,6 +528,8 @@ struct Settings {
     gfx: Gfx,
     hover: Option<Hit>,
     pressed: Option<Hit>,
+    /// A slider's thumb is being dragged (the pointer is captured).
+    slider: Option<SliderId>,
     /// `TME_LEAVE` is armed.
     tracking: bool,
     anims: Anims,
@@ -809,6 +836,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         gfx,
         hover: None,
         pressed: None,
+        slider: None,
         tracking: false,
         anims: Anims::default(),
         clock: None,
@@ -931,6 +959,14 @@ fn cue_for(kind: CustomKind) -> PCWSTR {
 /// Brings the window up to `model`; animates what changed.
 pub fn update(model: Model) {
     let changed = with(|st| {
+        let mut model = model;
+        // The thumb in hand is where the pointer put it; an echo of an
+        // earlier step must not pull it back.
+        if st.slider.is_some() {
+            model.notch_width = st.model.notch_width;
+            model.notch_height = st.model.notch_height;
+            model.notch_opacity = st.model.notch_opacity;
+        }
         if st.model == model {
             return None;
         }
@@ -1096,6 +1132,10 @@ impl Settings {
             style: m.style,
             accent: m.accent,
             surface: m.surface,
+            notch_width: m.notch_width,
+            notch_height: m.notch_height,
+            notch_fill: m.notch_fill,
+            notch_opacity: m.notch_opacity,
             window: m.window,
             autostart: m.autostart,
             idle_clock: m.idle_clock,
@@ -1264,11 +1304,13 @@ impl Settings {
                 // The form's own choice, not the model's.
                 Group::TileKind => 0.0,
                 Group::ShotTool => usize::from(m.shot.tool == ShotTool::Windows) as f32,
+                Group::NotchFill => usize::from(m.notch_fill == NotchFill::Transparent) as f32,
             }
         };
         for group in [
             Group::Style,
             Group::Surface,
+            Group::NotchFill,
             Group::Window,
             Group::Lang,
             Group::OpenMode,
@@ -1387,6 +1429,14 @@ impl Settings {
             p,
             island: theme::island(self.model.accent, self.model.surface),
             style: self.model.style,
+            notch: super::geometry::NotchSize::from_px(
+                self.model.notch_width,
+                self.model.notch_height,
+            ),
+            notch_alpha: super::notch_fill::fill_alpha(
+                self.model.notch_fill,
+                self.model.notch_opacity,
+            ),
             robot: self.model.robot,
             lang: self.model.lang,
             hover: self.hover,
@@ -1440,6 +1490,58 @@ impl Settings {
     fn hit_at(&self, lparam: LPARAM) -> Option<Hit> {
         let (x, y) = self.point(lparam);
         self.layout.hit(x, y)
+    }
+
+    /// Where slider `id`'s track is, as laid out now.
+    fn slider_track(&self, id: SliderId) -> Option<super::settings_layout::Rect> {
+        self.layout.controls.iter().find_map(|c| match c {
+            Control::Slider { id: i, track, .. } if *i == id => Some(*track),
+            _ => None,
+        })
+    }
+
+    /// The value slider `id` has in the model.
+    fn slider_current(&self, id: SliderId) -> i32 {
+        match id {
+            SliderId::NotchWidth => self.model.notch_width as i32,
+            SliderId::NotchHeight => self.model.notch_height as i32,
+            SliderId::NotchOpacity => i32::from(self.model.notch_opacity),
+        }
+    }
+
+    /// The action for slider `id`'s value as the model has it now.
+    fn slider_action(&self, id: SliderId, commit: bool) -> Action {
+        match id {
+            SliderId::NotchWidth | SliderId::NotchHeight => Action::NotchSize {
+                w: self.model.notch_width,
+                h: self.model.notch_height,
+                commit,
+            },
+            SliderId::NotchOpacity => Action::NotchOpacity {
+                pct: self.model.notch_opacity,
+                commit,
+            },
+        }
+    }
+
+    /// The thumb of slider `id` follows the pointer at `x`: the model and
+    /// the layout take the value at once (the thumb never waits for the
+    /// island). `Some` only when the whole number changed, so a drag posts
+    /// one live action per step.
+    fn slider_move(&mut self, id: SliderId, x: f32) -> Option<Action> {
+        let track = self.slider_track(id)?;
+        let (min, max) = id.range();
+        let value = slider_value(track, x, min, max);
+        if value == self.slider_current(id) {
+            return None;
+        }
+        match id {
+            SliderId::NotchWidth => self.model.notch_width = value as u32,
+            SliderId::NotchHeight => self.model.notch_height = value as u32,
+            SliderId::NotchOpacity => self.model.notch_opacity = value as u8,
+        }
+        self.relayout();
+        Some(self.slider_action(id, false))
     }
 
     /// The pointer went down on the drag handle `hit` at `y`: its row is in
@@ -1668,8 +1770,11 @@ impl Settings {
                     None => Vec::new(),
                 }
             }
-            // The handles act on a press and a drag, not on a click.
-            Hit::PageGrip(_) | Hit::TileGrip(_) => Vec::new(),
+            // The handles act on a press and a drag, not on a click; so do
+            // the sliders.
+            Hit::PageGrip(_) | Hit::TileGrip(_) | Hit::Slider(_) => Vec::new(),
+            Hit::NotchReset => post(Action::NotchReset),
+            Hit::NotchFill(v) if v != m.notch_fill => post(Action::NotchFill(v)),
             Hit::TileFormOpen => {
                 self.tile_form = Some(TileForm {
                     kind: CustomKind::App,
@@ -1761,6 +1866,7 @@ impl Settings {
             Hit::Style(_)
             | Hit::Accent(_)
             | Hit::Surface(_)
+            | Hit::NotchFill(_)
             | Hit::WindowMode(_)
             | Hit::Lang(_)
             | Hit::Shell(_)
@@ -1957,6 +2063,16 @@ fn set_section(hwnd: HWND, section: Section) {
 }
 
 fn on_mouse_move(hwnd: HWND, lparam: LPARAM) {
+    // A slider's thumb follows the pointer; the island follows live.
+    let slid = with(|st| {
+        let id = st.slider?;
+        let (x, _) = st.point(lparam);
+        st.slider_move(id, x).map(|action| (st.owner, action))
+    })
+    .flatten();
+    if let Some((owner, action)) = slid {
+        post_action(owner, action);
+    }
     let arm = with(|st| {
         if st.drag.is_some() {
             let (_, y) = st.point(lparam);
@@ -2010,9 +2126,40 @@ fn on_button_down(hwnd: HWND, lparam: LPARAM) {
             SetCapture(hwnd);
         }
     }
+    // A press on a slider jumps the thumb there and starts a drag.
+    let jumped = with(|st| {
+        let Some(Hit::Slider(id)) = st.pressed else {
+            return None;
+        };
+        st.slider = Some(id);
+        let (x, _) = st.point(lparam);
+        st.slider_move(id, x).map(|action| (st.owner, action))
+    })
+    .flatten();
+    if let Some((owner, action)) = jumped {
+        post_action(owner, action);
+    }
 }
 
 fn on_button_up(hwnd: HWND, lparam: LPARAM) {
+    // A slider's thumb lets go here: the value is final, so it is saved.
+    let released = with(|st| {
+        let id = st.slider.take()?;
+        st.pressed = None;
+        let (x, _) = st.point(lparam);
+        // The last move may have been a step short of where the pointer is.
+        st.slider_move(id, x);
+        st.invalidate();
+        Some((st.owner, st.slider_action(id, true)))
+    })
+    .flatten();
+    if let Some((owner, action)) = released {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        post_action(owner, action);
+        return;
+    }
     // A row in hand drops here.
     let dropped = with(|st| {
         st.drag.is_some().then(|| {
@@ -2319,10 +2466,18 @@ unsafe extern "system" fn wnd_proc(
         }
         // The pointer was taken from a row in hand (another window came up).
         WM_CAPTURECHANGED => {
-            with(|st| {
+            // A slider's drag cut short keeps the value it reached: saved.
+            let cut = with(|st| {
                 st.pressed = None;
                 st.end_drag(false);
-            });
+                let id = st.slider.take()?;
+                st.invalidate();
+                Some((st.owner, st.slider_action(id, true)))
+            })
+            .flatten();
+            if let Some((owner, action)) = cut {
+                post_action(owner, action);
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
@@ -2493,6 +2648,13 @@ pub fn run_demo(args: &[String]) {
             Action::Style(v) => m.style = v,
             Action::Accent(v) => m.accent = v,
             Action::Surface(v) => m.surface = v,
+            Action::NotchSize { w, h, .. } => (m.notch_width, m.notch_height) = (w, h),
+            Action::NotchOpacity { pct, .. } => m.notch_opacity = pct,
+            Action::NotchFill(v) => m.notch_fill = v,
+            Action::NotchReset => {
+                m.notch_width = crate::ui::geometry::NOTCH_W_DEFAULT;
+                m.notch_height = crate::ui::geometry::NOTCH_H_DEFAULT;
+            }
             Action::WindowMode(v) => m.window = v,
             Action::Lang(v) => {
                 m.lang = v;

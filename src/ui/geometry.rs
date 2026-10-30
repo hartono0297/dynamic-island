@@ -60,12 +60,62 @@ const PILL_TOP: f32 = 8.0;
 /// Bottom corners of the Notch's compact shapes.
 const NOTCH_COMPACT_RADIUS: f32 = 16.0;
 
+/// The closed island's width range (Settings -> Tampilan -> Notch), logical
+/// px. 160 keeps the idle robot and clock, and the compact media title, inside
+/// the shape; 300 is the widest that still reads as a notch.
+pub const NOTCH_W_MIN: u32 = 160;
+pub const NOTCH_W_MAX: u32 = 300;
+pub const NOTCH_W_DEFAULT: u32 = 190;
+/// The closed island's height range. 28 is Bata's 26 px plus 1 px each side;
+/// 44 stays well under the notice's 76, so a notice still grows from it. The
+/// Notch's corner radius (16) fits at 28 (`corner_radius` keeps it at
+/// `h - SHOULDER`).
+pub const NOTCH_H_MIN: u32 = 28;
+pub const NOTCH_H_MAX: u32 = 44;
+pub const NOTCH_H_DEFAULT: u32 = 34;
+/// The see-through fill's default opacity, percent.
+pub const NOTCH_OPACITY_DEFAULT: u8 = 30;
+
+/// The closed island's size as the user set it: what Idle, MediaCompact,
+/// PomodoroCompact (20 wider) and MediaLyric (its minimum width) are built on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NotchSize {
+    pub w: f32,
+    pub h: f32,
+}
+
+impl NotchSize {
+    /// 190 x 34, the island as it always was.
+    pub const DEFAULT: NotchSize = NotchSize {
+        w: NOTCH_W_DEFAULT as f32,
+        h: NOTCH_H_DEFAULT as f32,
+    };
+
+    /// From whole px, clamped to the allowed range.
+    pub fn from_px(w: u32, h: u32) -> NotchSize {
+        NotchSize {
+            w: w.clamp(NOTCH_W_MIN, NOTCH_W_MAX) as f32,
+            h: h.clamp(NOTCH_H_MIN, NOTCH_H_MAX) as f32,
+        }
+    }
+
+    pub fn from_config(config: &crate::config::Config) -> NotchSize {
+        NotchSize::from_px(config.notch_width, config.notch_height)
+    }
+}
+
 pub fn shape_for(style: Style, kind: ShapeKind) -> ShapeRect {
+    shape_sized(style, NotchSize::DEFAULT, kind)
+}
+
+/// `shape_for` with the closed island at the user's size. The panel and the
+/// notices do not follow it.
+pub fn shape_sized(style: Style, size: NotchSize, kind: ShapeKind) -> ShapeRect {
     let (w, h) = match kind {
-        ShapeKind::Idle | ShapeKind::MediaCompact => (190.0, 34.0),
-        ShapeKind::PomodoroCompact => (210.0, 34.0),
-        // Sized by its line (`lyric_shape`); without one, the narrowest.
-        ShapeKind::MediaLyric => (LYRIC_MIN_W, 34.0),
+        ShapeKind::Idle | ShapeKind::MediaCompact => (size.w, size.h),
+        ShapeKind::PomodoroCompact => (size.w + 20.0, size.h),
+        // Sized by its line (`lyric_shape_sized`); without one, the narrowest.
+        ShapeKind::MediaLyric => (LYRIC_MIN_W.max(size.w), size.h),
         ShapeKind::Notice => (360.0, 76.0),
         ShapeKind::NoticeShot => (SHOT_W, SHOT_H),
         ShapeKind::Panel => (560.0, 290.0),
@@ -118,8 +168,19 @@ pub fn robot_extra(kind: ShapeKind) -> f32 {
 }
 
 /// `shape_for`, widened by `robot_extra` (and still centred) with the robot on.
+#[cfg(test)]
 pub fn shape_with_robot(style: Style, kind: ShapeKind, robot: bool) -> ShapeRect {
-    let s = shape_for(style, kind);
+    shape_with_robot_sized(style, NotchSize::DEFAULT, kind, robot)
+}
+
+/// `shape_with_robot` with the closed island at the user's size.
+pub fn shape_with_robot_sized(
+    style: Style,
+    size: NotchSize,
+    kind: ShapeKind,
+    robot: bool,
+) -> ShapeRect {
+    let s = shape_sized(style, size, kind);
     if !robot {
         return s;
     }
@@ -475,13 +536,21 @@ pub fn lyric_max_w(screen_w: f32) -> f32 {
 
 /// The notch's width for a line measured `text_w` px wide (`None`: the
 /// instrumental rest "♪" or nothing, which takes the minimum).
+#[cfg(test)]
 pub fn lyric_width(text_w: Option<f32>, robot: bool, max_w: f32) -> f32 {
-    let max_w = max_w.max(LYRIC_MIN_W);
+    lyric_width_min(text_w, robot, LYRIC_MIN_W, max_w)
+}
+
+/// `lyric_width` with the minimum raised to the user's notch width (never
+/// below `LYRIC_MIN_W`); the maximum is never below the minimum.
+pub fn lyric_width_min(text_w: Option<f32>, robot: bool, min_w: f32, max_w: f32) -> f32 {
+    let min_w = min_w.max(LYRIC_MIN_W);
+    let max_w = max_w.max(min_w);
     match text_w {
         Some(w) if w > 0.0 => {
-            (w.ceil() + LYRIC_SLACK + lyric_lead(robot) + LYRIC_PAD).clamp(LYRIC_MIN_W, max_w)
+            (w.ceil() + LYRIC_SLACK + lyric_lead(robot) + LYRIC_PAD).clamp(min_w, max_w)
         }
-        _ => LYRIC_MIN_W,
+        _ => min_w,
     }
 }
 
@@ -501,8 +570,14 @@ pub fn lyric_target_w(current: Option<f32>, wanted: f32) -> f32 {
 }
 
 /// The lyric notch `w` wide, centred, as tall and round as the compact shapes.
+#[cfg(test)]
 pub fn lyric_shape(style: Style, w: f32) -> ShapeRect {
-    let s = shape_for(style, ShapeKind::MediaLyric);
+    lyric_shape_sized(style, NotchSize::DEFAULT, w)
+}
+
+/// `lyric_shape` as tall as the user's notch.
+pub fn lyric_shape_sized(style: Style, size: NotchSize, w: f32) -> ShapeRect {
+    let s = shape_sized(style, size, ShapeKind::MediaLyric);
     ShapeRect {
         x: (WINDOW_W - w) / 2.0,
         w,
@@ -1700,5 +1775,191 @@ mod tests {
         assert_eq!(lyric_scroll_offset(400.0, box_w, 10_000), 0.0);
         assert_eq!(lyric_scroll_end_ms(400.0, box_w), None);
         assert_eq!(lyric_scroll_end_ms(box_w, box_w), None);
+    }
+
+    const ALL_KINDS: [ShapeKind; 9] = [
+        ShapeKind::Idle,
+        ShapeKind::MediaCompact,
+        ShapeKind::MediaLyric,
+        ShapeKind::PomodoroCompact,
+        ShapeKind::Notice,
+        ShapeKind::NoticeShot,
+        ShapeKind::Panel,
+        ShapeKind::PanelTall,
+        ShapeKind::PanelClean,
+    ];
+
+    fn sizes() -> [NotchSize; 3] {
+        [
+            NotchSize::from_px(NOTCH_W_MIN, NOTCH_H_MIN),
+            NotchSize::from_px(NOTCH_W_MAX, NOTCH_H_MAX),
+            NotchSize::from_px(NOTCH_W_MIN, NOTCH_H_MAX),
+        ]
+    }
+
+    #[test]
+    fn the_default_size_gives_todays_shapes() {
+        assert_eq!(NotchSize::DEFAULT, NotchSize { w: 190.0, h: 34.0 });
+        assert_eq!(
+            NotchSize::from_config(&crate::config::Config::default()),
+            NotchSize::DEFAULT
+        );
+        for style in [Style::Pill, Style::Notch] {
+            for kind in ALL_KINDS {
+                let s = shape_sized(style, NotchSize::DEFAULT, kind);
+                assert_eq!(s, shape_for(style, kind));
+                for robot in [false, true] {
+                    assert_eq!(
+                        shape_with_robot_sized(style, NotchSize::DEFAULT, kind, robot),
+                        shape_with_robot(style, kind, robot)
+                    );
+                }
+            }
+            assert_eq!(
+                lyric_shape_sized(style, NotchSize::DEFAULT, 300.0),
+                lyric_shape(style, 300.0)
+            );
+        }
+        // Today's numbers, spelled out.
+        let idle = shape_for(Style::Pill, ShapeKind::Idle);
+        assert_eq!((idle.w, idle.h), (190.0, 34.0));
+        assert_eq!(shape_for(Style::Pill, ShapeKind::PomodoroCompact).w, 210.0);
+        assert_eq!(shape_for(Style::Pill, ShapeKind::MediaLyric).w, LYRIC_MIN_W);
+    }
+
+    #[test]
+    fn a_user_size_changes_only_the_compact_shapes() {
+        for style in [Style::Pill, Style::Notch] {
+            for size in sizes() {
+                for kind in ALL_KINDS {
+                    let s = shape_sized(style, size, kind);
+                    let base = shape_for(style, kind);
+                    match kind {
+                        ShapeKind::Idle | ShapeKind::MediaCompact => {
+                            assert_eq!((s.w, s.h), (size.w, size.h));
+                        }
+                        ShapeKind::PomodoroCompact => {
+                            assert_eq!((s.w, s.h), (size.w + 20.0, size.h));
+                        }
+                        ShapeKind::MediaLyric => {
+                            assert_eq!((s.w, s.h), (LYRIC_MIN_W.max(size.w), size.h));
+                        }
+                        _ => assert_eq!(s, base, "{kind:?} must not follow the size"),
+                    }
+                    // Always centred, whatever the width.
+                    assert!((s.x + s.w / 2.0 - WINDOW_W / 2.0).abs() < 1e-3);
+                }
+                let idle = shape_sized(style, size, ShapeKind::Idle);
+                match style {
+                    Style::Pill => assert_eq!(idle.radius, size.h / 2.0),
+                    Style::Notch => assert_eq!(idle.radius, NOTCH_COMPACT_RADIUS),
+                }
+                // The Notch keeps its full 16 px corner at the minimum.
+                assert!(corner_radius(style, idle) >= 14.0, "{size:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn size_from_px_is_clamped() {
+        assert_eq!(NotchSize::from_px(0, 0), NotchSize { w: 160.0, h: 28.0 });
+        assert_eq!(
+            NotchSize::from_px(9999, 9999),
+            NotchSize { w: 300.0, h: 44.0 }
+        );
+    }
+
+    #[test]
+    fn the_lyric_minimum_follows_the_width() {
+        assert_eq!(lyric_width_min(None, false, 160.0, 560.0), LYRIC_MIN_W);
+        assert_eq!(lyric_width_min(None, false, 300.0, 560.0), 300.0);
+        assert_eq!(lyric_width_min(Some(10.0), true, 300.0, 560.0), 300.0);
+        // A long line still grows past it; the cap never sits below it.
+        assert_eq!(lyric_width_min(Some(400.0), false, 300.0, 560.0), 441.0);
+        assert_eq!(lyric_width_min(Some(400.0), false, 300.0, 250.0), 300.0);
+        // The default minimum is `lyric_width`.
+        for t in [None, Some(50.0), Some(300.0), Some(900.0)] {
+            assert_eq!(
+                lyric_width_min(t, true, LYRIC_MIN_W, LYRIC_MAX_W),
+                lyric_width(t, true, LYRIC_MAX_W)
+            );
+        }
+    }
+
+    #[test]
+    fn content_stays_inside_at_the_smallest_and_largest_size() {
+        for style in [Style::Pill, Style::Notch] {
+            for size in sizes() {
+                let head_inside = |s: ShapeRect, robot: Rect| {
+                    for (x, y) in head_outline(robot) {
+                        assert!(
+                            shape_contains(style, s, x, y),
+                            "{style:?} {size:?} {robot:?} ({x}, {y})"
+                        );
+                    }
+                };
+                for (robot, clock) in [(true, true), (true, false), (false, true)] {
+                    let s = shape_with_robot_sized(style, size, ShapeKind::Idle, robot);
+                    let l = idle_layout(s, robot, clock);
+                    if let Some(r) = l.robot {
+                        head_inside(s, r);
+                    }
+                    if let Some(c) = l.clock {
+                        assert!(inside(s, c), "{style:?} {size:?} {c:?}");
+                    }
+                    if let (Some(r), Some(c)) = (l.robot, l.clock) {
+                        assert!(!intersects(r, c));
+                    }
+                }
+                // Compact media, with and without the robot.
+                let s = shape_with_robot_sized(style, size, ShapeKind::MediaCompact, false);
+                let l = compact_layout(s);
+                for r in [l.art, l.text, l.bars] {
+                    assert!(inside(s, r), "{style:?} {size:?} media {r:?}");
+                }
+                assert!(l.text.w > 40.0, "{size:?} the title keeps some room");
+                let s = shape_with_robot_sized(style, size, ShapeKind::MediaCompact, true);
+                let l = compact_layout_robot(s);
+                head_inside(s, l.art);
+                for r in [l.text, l.bars] {
+                    assert!(inside(s, r) && !intersects(l.art, r), "{size:?} {r:?}");
+                }
+                // The lyric view, both ways.
+                for robot in [false, true] {
+                    for text_w in [None, Some(120.0), Some(400.0)] {
+                        let s = lyric_shape_sized(
+                            style,
+                            size,
+                            lyric_width_min(text_w, robot, size.w, LYRIC_MAX_W),
+                        );
+                        assert!(s.w >= size.w && s.w >= LYRIC_MIN_W);
+                        if robot {
+                            let (r, t) = lyric_layout_robot(s);
+                            head_inside(s, r);
+                            assert!(inside(s, t) && !intersects(r, t));
+                        } else {
+                            assert!(inside(s, lyric_layout(s)));
+                        }
+                    }
+                }
+                // The timer.
+                let s = shape_with_robot_sized(style, size, ShapeKind::PomodoroCompact, true);
+                let (robot, (cx, cy), r, text) =
+                    super::super::panel_layout::pomodoro_compact_layout_robot(s);
+                head_inside(s, robot);
+                let ring = Rect {
+                    x: cx - r - 1.5,
+                    y: cy - r - 1.5,
+                    w: 2.0 * r + 3.0,
+                    h: 2.0 * r + 3.0,
+                };
+                for part in [ring, text] {
+                    assert!(inside(s, part) && !intersects(robot, part), "{part:?}");
+                }
+                let s = shape_with_robot_sized(style, size, ShapeKind::PomodoroCompact, false);
+                let (_, _, text) = super::super::panel_layout::pomodoro_compact_layout(s);
+                assert!(inside(s, text));
+            }
+        }
     }
 }

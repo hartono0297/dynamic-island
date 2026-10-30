@@ -96,14 +96,16 @@ use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
-    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, ShapeKind, ShapeRect, Under,
-    lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape,
-    lyric_target_w, lyric_width, panel_kind, shape_for, shape_with_robot,
+    ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, NOTCH_H_DEFAULT,
+    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, lerp_shape, lyric_box_w, lyric_max_w,
+    lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape_sized, lyric_target_w, lyric_width_min,
+    panel_kind, shape_for, shape_sized, shape_with_robot_sized,
 };
 use crate::ui::motion::{
-    COMPACT_H, FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
+    FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
     content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, panel_fade, transition,
 };
+use crate::ui::notch_fill;
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
     CleanerView, CliView, DevicesView, FolderMenuView, Frame, MoleView, Progress, Renderer,
@@ -317,7 +319,9 @@ pub fn run(media_log_flag: bool) {
     // once per version that it changed.
     app_icon::refresh_shell_icon_once(&app_icon::stamp_path());
 
-    let rest = shape_for(config.style, ShapeKind::Idle);
+    let notch = NotchSize::from_config(&config);
+    let rest = shape_sized(config.style, notch, ShapeKind::Idle);
+    let rest_fill = notch_fill::fill_alpha(config.notch_fill, config.notch_opacity);
     let pomodoro = config.pomodoro;
     let today = Local::now().date_naive();
     let notes = NotesStore::open(NotesStore::default_path());
@@ -348,7 +352,8 @@ pub fn run(media_log_flag: bool) {
             reveal: None,
             leaving: None,
             closed_panel: None,
-            fade_floor_h: COMPACT_H,
+            fade_floor_h: notch.h,
+            fill: (rest_fill, rest_fill),
             animations: client_animations_on(),
             clock: None,
             frame_log: FrameLog::from_env(),
@@ -568,6 +573,10 @@ struct App {
     /// current morph (`motion::fade_floor`): the target's height while the
     /// panel closes, so its fade ends with the morph.
     fade_floor_h: f32,
+    /// The surface fill's alpha the current morph starts from and heads for
+    /// (`ui::notch_fill`): 1 for the panel and a solid island, the see-through
+    /// alpha for the closed island. At rest both are the same.
+    fill: (f32, f32),
     /// Windows' "Animation effects" (`SPI_GETCLIENTAREAANIMATION`) is on.
     /// Off: no slides, no reveals, and the morph eases without overshoot.
     animations: bool,
@@ -2794,8 +2803,10 @@ impl App {
         if self.robot_moving(now) {
             self.ensure_clock();
         }
+        let notch = self.notch_size();
         if view == View::MediaLyric {
             let max_w = self.lyric_max_w();
+            self.lyric_fit.set_min(notch.w);
             self.lyric_fit.refit(self.config.robot, max_w);
         }
         let kind = match &view {
@@ -2814,8 +2825,8 @@ impl App {
         // notch is as wide as its line (robot included).
         let (style, robot) = (self.config.style, self.config.robot);
         let target = kind.map(|kind| match kind {
-            ShapeKind::MediaLyric => lyric_shape(style, self.lyric_fit.width()),
-            _ => shape_with_robot(style, kind, robot),
+            ShapeKind::MediaLyric => lyric_shape_sized(style, notch, self.lyric_fit.width()),
+            _ => shape_with_robot_sized(style, notch, kind, robot),
         });
         let retarget = match target {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
@@ -2868,6 +2879,15 @@ impl App {
                     .as_ref()
                     .map(|shown| panel_fade(shape.h, panel_rest_h(style, shown), self.fade_floor_h))
             };
+            // The fill goes from what shows now to the view's own; from
+            // nothing it simply is the view's.
+            let fill_to = self.view_fill(&self.state.view());
+            let fill_from = if from_visible {
+                self.fill_at(now)
+            } else {
+                fill_to
+            };
+            self.fill = (fill_from, fill_to);
             // Hidden keeps the shape where it is and only fades it out.
             let (to, to_opacity) = target.map_or((shape, 0.0), |s| (s, 1.0));
             self.anim = Anim {
@@ -2912,6 +2932,7 @@ impl App {
                         from_visible,
                         carried: self.fade_floor_h,
                         alpha: panel_alpha,
+                        compact_h: notch.h,
                     },
                 );
             }
@@ -3045,9 +3066,89 @@ impl App {
 
     /// The widest lyric notch on this screen.
     fn lyric_max_w(&self) -> f32 {
+        // Never below the lyric notch's minimum, which follows the user's width.
         self.win
             .as_ref()
             .map_or(LYRIC_MAX_W, |w| lyric_max_w(w.screen_w()))
+            .max(self.notch_size().w)
+    }
+
+    /// The closed island's size as set in Settings.
+    fn notch_size(&self) -> NotchSize {
+        NotchSize::from_config(&self.config)
+    }
+
+    /// The fill alpha `view` is drawn with at rest: solid for the open panel,
+    /// the configured one for the closed island and notices.
+    fn view_fill(&self, view: &View) -> f32 {
+        match view {
+            View::Panel(_) => 1.0,
+            _ => notch_fill::fill_alpha(self.config.notch_fill, self.config.notch_opacity),
+        }
+    }
+
+    /// The surface fill's alpha at `now`: blended with the morph's eased
+    /// progress while it runs (`notch_fill::morph_fill`).
+    fn fill_at(&self, now: Instant) -> f32 {
+        if !self.anim.running {
+            return self.fill.1;
+        }
+        let t = morph_ease(self.anim.plain, self.anim.progress(now));
+        notch_fill::morph_fill(self.fill.0, self.fill.1, t)
+    }
+
+    /// Re-reads where the fill is heading after the setting changed: at rest
+    /// it is there at once, during a morph it carries on toward it.
+    fn sync_fill(&mut self) {
+        let to = self.view_fill(&self.state.view());
+        self.fill.1 = to;
+        if !self.anim.running {
+            self.fill.0 = to;
+        }
+    }
+
+    /// A new notch size (the sliders, Reset): the closed island follows it.
+    /// `live` (a slider being dragged) settles on the new shape at once so it
+    /// tracks the pointer; otherwise the island morphs there. Nothing is
+    /// saved here (the caller saves on commit).
+    fn set_notch_size(&mut self, w: u32, h: u32, live: bool) {
+        let size = NotchSize::from_px(w, h);
+        self.config.notch_width = size.w as u32;
+        self.config.notch_height = size.h as u32;
+        let now = Instant::now();
+        self.fade_floor_h = size.h;
+        let view = self.state.view();
+        if view == View::Hidden {
+            // Nothing shows: rest on the new shape so the next appearance grows from it.
+            let rest = shape_sized(self.config.style, size, ShapeKind::Idle);
+            self.anim = Anim::settled(rest, 0.0);
+            self.draw(now);
+        } else if live && !matches!(view, View::Panel(_)) {
+            self.refresh(now);
+            // Settle where `refresh` was heading, so the shape follows the pointer.
+            if self.anim.running {
+                let (to, opacity) = (self.anim.to, self.anim.to_opacity);
+                self.anim = Anim::settled(to, opacity);
+                self.fill.0 = self.fill.1;
+                self.draw(now);
+            }
+        } else {
+            self.refresh(now);
+        }
+        self.sync_settings();
+    }
+
+    /// The see-through fill's opacity (0..=100 %); drawn at once.
+    fn set_notch_opacity(&mut self, pct: u8) {
+        self.config.notch_opacity = pct.min(100);
+        self.on_fill_changed();
+    }
+
+    fn on_fill_changed(&mut self) {
+        self.sync_fill();
+        if !self.animating() {
+            self.draw(Instant::now());
+        }
     }
 
     /// Measures the line now on screen (as the renderer draws it) and works
@@ -3058,6 +3159,7 @@ impl App {
             .shown(now)
             .and_then(|line| self.renderer.lyric_text_width(line.text));
         let max_w = self.lyric_max_w();
+        self.lyric_fit.set_min(self.notch_size().w);
         self.lyric_fit.line(text_w, now, self.config.robot, max_w);
     }
 
@@ -4099,7 +4201,8 @@ impl App {
         let now = Instant::now();
         if self.state.view() == View::Hidden {
             // Nothing to morph; rest on the new shape so the next appearance grows from it.
-            self.anim = Anim::settled(shape_for(style, ShapeKind::Idle), 0.0);
+            let rest = shape_sized(style, self.notch_size(), ShapeKind::Idle);
+            self.anim = Anim::settled(rest, 0.0);
             self.draw(now);
         }
         // Visible: morphs from the old style's shape to the new one.
@@ -4145,6 +4248,29 @@ impl App {
             }
             SettingsAction::Surface(surface) => {
                 self.config.surface = surface;
+                self.save_config();
+            }
+            // A live step follows the pointer and saves nothing; the release
+            // (`commit`) saves once.
+            SettingsAction::NotchSize { w, h, commit } => {
+                self.set_notch_size(w, h, !commit);
+                if commit {
+                    self.save_config();
+                }
+            }
+            SettingsAction::NotchOpacity { pct, commit } => {
+                self.set_notch_opacity(pct);
+                if commit {
+                    self.save_config();
+                }
+            }
+            SettingsAction::NotchFill(fill) => {
+                self.config.notch_fill = fill;
+                self.on_fill_changed();
+                self.save_config();
+            }
+            SettingsAction::NotchReset => {
+                self.set_notch_size(NOTCH_W_DEFAULT, NOTCH_H_DEFAULT, false);
                 self.save_config();
             }
             SettingsAction::WindowMode(mode) => {
@@ -4344,6 +4470,7 @@ impl App {
             leaving: leaving.map(|shown| shown.page),
             fade_floor_h: self.fade_floor_h,
         };
+        let fill_alpha = self.fill_at(now);
         let state = &self.state;
         let cwd = self.cli_cwd.to_string_lossy();
         let input = self.cli_input.as_ref();
@@ -4448,6 +4575,8 @@ impl App {
             pages: state.pages().visible(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
+            fill_alpha,
+            legibility: notch_fill::legibility(fill_alpha),
             clock: (self.config.idle_clock && self.drawn == View::Idle)
                 .then(|| Local::now().format("%H:%M").to_string()),
             lyric: self.lyrics.shown(now),
@@ -4809,18 +4938,35 @@ struct LyricFit {
     /// The robot and the cap `width` was worked out with.
     robot: bool,
     max_w: f32,
+    /// The user's notch width, the notch's floor (`lyric_width_min`); 0 until
+    /// set, which `lyric_width_min` reads as `LYRIC_MIN_W`.
+    min_w: f32,
 }
 
 impl LyricFit {
+    /// The user's notch width changed: the same line is fitted to the new
+    /// floor.
+    fn set_min(&mut self, min_w: f32) {
+        if self.min_w == min_w {
+            return;
+        }
+        self.min_w = min_w;
+        if self.width.is_some() {
+            self.width = Some(lyric_width_min(self.text_w, self.robot, min_w, self.max_w));
+        }
+    }
+
     /// A new line on screen at `now`: the notch grows to it at once, and
     /// shrinks only when it is `LYRIC_SHRINK_SLACK` or more narrower.
     fn line(&mut self, text_w: Option<f32>, now: Instant, robot: bool, max_w: f32) {
         self.prev_scroll = self.scroll(now);
-        let wanted = lyric_width(text_w, robot, max_w);
+        let wanted = lyric_width_min(text_w, robot, self.min_w, max_w);
         let current = self
             .width
             .filter(|_| self.robot == robot && self.max_w == max_w);
-        self.width = Some(lyric_target_w(current, wanted).min(max_w));
+        // The cap never sits under the notch width the user set.
+        let cap = max_w.max(self.min_w);
+        self.width = Some(lyric_target_w(current, wanted).min(cap));
         self.since = Some(now);
         self.text_w = text_w;
         self.robot = robot;
@@ -4831,14 +4977,14 @@ impl LyricFit {
     /// is fitted again.
     fn refit(&mut self, robot: bool, max_w: f32) {
         if self.width.is_some() && (self.robot != robot || self.max_w != max_w) {
-            self.width = Some(lyric_width(self.text_w, robot, max_w));
+            self.width = Some(lyric_width_min(self.text_w, robot, self.min_w, max_w));
             self.robot = robot;
             self.max_w = max_w;
         }
     }
 
     fn width(&self) -> f32 {
-        self.width.unwrap_or(LYRIC_MIN_W)
+        self.width.unwrap_or(LYRIC_MIN_W.max(self.min_w))
     }
 
     fn box_w(&self) -> f32 {
@@ -6127,6 +6273,7 @@ unsafe extern "system" fn wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::geometry::{lyric_shape, lyric_width};
 
     #[test]
     fn greeting_waits_for_someone_at_an_unlocked_screen() {
@@ -6536,6 +6683,34 @@ mod tests {
         fit = LyricFit::default();
         fit.line(Some(100.0), t0, false, LYRIC_MAX_W);
         assert_eq!(fit.width(), LYRIC_MIN_W);
+    }
+
+    #[test]
+    fn lyric_fit_floors_at_the_users_notch_width() {
+        let t0 = Instant::now();
+        let mut fit = LyricFit::default();
+        // Wider than the lyric minimum: the empty notch takes it.
+        fit.set_min(300.0);
+        assert_eq!(fit.width(), 300.0);
+        fit.line(None, t0, false, 300.0_f32.max(LYRIC_MAX_W));
+        assert_eq!(fit.width(), 300.0);
+        // A short line stays at the floor; a long one grows past it.
+        fit.line(Some(100.0), t0, true, LYRIC_MAX_W);
+        assert_eq!(fit.width(), 300.0);
+        fit.line(Some(450.0), t0, true, LYRIC_MAX_W);
+        assert!(fit.width() > 450.0 && fit.width() <= LYRIC_MAX_W);
+        // Changing the width refits the same line; a narrower setting goes
+        // back to the lyric minimum.
+        fit.line(Some(100.0), t0, true, LYRIC_MAX_W);
+        fit.set_min(160.0);
+        assert_eq!(fit.width(), LYRIC_MIN_W);
+        fit.set_min(260.0);
+        assert_eq!(fit.width(), 260.0);
+        // The cap never sits under the floor.
+        let mut tight = LyricFit::default();
+        tight.set_min(300.0);
+        tight.line(Some(400.0), t0, false, 250.0);
+        assert_eq!(tight.width(), 250.0_f32.max(300.0));
     }
 
     #[test]

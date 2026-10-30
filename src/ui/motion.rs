@@ -67,8 +67,9 @@ pub fn content_alpha_from(from: f32, progress: f32) -> f32 {
     from + (1.0 - from) * content_alpha(progress)
 }
 
-/// The height of the compact shapes: where a panel's content is invisible
-/// unless the morph says otherwise (`fade_floor`).
+/// The default height of the compact shapes (the user's notch height is
+/// `NotchSize::h`, passed as `FadeStart::compact_h`): where a panel's content
+/// is invisible unless the morph says otherwise (`fade_floor`).
 pub const COMPACT_H: f32 = 34.0;
 
 /// How visible a panel's content is while its shape is `h` tall on its way
@@ -100,6 +101,9 @@ pub struct FadeStart {
     /// opening, or a closing one still fading out): how visible it is now.
     /// `None` when no panel content is fading.
     pub alpha: Option<f32>,
+    /// The compact views' height now (the user's notch height; `COMPACT_H`
+    /// by default): where a panel opening from nothing starts its content.
+    pub compact_h: f32,
 }
 
 /// The floor at which `panel_fade` gives `alpha` at height `h` below
@@ -148,9 +152,9 @@ pub fn fade_floor(to_panel: bool, to_h: f32, rest_h: f32, start: FadeStart) -> f
         };
     }
     let settled = if start.from_visible {
-        h.max(COMPACT_H)
+        h.max(start.compact_h)
     } else {
-        COMPACT_H
+        start.compact_h
     };
     match start.alpha {
         Some(alpha) if (panel_fade(h, rest_h, start.carried) - alpha).abs() <= 1e-3 => {
@@ -873,6 +877,7 @@ mod tests {
             from_visible,
             carried,
             alpha: None,
+            compact_h: COMPACT_H,
         }
     }
 
@@ -947,6 +952,38 @@ mod tests {
             from_visible: true,
             carried: floor,
             alpha: Some(panel_fade(h, rest, floor)),
+            compact_h: COMPACT_H,
+        }
+    }
+
+    #[test]
+    fn the_fade_floor_follows_the_notch_height() {
+        let rest = 290.0;
+        for compact_h in [28.0, 44.0] {
+            let from = |shape_h, visible| FadeStart {
+                compact_h,
+                ..settled(shape_h, false, compact_h, visible)
+            };
+            // From nothing: the user's compact height, not 34.
+            assert_eq!(
+                fade_floor(true, rest, rest, from(compact_h, false)),
+                compact_h
+            );
+            assert_eq!(fade_floor(true, rest, rest, from(20.0, false)), compact_h);
+            // From the compact view on screen.
+            assert_eq!(
+                fade_floor(true, rest, rest, from(compact_h, true)),
+                compact_h
+            );
+            // From a notice: its own height.
+            assert_eq!(fade_floor(true, rest, rest, from(76.0, true)), 76.0);
+            // Closing into the compact view fades out at its height.
+            let open = FadeStart {
+                from_panel: true,
+                ..from(rest, true)
+            };
+            assert_eq!(fade_floor(false, compact_h, rest, open), compact_h);
+            assert_eq!(panel_fade(compact_h, rest, compact_h), 0.0);
         }
     }
 
