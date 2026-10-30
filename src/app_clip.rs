@@ -941,6 +941,119 @@ mod tests {
         assert_eq!(n.body, "Denah lantai 2 sudah saya revisi");
     }
 
+    fn preview_of(snap: ClipSnapshot) -> (Notice, u64, History) {
+        let mut h = History::new(50);
+        let Ingested::Added { id, .. } = ingest(&mut h, snap, 0) else {
+            panic!("the fake copy was not added");
+        };
+        let n = clip_preview_notice(h.get(id).expect("entry"));
+        (n, id, h)
+    }
+
+    #[test]
+    fn the_preview_of_text_is_its_first_two_lines_or_a_meta_line() {
+        let (n, id, _) = preview_of(text(
+            "\r\n  Denah lantai 2 \t\r\nTolong dicek\r\nbaris tiga",
+        ));
+        assert_eq!(n.kind, NoticeKind::ClipPreview { id });
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("Denah lantai 2", "Tolong dicek")
+        );
+        assert_eq!(n.source, "Clipboard");
+        assert_eq!(n.key, CLIP_PREVIEW_KEY);
+        // One line: the kind and the length.
+        let (n, _, _) = preview_of(text("cuma satu baris"));
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("cuma satu baris", "Teks · 15 karakter")
+        );
+        // A link or a colour: the kind's name alone.
+        let (n, _, _) = preview_of(text("https://example.com/denah"));
+        assert_eq!(n.body, "Tautan");
+        let (n, _, _) = preview_of(text("#E2683C"));
+        assert_eq!(n.body, "Warna");
+        // Code counts characters, not bytes.
+        let (n, _, _) = preview_of(text("cargo test --locked"));
+        assert_eq!(n.body, "Kode · 19 karakter");
+        let (n, _, _) = preview_of(text("日本語のテキスト"));
+        assert_eq!(n.body, "Teks · 8 karakter");
+    }
+
+    #[test]
+    fn the_preview_of_an_image_names_its_size_and_asks_for_the_thumbnail() {
+        let (n, id, h) = preview_of(image(1280, 720));
+        assert_eq!(n.key, CLIP_IMAGE_KEY);
+        // Only bitmap formats were on the clipboard: a screenshot.
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("Screenshot", "1280 × 720")
+        );
+        let view = View::Notice(n);
+        let thumb = clip_notice_view(&h, &view).expect("the image's thumbnail");
+        assert_eq!(thumb.id, id);
+        assert!(thumb.thumb.w > 0 && thumb.thumb.h > 0);
+        // Text has no thumbnail, and an entry that is gone has none.
+        let (n, _, h) = preview_of(text("abc"));
+        assert!(clip_notice_view(&h, &View::Notice(n)).is_none());
+        let gone = View::Notice(Notice {
+            kind: NoticeKind::ClipPreview { id: 999 },
+            ..clip_preview_notice(&Clip {
+                id: 999,
+                kind: crate::clipboard::ClipKind::Text,
+                data: ClipData::Text("x".into()),
+                pinned: false,
+                at: 0,
+            })
+        });
+        assert!(clip_notice_view(&History::new(50), &gone).is_none());
+        assert!(clip_notice_view(&h, &View::Idle).is_none());
+    }
+
+    #[test]
+    fn the_preview_of_files_names_them() {
+        let snap = |paths: &[&str]| ClipSnapshot {
+            files: paths.iter().map(std::path::PathBuf::from).collect(),
+            ..ClipSnapshot::default()
+        };
+        let (n, _, _) = preview_of(snap(&[r"C:\Proyek\laporan.pdf"]));
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("Berkas disalin", "laporan.pdf")
+        );
+        let (n, _, _) = preview_of(snap(&[r"C:\a.txt", r"C:\b.txt", r"C:\c.txt"]));
+        assert_eq!(n.body, "3 file");
+        assert_eq!(n.key, CLIP_PREVIEW_KEY);
+    }
+
+    #[test]
+    fn private_content_never_reaches_the_preview_rules() {
+        // A password manager's copy: `ingest` skips it, so no entry, and the
+        // rules say no whatever the setting.
+        let mut h = History::new(50);
+        let secret = ClipSnapshot {
+            formats: vec![("ExcludeClipboardContentFromMonitorProcessing".into(), None)],
+            text: Some("hunter2".into()),
+            ..ClipSnapshot::default()
+        };
+        let outcome = ingest(&mut h, secret, 0);
+        assert_eq!(outcome, Ingested::Skipped);
+        assert!(h.is_empty());
+        let ctx = NoticeCtx {
+            setting: true,
+            history: true,
+            outcome,
+            own: false,
+            shot: false,
+            clip_page_open: false,
+            fullscreen: false,
+        };
+        assert!(!clip_notice_wanted(&ctx));
+        // The same text copied normally is announced, then its repeat is held.
+        let outcome = ingest(&mut h, text("hunter2"), 1);
+        assert!(clip_notice_wanted(&NoticeCtx { outcome, ..ctx }));
+    }
+
     #[test]
     fn a_card_without_its_original_says_it_pastes_small() {
         let mut h = History::new(50);

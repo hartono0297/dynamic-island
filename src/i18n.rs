@@ -1524,6 +1524,7 @@ pub fn clip_text_meta(lang: Lang, kind: crate::clipboard::ClipKind, chars: usize
 }
 
 /// The copy preview's body for an image: "1280 × 720".
+/// (Tested by `copy_preview_texts`.)
 pub fn clip_preview_size(w: u32, h: u32) -> String {
     format!("{w} × {h}")
 }
@@ -2874,6 +2875,9 @@ mod tests {
                 clip_image_meta(lang, true, 1280, 720),
                 clip_image_meta(lang, false, 640, 480),
                 clip_files(lang, 3, "a.pdf"),
+                clip_text_meta(lang, crate::clipboard::ClipKind::Text, 42),
+                clip_text_meta(lang, crate::clipboard::ClipKind::Link, 42),
+                clip_preview_size(1280, 720),
                 save_failed_because(lang, text(lang, Key::ReasonOffline)),
                 google_refused(lang, "403"),
                 unreadable_reply(lang, 200),
@@ -3335,5 +3339,41 @@ mod lyric_offset_tests {
         // Off the grid rounds to a tenth; nearly 0 shows as 0 without a sign.
         assert_eq!(lyric_offset(Lang::En, 40), "0.0 s");
         assert_eq!(lyric_offset(Lang::En, -149), "\u{2212}0.1 s");
+    }
+}
+
+#[cfg(test)]
+mod copy_preview_tests {
+    use super::*;
+    use crate::clipboard::ClipKind;
+
+    #[test]
+    fn copy_preview_texts() {
+        assert_eq!(
+            clip_text_meta(Lang::Id, ClipKind::Text, 42),
+            "Teks · 42 karakter"
+        );
+        assert_eq!(
+            clip_text_meta(Lang::En, ClipKind::Text, 42),
+            "Text · 42 characters"
+        );
+        assert_eq!(
+            clip_text_meta(Lang::En, ClipKind::Code, 1),
+            "Code · 1 character"
+        );
+        // A link or a colour is its kind's name alone.
+        assert_eq!(clip_text_meta(Lang::Id, ClipKind::Link, 30), "Tautan");
+        assert_eq!(clip_text_meta(Lang::En, ClipKind::Color, 7), "Color");
+        assert_eq!(clip_preview_size(1280, 720), "1280 × 720");
+        for (lang, title, files, chip) in [
+            (Lang::Id, "Gambar disalin", "Berkas disalin", "Riwayat"),
+            (Lang::En, "Image copied", "Files copied", "History"),
+        ] {
+            assert_eq!(text(lang, Key::ClipPreviewImage), title);
+            assert_eq!(text(lang, Key::ClipPreviewFiles), files);
+            assert_eq!(text(lang, Key::ClipPreviewChip), chip);
+        }
+        assert_eq!(text(Lang::Id, Key::ClipCopyNotice), "Notifikasi salinan");
+        assert_eq!(text(Lang::En, Key::ClipCopyNotice), "Copy notification");
     }
 }

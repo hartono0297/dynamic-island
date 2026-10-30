@@ -1455,6 +1455,17 @@ mod tests {
         for kind in [NoticeKind::MoleDone, NoticeKind::MoleFailed] {
             assert_eq!(notice_action(&kind, PomoStatus::Idle), Some(Key::MoleLog));
         }
+        // A copy preview: "Riwayat" opens the Clipboard page; "Disalin" has
+        // no chip.
+        assert_eq!(
+            notice_action(&NoticeKind::ClipPreview { id: 1 }, PomoStatus::Idle),
+            Some(Key::ClipPreviewChip)
+        );
+        assert_eq!(notice_action(&NoticeKind::Copied, PomoStatus::Idle), None);
+        assert_eq!(
+            notice_action_w(&NoticeKind::ClipPreview { id: 1 }),
+            ACTION_W
+        );
     }
 
     #[test]

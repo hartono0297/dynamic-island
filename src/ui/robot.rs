@@ -1564,6 +1564,38 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_preview_has_bata_but_a_copied_image_has_its_thumbnail() {
+        let preview = |key: &str| {
+            View::Notice(Notice {
+                key: key.into(),
+                source: "Clipboard".into(),
+                title: "t".into(),
+                body: "b".into(),
+                kind: NoticeKind::ClipPreview { id: 1 },
+            })
+        };
+        // Text and files: Bata, happy.
+        let text = Spot::of(&preview(crate::model::CLIP_PREVIEW_KEY));
+        assert_eq!(text, Spot::Notice(NoticeSort::ClipPreview));
+        // An image: no robot, its thumbnail takes the badge spot.
+        let image = Spot::of(&preview(crate::model::CLIP_IMAGE_KEY));
+        assert_eq!(image, Spot::Notice(NoticeSort::ClipImage));
+        let face = |spot| {
+            choose_expr(&RobotInputs {
+                spot,
+                hover: false,
+                asleep: false,
+                claude_working: false,
+                cli: Cli::None,
+                mole_running: false,
+                battery_low: false,
+            })
+        };
+        assert_eq!(face(text), Some(Expr::Happy));
+        assert_eq!(face(image), None);
+    }
+
+    #[test]
     fn blink_delay_stays_in_range() {
         let mut rng = Rng::new(42);
         let delays: Vec<u32> = (0..2000).map(|_| blink_delay_ms(&mut rng)).collect();
