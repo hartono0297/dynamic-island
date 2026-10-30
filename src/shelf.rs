@@ -115,6 +115,9 @@ pub fn probe(path: &Path) -> Probe {
 /// One card as it is drawn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShelfCard {
+    /// Who the card is across changes: the normalised path (`key_of`), so
+    /// the motion can tell a card that stayed from one that came or went.
+    pub key: String,
     /// The file's whole name; the page breaks it into lines (`wrap_name`).
     pub name: String,
     pub kind: ShelfKind,
@@ -234,6 +237,7 @@ impl Shelf {
             .map(|p| {
                 let found = probe(p);
                 ShelfCard {
+                    key: key_of(p),
                     name: display_name(p),
                     kind: kind_of(p, found == Probe::Folder),
                     stale: found == Probe::Missing,
@@ -275,6 +279,18 @@ mod tests {
         assert_eq!(s.add([p(r"C:\one-more.txt")]), 0, "full");
         // The first ones stay, in order.
         assert_eq!(s.get(0), Some(Path::new(r"C:\a\Denah.pdf")));
+    }
+
+    #[test]
+    fn a_card_key_ignores_letter_case_and_a_trailing_slash() {
+        let key = |path: &str| {
+            let mut s = Shelf::default();
+            s.add([p(path)]);
+            s.cards(|_| Probe::File)[0].key.clone()
+        };
+        assert_eq!(key(r"C:\Proyek\Denah"), key(r"c:\proyek\DENAH\"));
+        assert_ne!(key(r"C:\Proyek\Denah"), key(r"C:\Proyek\Lain"));
+        assert!(!key(r"C:\Proyek\Denah").is_empty());
     }
 
     #[test]

@@ -183,3 +183,7 @@ it, a card click collapses it, fullscreen or a mode change clear it).
 and the Hover-mode hand-over on the next visit.
 
 Related: [[mixer]], [[open-mode]].
+
+## v3.5: motion
+
+Cards animate in, out and across: see [[shelf-motion]].

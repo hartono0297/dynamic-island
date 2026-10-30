@@ -56,6 +56,7 @@ use super::geometry::{
 use super::icons::{Icon, IconSet};
 use super::motion::Transit;
 use super::robot::{Expr, Pose, RobotPainter};
+use super::shelf_motion::ShelfMotion;
 use super::window::IslandWindow;
 use crate::audio::MixerRow;
 use crate::calendar::CalendarSnapshot;
@@ -120,6 +121,9 @@ pub struct Frame<'a> {
     pub shelf: &'a [ShelfCard],
     /// Files are being dragged over the island: the shelf's drop zone lights.
     pub shelf_drag: bool,
+    /// Cards coming in, going out or changing slot, as of `now` (empty at
+    /// rest). `shelf` is the final list.
+    pub shelf_motion: &'a ShelfMotion,
     /// The Devices page.
     pub devices: DevicesView<'a>,
     pub notes: &'a [Note],

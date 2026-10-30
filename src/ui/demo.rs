@@ -22,6 +22,14 @@
 //!   they play once from the step's start. While a scene morphs in from a panel, a compact view or
 //!   notice fades in with the morph (`DI_DEMO_T=0.5` shows it halfway), and
 //!   the panel it replaces fades out with the shrinking shape.
+//! - `DI_DEMO_SHELF=0.5` freezes the shelf's card motion at that progress
+//!   (0 to 1 of the scene's span: 260 ms for `shelf-enter`, 220 ms for
+//!   `shelf-exit` and `shelf-move`). Without it the scene plays once from
+//!   the step's start. `shelf-enter` has three more files dropped on a
+//!   shelf of three (they stagger in), `shelf-exit` takes the second of six
+//!   off (it shrinks and fades where it was, the rest slide over) and
+//!   `shelf-move` takes the third of nine off (three rows become two, so
+//!   every card changes place). Made-up names only.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
 //! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
 //! - `DI_CLOCK=0` draws the idle island without its clock.
@@ -86,6 +94,7 @@ use super::render::{
     Renderer, RobotFrame, SearchView, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
+use super::shelf_motion::{SHELF_ENTER_MS, SHELF_MOVE_MS, SHELF_STAGGER_MS, ShelfMotion};
 use super::window::IslandWindow;
 use crate::calendar::{CalEvent, CalStatus, CalendarSnapshot, EventTime};
 use crate::clean::{self, AdminOutcome, CatSize, CleanCat, CleanMode, CleanReport, ScanResult};
@@ -540,7 +549,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 101] = [
+const SCENES: [Scene; 104] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -685,6 +694,10 @@ const SCENES: [Scene; 101] = [
         shelf_drag: true,
         ..panel("shelf-drop-files", Page::Shelf)
     },
+    // The cards' motion (`DI_DEMO_SHELF` freezes it).
+    panel("shelf-enter", Page::Shelf),
+    panel("shelf-exit", Page::Shelf),
+    panel("shelf-move", Page::Shelf),
     Scene {
         search: true,
         ..panel("search", Page::Search)
@@ -1137,6 +1150,7 @@ fn run_scenes(scenes: &[Scene]) {
     let lyric_scroll: Option<u64> = env("DI_LYRIC_SCROLL");
     let frozen_reveal: Option<f32> = env("DI_DEMO_REVEAL");
     let notch = demo_notch();
+    let frozen_shelf: Option<f32> = env("DI_DEMO_SHELF");
     let steps = 2 * scenes.len();
     println!("demo: 2 s per view, Pill then Notch ({steps} steps); kill the process to stop");
     let start = Instant::now();
@@ -1186,9 +1200,13 @@ fn run_scenes(scenes: &[Scene]) {
         let reveal_playing = (scene.reveal.is_some() || scene.fade_from.is_some())
             && frozen_reveal.is_none()
             && into < (ANIM_MS + REVEAL_MS.max(PAGE_FADE_MS)) as u128 + 50;
+        let shelf_span = shelf_scene_ms(scene.name);
+        let shelf_playing =
+            frozen_shelf.is_none() && shelf_span.is_some_and(|ms| into < ms as u128 + 50);
         let animated = scene.view == View0::MediaCompact
             || (scene.view == View0::MediaLyric && lyric_scroll.is_none() && scroll > 0.0)
-            || reveal_playing;
+            || reveal_playing
+            || shelf_playing;
         if step != settled || animated {
             if t >= 1.0 {
                 if settled != step {
@@ -1285,7 +1303,18 @@ fn run_scenes(scenes: &[Scene]) {
                 super::panel_layout::devices_reveal(shape, scene.strip, &shapes, 0.0, at)
             });
             let mixer_rows = demo_mixer();
-            let shelf_cards = demo_shelf(matches!(scene.name, "shelf" | "shelf-drop-files"));
+            let shelf_elapsed = shelf_span.map_or(0, |ms| match frozen_shelf {
+                Some(p) => (p.clamp(0.0, 1.0) * ms as f32) as u64,
+                None => into as u64,
+            });
+            let (shelf_cards, shelf_motion) =
+                demo_shelf_motion(scene.name, style, scene.strip, now, shelf_elapsed)
+                    .unwrap_or_else(|| {
+                        (
+                            demo_shelf(matches!(scene.name, "shelf" | "shelf-drop-files")),
+                            ShelfMotion::default(),
+                        )
+                    });
             let with_files = scene.name == "search-files";
             let search_query = if with_files {
                 DEMO_FILES_QUERY
@@ -1321,6 +1350,7 @@ fn run_scenes(scenes: &[Scene]) {
                 mixer: Some(&mixer_rows),
                 shelf: &shelf_cards,
                 shelf_drag: scene.shelf_drag,
+                shelf_motion: &shelf_motion,
                 devices: DevicesView {
                     list: &dev_list,
                     ejecting: &dev_ejecting,
@@ -2620,11 +2650,18 @@ fn demo_search_details()
 /// Made-up files for the shelf scene (and an empty shelf elsewhere): never
 /// the machine's own. One of them is gone, as a card shows it.
 fn demo_shelf(filled: bool) -> Vec<crate::shelf::ShelfCard> {
-    use crate::shelf::{ShelfCard, ShelfKind};
     if !filled {
         return Vec::new();
     }
+    demo_shelf_files().into_iter().take(6).collect()
+}
+
+/// Twelve made-up cards, the shelf's most: the first six are the `shelf`
+/// scene's.
+fn demo_shelf_files() -> Vec<crate::shelf::ShelfCard> {
+    use crate::shelf::{ShelfCard, ShelfKind};
     let card = |name: &str, kind, stale| ShelfCard {
+        key: name.to_lowercase(),
         name: name.into(),
         kind,
         stale,
@@ -2640,5 +2677,65 @@ fn demo_shelf(filled: bool) -> Vec<crate::shelf::ShelfCard> {
         card("rab-v3.xlsx", ShelfKind::Document, false),
         card("render.mp4", ShelfKind::Media, false),
         card("arsip-lama.zip", ShelfKind::Archive, true),
+        card("sketsa-fasad.dwg", ShelfKind::Document, false),
+        card("moodboard.jpg", ShelfKind::Image, false),
+        card("Referensi", ShelfKind::Folder, false),
+        card("notulen-rapat.docx", ShelfKind::Document, false),
+        card("walkthrough.mov", ShelfKind::Media, false),
+        card("backup-proyek.7z", ShelfKind::Archive, false),
     ]
+}
+
+/// How long a shelf motion scene plays, in ms (`DI_DEMO_SHELF` is a
+/// fraction of it).
+fn shelf_scene_ms(name: &str) -> Option<u64> {
+    match name {
+        "shelf-enter" => Some(SHELF_ENTER_MS + 2 * SHELF_STAGGER_MS),
+        "shelf-exit" | "shelf-move" => Some(SHELF_MOVE_MS),
+        _ => None,
+    }
+}
+
+/// The shelf motion scenes: the cards after the change and the motion that
+/// leads to them, `elapsed_ms` into it (rebuilt on every frame, so it
+/// holds no clock of its own). `None` for any other scene.
+fn demo_shelf_motion(
+    name: &str,
+    style: Style,
+    strip: bool,
+    now: Instant,
+    elapsed_ms: u64,
+) -> Option<(Vec<crate::shelf::ShelfCard>, ShelfMotion)> {
+    let (before, after): (Vec<usize>, Vec<usize>) = match name {
+        "shelf-enter" => ((0..3).collect(), (0..6).collect()),
+        "shelf-exit" => ((0..6).collect(), vec![0, 2, 3, 4, 5]),
+        "shelf-move" => ((0..9).collect(), vec![0, 1, 3, 4, 5, 6, 7, 8]),
+        _ => return None,
+    };
+    let files = demo_shelf_files();
+    let pick = |at: &[usize]| -> Vec<crate::shelf::ShelfCard> {
+        at.iter().map(|&i| files[i].clone()).collect()
+    };
+    let shape = super::geometry::shape_for(style, ShapeKind::Panel);
+    let rects = |n: usize| -> Vec<super::geometry::Rect> {
+        super::panel_layout::shelf_layout(shape, strip, n)
+            .cards
+            .iter()
+            .map(|c| c.card)
+            .collect()
+    };
+    let (old, new) = (pick(&before), pick(&after));
+    let start = now
+        .checked_sub(Duration::from_millis(elapsed_ms))
+        .unwrap_or(now);
+    let mut motion = ShelfMotion::default();
+    motion.on_change(
+        &old,
+        &rects(old.len()),
+        &new,
+        &rects(new.len()),
+        start,
+        true,
+    );
+    Some((new, motion))
 }

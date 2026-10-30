@@ -80,7 +80,7 @@ Hover the notch to open it, scroll to change pages. The panel stays open for a f
 | **Mixer** | Master and per-app volume sliders. |
 | **Clipboard** | Searchable history of text, links, colours, files and images, with pins. Password managers' copies are never kept. |
 | **Screenshot** | Its own capture: the Screenshot tile freezes the screen and snaps to the window, panel or box under the pointer (or drag your own rectangle), then opens an editor with text, arrows, boxes, pen, marker and pixelate. The notch also previews PrtSc and Win+Shift+S shots, with Copy again, Keep or Delete. |
-| **File shelf** | Drop files on the notch, drag them out later. |
+| **File shelf** | Drop files on the notch, drag them out later. Cards animate in and out. |
 | **Search** | `Ctrl+Alt+Space`: apps, files and folders, calculator, Windows settings, web. |
 | **Calendar** | Google Calendar with day, week and month views; add and edit events. |
 | **Reminders, Notes, Pomodoro** | Quick ones, right in the panel. |
