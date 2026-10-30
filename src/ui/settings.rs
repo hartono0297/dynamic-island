@@ -156,9 +156,6 @@ pub enum Action {
     ShotSecs(u32),
     /// "Tombol PrtSc membuka screenshot Vale".
     ShotPrintScreen(bool),
-    /// "Matikan di Windows": switch off Windows' own PrtSc setting (HKCU),
-    /// then take the key.
-    PrtscTurnOffWindows,
     BatteryThreshold(u8),
     /// "Peringatan disk": GB free.
     DiskWarn(u32),
@@ -292,7 +289,7 @@ pub struct Model {
     pub devices_hotkey: DevicesHotkey,
     /// The chosen Devices hotkey could not be registered.
     pub devices_hotkey_failed: bool,
-    /// What the PrtSc row says when the key is wanted but taken.
+    /// What the PrtSc row says when the key is wanted but its hook failed.
     pub prtsc: PrtscRow,
     pub robot: bool,
     pub robot_motion: Motion,
@@ -1741,7 +1738,6 @@ impl Settings {
             }
             Hit::ShotPreview => post(Action::ShotPreview(!m.shot.preview)),
             Hit::ShotPrintScreen => post(Action::ShotPrintScreen(!m.shot.print_screen)),
-            Hit::PrtscTurnOffWindows => post(Action::PrtscTurnOffWindows),
             Hit::ShotTool(v) if v != m.shot.tool => post(Action::ShotTool(v)),
             Hit::ShotIgnore(v) if v != m.shot.on_ignore => post(Action::ShotOnIgnore(v)),
             Hit::ShotSecs(dir) => {
@@ -2649,9 +2645,8 @@ unsafe extern "system" fn edit_proc(
 /// demo model and pushes it back, so every control works. Nothing is saved
 /// and the island is not involved; the hook buttons and links are real, so
 /// leave them alone. `DI_ACCENT`, `DI_GOOGLE` (`ok`, `needslogin`,
-/// `reconnect`, `offline`, `none`), `DI_POMO_LOCKED=1` and `DI_PRTSC` (`windows`:
-/// the PrtSc key is Windows', with its button; `app`: another app has it) set
-/// the start.
+/// `reconnect`, `offline`, `none`), `DI_POMO_LOCKED=1` and `DI_PRTSC` (`failed`:
+/// the PrtSc keyboard hook could not be installed) set the start.
 #[cfg(debug_assertions)]
 pub fn run_demo(args: &[String]) {
     use crate::i18n;
@@ -2706,8 +2701,6 @@ pub fn run_demo(args: &[String]) {
             Action::ShotTool(v) => m.shot.tool = v,
             Action::ShotPreview(v) => m.shot.preview = v,
             Action::ShotPrintScreen(v) => m.shot.print_screen = v,
-            // The demo never touches the registry: the click just frees the key.
-            Action::PrtscTurnOffWindows => m.prtsc = PrtscRow::Plain,
             Action::ShotOnIgnore(v) => m.shot.on_ignore = v,
             Action::ShotSecs(v) => m.shot.show_secs = v,
             Action::BatteryThreshold(v) => m.battery_threshold = v,
@@ -2825,11 +2818,9 @@ pub fn run_demo(args: &[String]) {
         lang,
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
         lyrics: env("DI_LYRICS") == "1",
-        // The PrtSc row taken: by Windows' own setting (the button shows) or
-        // by another app.
+        // The PrtSc row with its hook failed (the red note).
         prtsc: match env("DI_PRTSC").as_str() {
-            "windows" => PrtscRow::TakenByWindows,
-            "app" => PrtscRow::TakenByApp,
+            "failed" => PrtscRow::Failed,
             _ => PrtscRow::Plain,
         },
         calendar,

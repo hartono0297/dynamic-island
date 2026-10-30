@@ -134,7 +134,7 @@ use dock_page::DockState;
 
 #[path = "app_prtsc.rs"]
 mod prtsc;
-use prtsc::{HOTKEY_PRTSC, PrtscState};
+use prtsc::{PrtscState, WM_APP_PRTSC};
 
 #[path = "app_search.rs"]
 mod quick;
@@ -487,7 +487,7 @@ pub fn run(media_log_flag: bool) {
         app.clip_start();
         app.sync_search_hotkey();
         app.devices_start();
-        app.sync_prtsc_hotkey();
+        app.sync_prtsc_hook();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
         // An empty notes list would otherwise look like the notes were deleted.
@@ -4846,7 +4846,6 @@ impl App {
             SettingsAction::ShotOnIgnore(v) => self.on_shot_setting(ShotSetting::OnIgnore(v)),
             SettingsAction::ShotSecs(n) => self.on_shot_setting(ShotSetting::Secs(n)),
             SettingsAction::ShotPrintScreen(on) => self.set_print_screen(on),
-            SettingsAction::PrtscTurnOffWindows => self.turn_off_windows_print_screen(),
             // Handled outside the app borrow (`deliver_settings_action`).
             SettingsAction::DndHelp | SettingsAction::Closed => {}
         }
@@ -6618,9 +6617,12 @@ unsafe extern "system" fn wnd_proc(
                 with_app(App::on_search_hotkey);
             } else if wparam.0 as i32 == HOTKEY_DEVICES {
                 with_app(App::on_devices_hotkey);
-            } else if wparam.0 as i32 == HOTKEY_PRTSC {
-                with_app(App::on_prtsc_hotkey);
             }
+            LRESULT(0)
+        }
+        // The PrtSc key, seen by the keyboard hook thread (`app_prtsc`).
+        WM_APP_PRTSC => {
+            with_app(App::on_prtsc_hotkey);
             LRESULT(0)
         }
         // A drive came or went: only an arrival or a removal of a volume or
