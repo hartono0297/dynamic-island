@@ -4412,6 +4412,7 @@ impl App {
             SettingsAction::ClipFeedbackAll(on) => {
                 self.on_clip_setting(ClipSetting::FeedbackAll(on))
             }
+            SettingsAction::ClipNotice(on) => self.on_clip_setting(ClipSetting::CopyNotice(on)),
             SettingsAction::ClipClear => self.on_clip_setting(ClipSetting::Clear),
             SettingsAction::ShotTool(v) => self.on_shot_setting(ShotSetting::Tool(v)),
             SettingsAction::ShotPreview(on) => self.on_shot_setting(ShotSetting::Preview(on)),
@@ -4626,6 +4627,7 @@ impl App {
             system: Some(&system),
             cleaner: cleaner.as_ref(),
             shot: shot::shot_view(&self.shots, &self.drawn),
+            clip_notice: clip::clip_notice_view(&self.clip.history, &self.drawn),
             transit,
         };
         if let Err(error) = self

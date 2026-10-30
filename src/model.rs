@@ -30,6 +30,12 @@ pub struct Notice {
     pub kind: NoticeKind,
 }
 
+/// `Notice::key` of a copy preview of an image: its badge spot is the
+/// thumbnail, never Bata.
+pub const CLIP_IMAGE_KEY: &str = "clip-preview-image";
+/// `Notice::key` of a copy preview of text or files.
+pub const CLIP_PREVIEW_KEY: &str = "clip-preview";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NoticeKind {
     App {
@@ -69,6 +75,13 @@ pub enum NoticeKind {
     /// "Disalin": an entry was copied from the island (or, with the setting,
     /// any copy). Short (`COPIED_DURATION`); a newer one replaces it.
     Copied,
+    /// A copy made in another app: a preview of what is now in the history
+    /// (entry `id`: text lines, an image thumbnail or the files), with a
+    /// "Riwayat" chip. Lasts `CLIP_NOTICE_DURATION`; only the latest is kept
+    /// (it replaces a `Copied` too). A click opens the Clipboard page.
+    ClipPreview {
+        id: u64,
+    },
     /// The big screenshot preview (`ShapeKind::NoticeShot`): its thumbnail,
     /// size and Salin lagi / Simpan / Hapus. `shot` names `App`'s screenshot
     /// state; it shows `secs` from when it becomes current (never expiring

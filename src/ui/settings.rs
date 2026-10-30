@@ -145,6 +145,7 @@ pub enum Action {
     /// and the Devices page's hotkey.
     DeviceNotices(bool),
     DevicesHotkey(DevicesHotkey),
+    ClipNotice(bool),
     ClipFeedbackAll(bool),
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
@@ -1362,6 +1363,7 @@ impl Settings {
             (Hit::ClipEnabled, oc.enabled, nc.enabled),
             (Hit::ClipPersist, oc.persist, nc.persist),
             (Hit::ClipClearOnLock, oc.clear_on_lock, nc.clear_on_lock),
+            (Hit::ClipNotice, oc.copy_notice, nc.copy_notice),
             (
                 Hit::ClipFeedbackAll,
                 oc.copied_feedback_all,
@@ -1710,6 +1712,7 @@ impl Settings {
             Hit::SearchHotkey(h) if h != m.search_hotkey => post(Action::SearchHotkey(h)),
             Hit::DeviceNotices => post(Action::DeviceNotices(!m.device_notices)),
             Hit::DevicesHotkey(h) if h != m.devices_hotkey => post(Action::DevicesHotkey(h)),
+            Hit::ClipNotice => post(Action::ClipNotice(!m.clip.copy_notice)),
             Hit::ClipFeedbackAll => post(Action::ClipFeedbackAll(!m.clip.copied_feedback_all)),
             Hit::ClipClear if self.clip_confirm => {
                 self.clip_confirm = false;
@@ -2679,6 +2682,7 @@ pub fn run_demo(args: &[String]) {
             Action::SearchHotkey(v) => m.search_hotkey = v,
             Action::DeviceNotices(v) => m.device_notices = v,
             Action::DevicesHotkey(v) => m.devices_hotkey = v,
+            Action::ClipNotice(v) => m.clip.copy_notice = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
             Action::ShotTool(v) => m.shot.tool = v,

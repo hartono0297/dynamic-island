@@ -2594,7 +2594,7 @@ impl Renderer {
     }
 
     /// The thumbnail of entry `id` as a bitmap of this target, made once.
-    fn clip_thumb(&self, id: u64, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
+    pub(super) fn clip_thumb(&self, id: u64, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
         if let Some((_, b)) = self.clip_thumbs.borrow().iter().find(|(i, _)| *i == id) {
             return Ok(Some(b.clone()));
         }

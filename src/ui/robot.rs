@@ -711,6 +711,10 @@ pub enum NoticeSort {
     Greeting,
     /// "Disalin" after a copy.
     Copied,
+    /// The preview of a copy made elsewhere (text or files): Bata happy.
+    ClipPreview,
+    /// The same for an image: its thumbnail takes the badge spot, no robot.
+    ClipImage,
     /// The screenshot preview.
     Screenshot,
     /// "Disimpan" after its Simpan.
@@ -738,6 +742,7 @@ impl NoticeSort {
             NoticeKind::MoleFailed => NoticeSort::MoleFailed,
             NoticeKind::Greeting => NoticeSort::Greeting,
             NoticeKind::Copied => NoticeSort::Copied,
+            NoticeKind::ClipPreview { .. } => NoticeSort::ClipPreview,
             NoticeKind::Screenshot { .. } => NoticeSort::Screenshot,
             NoticeKind::ShotSaved => NoticeSort::ShotSaved,
             NoticeKind::ShotDeleted => NoticeSort::ShotDeleted,
@@ -770,6 +775,13 @@ impl Spot {
             View::PomodoroCompact => Spot::Pomodoro,
             View::MediaCompact => Spot::Media,
             View::MediaLyric => Spot::Lyric,
+            // A copied image shows its own thumbnail where Bata would be.
+            View::Notice(n)
+                if matches!(n.kind, NoticeKind::ClipPreview { .. })
+                    && n.key == crate::model::CLIP_IMAGE_KEY =>
+            {
+                Spot::Notice(NoticeSort::ClipImage)
+            }
             View::Notice(n) => Spot::Notice(NoticeSort::of(&n.kind)),
         }
     }
@@ -831,13 +843,14 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
         Spot::Hidden | Spot::Panel => return None,
         Spot::Notice(sort) => {
             return match sort {
-                NoticeSort::App => None,
+                NoticeSort::App | NoticeSort::ClipImage => None,
                 NoticeSort::Reminder | NoticeSort::ClaudeWaiting => Some(Expr::Alert),
                 NoticeSort::PomodoroDone
                 | NoticeSort::ClaudeDone
                 | NoticeSort::CleanDone
                 | NoticeSort::MoleDone
                 | NoticeSort::Copied
+                | NoticeSort::ClipPreview
                 | NoticeSort::Screenshot
                 | NoticeSort::DeviceSafe
                 | NoticeSort::ShotSaved => Some(Expr::Happy),
@@ -1440,6 +1453,7 @@ mod tests {
             (NoticeSort::MoleFailed, Expr::Sad),
             (NoticeSort::Greeting, Expr::Wave),
             (NoticeSort::Copied, Expr::Happy),
+            (NoticeSort::ClipPreview, Expr::Happy),
             (NoticeSort::Screenshot, Expr::Happy),
             (NoticeSort::ShotSaved, Expr::Happy),
             (NoticeSort::ShotDeleted, Expr::Idle),
@@ -1547,6 +1561,38 @@ mod tests {
         );
         assert_eq!(Spot::of(&View::MediaLyric), Spot::Lyric);
         assert_eq!(Spot::of(&View::Panel(crate::model::Page::Cli)), Spot::Panel);
+    }
+
+    #[test]
+    fn a_copy_preview_has_bata_but_a_copied_image_has_its_thumbnail() {
+        let preview = |key: &str| {
+            View::Notice(Notice {
+                key: key.into(),
+                source: "Clipboard".into(),
+                title: "t".into(),
+                body: "b".into(),
+                kind: NoticeKind::ClipPreview { id: 1 },
+            })
+        };
+        // Text and files: Bata, happy.
+        let text = Spot::of(&preview(crate::model::CLIP_PREVIEW_KEY));
+        assert_eq!(text, Spot::Notice(NoticeSort::ClipPreview));
+        // An image: no robot, its thumbnail takes the badge spot.
+        let image = Spot::of(&preview(crate::model::CLIP_IMAGE_KEY));
+        assert_eq!(image, Spot::Notice(NoticeSort::ClipImage));
+        let face = |spot| {
+            choose_expr(&RobotInputs {
+                spot,
+                hover: false,
+                asleep: false,
+                claude_working: false,
+                cli: Cli::None,
+                mole_running: false,
+                battery_low: false,
+            })
+        };
+        assert_eq!(face(text), Some(Expr::Happy));
+        assert_eq!(face(image), None);
     }
 
     #[test]

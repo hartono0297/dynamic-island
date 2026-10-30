@@ -260,6 +260,10 @@ pub struct ClipboardSettings {
     pub hotkey: ClipHotkey,
     /// "Disalin" also for copies made in other apps.
     pub copied_feedback_all: bool,
+    /// "Notifikasi salinan": a preview in the notch on every copy made in
+    /// another app. While it is on it supersedes `copied_feedback_all` for
+    /// those copies.
+    pub copy_notice: bool,
 }
 
 impl Default for ClipboardSettings {
@@ -271,6 +275,7 @@ impl Default for ClipboardSettings {
             clear_on_lock: false,
             hotkey: ClipHotkey::Off,
             copied_feedback_all: false,
+            copy_notice: true,
         }
     }
 }
@@ -876,6 +881,7 @@ mod tests {
                 clear_on_lock: true,
                 hotkey: ClipHotkey::WinAltV,
                 copied_feedback_all: true,
+                copy_notice: false,
             },
             screenshot: ScreenshotSettings {
                 preview: false,
@@ -1053,6 +1059,17 @@ mod tests {
     fn clipboard_defaults_and_hand_edits() {
         let d = ClipboardSettings::default();
         assert!(d.enabled && d.persist && !d.clear_on_lock && !d.copied_feedback_all);
+        // The copy notice is on by default, also for a config.json written
+        // before it existed (the group or just the field missing).
+        assert!(d.copy_notice);
+        assert!(parse(r#"{"style":"Notch"}"#).clipboard.copy_notice);
+        let old_group = parse(r#"{"clipboard":{"enabled":false,"max_items":30}}"#);
+        assert!(old_group.clipboard.copy_notice && !old_group.clipboard.enabled);
+        assert!(
+            !parse(r#"{"clipboard":{"copy_notice":false}}"#)
+                .clipboard
+                .copy_notice
+        );
         assert_eq!((d.max_items, d.hotkey), (50, ClipHotkey::Off));
         // An older config.json without the group loads the defaults.
         let old = parse(r#"{"style":"Notch","robot":false,"lyrics":true}"#);

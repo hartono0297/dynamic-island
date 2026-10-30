@@ -28,6 +28,8 @@ pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
 pub const GREETING_DURATION: Duration = Duration::from_secs(4);
 /// "Disalin" is only a confirmation.
 pub const COPIED_DURATION: Duration = Duration::from_millis(1500);
+/// The copy preview (text lines, a thumbnail) needs a little more to be read.
+pub const CLIP_NOTICE_DURATION: Duration = Duration::from_secs(3);
 
 /// "Disimpan" and "Dihapus" after a screenshot's button.
 pub const SHOT_DONE_DURATION: Duration = Duration::from_millis(2500);
@@ -40,6 +42,7 @@ fn duration_of(notice: &Notice) -> Duration {
     match notice.kind {
         NoticeKind::Greeting => GREETING_DURATION,
         NoticeKind::Copied => COPIED_DURATION,
+        NoticeKind::ClipPreview { .. } => CLIP_NOTICE_DURATION,
         NoticeKind::Screenshot { secs, .. } => Duration::from_secs(u64::from(secs)),
         NoticeKind::ShotSaved | NoticeKind::ShotDeleted => SHOT_DONE_DURATION,
         _ => NOTICE_DURATION,
@@ -52,6 +55,11 @@ fn shot_of(notice: &Notice) -> Option<u64> {
         NoticeKind::Screenshot { shot, .. } => Some(shot),
         _ => None,
     }
+}
+
+/// The copy preview (`ClipPreview`) in `notice`.
+fn is_clip_preview(notice: &Notice) -> bool {
+    matches!(notice.kind, NoticeKind::ClipPreview { .. })
 }
 
 /// A notice the pointer can act on: a button or a click target. Hover must
@@ -68,6 +76,7 @@ fn notice_has_action(notice: &Notice) -> bool {
             | NoticeKind::Pomodoro
             | NoticeKind::Screenshot { .. }
             | NoticeKind::DevicePlugged { .. }
+            | NoticeKind::ClipPreview { .. }
             | NoticeKind::App { app_id: Some(_) }
     )
 }
@@ -406,8 +415,11 @@ impl IslandState {
                 // another kind of notice and never shows over a game.
                 NoticeKind::Screenshot { .. } => {
                     if !self.fullscreen {
-                        let replaced =
-                            |n: &Notice| shot_of(n).is_some() || n.kind == NoticeKind::Copied;
+                        let replaced = |n: &Notice| {
+                            shot_of(n).is_some()
+                                || n.kind == NoticeKind::Copied
+                                || is_clip_preview(n)
+                        };
                         self.queue.retain(|n| !replaced(n));
                         if matches!(&self.current, Some((n, _)) if replaced(n)) {
                             self.current = None;
@@ -432,6 +444,20 @@ impl IslandState {
                         self.queue.push_back(notice);
                     }
                 }
+                // The preview of a copy made elsewhere: like "Disalin" only
+                // the latest is worth showing (it replaces an older preview
+                // or a "Disalin"), and none over a game.
+                NoticeKind::ClipPreview { .. } => {
+                    if !self.fullscreen {
+                        let replaced =
+                            |n: &Notice| n.kind == NoticeKind::Copied || is_clip_preview(n);
+                        self.queue.retain(|n| !replaced(n));
+                        if matches!(&self.current, Some((n, _)) if replaced(n)) {
+                            self.current = None;
+                        }
+                        self.queue.push_back(notice);
+                    }
+                }
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => {
@@ -444,6 +470,11 @@ impl IslandState {
                 if on {
                     self.queue.retain(|n| shot_of(n).is_none());
                     if matches!(&self.current, Some((n, _)) if shot_of(n).is_some()) {
+                        self.current = None;
+                    }
+                    // A copy preview is stale by the time the game ends.
+                    self.queue.retain(|n| !is_clip_preview(n));
+                    if matches!(&self.current, Some((n, _)) if is_clip_preview(n)) {
                         self.current = None;
                     }
                 }
@@ -1313,10 +1344,13 @@ impl IslandState {
                     // These notices lead to the panel: it opens under the
                     // pointer after the click, and in the modes that keep it
                     // open, it stays (the pointer alone would not hold it).
+                    // The copy preview only when the Clipboard page is on in
+                    // "Halaman panel"; off, the click just dismisses it.
                     let opens_panel = matches!(
                         n.kind,
                         NoticeKind::SystemLow | NoticeKind::MoleDone | NoticeKind::MoleFailed
-                    );
+                    ) || (is_clip_preview(&n)
+                        && self.pages.is_on(Page::Clipboard));
                     effects.extend(self.dismiss_visible_notice(now));
                     // A plugged-in drive's "Buka": Explorer on its first
                     // drive, and the panel stays out of the way like after a
@@ -1874,6 +1908,14 @@ impl IslandState {
             // The panel the pointer opens next is the System page.
             NoticeKind::SystemLow => {
                 self.page = Page::System;
+                None
+            }
+            // The panel the pointer opens next is the Clipboard's (when that
+            // page is on; off, the click only dismisses).
+            NoticeKind::ClipPreview { .. } => {
+                if self.pages.is_on(Page::Clipboard) {
+                    self.page = Page::Clipboard;
+                }
                 None
             }
             _ => None,
@@ -4127,6 +4169,176 @@ mod tests {
         s.apply(Event::Notice(copied("c")), t3);
         s.apply(Event::Tick, t3 + COPIED_DURATION);
         assert_eq!(s.view(), View::Notice(failed));
+    }
+
+    fn clip_preview(id: u64) -> Notice {
+        Notice {
+            key: format!("clip-preview-{id}"),
+            source: "Clipboard".into(),
+            title: format!("Salinan {id}"),
+            body: "Teks · 9 karakter".into(),
+            kind: NoticeKind::ClipPreview { id },
+        }
+    }
+
+    #[test]
+    fn a_copy_preview_lasts_three_seconds_and_the_latest_replaces_older_ones() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(clip_preview(1)), t0);
+        assert_eq!(s.view(), View::Notice(clip_preview(1)));
+        assert_eq!(CLIP_NOTICE_DURATION, secs(3));
+        assert_eq!(s.next_deadline(), Some(t0 + CLIP_NOTICE_DURATION));
+        // A newer one replaces the current one, and a queued one.
+        s.apply(Event::Notice(clip_preview(2)), t0 + secs(1));
+        assert_eq!(s.view(), View::Notice(clip_preview(2)));
+        assert_eq!(s.next_deadline(), Some(t0 + secs(1) + CLIP_NOTICE_DURATION));
+        let done = mole_notice(NoticeKind::CleanDone);
+        s.apply(Event::Notice(done.clone()), t0 + secs(1));
+        s.apply(Event::Notice(clip_preview(3)), t0 + secs(1));
+        s.apply(Event::Notice(clip_preview(4)), t0 + secs(1));
+        s.apply(Event::Tick, t0 + secs(1) + CLIP_NOTICE_DURATION);
+        assert_eq!(
+            s.view(),
+            View::Notice(done),
+            "the clean notice keeps its turn"
+        );
+        let t1 = t0 + secs(1) + CLIP_NOTICE_DURATION + NOTICE_DURATION;
+        s.apply(Event::Tick, t1);
+        assert_eq!(s.view(), View::Notice(clip_preview(4)), "only the latest");
+        s.apply(Event::Tick, t1 + CLIP_NOTICE_DURATION);
+        assert_eq!(s.view(), View::Idle, "nothing queued behind it");
+    }
+
+    #[test]
+    fn a_copy_preview_replaces_a_copied_notice_and_a_screenshot_replaces_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(copied("a")), t0);
+        s.apply(Event::Notice(clip_preview(1)), t0);
+        assert_eq!(s.view(), View::Notice(clip_preview(1)));
+        s.apply(Event::Tick, t0 + CLIP_NOTICE_DURATION);
+        assert_eq!(s.view(), View::Idle, "the Disalin did not wait behind it");
+        // Queued behind another notice: still replaced, as Copied is.
+        let done = mole_notice(NoticeKind::CleanDone);
+        s.apply(Event::Notice(done.clone()), t0);
+        s.apply(Event::Notice(copied("b")), t0);
+        s.apply(Event::Notice(clip_preview(2)), t0);
+        s.apply(Event::Notice(shot(1, false)), t0);
+        s.apply(Event::Tick, t0 + NOTICE_DURATION);
+        assert_eq!(s.view(), View::Notice(shot(1, false)));
+        // The screenshot took the current preview's place too.
+        let mut s = st();
+        s.apply(Event::Notice(clip_preview(3)), t0);
+        s.apply(Event::Notice(shot(2, false)), t0);
+        assert_eq!(s.view(), View::Notice(shot(2, false)));
+        s.apply(Event::Tick, t0 + secs(8));
+        assert_eq!(s.view(), View::Idle, "the preview did not come back");
+    }
+
+    #[test]
+    fn a_copy_preview_never_shows_over_a_fullscreen_app() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::Notice(clip_preview(1)), t0);
+        assert_eq!(s.view(), View::Hidden);
+        s.apply(Event::Fullscreen(false), t0 + secs(1));
+        assert_eq!(s.view(), View::Idle, "dropped, not queued for afterwards");
+        // One already up or queued goes when a fullscreen app starts.
+        s.apply(Event::Notice(clip_preview(2)), t0 + secs(2));
+        s.apply(Event::Fullscreen(true), t0 + secs(2));
+        s.apply(Event::Fullscreen(false), t0 + secs(2));
+        assert_eq!(s.view(), View::Idle);
+        let done = mole_notice(NoticeKind::CleanDone);
+        s.apply(Event::Notice(done.clone()), t0 + secs(3));
+        s.apply(Event::Notice(clip_preview(3)), t0 + secs(3));
+        s.apply(Event::Fullscreen(true), t0 + secs(3));
+        s.apply(Event::Fullscreen(false), t0 + secs(3));
+        s.apply(Event::Tick, t0 + secs(3) + NOTICE_DURATION);
+        assert_eq!(s.view(), View::Idle, "the queued preview was dropped");
+    }
+
+    #[test]
+    fn a_copy_preview_has_a_button_so_hover_waits_for_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert!(notice_has_action(&clip_preview(1)));
+        assert!(!notice_has_action(&copied("a")), "Disalin has none");
+        s.apply(Event::Notice(clip_preview(1)), t0);
+        // The pointer's visit began on it: no panel over it, and it stays
+        // while the pointer does.
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(clip_preview(1)));
+        s.apply(Event::Tick, t0 + CLIP_NOTICE_DURATION + secs(5));
+        assert_eq!(
+            s.view(),
+            View::Notice(clip_preview(1)),
+            "held under the pointer"
+        );
+        // Once it leaves, the grace first.
+        let left = t0 + secs(10);
+        s.apply(Event::Hover(false), left);
+        s.apply(Event::Tick, left + secs(1));
+        assert_eq!(s.view(), View::Notice(clip_preview(1)));
+        s.apply(Event::Tick, left + SHOT_LEAVE_GRACE);
+        assert_eq!(s.view(), View::Idle);
+        // A notice that arrives under a pointer already there runs its
+        // normal time.
+        let mut s = st();
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0 + secs(1));
+        s.apply(Event::Notice(clip_preview(2)), t0 + secs(2));
+        s.apply(Event::Tick, t0 + secs(2) + CLIP_NOTICE_DURATION);
+        assert!(!matches!(s.view(), View::Notice(_)));
+    }
+
+    #[test]
+    fn a_copy_preview_click_opens_the_clipboard_page() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(clip_preview(1)), t0);
+        s.apply(Event::Hover(true), t0);
+        assert!(!s.panel_is_open());
+        assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        // Hover mode: the pointer holds it, nothing is latched.
+        assert!(!s.outside_click_wanted());
+        s.apply(Event::Hover(false), t0 + secs(1));
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn a_copy_preview_click_keeps_the_panel_in_the_staying_modes() {
+        let t0 = Instant::now();
+        for m in [OpenMode::HoverStay, OpenMode::Click] {
+            let mut s = mode(m, t0);
+            s.apply(Event::Notice(clip_preview(1)), t0);
+            s.apply(Event::Hover(true), t0);
+            s.apply(Event::Click(Hit::Body), t0);
+            assert_eq!(s.view(), View::Panel(Page::Clipboard), "{m:?}");
+            s.apply(Event::Hover(false), t0 + secs(1));
+            assert_eq!(s.view(), View::Panel(Page::Clipboard), "{m:?}: it stays");
+            assert!(s.outside_click_wanted(), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn a_copy_preview_click_only_dismisses_with_the_clipboard_page_off() {
+        let t0 = Instant::now();
+        for m in [OpenMode::Hover, OpenMode::HoverStay, OpenMode::Click] {
+            let mut s = mode(m, t0);
+            let mut pages = PanelPages::default();
+            pages.toggle(Page::Clipboard);
+            s.apply(Event::PanelPages(pages), t0);
+            s.apply(Event::Notice(clip_preview(1)), t0);
+            s.apply(Event::Hover(true), t0);
+            assert_eq!(s.apply(Event::Click(Hit::Body), t0), vec![], "{m:?}");
+            assert_eq!(s.view(), View::Idle, "{m:?}: dismissed, no panel");
+            assert!(!s.outside_click_wanted(), "{m:?}");
+            assert_ne!(s.page(), Page::Clipboard, "{m:?}");
+        }
     }
 
     #[test]

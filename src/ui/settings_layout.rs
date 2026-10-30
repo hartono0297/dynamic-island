@@ -321,12 +321,13 @@ pub enum Hit {
     Greeting,
     /// Settings → Clipboard: "Riwayat clipboard", "Jumlah item" (−1 / +1),
     /// "Simpan setelah restart", "Hapus saat layar dikunci", "Pintasan",
-    /// "Disalin" for every copy, and "Hapus riwayat".
+    /// "Notifikasi salinan", "Disalin" for every copy, and "Hapus riwayat".
     ClipEnabled,
     ClipItems(i32),
     ClipPersist,
     ClipClearOnLock,
     ClipHotkey(ClipHotkey),
+    ClipNotice,
     ClipFeedbackAll,
     ClipClear,
     /// Settings → Clipboard → Screenshot: "Preview di notch", "Jika
@@ -2646,8 +2647,8 @@ pub fn clip_items_step(n: u32, dir: i32) -> u32 {
 /// fade and take no clicks.
 fn clipboard_page(b: &mut Builder, s: &State) {
     let c = s.clip;
-    let card = b.card(7.0 * ROW_H);
-    let rows: [f32; 7] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(8.0 * ROW_H);
+    let rows: [f32; 8] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
     let on = c.enabled;
 
@@ -2703,16 +2704,35 @@ fn clipboard_page(b: &mut Builder, s: &State) {
     b.row_text(card, rows[4], b.t(Key::ClipHotkey), Some(desc), false, x);
     b.divider(card, rows[4]);
 
+    // The copy preview needs a history entry to show: faded with it off.
+    let x = b.toggle_if(Hit::ClipNotice, RIGHT, cy(rows[5]), c.copy_notice, on);
+    let desc = Some((b.t(Key::ClipCopyNoticeDesc), Tone::Secondary));
+    b.row_text(card, rows[5], b.t(Key::ClipCopyNotice), desc, false, x);
+    b.divider(card, rows[5]);
+
+    // While the preview is on it says what "Disalin" would, for the same
+    // copies: this row fades and tells so.
     let x = b.toggle_if(
         Hit::ClipFeedbackAll,
         RIGHT,
-        cy(rows[5]),
+        cy(rows[6]),
         c.copied_feedback_all,
-        on,
+        on && !c.copy_notice,
     );
-    let desc = Some((b.t(Key::ClipFeedbackAllDesc), Tone::Secondary));
-    b.row_text(card, rows[5], b.t(Key::ClipFeedbackAll), desc, false, x);
-    b.divider(card, rows[5]);
+    let desc = if c.copy_notice {
+        b.t(Key::ClipFeedbackAllReplaced)
+    } else {
+        b.t(Key::ClipFeedbackAllDesc)
+    };
+    b.row_text(
+        card,
+        rows[6],
+        b.t(Key::ClipFeedbackAll),
+        Some((desc, Tone::Secondary)),
+        false,
+        x,
+    );
+    b.divider(card, rows[6]);
 
     // Two clicks, as "Putuskan": the first arms it for a few seconds.
     let (label, sure) = (b.t(Key::ClipClearButton), b.t(Key::ConfirmShort));
@@ -2722,10 +2742,10 @@ fn clipboard_page(b: &mut Builder, s: &State) {
     } else {
         (Hit::ClipClear, label, ButtonKind::Secondary, true, w)
     };
-    let x = b.buttons(RIGHT, cy(rows[6]), vec![item]);
+    let x = b.buttons(RIGHT, cy(rows[7]), vec![item]);
     let desc = Some((b.t(Key::ClipClearDesc), Tone::Secondary));
-    b.row_text(card, rows[6], b.t(Key::ClipClear), desc, false, x);
-    b.divider(card, rows[6]);
+    b.row_text(card, rows[7], b.t(Key::ClipClear), desc, false, x);
+    b.divider(card, rows[7]);
 
     screenshot_card(b, s);
 }
@@ -2743,7 +2763,7 @@ pub fn shot_secs_step(n: u32, dir: i32) -> u32 {
 }
 
 /// The screenshot preview (keputusan-v3.1.html p6, its `settingsWin`
-/// "Screenshot") in a second card under the history's seven rows, named by
+/// "Screenshot") in a second card under the history's eight rows, named by
 /// an eyebrow; the section scrolls to reach it. With the preview off the
 /// other two rows fade and take no clicks. Simpan is the default.
 fn screenshot_card(b: &mut Builder, s: &State) {
@@ -3833,6 +3853,80 @@ mod tests {
             };
             let l = layout(Section::Clipboard, &off, &Estimate);
             assert_eq!(shot_hits(&l), [Hit::ShotPreview]);
+        }
+    }
+
+    /// The Clipboard section's toggle for `hit`: (on, enabled), and its row's
+    /// y so the order of the rows can be checked.
+    fn clip_toggle(l: &Layout, hit: Hit) -> Option<(bool, bool, f32)> {
+        l.controls.iter().find_map(|c| match c {
+            Control::Toggle {
+                hit: h,
+                rect,
+                on,
+                enabled,
+            } if *h == hit => Some((*on, *enabled, rect.y)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_copy_notice_row_sits_above_disalin_and_follows_the_history() {
+        for lang in [Lang::Id, Lang::En] {
+            let state = |clip: ClipboardSettings| State {
+                lang,
+                clip,
+                ..states()[0].clone()
+            };
+            let defaults = ClipboardSettings::default();
+            let l = layout(Section::Clipboard, &state(defaults), &Estimate);
+            // Present, on by default, directly above the "Disalin" row.
+            let (on, enabled, y) = clip_toggle(&l, Hit::ClipNotice).expect("the row");
+            assert!(on && enabled, "{lang:?}");
+            let (_, _, feedback_y) = clip_toggle(&l, Hit::ClipFeedbackAll).expect("Disalin row");
+            assert!((feedback_y - y - ROW_H).abs() < 0.01, "{lang:?}");
+            for key in [Key::ClipCopyNotice, Key::ClipCopyNoticeDesc] {
+                assert!(
+                    l.texts.iter().any(|t| t.text == text(lang, key)),
+                    "{lang:?} {key:?}"
+                );
+            }
+            // The preview says what "Disalin" would: that row fades, with a
+            // desc that tells so, and takes no click.
+            let (_, feedback_on, _) = clip_toggle(&l, Hit::ClipFeedbackAll).unwrap();
+            assert!(!feedback_on, "{lang:?}");
+            assert!(
+                l.texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::ClipFeedbackAllReplaced))
+            );
+            assert!(!l.hits().iter().any(|(h, _)| *h == Hit::ClipFeedbackAll));
+            assert!(l.hits().iter().any(|(h, _)| *h == Hit::ClipNotice));
+            // The preview off: "Disalin" is a choice again.
+            let off = ClipboardSettings {
+                copy_notice: false,
+                ..defaults
+            };
+            let l = layout(Section::Clipboard, &state(off), &Estimate);
+            let (on, enabled, _) = clip_toggle(&l, Hit::ClipNotice).unwrap();
+            assert!(!on && enabled);
+            assert!(clip_toggle(&l, Hit::ClipFeedbackAll).unwrap().1);
+            assert!(
+                l.texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::ClipFeedbackAllDesc))
+            );
+            // The history off: the new row fades and takes no clicks too.
+            let history_off = ClipboardSettings {
+                enabled: false,
+                ..defaults
+            };
+            let l = layout(Section::Clipboard, &state(history_off), &Estimate);
+            let (on, enabled, _) = clip_toggle(&l, Hit::ClipNotice).unwrap();
+            assert!(on && !enabled, "{lang:?}: faded, its value kept");
+            assert!(!l.hits().iter().any(|(h, _)| *h == Hit::ClipNotice));
+            // Only "Riwayat clipboard" itself still answers.
+            assert!(l.hits().iter().any(|(h, _)| *h == Hit::ClipEnabled));
         }
     }
 

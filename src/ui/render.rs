@@ -189,9 +189,21 @@ pub struct Frame<'a> {
     pub cleaner: Option<&'a CleanerView<'a>>,
     /// The screenshot preview's picture and size, while it shows.
     pub shot: Option<ShotView<'a>>,
+    /// The copied image's thumbnail for a `ClipPreview` notice; `None` for
+    /// text and files, or when the entry is gone (then the Clipboard badge).
+    pub clip_notice: Option<ClipNoticeView<'a>>,
     /// What transitions add to this frame (`ui::motion`); all at rest by
     /// default.
     pub transit: Transit,
+}
+
+/// What a copy preview draws in its badge spot (`NoticeKind::ClipPreview`):
+/// the history entry's thumbnail, cover-cropped to the badge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipNoticeView<'a> {
+    /// The history entry's id (the notice's `id`, and the bitmap cache's key).
+    pub id: u64,
+    pub thumb: &'a Thumb,
 }
 
 /// What the screenshot preview draws (`NoticeKind::Screenshot`): its
@@ -1282,7 +1294,7 @@ impl Renderer {
                 (NoticeKind::Screenshot { shot, .. }, Some(view)) if view.id == *shot => {
                     self.paint_shot(shape, notice, view, robot)
                 }
-                _ => self.paint_notice(shape, notice, frame.pomodoro, robot),
+                _ => self.paint_notice(shape, notice, frame.pomodoro, robot, frame.clip_notice),
             },
             View::Idle => {
                 // Without the clock or the robot, idle is the empty shape.
@@ -1593,6 +1605,7 @@ impl Renderer {
         notice: &Notice,
         pomo: &Pomodoro,
         robot: Option<RobotFrame>,
+        clip: Option<ClipNoticeView>,
     ) -> Result<()> {
         let p = self.palette;
         let next = pomo.phase();
@@ -1605,7 +1618,17 @@ impl Renderer {
         });
         let layout = notice_layout(shape, action.map(|_| notice_action_w(&notice.kind)));
         let badge = badge_style(notice, &p, next);
+        // A copied image: its thumbnail takes the badge spot, never Bata.
+        let thumb = match (&notice.kind, clip) {
+            (NoticeKind::ClipPreview { id }, Some(view)) if view.id == *id => Some(view),
+            _ => None,
+        };
+        let thumb_drawn = match thumb {
+            Some(view) => self.paint_clip_notice_thumb(layout.badge, view)?,
+            None => false,
+        };
         match robot {
+            _ if thumb_drawn => {}
             // The island's own notices: Bata (40 px) instead of the badge.
             Some(r) => self.paint_robot(layout.badge, r),
             None => {
@@ -1639,6 +1662,51 @@ impl Renderer {
             });
         }
         Ok(())
+    }
+
+    /// A copied image's thumbnail in the notice's badge spot: cover-cropped
+    /// (the short side fills the square, the long one is centred) with the
+    /// badge's rounded corners. Its bitmap is the Clipboard page's cache entry
+    /// (`clip_thumbs`), kept to a few so copies without the panel ever opening
+    /// do not pile up.
+    /// False when the pixels are unreadable: the caller draws the badge.
+    fn paint_clip_notice_thumb(&self, area: Rect, view: ClipNoticeView) -> Result<bool> {
+        /// Bitmaps the cache keeps after a notice (the page refills what it needs).
+        const KEEP: usize = 8;
+        let Some(bitmap) = self.clip_thumb(view.id, view.thumb)? else {
+            return Ok(false);
+        };
+        {
+            let mut cache = self.clip_thumbs.borrow_mut();
+            while cache.len() > KEEP {
+                cache.remove(0);
+            }
+        }
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            let D2D_SIZE_F { width, height } = bitmap.GetSize();
+            let k = (area.w / width.max(1.0)).max(area.h / height.max(1.0));
+            let transform = Matrix3x2 {
+                M11: k,
+                M12: 0.0,
+                M21: 0.0,
+                M22: k,
+                M31: area.x + (area.w - width * k) / 2.0,
+                M32: area.y + (area.h - height * k) / 2.0,
+            };
+            let brush = target.rt.CreateBitmapBrush(&bitmap, None, None)?;
+            brush.SetTransform(&transform);
+            let brush: ID2D1Brush = brush.cast()?;
+            target.rt.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(area),
+                    radiusX: radius::BADGE,
+                    radiusY: radius::BADGE,
+                },
+                &brush,
+            );
+        }
+        Ok(true)
     }
 
     /// The screenshot preview (keputusan-v3.1 p6): the thumbnail at the
