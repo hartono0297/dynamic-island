@@ -107,7 +107,11 @@ robot, robot_animation; Energy Saver goes through `check_battery`'s refresh;
 fullscreen through the event's refresh). Each tick does one `GetCursorPos`
 and feeds both. The window walk of the peek is not part of the poll's idle
 cost: it runs only when the pointer first comes into the zone round the notch
-and at most once a second while it stays.
+and at most once a second while it stays. With stay-behind on and the island
+lowered, the poll still runs (the look needs it when nothing covers the
+island), but a window over the island stops the look from setting targets:
+the tick adds at most one `WindowFromPoint` a second and starts no frames
+([[cat-looks-at-pointer]]).
 
 **The look's ease runs on the `FrameClock`**, not on this timer: a poll that
 moves the look target by 0.02 or more starts the clock (`ensure_clock`),

@@ -207,9 +207,10 @@ pub fn peek_zone(s: ShapeRect) -> Rect {
     }
 }
 
-/// Remembers whether a window lay under the notch, so the walk over the
-/// windows runs when the pointer first comes near and at most once a
-/// `UNDER_RECHECK` while it stays.
+/// Remembers a window reading: whether a window lay under the notch (the
+/// peek), so the walk over the windows runs when the pointer first comes near
+/// and at most once a `UNDER_RECHECK` while it stays; or whether one lay over
+/// the lowered island (the look, `look_hidden`).
 #[derive(Debug, Default)]
 pub struct UnderCache {
     read: Option<(Instant, bool)>,
@@ -250,6 +251,14 @@ pub fn look_target(pointer_x: f32, centre_x: f32, monitor_left: f32, monitor_rig
     (offset / span).clamp(-1.0, 1.0)
 }
 
+/// The cat would follow the pointer but nobody can see it: "Di belakang
+/// jendela" has lowered the island (`lowered`) and a window lies over it
+/// (`covered`, read only for a lowered island). Its look then stays where it
+/// is: no new target, so no frame clock and no draws behind the window.
+pub fn look_hidden(lowered: bool, covered: impl FnOnce() -> bool) -> bool {
+    lowered && covered()
+}
+
 /// The cat's look, -1 to 1, eased toward its target.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LookEase {
@@ -275,12 +284,6 @@ impl LookEase {
         }
         self.target = v;
         true
-    }
-
-    /// Heads back to the centre, whatever the distance. True when that
-    /// changed the target.
-    pub fn release(&mut self) -> bool {
-        std::mem::replace(&mut self.target, 0.0) != 0.0
     }
 
     /// At the centre now, nothing left to ease. True when that moved the cat.
@@ -646,16 +649,33 @@ mod tests {
     }
 
     #[test]
-    fn releasing_heads_for_the_centre_and_a_snap_gets_there() {
+    fn a_snap_puts_the_look_at_the_centre_at_once() {
         let mut look = LookEase::default();
         look.set_target(0.01 + LOOK_EPS);
         look.advance(ms(1000));
-        assert!(look.release(), "even a small target is let go");
-        assert!(look.moving());
         assert!(look.snap_to_centre());
         assert!(!look.moving());
         assert_eq!(look.value(), 0.0);
-        assert!(!look.release());
         assert!(!look.snap_to_centre());
+        // Mid-ease: the target goes too, nothing is left to ease.
+        look.set_target(1.0);
+        look.advance(ms(16));
+        assert!(look.moving());
+        assert!(look.snap_to_centre());
+        assert!(!look.moving());
+    }
+
+    #[test]
+    fn a_lowered_and_covered_cat_is_hidden_and_covered_is_read_only_when_lowered() {
+        // Up (or stay-behind off): never hidden, and no window read.
+        let mut reads = 0;
+        assert!(!look_hidden(false, || {
+            reads += 1;
+            true
+        }));
+        assert_eq!(reads, 0);
+        // Lowered: hidden only with a window over it.
+        assert!(look_hidden(true, || true));
+        assert!(!look_hidden(true, || false));
     }
 }

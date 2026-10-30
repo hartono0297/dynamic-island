@@ -32,8 +32,10 @@ their pose centred even mid-ease.
 - `LookEase { current, target }`: `set_target` ignores a change under
   `LOOK_EPS` (0.02) and returns false (no redraw, no clock); `advance(dt)` is an
   exponential ease with tau 120 ms (`1 - e^(-dt/tau)`, the same at any frame
-  rate, never overshoots), snapping within 0.002; `release()` sends the target
-  back to 0 whatever the distance; `snap_to_centre()`.
+  rate, never overshoots), snapping within 0.002; `snap_to_centre()` puts
+  both at 0 at once.
+- `look_hidden(lowered, covered)`: the island is lowered by stay-behind and a
+  window lies over it; `covered` is read only when lowered.
 - `Pose::looking(v)` (`ui/robot.rs`): `head_dx_dip = 7 v`, `tilt_deg = 6 v`,
   `eye_dx_dip = 4 v` (constants `LOOK_HEAD_DIP`, `LOOK_TILT_DEG`,
   `LOOK_EYE_DIP`). `RobotPainter::paint` slides and tilts the head and ears
@@ -66,10 +68,23 @@ The poll (`TIMER_POINTER`) is slow far from the top edge (250 ms) and 33 ms
 within 150 dip of it. The look itself only runs the `FrameClock` while the ease
 moves: a poll that changes the target by 0.02 or more calls `ensure_clock`;
 `animate` eases the look before each draw (`advance_look`); `animating_at`
-counts `look.moving()`. When the cat stops being eligible the target goes to 0
-(eased with Full motion while the cat is still on screen with a face that
-looks, snapped otherwise: a locked session or a display that is off snaps
-it, so no frames run that nobody sees; so does a face that stops looking).
+counts `look.moving()`. When the cat stops being eligible, `sync_look` snaps
+the look to 0 with no ease. There is no eased return: every way to lose
+eligibility either hides the cat (off, another view, the eyes, fullscreen),
+leaves nobody to see it (locked, display off), stops motion, or turns to a
+face that `Pose::looking_as` draws centred anyway. (An earlier eased-release
+branch tested the same conditions as `look_eligible`, so it could never run;
+it and `LookEase::release` were removed.)
+
+With "Di belakang jendela" on, the poll keeps running while stay-behind has
+lowered the island to `Z::Bottom` (the cat may still be seen on the desktop),
+but `on_pointer_timer` sets no target while a window lies over the island
+(`App::look_hidden_behind`: `island_covered`, the window at the island's
+centre, cached for `UNDER_RECHECK`, 1 s, in `cover_cache`, cleared whenever
+the island goes up or down). So a maximized window over the notch costs the
+poll's `GetCursorPos` and at most one `WindowFromPoint` a second, never the
+frame clock or a draw. The look stays where it was and goes on from there
+once the island rises or the window moves away.
 
 Demo scenes: `bata-look-left`, `bata-look-right` (the idle cat at -1 / +1).
 

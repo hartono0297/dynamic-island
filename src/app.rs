@@ -389,6 +389,7 @@ pub fn run(media_log_flag: bool) {
             halo_ms: 0,
             peek: Peek::default(),
             under_cache: UnderCache::default(),
+            cover_cache: UnderCache::default(),
             eyes: false,
             eyes_morph: false,
             look: LookEase::default(),
@@ -647,6 +648,9 @@ struct App {
     /// eyes (set by `refresh`, so it changes together with the target shape).
     peek: Peek,
     under_cache: UnderCache,
+    /// Whether a window lay over the island when the cat's look last asked,
+    /// while stay-behind had it lowered (`look_hidden_behind`).
+    cover_cache: UnderCache,
     eyes: bool,
     /// The morph between the eyes and the notch is running: the cat fades
     /// with the rest of the content instead of staying at full strength.
@@ -3388,6 +3392,7 @@ impl App {
             if self.behind_ms != 0 {
                 self.pace(TIMER_BEHIND, 0);
                 self.behind.reset();
+                self.cover_cache.clear();
                 self.set_front(true);
                 // No half-faded island is left behind (the clock, if it
                 // runs, draws the settled frame; else draw it here).
@@ -3578,6 +3583,10 @@ impl App {
         };
         let was = self.behind.z();
         let z = self.behind.decide(inputs, now);
+        if z != was {
+            // Up or down: whether a window covers the cat is read afresh.
+            self.cover_cache.clear();
+        }
         // Coming up from the bottom behind a window: read "covered" now,
         // while it is still down, and draw the first (invisible) frame
         // before the island is raised so it does not pop for a frame.
@@ -3697,34 +3706,30 @@ impl App {
         Some(shape_with_robot_sized(style, notch, kind, robot))
     }
 
-    /// Where the cat's look goes when it cannot follow the pointer (or has
-    /// nothing to follow): back to the centre, eased while the cat is still
-    /// on screen with Full motion and a face that looks, at once otherwise
-    /// (a locked session or a dark display shows nobody the ease; a face that
-    /// does not look is already drawn centred). Nothing to do while it follows.
+    /// The cat cannot follow the pointer any more (`look_eligible` is false):
+    /// its look is back at the centre at once, with no ease. Every way out
+    /// leaves nothing to ease on screen: the cat is gone (off, another view,
+    /// the eyes, fullscreen), nobody is looking (a locked session, a dark
+    /// display), motion is not Full, or the face does not look and is drawn
+    /// centred anyway (`Pose::looking_as`). Nothing to do while it follows.
     fn sync_look(&mut self, now: Instant) {
-        if self.look_eligible(now) {
-            return;
-        }
-        let view = self.state.view();
-        let on_screen = self.config.robot
-            && self.motion().moves()
-            && view == View::Idle
-            && !self.peek.is_shrunk()
-            && !self.fullscreen
-            && !self.screen_away()
-            && self
-                .robot_frame(&view, now)
-                .is_some_and(|frame| frame.expr.looks());
-        if on_screen {
-            if self.look.release() {
-                self.look_at = None;
-                self.ensure_clock();
-            }
-        } else {
+        if !self.look_eligible(now) {
             self.look.snap_to_centre();
             self.look_at = None;
         }
+    }
+
+    /// The island is lowered behind windows ("Di belakang jendela") with one
+    /// over it, so nobody sees the cat: its look stays where it is. The
+    /// window read (`island_covered`) runs only while lowered, and at most
+    /// once a `pointer_watch::UNDER_RECHECK`.
+    fn look_hidden_behind(&mut self, now: Instant) -> bool {
+        let lowered = self.config.stay_behind && self.behind.z() == behind::Z::Bottom;
+        let mut cache = std::mem::take(&mut self.cover_cache);
+        let hidden =
+            pointer_watch::look_hidden(lowered, || cache.get(now, || self.island_covered()));
+        self.cover_cache = cache;
+        hidden
     }
 
     /// One frame-clock tick of the cat's look: eased to `now`; once it has
@@ -3750,6 +3755,7 @@ impl App {
         let ms = pointer_watch::poll_ms(follow, peek, self.pointer_near);
         if ms == 0 {
             self.under_cache.clear();
+            self.cover_cache.clear();
             // The next start reads at the quick pace first.
             self.pointer_near = true;
         }
@@ -3777,7 +3783,7 @@ impl App {
         if self.peek_eligible() {
             self.peek_tick(pt, now);
         }
-        if self.look_eligible(now) {
+        if self.look_eligible(now) && !self.look_hidden_behind(now) {
             // The island is centred on the monitor: so is the notch.
             let centre = origin.0 as f32 + WINDOW_W * scale / 2.0;
             let half = screen_w * scale / 2.0;
