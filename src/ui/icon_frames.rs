@@ -94,3 +94,21 @@ fn icon_frames_decode_to_the_same_pixels() {
         assert_eq!(*hash, golden, "{size} px frame decodes to other pixels");
     }
 }
+
+/// The shell and the windows load the icon from the exe's resource at the
+/// small-icon sizes of every DPI scale; PNG frames must load at each of them.
+#[test]
+fn the_embedded_icon_loads_at_every_small_size() {
+    use windows::Win32::Foundation::HINSTANCE;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Controls::LoadIconWithScaleDown;
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+    use windows::core::PCWSTR;
+
+    let module: HINSTANCE = unsafe { GetModuleHandleW(None) }.expect("module").into();
+    for size in [16, 20, 24, 32, 40, 48, 64, 96, 128, 256] {
+        let icon = unsafe { LoadIconWithScaleDown(Some(module), PCWSTR(1 as _), size, size) };
+        let icon = icon.unwrap_or_else(|e| panic!("icon at {size} px: {e}"));
+        unsafe { DestroyIcon(icon).ok() };
+    }
+}
