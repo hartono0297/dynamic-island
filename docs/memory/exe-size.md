@@ -60,7 +60,11 @@ no single thing to cut.
   count of mapped code points in the subset per font (DM Sans 325, DM Mono
   316), checks the symbols the UI draws (`·`, `×`, `÷`, `°`, `±`, `§`, `–`,
   `—`, `…`, `›`, `→`, `↑`, `↓`, `−`, quotes, `•`, `€`, `™`, `%`) and scans every
-  non-test, non-comment character in `src/**` against DM Sans.
+  non-test, non-comment character in `src/**` against DM Sans. "Non-test"
+  means each `#[cfg(test)]` item is cut out by brace depth (not the file from
+  the first `#[cfg(test)]` on: i18n.rs and mole.rs have test-only helpers near
+  the top), and files declared `#[cfg(test)] mod x;` are skipped. Characters
+  matched but never drawn (U+201B in `ps_quote`) go in `NOT_DRAWN`.
   Characters already outside the fonts, drawn through DirectWrite's system
   fallback today, are listed in `SYSTEM_FALLBACK` (`↗`, `↳`, `≤`, `▸`, `♪`,
   box drawing, `✓`, `●`). DM Sans has no `✓` and DM Mono has no arrows; that

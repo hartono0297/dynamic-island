@@ -30,8 +30,9 @@ const SYSTEM_FALLBACK: &[char] = &[
 ];
 
 /// Non-ASCII code points in the sources that are never drawn: BOM and
-/// replacement-character checks, zero-width joiner, ESC/CSI controls.
-const NOT_DRAWN: &[char] = &['\u{FEFF}', '\u{FFFD}', '\u{200D}', '\u{9B}'];
+/// replacement-character checks, zero-width joiner, ESC/CSI controls, and the
+/// end of the PowerShell quote range `ps_quote` escapes (mole.rs).
+const NOT_DRAWN: &[char] = &['\u{FEFF}', '\u{FFFD}', '\u{200D}', '\u{9B}', '\u{201B}'];
 
 /// Mirrors `UNICODES` in `scripts/make-fonts.ps1`.
 const SUBSET_RANGES: &[(u32, u32)] = &[
@@ -131,11 +132,98 @@ fn rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+const CFG_TEST: &str = "#[cfg(test)]";
+
+/// Byte length of the item at the start of `s`: up to the `}` that closes its
+/// body, or the `;` that ends it at depth 0. Braces and semicolons inside
+/// comments, strings and char literals do not count.
+fn item_len(s: &str) -> usize {
+    let b = s.as_bytes();
+    let (mut i, mut depth) = (0, 0usize);
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                i += s[i..].find('\n').unwrap_or(s.len() - i);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += s[i + 2..].find("*/").map_or(s.len() - i, |e| e + 4);
+                continue;
+            }
+            b'r' if (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'))
+                && matches!(b.get(i + 1), Some(b'"' | b'#')) =>
+            {
+                let hashes = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                if b.get(i + 1 + hashes) == Some(&b'"') {
+                    let close = format!("\"{}", "#".repeat(hashes));
+                    let body = i + 2 + hashes;
+                    i = s[body..].find(&close).map_or(s.len(), |e| body + e + close.len());
+                    continue;
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'\'' => {
+                // A char literal ('x', '\n', '\u{..}', or one multi-byte char);
+                // anything else is a lifetime.
+                if b.get(i + 1) == Some(&b'\\') {
+                    i += s[i + 2..].find('\'').map_or(s.len() - i, |e| e + 2);
+                } else if let Some(c) = s[i + 1..].chars().next()
+                    && s[i + 1 + c.len_utf8()..].starts_with('\'')
+                {
+                    i += c.len_utf8() + 1;
+                }
+            }
+            b'{' | b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            b';' if depth == 0 => return i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    s.len()
+}
+
+/// The source with every `#[cfg(test)]` item cut out (test modules, test-only
+/// helpers anywhere in the file), and the names of the modules declared
+/// test-only as `#[cfg(test)] mod name;`.
+fn live_source(source: &str) -> (String, Vec<String>) {
+    let (mut live, mut test_mods) = (String::new(), Vec::new());
+    let mut rest = source;
+    // The attribute on its own line, so the text in a comment or literal is
+    // not taken for it.
+    let own_line = |s: &str, at: usize| {
+        s[..at].rsplit('\n').next().is_some_and(|l| l.trim().is_empty())
+            && s[at + CFG_TEST.len()..].starts_with(['\r', '\n'])
+    };
+    while let Some((at, _)) = rest.match_indices(CFG_TEST).find(|&(at, _)| own_line(rest, at)) {
+        live.push_str(&rest[..at]);
+        let item = &rest[at + CFG_TEST.len()..];
+        let len = item_len(item);
+        let decl = item[..len].trim();
+        if let Some(name) = decl.strip_prefix("mod ").and_then(|d| d.strip_suffix(';')) {
+            test_mods.push(name.trim().to_string());
+        }
+        rest = &item[len..];
+    }
+    live.push_str(rest);
+    (live, test_mods)
+}
+
 /// Non-ASCII characters written in a source file outside comments and test
-/// modules: raw in a literal, or as a `\u{..}` escape.
+/// items: raw in a literal, or as a `\u{..}` escape.
 fn drawn_chars(source: &str) -> BTreeSet<char> {
     let mut set = BTreeSet::new();
-    let live = source.split("#[cfg(test)]").next().unwrap_or(source);
+    let (live, _) = live_source(source);
     for line in live.lines() {
         let code = match line.trim_start() {
             t if t.starts_with("//") => continue,
@@ -147,16 +235,27 @@ fn drawn_chars(source: &str) -> BTreeSet<char> {
         let mut rest = code;
         while let Some(i) = rest.find("\\u{") {
             rest = &rest[i + 3..];
-            if let Some(end) = rest.find('}') {
-                if let Some(c) = u32::from_str_radix(&rest[..end], 16).ok().and_then(char::from_u32) {
-                    if !c.is_ascii() {
-                        set.insert(c);
-                    }
-                }
+            if let Some(end) = rest.find('}')
+                && let Some(c) = u32::from_str_radix(&rest[..end], 16).ok().and_then(char::from_u32)
+                && !c.is_ascii()
+            {
+                set.insert(c);
             }
         }
     }
     set
+}
+
+/// Files of the modules a source file declares as `#[cfg(test)] mod name;`.
+fn test_module_files(file: &Path, source: &str) -> Vec<std::path::PathBuf> {
+    let dir = file.parent().expect("parent");
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let base = if matches!(stem, "mod" | "main" | "lib") { dir.to_path_buf() } else { dir.join(stem) };
+    live_source(source)
+        .1
+        .into_iter()
+        .flat_map(|m| [base.join(format!("{m}.rs")), base.join(&m).join("mod.rs")])
+        .collect()
 }
 
 /// Mapped code points per font inside `SUBSET_RANGES`, as the generated files
@@ -217,10 +316,25 @@ fn every_character_the_sources_draw_is_covered() {
     // back to a system font like any user character does.
     let sans: Vec<BTreeSet<u32>> =
         FONTS.iter().filter(|(n, _)| n.starts_with("DMSans")).map(|(_, b)| cmap(b)).collect();
+    let sources: Vec<(std::path::PathBuf, String)> = files
+        .into_iter()
+        .map(|f| {
+            let text = std::fs::read_to_string(&f).expect("read source");
+            (f, text)
+        })
+        .collect();
+    let test_only: Vec<std::path::PathBuf> =
+        sources.iter().flat_map(|(f, text)| test_module_files(f, text)).collect();
+    assert!(
+        test_only.iter().any(|f| f.ends_with("font_coverage.rs")),
+        "test-only modules not found: {test_only:?}"
+    );
     let mut missing = Vec::new();
-    for file in files {
-        let text = std::fs::read_to_string(&file).expect("read source");
-        for c in drawn_chars(&text) {
+    for (file, text) in &sources {
+        if test_only.contains(file) {
+            continue;
+        }
+        for c in drawn_chars(text) {
             if NOT_DRAWN.contains(&c) || SYSTEM_FALLBACK.contains(&c) {
                 continue;
             }
@@ -230,4 +344,26 @@ fn every_character_the_sources_draw_is_covered() {
         }
     }
     assert!(missing.is_empty(), "uncovered glyphs:\n{}", missing.join("\n"));
+    // The scan reaches live code past a test-only helper near the top of a
+    // file (i18n.rs `mod current`, mole.rs `argv`).
+    let drawn_in = |name: &str| {
+        let (_, text) = sources.iter().find(|(f, _)| f.ends_with(name)).expect(name);
+        drawn_chars(text)
+    };
+    assert!(drawn_in("i18n.rs").contains(&'\u{21B3}'), "i18n.rs not scanned past `mod current`");
+    assert!(drawn_in("mole.rs").contains(&'\u{201B}'), "mole.rs not scanned past `argv`");
+}
+
+#[test]
+fn the_scan_skips_only_test_items() {
+    let source = "#[cfg(test)]\nmod current {\n    fn f() -> char { '\u{2265}' }\n    \
+                  fn b<'a>(s: &'a str) -> (char, &'a str) { ('{', \"}}\" /* } */) } // }\n}\n\
+                  const NOTE: &str = \"#[cfg(test)]\";\n\
+                  const LIVE: &str = \"\u{2248}\";\n\
+                  #[cfg(test)]\nconst CF: [u8; 2] = [0; 2];\n\
+                  fn g() -> char { '\u{2260}' }\n\
+                  #[cfg(test)]\nmod tests {\n    const T: char = '\u{221E}';\n}\n\
+                  fn h() -> char { '\u{2261}' }\n";
+    let found: String = drawn_chars(source).into_iter().collect();
+    assert_eq!(found, "\u{2248}\u{2260}\u{2261}");
 }
