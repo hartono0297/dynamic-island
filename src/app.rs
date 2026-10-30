@@ -7046,6 +7046,7 @@ mod tests {
             TIMER_BEHIND,
             TIMER_HALO,
             TIMER_LYRIC_RETRY,
+            TIMER_DEVICES,
         ];
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
