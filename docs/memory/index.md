@@ -54,7 +54,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[stay-behind]]: experimental setting, island below ordinary windows, rises at the top edge with a short fade and slide (v3.3)
 - [[shelf]]: file shelf page, OLE drop target, drag out (paths only, in memory); a drop latches the panel (v3.3)
 - [[shelf-motion]]: shelf cards animate in (200 ms), out as ghosts (180 ms) and across (220 ms), no timer, per-draw alpha, reduced motion (v3.5)
-- [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web; back button = Esc
+- [[search]]: quick search on a hotkey: apps, calculator, Windows settings, web; back button returns to the previous page
 - [[search-files]]: files and folders by name in six user folders, own walker with caps, icons/sizes/counts from a background worker
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 - [[devices]]: Devices page (Perangkat), safe eject of flash drives, external disks and cards through a worker thread, no polling

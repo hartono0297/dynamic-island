@@ -1,6 +1,6 @@
 ---
 tags: [decision, search, hotkey, v3.2]
-date: 2026-10-28
+date: 2026-10-30
 ---
 
 # Quick search (v3.2 Run 10, "Pencarian-lite")
@@ -127,9 +127,18 @@ The hint now says "Cari aplikasi, berkas, hitung…".
 ## Back button (2026-10-30)
 
 A back arrow (`Icon::Back`, `Hit::SearchBack`, `SearchLayout::back`, 32 px
-wide, the field's height) sits left of the field. Its click runs the same
-reducer path as Esc (`close_search`, used by `Event::SearchClose` too): the
-page returns and `ReleaseSearchFocus` hands the keyboard back. The island
-window answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`, so the click does not
-blur the EDIT before the reducer closes it. Label key `SearchBack` (Kembali /
+wide, the field's height) sits left of the field. Its click runs
+`search_back`, not `close_search`: it returns to the page the search came
+over and the panel stays open there, latched like a click-open (`open_by_click`;
+a click outside, `Event::Dismiss`, closes it; the latch, not the 4 s linger,
+holds it). Opened by the hotkey with the notch closed, the panel opens on the
+last page it showed (`search_prev`; the start page on a fresh state, and
+Shortcuts as the fallback if it were ever `Page::Search`). A page switched off
+in PanelPages is kept for that visit, like one opened by its own button.
+`ReleaseSearchFocus` is emitted by `search_back` itself (the post-process in
+`apply` does not fire for it, so it is sent once). Back with the search closed
+does nothing. Esc (`SearchClose`), blur, the hotkey again, an outside click
+and a result click still close as before (`close_search` collapses the panel).
+The island window answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`, so the click
+does not blur the EDIT before the reducer closes it. Label key `SearchBack` (Kembali /
 Back); the island has no tooltip mechanism.
