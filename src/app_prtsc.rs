@@ -9,14 +9,11 @@
 //! case `RegisterHotKey` fails; the Settings row then offers to turn that off.
 //!
 //! Power: no timer, no polling. A failed registration is tried again only
-//! when the config is read, the tray menu opens or Settings opens
-//! (`retry_hotkeys`), like the other hotkeys. The registry is read once per
-//! failed try and kept, never on a Settings redraw.
-//!
-//! Windows usually picks up a direct edit of its value only after a sign-out
-//! (Vale sends no `WM_SETTINGCHANGE`; nothing documents one that frees the
-//! key). So once Vale has written 0 and the key is still taken, the row says
-//! to sign out rather than blaming another app.
+//! when the tray menu opens or Settings opens (`retry_hotkeys`). A config
+//! save or read registers or lets go only when the setting itself moved
+//! (`follows_config`), so a toggle click is one try and an unrelated save
+//! none. The registry is read once per failed try and kept, never on a
+//! Settings redraw.
 
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW, RegSetKeyValueW,
@@ -39,13 +36,12 @@ pub(super) const HOTKEY_PRTSC: i32 = 4;
 /// treats an absent value as on).
 const KEYBOARD_KEY: windows::core::PCWSTR = w!("Control Panel\\Keyboard");
 const SNIPPING_VALUE: windows::core::PCWSTR = w!("PrintScreenKeyForSnippingEnabled");
-/// Where "Matikan di Windows" ends up when the registry write did not free
-/// the key: Windows' own keyboard page, for the owner to switch it off.
+/// Where "Matikan di Windows" ends up when the retry after the registry write
+/// still fails: Windows' own keyboard page, for the owner to switch it off.
 const WINDOWS_KEYBOARD_PAGE: &str = "ms-settings:easeofaccess-keyboard";
 
 /// What the PrtSc key holds: whether Vale has the key, whether the last
-/// registration failed, Windows' value as read then, and whether Vale wrote
-/// that value this session.
+/// registration failed, and Windows' value as read then.
 #[derive(Default)]
 pub(super) struct PrtscState {
     pub registered: bool,
@@ -53,9 +49,6 @@ pub(super) struct PrtscState {
     /// `PrintScreenKeyForSnippingEnabled` read at the last failed try
     /// (`None`: absent). Not read while the key is Vale's.
     windows_value: Option<u32>,
-    /// The button's write went through this session: a 0 read back is then
-    /// Vale's own, not yet in effect, rather than the sign of another app.
-    wrote_off: bool,
 }
 
 impl PrtscState {
@@ -71,7 +64,7 @@ impl PrtscState {
 
     /// The Settings row, from what is kept (no registry read).
     fn row(&self, on: bool) -> RowState {
-        prtsc_row(on, self.failed, self.windows_value, self.wrote_off)
+        prtsc_row(on, self.failed, self.windows_value)
     }
 
     /// The button writes only while its row offers it: a late click (the
@@ -94,27 +87,17 @@ pub(super) enum RowState {
     /// On, registration failed, and Windows' setting is already off: another
     /// app holds the key. The usual "taken" text, no button.
     TakenByApp,
-    /// On, still failing after Vale itself wrote 0: Windows has not picked
-    /// the change up yet. "Applies after signing out", no button.
-    SignOutToApply,
 }
 
-/// The row's state from the toggle, whether registration failed, the
-/// registry value (`None`: absent) and whether Vale wrote that value.
-pub(super) fn prtsc_row(
-    on: bool,
-    failed: bool,
-    windows_value: Option<u32>,
-    wrote_off: bool,
-) -> RowState {
+/// The row's state from the toggle, whether registration failed and the
+/// registry value (`None`: absent).
+pub(super) fn prtsc_row(on: bool, failed: bool, windows_value: Option<u32>) -> RowState {
     if !on {
         RowState::Off
     } else if !failed {
         RowState::Active
     } else if windows_value != Some(0) {
         RowState::TakenByWindows
-    } else if wrote_off {
-        RowState::SignOutToApply
     } else {
         RowState::TakenByApp
     }
@@ -126,7 +109,6 @@ pub(super) fn ui_row(row: RowState) -> PrtscRow {
         RowState::Off | RowState::Active => PrtscRow::Plain,
         RowState::TakenByWindows => PrtscRow::TakenByWindows,
         RowState::TakenByApp => PrtscRow::TakenByApp,
-        RowState::SignOutToApply => PrtscRow::SignOutToApply,
     }
 }
 
@@ -135,22 +117,25 @@ pub(super) fn ui_row(row: RowState) -> PrtscRow {
 pub(super) enum Next {
     /// The key is Vale's now.
     Registered,
-    /// Written but still taken: Windows applies it after a sign-out. Its
-    /// keyboard page would already show the setting off, so nothing opens;
-    /// the row says to sign out.
-    SignOut,
-    /// The write failed: open Windows' keyboard settings for the owner.
+    /// Still taken, whether or not the write went through (Windows may not
+    /// have picked it up yet): open Windows' keyboard settings for the owner.
     OpenSettings,
 }
 
-pub(super) fn after_disable_click(retry_ok: bool, wrote: bool) -> Next {
+pub(super) fn after_disable_click(retry_ok: bool) -> Next {
     if retry_ok {
         Next::Registered
-    } else if wrote {
-        Next::SignOut
     } else {
         Next::OpenSettings
     }
+}
+
+/// Whether a config save or read has to touch the registration: only when
+/// the setting no longer matches what is held or was last tried (turned on
+/// and never tried, turned off while held or failed). A failed key that is
+/// still wanted waits for `retry_hotkeys`.
+pub(super) fn follows_config(want: bool, registered: bool, failed: bool) -> bool {
+    want != (registered || failed)
 }
 
 /// What a sync has to do to the registration.
@@ -249,11 +234,20 @@ impl App {
         self.apply_now(Event::PrintScreen);
     }
 
-    /// The Settings toggle: kept, saved, and the key follows.
+    /// The Settings toggle: kept and saved; the key follows from
+    /// `adopt_config` (`prtsc_follow_config`), one try per click.
     pub(super) fn set_print_screen(&mut self, on: bool) {
         self.config.screenshot.print_screen = on;
         self.save_config();
-        self.sync_prtsc_hotkey();
+    }
+
+    /// A config save or read (the toggle, a hand edit): the key follows a
+    /// changed setting. Not a retry of a failed key (`retry_hotkeys` is).
+    pub(super) fn prtsc_follow_config(&mut self) {
+        let want = self.config.screenshot.print_screen;
+        if follows_config(want, self.prtsc.registered, self.prtsc.failed) {
+            self.sync_prtsc_hotkey();
+        }
     }
 
     /// The row's state for Settings, from the value kept at the last failed
@@ -265,17 +259,15 @@ impl App {
 
     /// "Matikan di Windows", on click only and only while the row offers it:
     /// Windows' own setting is switched off (HKCU), then the registration is
-    /// tried again (which reads the value back if it fails). Written but
-    /// still taken, the row says to sign out; a failed write opens Windows'
-    /// keyboard settings for the owner.
+    /// tried again (which reads the value back if it fails). Still taken,
+    /// written or not, Windows' keyboard settings open for the owner.
     pub(super) fn turn_off_windows_print_screen(&mut self) {
         if !self.prtsc.click_writes(self.config.screenshot.print_screen) {
             return;
         }
-        let wrote = write_windows_value_off();
-        self.prtsc.wrote_off |= wrote;
+        let _ = write_windows_value_off();
         self.sync_prtsc_hotkey();
-        if after_disable_click(self.prtsc.registered, wrote) == Next::OpenSettings {
+        if after_disable_click(self.prtsc.registered) == Next::OpenSettings {
             self.queue_shortcut(shortcuts::Action::Open(WINDOWS_KEYBOARD_PAGE));
         }
     }
@@ -303,53 +295,53 @@ mod tests {
 
     #[test]
     fn the_row_follows_the_toggle_the_registration_and_windows() {
-        for wrote in [false, true] {
-            for value in [None, Some(0), Some(1), Some(7)] {
-                assert_eq!(prtsc_row(false, false, value, wrote), RowState::Off);
-                // Off wins even when a stale failure is left.
-                assert_eq!(prtsc_row(false, true, value, wrote), RowState::Off);
-                assert_eq!(prtsc_row(true, false, value, wrote), RowState::Active);
-            }
-            // Taken: Windows' setting on (1) or absent is Windows'.
-            assert_eq!(prtsc_row(true, true, None, wrote), RowState::TakenByWindows);
-            assert_eq!(
-                prtsc_row(true, true, Some(1), wrote),
-                RowState::TakenByWindows
-            );
+        for value in [None, Some(0), Some(1), Some(7)] {
+            assert_eq!(prtsc_row(false, false, value), RowState::Off);
+            // Off wins even when a stale failure is left.
+            assert_eq!(prtsc_row(false, true, value), RowState::Off);
+            assert_eq!(prtsc_row(true, false, value), RowState::Active);
         }
-        // An explicit 0 Vale did not write means another app has the key.
-        assert_eq!(prtsc_row(true, true, Some(0), false), RowState::TakenByApp);
+        // Taken: Windows' setting on (1) or absent is Windows'.
+        assert_eq!(prtsc_row(true, true, None), RowState::TakenByWindows);
+        assert_eq!(prtsc_row(true, true, Some(1)), RowState::TakenByWindows);
+        // An explicit 0 means another app has the key.
+        assert_eq!(prtsc_row(true, true, Some(0)), RowState::TakenByApp);
+        assert_eq!(ui_row(RowState::Off), PrtscRow::Plain);
+        assert_eq!(ui_row(RowState::Active), PrtscRow::Plain);
+        assert_eq!(ui_row(RowState::TakenByWindows), PrtscRow::TakenByWindows);
+        assert_eq!(ui_row(RowState::TakenByApp), PrtscRow::TakenByApp);
     }
 
     #[test]
-    fn written_by_vale_and_still_taken_says_sign_out_not_another_app() {
-        // The default Windows 11 case: the write lands, Windows has not
-        // picked it up, the retry fails and the value reads back as 0.
-        assert_eq!(after_disable_click(false, true), Next::SignOut);
-        assert_eq!(
-            prtsc_row(true, true, Some(0), true),
-            RowState::SignOutToApply
-        );
-        assert_eq!(ui_row(RowState::SignOutToApply), PrtscRow::SignOutToApply);
-        // Through the kept state: the failed retry after the click.
+    fn a_failed_retry_after_the_click_opens_windows_keyboard_settings() {
+        assert_eq!(after_disable_click(true), Next::Registered);
+        // The usual Windows 11 case (the write landed but Windows has not let
+        // go of the key yet) and a failed write alike: Windows' own page.
+        assert_eq!(after_disable_click(false), Next::OpenSettings);
+        assert_eq!(WINDOWS_KEYBOARD_PAGE, "ms-settings:easeofaccess-keyboard");
+    }
+
+    #[test]
+    fn a_config_save_touches_the_key_only_when_the_setting_moved() {
+        // Wanted and held, or wanted and failed: an unrelated save (or the
+        // toggle's own save, already followed) neither registers again nor
+        // reads the registry. A failed key waits for `retry_hotkeys`.
+        assert!(!follows_config(true, true, false));
+        assert!(!follows_config(true, false, true));
+        // Turned on (never tried, or let go): one try.
+        assert!(follows_config(true, false, false));
+        // Turned off while held: let go; while failed: the failure clears.
+        assert!(follows_config(false, true, false));
+        assert!(follows_config(false, false, true));
+        // Off and nothing held: nothing.
+        assert!(!follows_config(false, false, false));
+        // After the one try the toggle's save made, the same setting no
+        // longer moves anything, held or failed.
         let mut s = PrtscState::default();
-        s.tried(false, || None);
-        assert_eq!(s.row(true), RowState::TakenByWindows);
-        s.wrote_off = true;
-        s.tried(false, || Some(0));
-        assert_eq!(s.row(true), RowState::SignOutToApply);
-        assert!(!s.click_writes(true), "no button, no second write");
-    }
-
-    #[test]
-    fn the_button_ends_registered_signed_out_or_opens_windows_settings() {
-        assert_eq!(after_disable_click(true, true), Next::Registered);
-        assert_eq!(after_disable_click(true, false), Next::Registered);
-        // Written: the row says to sign out, nothing opens.
-        assert_eq!(after_disable_click(false, true), Next::SignOut);
-        // Not written: Windows' own page, for the owner to switch it.
-        assert_eq!(after_disable_click(false, false), Next::OpenSettings);
-        assert!(WINDOWS_KEYBOARD_PAGE.starts_with("ms-settings:"));
+        s.tried(false, || Some(1));
+        assert!(!follows_config(true, s.registered, s.failed));
+        s.tried(true, || None);
+        assert!(!follows_config(true, s.registered, s.failed));
     }
 
     #[test]

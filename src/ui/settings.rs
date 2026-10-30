@@ -154,7 +154,7 @@ pub enum Action {
     ShotPreview(bool),
     ShotOnIgnore(ShotIgnore),
     ShotSecs(u32),
-    /// "PrtSc untuk screenshot Vale".
+    /// "Tombol PrtSc membuka screenshot Vale".
     ShotPrintScreen(bool),
     /// "Matikan di Windows": switch off Windows' own PrtSc setting (HKCU),
     /// then take the key.
@@ -2825,12 +2825,11 @@ pub fn run_demo(args: &[String]) {
         lang,
         pomodoro_locked: env("DI_POMO_LOCKED") == "1",
         lyrics: env("DI_LYRICS") == "1",
-        // The PrtSc row taken: by Windows' own setting (the button shows), by
-        // another app, or written by Vale and waiting for a sign-out.
+        // The PrtSc row taken: by Windows' own setting (the button shows) or
+        // by another app.
         prtsc: match env("DI_PRTSC").as_str() {
             "windows" => PrtscRow::TakenByWindows,
             "app" => PrtscRow::TakenByApp,
-            "signout" => PrtscRow::SignOutToApply,
             _ => PrtscRow::Plain,
         },
         calendar,

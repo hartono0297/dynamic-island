@@ -4185,8 +4185,8 @@ impl App {
             self.sync_search_hotkey();
         }
         self.devices_follow_config();
-        // The PrtSc setting may have been edited by hand too.
-        self.sync_prtsc_hotkey();
+        // The PrtSc setting may have been edited by hand too (or toggled).
+        self.prtsc_follow_config();
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
