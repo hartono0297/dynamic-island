@@ -50,6 +50,8 @@ pub struct Device {
     /// The instance ID of the ejectable device node: stable while it stays
     /// plugged in, and what Eject locates again.
     pub key: String,
+    /// The vendor and product, else the volume's label; empty when the device
+    /// gives neither, and then `display_name` names its kind when drawn.
     pub name: String,
     /// Vendor and product as the device reports them, for the details.
     pub model: String,
@@ -223,12 +225,13 @@ pub fn veto_message(lang: Lang, veto: &Veto) -> (String, String) {
     let title = text(lang, Key::VetoTitle).to_owned();
     let name = veto.name.trim();
     let detail = match veto.kind {
-        VetoKind::WindowsApp | VetoKind::PendingClose => match app_name(name) {
+        // The only kind whose name is a program (`PNP_VETO_TYPE` remarks).
+        VetoKind::WindowsApp => match app_name(name) {
             Some(app) if !name.is_empty() => i18n::veto_in_use_by(lang, &app),
             _ => text(lang, Key::VetoInUse).to_owned(),
         },
-        // Its name is a device path: never shown.
-        VetoKind::OutstandingOpen => text(lang, Key::VetoInUse).to_owned(),
+        // Their name is a device instance path: never shown.
+        VetoKind::OutstandingOpen | VetoKind::PendingClose => text(lang, Key::VetoInUse).to_owned(),
         VetoKind::WindowsService if !name.is_empty() => i18n::veto_service(lang, name),
         VetoKind::WindowsService => text(lang, Key::VetoService).to_owned(),
         VetoKind::Device => text(lang, Key::VetoDevice).to_owned(),
@@ -336,17 +339,28 @@ pub fn subtitle(lang: Lang, device: &Device) -> String {
     }
 }
 
+/// The device's name, or its kind ("Flashdisk") when it has none: resolved
+/// when drawn, so a language change re-renders it.
+pub fn display_name(lang: Lang, device: &Device) -> String {
+    if device.name.is_empty() {
+        kind_name(lang, device.kind).to_owned()
+    } else {
+        device.name.clone()
+    }
+}
+
 /// "SanDisk Ultra · E:", or "WD Elements · F:  G:" for several letters.
-pub fn title_line(device: &Device) -> String {
+pub fn title_line(lang: Lang, device: &Device) -> String {
+    let name = display_name(lang, device);
     let letters: Vec<String> = device
         .partitions
         .iter()
         .map(|p| format!("{}:", p.letter))
         .collect();
     if letters.is_empty() {
-        device.name.clone()
+        name
     } else {
-        format!("{} · {}", device.name, letters.join("  "))
+        format!("{name} · {}", letters.join("  "))
     }
 }
 
@@ -472,7 +486,7 @@ pub fn plugged_notice(lang: Lang, device: &Device) -> Notice {
     Notice {
         key: format!("device-plugged-{}", device.key),
         source: text(lang, Key::PageDevices).to_owned(),
-        title: i18n::device_plugged(lang, &device.name),
+        title: i18n::device_plugged(lang, &display_name(lang, device)),
         body,
         kind: NoticeKind::DevicePlugged {
             letter: first.map_or('\0', |p| p.letter),
@@ -623,12 +637,20 @@ mod tests {
             }
         }
         // An app, with and without a usable name.
-        for k in [WindowsApp, PendingClose] {
-            assert_eq!(id(k, r"C:\Office\EXCEL.EXE").1, "Masih dipakai: Excel");
-            assert_eq!(en(k, r"C:\Office\EXCEL.EXE").1, "Still in use: Excel");
-            assert_eq!(id(k, "").1, "Masih dipakai aplikasi lain.");
-            assert_eq!(en(k, "  ").1, "Still in use by another app.");
-            assert_eq!(id(k, r"C:\x\.exe").1, "Masih dipakai aplikasi lain.");
+        let k = WindowsApp;
+        assert_eq!(id(k, r"C:\Office\EXCEL.EXE").1, "Masih dipakai: Excel");
+        assert_eq!(en(k, r"C:\Office\EXCEL.EXE").1, "Still in use: Excel");
+        assert_eq!(id(k, "").1, "Masih dipakai aplikasi lain.");
+        assert_eq!(en(k, "  ").1, "Still in use by another app.");
+        assert_eq!(id(k, r"C:\x\.exe").1, "Masih dipakai aplikasi lain.");
+        // A pending close names a device instance path: never shown.
+        for n in [
+            "",
+            r"USBSTOR\DISK&VEN_SANDISK&PROD_ULTRA&REV_1.00\4C530001230101&0",
+            r"C:\Office\EXCEL.EXE",
+        ] {
+            assert_eq!(id(PendingClose, n).1, "Masih dipakai aplikasi lain.");
+            assert_eq!(en(PendingClose, n).1, "Still in use by another app.");
         }
         // The design's own example.
         assert_eq!(
@@ -834,7 +856,7 @@ mod tests {
 
     #[test]
     fn the_title_line_lists_the_letters() {
-        assert_eq!(title_line(&sandisk()), "SanDisk Ultra · E:");
+        assert_eq!(title_line(Lang::Id, &sandisk()), "SanDisk Ultra · E:");
         let wd = device(
             "k",
             "WD Elements",
@@ -842,12 +864,27 @@ mod tests {
             Bus::Usb,
             vec![part('F', "NTFS", GB, None), part('G', "NTFS", GB, None)],
         );
-        assert_eq!(title_line(&wd), "WD Elements · F:  G:");
+        assert_eq!(title_line(Lang::Id, &wd), "WD Elements · F:  G:");
         let none = Device {
             partitions: vec![],
             ..wd
         };
-        assert_eq!(title_line(&none), "WD Elements");
+        assert_eq!(title_line(Lang::Id, &none), "WD Elements");
+    }
+
+    #[test]
+    fn a_nameless_device_is_named_by_its_kind_in_the_language_drawn() {
+        let mut bare = sandisk();
+        bare.name = String::new();
+        let (id, en) = (
+            kind_name(Lang::Id, bare.kind),
+            kind_name(Lang::En, bare.kind),
+        );
+        assert_eq!(display_name(Lang::Id, &bare), id);
+        assert_eq!(display_name(Lang::En, &bare), en);
+        assert_eq!(title_line(Lang::En, &bare), format!("{en} · E:"));
+        assert!(plugged_notice(Lang::En, &bare).title.starts_with(en));
+        assert_eq!(display_name(Lang::En, &sandisk()), "SanDisk Ultra");
     }
 
     #[test]

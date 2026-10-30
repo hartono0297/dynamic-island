@@ -16,7 +16,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::time::Instant;
 
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::System::Ioctl::GUID_DEVINTERFACE_DISK;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
@@ -91,6 +91,24 @@ pub(super) fn relevant_device_change(wparam: usize, device_type: Option<u32>) ->
             device_type,
             Some(t) if t == DBT_DEVTYP_VOLUME.0 || t == DBT_DEVTYP_DEVICEINTERFACE.0
         )
+}
+
+/// `WM_DEVICECHANGE`: an arrival or a removal of a volume or disk starts (or
+/// restarts) the pause before the scan. `lparam` is a `DEV_BROADCAST_HDR` for
+/// those messages. Needs no `App`: the system sends these synchronously, so
+/// one can arrive while a handler holds `App`, and the timer is armed anyway.
+pub(super) fn on_device_change(hwnd: HWND, wparam: usize, lparam: isize) {
+    // Only the two messages that carry a header have one to read: for the
+    // others `lparam` is not a pointer (or not ours to follow).
+    let device_type = (matches!(wparam, ARRIVAL | REMOVED) && lparam != 0).then(|| {
+        let header = lparam as *const DEV_BROADCAST_HDR;
+        unsafe { (*header).dbch_devicetype.0 }
+    });
+    if relevant_device_change(wparam, device_type) {
+        unsafe {
+            SetTimer(Some(hwnd), TIMER_DEVICES, DEBOUNCE_MS, None);
+        }
+    }
 }
 
 /// The list's scroll after a wheel turn of `delta` (120 a notch, positive
@@ -206,23 +224,6 @@ impl App {
         };
         if let Ok(note) = note {
             self.devices.notify = note.0 as isize;
-        }
-    }
-
-    /// `WM_DEVICECHANGE`: an arrival or a removal of a volume or disk starts
-    /// (or restarts) the pause before the scan. `lparam` is a
-    /// `DEV_BROADCAST_HDR` for those messages.
-    pub(super) fn on_device_change(&mut self, wparam: usize, lparam: isize) {
-        // Only the two messages that carry a header have one to read: for
-        // the others `lparam` is not a pointer (or not ours to follow).
-        let device_type = (matches!(wparam, ARRIVAL | REMOVED) && lparam != 0).then(|| {
-            let header = lparam as *const DEV_BROADCAST_HDR;
-            unsafe { (*header).dbch_devicetype.0 }
-        });
-        if relevant_device_change(wparam, device_type) {
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_DEVICES, DEBOUNCE_MS, None);
-            }
         }
     }
 

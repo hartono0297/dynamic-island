@@ -842,7 +842,7 @@ impl Renderer {
                 DeviceKind::Sd => Icon::Sd,
             };
             self.icon_colored(glyph, lay.well, 19.0, p.accent, 1.0, None);
-            let title = devices::title_line(dev);
+            let title = devices::title_line(lang, dev);
             self.text_colored(&title, &self.fonts.body_medium, lay.title, p.text, 1.0);
             let sub = devices::subtitle(lang, dev);
             self.text_colored(&sub, &self.fonts.small, lay.subtitle, p.secondary, 1.0);

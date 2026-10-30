@@ -19,6 +19,24 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   the device's `key` (several letters of one disk are one card). Internal disks
   have no removable ancestor and never show (checked live: four internal
   volumes, chains of 7 to 9 nodes, none removable).
+- **But a hot-plug SATA/AHCI or PCIe port flags an internal disk
+  `DN_REMOVABLE`** (why Windows' tray offers to eject it). Guards in `scan`:
+  the disk holding the Windows directory and any disk with a
+  `X:\pagefile.sys` are never listed (`pinned`), and an ATA, SATA, SAS or RAID
+  disk with no USB, Thunderbolt, USB4 or SD node on its chain is internal
+  (`internal_disk`). NVMe is deliberately not in that bus list: a Thunderbolt 3
+  enclosure's chain is plain PCI nodes and would vanish.
+- **A page file in use cannot be stat'ed**: `GetFileAttributesW` on a live
+  `pagefile.sys` (or `swapfile.sys`) returns `INVALID_FILE_ATTRIBUTES` with
+  `ERROR_SHARING_VIOLATION` (32), checked live on `C:`. So
+  `page_file_present` counts error 32 and access denied as "there"; only not
+  found and the like mean absent.
+- **The worker sets `SetThreadErrorMode(SEM_FAILCRITICALERRORS |
+  SEM_NOOPENFILEERRORBOX)`** at its start: without it an empty card slot can
+  raise "There is no disk in the drive" and block the thread until dismissed.
+- A device with no vendor, product or label has an empty `name`;
+  `devices::display_name` names its kind when drawn, so a language change
+  re-renders it.
 - **No drive letter means not listed** (decision): Open needs a letter, so a
   disk without one, a card slot with no card (`ERROR_NOT_READY` from
   `GetVolumeInformationW`), phones (MTP, never a letter), network drives and
@@ -54,14 +72,18 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   `RegisterDeviceNotificationW` for `GUID_DEVINTERFACE_DISK`. Only
   `DBT_DEVICEARRIVAL` / `DBT_DEVICEREMOVECOMPLETE` with a volume (2) or device
   interface (5) header count, `DBT_DEVNODES_CHANGED` and the rest are ignored
-  (the handler returns TRUE). Each one restarts a 400 ms one-shot
-  `TIMER_DEVICES` (32) that sends `Scan { NewOnly }`. No repeating timer
-  anywhere ([[bata-idle-power-budget]]).
+  (the handler returns TRUE). The handler is a free function on the `hwnd`,
+  not `with_app`: the broadcasts are sent synchronously and can arrive while
+  `App` is borrowed, where `with_app` would drop them. Each one restarts a
+  400 ms one-shot `TIMER_DEVICES` (32) that sends `Scan { NewOnly }`. No
+  repeating timer anywhere ([[bata-idle-power-budget]]).
 - **Capacity only when needed:** `GetDiskFreeSpaceExW` runs on the worker for
   every volume when the page opens (`All`), for a drive not in the last list
   (`NewOnly`, so its notice can say how much is free) and never for the
-  startup seed or after an eject (`Keep`, which carries the old figures). The
-  seed scan raises no notices (`DevicesState::accept`).
+  startup seed (`Keep`, which carries the old figures). The scan after an
+  eject is `NewOnly` too: a drive plugged in while the eject ran shows up
+  there first, and the debounced scan after it would find it known and never
+  read its size. The seed scan raises no notices (`DevicesState::accept`).
 
 ## Page, notices, hotkey
 
@@ -76,8 +98,11 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   the frame cannot redirect a click. Folding and the scroll reset when the page
   opens, not when it closes (the closing fade still draws what it showed).
 - Refusals are worked out at draw time (`veto_message`), so a language change
-  re-renders them. Windows does not always name the program, and an open
-  handle's name is a device path and never shown.
+  re-renders them. Only `WindowsApp` (3) names a program (`app_name`).
+  `PendingClose` (2) and `OutstandingOpen` (5) carry a device instance path
+  (`USBSTOR\DISK&VEN_...`, per the `PNP_VETO_TYPE` remarks), so both show the
+  plain "still in use" line and never the name. Windows does not always name
+  the program either.
 - Notices (`DevicePlugged { letter }` with "Buka", `DeviceSafe`) are on by
   default and `config.device_notices` switches both off (Settings → Umum →
   Perangkat). The safe notice is raised only after an eject started from Vale.
