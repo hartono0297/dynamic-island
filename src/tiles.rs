@@ -507,29 +507,31 @@ mod tests {
         let all: Vec<Tile> = Shortcut::ALL.iter().map(|s| Tile::Builtin(*s)).collect();
         let listed: Vec<Tile> = t.entries().iter().map(|(x, _)| x.clone()).collect();
         assert_eq!(listed, all);
-        // The original nine, Vale's Settings and the Shelf.
+        // The original nine, Vale's Settings, the Shelf and Devices.
         let mut on: Vec<Tile> = original_nine().iter().map(|s| Tile::Builtin(*s)).collect();
         on.push(Tile::Builtin(Shortcut::ValeSettings));
         on.push(Tile::Builtin(Shortcut::Go(Page::Shelf)));
+        on.push(Tile::Builtin(Shortcut::Go(Page::Devices)));
         assert_eq!(t.visible(), on);
-        assert_eq!(t.shown(), 11);
+        assert_eq!(t.shown(), 12);
         assert_eq!(ShortcutTiles::from_saved(&[]), t);
     }
 
     #[test]
-    fn only_the_original_nine_vale_settings_and_the_shelf_are_on_by_default() {
+    fn only_the_original_nine_vale_settings_the_shelf_and_devices_are_on_by_default() {
         for s in original_nine() {
             assert!(s.default_on(), "{s:?}");
         }
         assert!(Shortcut::ValeSettings.default_on());
         assert!(Shortcut::Go(Page::Shelf).default_on());
+        assert!(Shortcut::Go(Page::Devices).default_on());
         for page in Page::ALL {
             let go = Shortcut::Go(page);
-            if Shortcut::ALL.contains(&go) && page != Page::Shelf {
+            if Shortcut::ALL.contains(&go) && !matches!(page, Page::Shelf | Page::Devices) {
                 assert!(!go.default_on(), "{page:?}");
             }
         }
-        assert_eq!(Shortcut::ALL.iter().filter(|s| s.default_on()).count(), 11);
+        assert_eq!(Shortcut::ALL.iter().filter(|s| s.default_on()).count(), 12);
     }
 
     #[test]
@@ -544,6 +546,7 @@ mod tests {
         }
         assert_eq!(shortcut_name(Shortcut::ValeSettings), "ValeSettings");
         assert_eq!(shortcut_name(Shortcut::Go(Page::Shelf)), "GoShelf");
+        assert_eq!(shortcut_name(Shortcut::Go(Page::Devices)), "GoDevices");
         assert_eq!(shortcut_name(Shortcut::Go(Page::Cli)), "GoCli");
         assert_eq!(
             shortcut_from_name(" goshelf "),
@@ -563,13 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn an_old_nine_tile_config_gets_vale_settings_and_the_shelf_on() {
+    fn an_old_nine_tile_config_gets_vale_settings_the_shelf_and_devices_on() {
         let saved: Vec<TileEntry> = original_nine()
             .iter()
             .map(|s| entry(&shortcut_name(*s), true))
             .collect();
         let t = ShortcutTiles::from_saved(&saved);
-        assert_eq!(t.shown(), 11);
+        assert_eq!(t.shown(), 12);
         let on = |s: Shortcut| {
             t.entries()
                 .iter()
@@ -577,6 +580,7 @@ mod tests {
         };
         assert!(on(Shortcut::ValeSettings));
         assert!(on(Shortcut::Go(Page::Shelf)));
+        assert!(on(Shortcut::Go(Page::Devices)));
         assert!(!on(Shortcut::Go(Page::Calendar)));
         // Each joins after its predecessor in ALL.
         assert_eq!(
@@ -587,7 +591,32 @@ mod tests {
         let mut saved = saved;
         saved[8].on = false;
         let t = ShortcutTiles::from_saved(&saved);
-        assert_eq!(t.shown(), 10);
+        assert_eq!(t.shown(), 11);
+    }
+
+    #[test]
+    fn an_old_config_with_eleven_shown_gets_devices_and_one_with_twelve_does_not() {
+        // The nine, Vale's Settings and the Shelf: eleven shown, as 3.4 left it.
+        let mut saved: Vec<TileEntry> = original_nine()
+            .iter()
+            .map(|s| entry(&shortcut_name(*s), true))
+            .collect();
+        saved.push(entry("ValeSettings", true));
+        saved.push(entry("GoShelf", true));
+        let t = ShortcutTiles::from_saved(&saved);
+        assert_eq!(t.shown(), 12, "room for one more: Devices is on");
+        assert!(t.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
+        // One more own tile: twelve shown, so Devices joins off.
+        saved.push(TileEntry {
+            tile: CUSTOM.into(),
+            on: true,
+            label: "Gmail".into(),
+            kind: "Url".into(),
+            target: "https://mail.google.com".into(),
+        });
+        let t = ShortcutTiles::from_saved(&saved);
+        assert_eq!(t.shown(), 12);
+        assert!(!t.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
     }
 
     #[test]
@@ -609,7 +638,11 @@ mod tests {
         let t = ShortcutTiles::from_saved(&saved);
         assert_eq!(t.shown(), MAX_SHOWN);
         assert_eq!(t.customs(), 3);
-        for s in [Shortcut::ValeSettings, Shortcut::Go(Page::Shelf)] {
+        for s in [
+            Shortcut::ValeSettings,
+            Shortcut::Go(Page::Shelf),
+            Shortcut::Go(Page::Devices),
+        ] {
             assert!(
                 t.entries()
                     .iter()
@@ -646,6 +679,7 @@ mod tests {
                 "(GoMixer)",
                 "GoShelf",
                 "(GoSystem)",
+                "GoDevices",
                 "(GoCli)",
                 "(Emoji)",
                 "Explorer",
@@ -845,10 +879,13 @@ mod tests {
                 .iter()
                 .any(|(x, on)| *x == Tile::Builtin(Shortcut::Search) && !on)
         );
-        // With room, the new ones that are on by default come in shown (Search,
-        // Vale's Settings, the Shelf: 8 + 1 own + 3); a fresh install shows 11.
-        assert_eq!(ShortcutTiles::from_saved(&saved[..9]).shown(), 12);
-        assert_eq!(ShortcutTiles::default().shown(), 11);
+        // With room, the new ones that are on by default come in shown until
+        // the page is full (Search, Vale's Settings, the Shelf: 8 + 1 own + 3,
+        // so Devices has no room and joins off); a fresh install shows 12.
+        let few = ShortcutTiles::from_saved(&saved[..9]);
+        assert_eq!(few.shown(), 12);
+        assert!(!few.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
+        assert_eq!(ShortcutTiles::default().shown(), 12);
     }
 
     #[test]
@@ -882,7 +919,7 @@ mod tests {
         assert_eq!(t.entries().len(), Shortcut::ALL.len());
     }
 
-    /// The default tiles (11 on) plus `own` custom tiles, all on.
+    /// The default tiles (12 on) plus `own` custom tiles, all on.
     fn with_own(own: usize) -> ShortcutTiles {
         let mut t = ShortcutTiles::default();
         for i in 0..own {
@@ -893,8 +930,8 @@ mod tests {
 
     #[test]
     fn no_tile_goes_on_while_twelve_show() {
-        // 11 + 1 = 12 shown: the page is full.
-        let mut t = with_own(1);
+        // The default shows 12: the page is full.
+        let mut t = with_own(0);
         assert!(t.full());
         assert!(t.toggle(0), "off is always fine");
         assert!(!t.full());
@@ -914,14 +951,14 @@ mod tests {
 
     #[test]
     fn tiles_on_past_the_twelfth_are_marked() {
-        // Hand-added: 11 + 3 on, two past the limit (the own tiles sit after
-        // the 19 built-ins, at 19, 20 and 21).
+        // Hand-added: 12 + 3 on, all three past the limit (the own tiles sit
+        // after the 20 built-ins, at 20, 21 and 22).
         let t = with_own(3);
-        assert_eq!(t.shown(), 14);
+        assert_eq!(t.shown(), 15);
         let beyond: Vec<usize> = (0..t.entries().len())
             .filter(|i| t.beyond_limit(*i))
             .collect();
-        assert_eq!(beyond, [20, 21]);
+        assert_eq!(beyond, [20, 21, 22]);
         assert_eq!(t.visible().len(), MAX_SHOWN);
         // An entry that is off is never "beyond"; neither is one that shows.
         let mut t = with_own(3);
@@ -958,7 +995,8 @@ mod tests {
     #[test]
     fn move_shown_steps_over_tiles_that_are_off() {
         let mut t = ShortcutTiles::default();
-        // Index 9 is ValeSettings (on), 10..16 are off Go tiles, 16 is GoShelf.
+        // Index 9 is ValeSettings (on), 10..16 are off Go tiles, 16 is GoShelf,
+        // 17 GoSystem (off), 18 GoDevices (on, the last shown).
         assert!(
             t.move_shown(16, -1),
             "past the off Go tiles, onto Vale's place"
@@ -969,10 +1007,10 @@ mod tests {
         assert!(!t.move_shown(10, 1) || names(&t)[10] != "ValeSettings");
         let mut t = ShortcutTiles::default();
         assert!(!t.move_shown(12, 1), "an off tile does not move");
-        let last_on = 16;
+        let last_on = 18;
         assert!(!t.move_shown(last_on, 1), "last shown");
         assert!(t.move_shown(0, 50), "clamped to the last shown tile");
-        assert_eq!(names(&t)[16], "Screenshot");
+        assert_eq!(names(&t)[18], "Screenshot");
     }
 
     #[test]
@@ -1005,16 +1043,16 @@ mod tests {
         t.move_to(0, 5);
         t.toggle(2);
         t.toggle(10);
-        t.move_to(19, 0);
+        t.move_to(20, 0);
         t.reset();
         let defaults = ShortcutTiles::default();
         assert_eq!(t.entries()[..Shortcut::ALL.len()], *defaults.entries());
         assert_eq!(
             &names(&t)[Shortcut::ALL.len()..],
-            ["+Gmail", "(+Proyek)"],
+            ["(+Gmail)", "(+Proyek)"],
             "own tiles in their order, after the built-ins"
         );
-        // 11 built-ins on: only one own tile fits.
+        // 12 built-ins on: no own tile fits.
         assert_eq!(t.shown(), MAX_SHOWN);
         assert!(!t.entries()[Shortcut::ALL.len() + 1].1, "no room");
         // An own tile that was off stays off.
@@ -1022,7 +1060,7 @@ mod tests {
         t.add_own(custom("Gmail", CustomKind::Url, "https://mail.google.com"));
         t.toggle(Shortcut::ALL.len());
         t.reset();
-        assert_eq!(t.shown(), 11);
+        assert_eq!(t.shown(), 12);
         // Nothing to do on the default.
         let mut d = ShortcutTiles::default();
         d.reset();
@@ -1032,8 +1070,17 @@ mod tests {
     #[test]
     fn add_own_is_on_only_while_there_is_room() {
         let mut t = ShortcutTiles::default();
+        // A fresh install shows twelve: the first own tile is off already.
+        assert!(t.full());
         assert_eq!(
             t.add_own(custom("Gmail", CustomKind::Url, "https://mail.google.com")),
+            Some(false),
+            "off: twelve show"
+        );
+        // One built-in hidden makes room for exactly one.
+        t.toggle(0);
+        assert_eq!(
+            t.add_own(custom("Surel", CustomKind::Url, "https://mail.example.com")),
             Some(true)
         );
         assert!(t.full());
@@ -1043,7 +1090,7 @@ mod tests {
             "off: twelve show"
         );
         assert_eq!(t.shown(), MAX_SHOWN);
-        assert_eq!(t.customs(), 2);
+        assert_eq!(t.customs(), 3);
         // The list of own tiles has a limit too.
         let mut t = ShortcutTiles::default();
         for i in 0..MAX_CUSTOM {

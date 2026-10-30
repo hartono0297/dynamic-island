@@ -100,6 +100,7 @@ pub fn label(s: Shortcut) -> Key {
             // "Rak berkas" is too long under a tile's icon.
             Page::Shelf => Key::ShortcutGoShelf,
             Page::System => Key::PageSystem,
+            Page::Devices => Key::PageDevices,
             Page::Cli => Key::PageCli,
             Page::Clipboard => Key::PageClipboard,
             Page::Shortcuts => Key::PageShortcuts,
@@ -120,6 +121,7 @@ fn page_icon(page: Page) -> Icon {
         Page::Clipboard => Icon::Clipboard,
         Page::Shelf => Icon::TempFile,
         Page::System => Icon::Chip,
+        Page::Devices => Icon::Usb,
         Page::Cli => Icon::Terminal,
         Page::Shortcuts => Icon::Grid,
         Page::Search => Icon::Search,
@@ -312,6 +314,7 @@ mod tests {
                 (Shortcut::Go(Page::Mixer), None),
                 (Shortcut::Go(Page::Shelf), None),
                 (Shortcut::Go(Page::System), None),
+                (Shortcut::Go(Page::Devices), None),
                 (Shortcut::Go(Page::Cli), None),
             ]
         );
@@ -329,6 +332,8 @@ mod tests {
         );
         assert_eq!(icon(Shortcut::Go(Page::Calendar)), Icon::Calendar);
         assert_eq!(label(Shortcut::Go(Page::Shelf)), Key::ShortcutGoShelf);
+        assert_eq!(icon(Shortcut::Go(Page::Devices)), Icon::Usb);
+        assert_eq!(label(Shortcut::Go(Page::Devices)), Key::PageDevices);
     }
 
     #[test]

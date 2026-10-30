@@ -501,6 +501,36 @@ keys! {
     ShelfEmpty => "Seret berkas ke notch, ambil lagi nanti",
         "Drag files to the notch, take them out later";
     PageSystem => "Sistem", "System";
+    PageDevices => "Perangkat", "Devices";
+    DevicesEject => "Eject", "Eject";
+    DevicesEjecting => "Melepas…", "Ejecting…";
+    DevicesEjectAll => "Eject semua", "Eject all";
+    DevicesRetry => "Coba lagi", "Try again";
+    DevicesEmpty => "Tidak ada flashdisk atau disk eksternal", "No removable drives";
+    DeviceModel => "Model", "Model";
+    DeviceConnection => "Jalur", "Connection";
+    DeviceFileSystem => "Sistem file", "File system";
+    DeviceCardReader => "Pembaca kartu", "Card reader";
+    DeviceBusOther => "Lainnya", "Other";
+    DeviceKindUsb => "Flashdisk", "Flash drive";
+    DeviceKindHdd => "Disk eksternal", "External disk";
+    DeviceKindSd => "Kartu SD", "SD card";
+    DeviceSafe => "Aman dicabut", "Safe to remove";
+    VetoTitle => "Belum bisa dilepas.", "Can't remove it yet.";
+    VetoInUse => "Masih dipakai aplikasi lain.", "Still in use by another app.";
+    VetoService => "Masih dipakai layanan Windows.", "In use by a Windows service.";
+    VetoDevice => "Perangkat lain masih memakainya.", "Another device is still using it.";
+    VetoDriver => "Driver-nya menolak dilepas.", "Its driver refused.";
+    VetoNotAllowed => "Windows tidak mengizinkan perangkat ini dilepas.",
+        "Windows does not allow removing this device.";
+    VetoRights => "Butuh izin administrator.", "Needs administrator rights.";
+    VetoPower => "Dayanya tidak cukup.", "Not enough power.";
+    VetoRefused => "Windows menolak melepasnya.", "Windows refused to remove it.";
+    DeviceNotices => "Notice perangkat", "Device notices";
+    DeviceNoticesDesc => "Saat flashdisk dicolok dan saat aman dicabut",
+        "When a drive is plugged in and when it is safe to remove";
+    DevicesHotkey => "Pintasan Perangkat", "Devices hotkey";
+    DevicesHotkeyDesc => "Buka halaman Perangkat", "Open the Devices page";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
     Language => "Bahasa", "Language";
@@ -825,7 +855,7 @@ const GIB: u64 = MIB * 1024;
 
 /// `value` with one decimal, a comma in Indonesian ("47,2"), a point in
 /// English ("47.2").
-fn one_decimal(lang: Lang, value: f64) -> String {
+pub(crate) fn one_decimal(lang: Lang, value: f64) -> String {
     let s = format!("{value:.1}");
     match lang {
         Lang::Id => s.replace('.', ","),
@@ -847,6 +877,56 @@ pub fn format_size(lang: Lang, bytes: u64) -> String {
         return format!("{} TB", one_decimal(lang, gb / 1024.0));
     }
     format!("{} GB", one_decimal(lang, gb))
+}
+
+/// "Masih dipakai: Excel", "Still in use: Excel": the app that kept a
+/// device from being ejected.
+pub fn veto_in_use_by(lang: Lang, app: &str) -> String {
+    match lang {
+        Lang::Id => format!("Masih dipakai: {app}"),
+        Lang::En => format!("Still in use: {app}"),
+    }
+}
+
+/// The eject refusal that names a Windows service.
+pub fn veto_service(lang: Lang, name: &str) -> String {
+    match lang {
+        Lang::Id => format!("Masih dipakai layanan Windows: {name}"),
+        Lang::En => format!("In use by a Windows service: {name}"),
+    }
+}
+
+/// The plugged-in notice's title: "SanDisk Ultra tersambung".
+pub fn device_plugged(lang: Lang, name: &str) -> String {
+    match lang {
+        Lang::Id => format!("{name} tersambung"),
+        Lang::En => format!("{name} connected"),
+    }
+}
+
+/// The plugged-in notice's body: "E: · 38,9 GB kosong", "E: · 38.9 GB free".
+pub fn device_free(lang: Lang, letter: char, free: &str) -> String {
+    match lang {
+        Lang::Id => format!("{letter}: · {free} kosong"),
+        Lang::En => format!("{letter}: · {free} free"),
+    }
+}
+
+/// "3 perangkat", "3 devices" (the safe-to-remove notice's body when the
+/// names would not fit).
+pub fn device_count(lang: Lang, n: usize) -> String {
+    match lang {
+        Lang::Id => format!("{n} perangkat"),
+        Lang::En => format!("{n} {}", if n == 1 { "device" } else { "devices" }),
+    }
+}
+
+/// The Devices page's chip: "3 tersambung", "3 connected".
+pub fn devices_connected(lang: Lang, n: usize) -> String {
+    match lang {
+        Lang::Id => format!("{n} tersambung"),
+        Lang::En => format!("{n} connected"),
+    }
 }
 
 /// A drive's meter: "sisa 47,2 GB dari 338,4 GB", "47.2 GB free of 338.4 GB".

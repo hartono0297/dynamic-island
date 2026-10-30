@@ -47,7 +47,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PeekMessageW, PostMessageW, PostQuitMessage, SM_SWAPBUTTON, SPI_GETCLIENTAREAANIMATION,
     SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetCoalescableTimer, SetForegroundWindow,
     SetTimer, SystemParametersInfoW, TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_APP,
-    WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_CAPTURECHANGED, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DEVICECHANGE,
+    WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
     WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WindowFromPoint,
@@ -105,8 +106,8 @@ use crate::ui::motion::{
 };
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
-    CleanerView, CliView, FolderMenuView, Frame, MoleView, Progress, Renderer, RobotFrame,
-    SearchView, SystemView,
+    CleanerView, CliView, DevicesView, FolderMenuView, Frame, MoleView, Progress, Renderer,
+    RobotFrame, SearchView, SystemView,
 };
 use crate::ui::robot::{
     self, Brain, GreetSettings, Motion, Rng, Spot, choose_expr, plan_timers, should_greet,
@@ -118,6 +119,10 @@ use crate::ui::window::IslandWindow;
 #[path = "app_clip.rs"]
 mod clip;
 use clip::{ClipSetting, ClipState, SEARCH_LIMIT};
+
+#[path = "app_devices.rs"]
+mod devices_page;
+use devices_page::{DevicesState, HOTKEY_DEVICES, TIMER_DEVICES};
 
 #[path = "app_search.rs"]
 mod quick;
@@ -384,6 +389,7 @@ pub fn run(media_log_flag: bool) {
             mixer_wheel_sum: None,
             mixer_drag: None,
             shelf: ShelfState::default(),
+            devices: DevicesState::default(),
             pomo_timer: false,
             clock_timer: false,
             progress_timer: false,
@@ -447,6 +453,7 @@ pub fn run(media_log_flag: bool) {
         app.check_battery();
         app.clip_start();
         app.sync_search_hotkey();
+        app.devices_start();
         app.draw(now);
         app.request_calendar(app.state.cal_range(), now);
         // An empty notes list would otherwise look like the notes were deleted.
@@ -646,6 +653,9 @@ struct App {
     mixer_drag: Option<audio::Target>,
     /// The file shelf (`app_shelf`).
     shelf: ShelfState,
+    /// The Devices page: the drives, their worker and the page's state
+    /// (`app_devices`).
+    devices: DevicesState,
     pomo_timer: bool,
     /// `TIMER_CLOCK` is set.
     clock_timer: bool,
@@ -894,7 +904,10 @@ impl App {
         while let Ok(event) = self.rx.try_recv() {
             received += 1;
             // Background readings draw what they changed themselves.
-            samples += usize::from(matches!(event, Event::SystemSample(_) | Event::Audio(..)));
+            samples += usize::from(matches!(
+                event,
+                Event::SystemSample(_) | Event::Audio(..) | Event::Devices(_)
+            ));
             self.apply(event, now);
         }
         // Once per burst of command output, not per chunk.
@@ -968,6 +981,10 @@ impl App {
                 }
                 Event::Audio(asked, rows) => {
                     self.on_audio(asked, rows);
+                    continue;
+                }
+                Event::Devices(event) => {
+                    self.on_devices_event(event, now);
                     continue;
                 }
                 Event::SearchIndex(apps) => {
@@ -1484,6 +1501,10 @@ impl App {
             Effect::ShelfOpen(i) => self.shelf_open(i),
             Effect::ShelfRemove(i) => self.shelf_remove(i),
             Effect::ShelfClear => self.shelf_clear(),
+            Effect::DeviceEject(i) => self.devices_eject(i),
+            Effect::DeviceOpen(i) => self.devices_open(i),
+            Effect::DeviceDetail(i) => self.devices_toggle_detail(i),
+            Effect::DevicesEjectAll => self.devices_eject_all(),
             Effect::OpenCleaner => self.scan_clean(),
             Effect::CleanDelete(cats) => return self.start_clean(cats),
             Effect::SaveCleanMode(mode) => {
@@ -3149,6 +3170,7 @@ impl App {
         self.sync_system_page();
         self.sync_mixer();
         self.sync_shelf();
+        self.sync_devices();
         self.sync_outside_timer();
         self.sync_behind(now);
         self.sync_halo_timer();
@@ -3608,6 +3630,7 @@ impl App {
                 }
             }
             TIMER_VOLUME => self.on_volume_timer(),
+            TIMER_DEVICES => self.on_devices_timer(),
             TIMER_SHELF_HOLD => self.on_shelf_hold_timer(),
             TIMER_OUTSIDE => self.on_outside_poll(),
             TIMER_BEHIND => self.on_behind_timer(),
@@ -3927,6 +3950,7 @@ impl App {
         }
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
         let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
+        let over_devices = client && self.renderer.over_devices_list(pt.x as f32, pt.y as f32);
         let over_art = client && self.renderer.over_media_art(pt.x as f32, pt.y as f32);
         if self.state.cli_menu() && self.state.view() == View::Panel(Page::Cli) {
             // The open folder menu scrolls, a row per notch (more rows
@@ -3944,6 +3968,12 @@ impl App {
             && self.clip_wheel(delta)
         {
             // The cards scrolled (or an end spent the notch).
+        } else if over_devices
+            && self.state.view() == View::Panel(Page::Devices)
+            && self.devices_wheel(delta)
+        {
+            // The device cards scrolled; with everything fitting, the notch
+            // turns the page below.
         } else if over && self.state.view() == View::Panel(Page::Cli) {
             // A notch away from the user scrolls up to older lines.
             let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);
@@ -4040,6 +4070,7 @@ impl App {
         if self.search.hotkey.is_some() {
             self.sync_search_hotkey();
         }
+        self.devices_follow_config();
         if changed && let Some(sync) = &self.sync {
             sync.send(SyncRequest::Config(self.config.clone()));
             // The next calendar view asks again, now with the new client.
@@ -4091,6 +4122,7 @@ impl App {
             calendar: self.calendar.status,
             clip_hotkey_failed: self.clip_hotkey_failed(),
             search_hotkey_failed: self.search.hotkey_failed,
+            devices_hotkey_failed: self.devices.hotkey_failed,
             ..settings::Model::from_config(&self.config)
         }
     }
@@ -4169,6 +4201,15 @@ impl App {
                 self.config.search_hotkey = h;
                 self.save_config();
                 self.sync_search_hotkey();
+            }
+            SettingsAction::DeviceNotices(on) => {
+                self.config.device_notices = on;
+                self.save_config();
+            }
+            SettingsAction::DevicesHotkey(h) => {
+                self.config.devices_hotkey = h;
+                self.save_config();
+                self.sync_devices_hotkey();
             }
             SettingsAction::OpenMode(mode) => {
                 self.config.open_mode = mode;
@@ -4279,6 +4320,8 @@ impl App {
     }
 
     fn draw(&mut self, now: Instant) {
+        // Clicks on the Devices page mean the cards of the frame drawn here.
+        self.devices_sync_drawn();
         let Some(win) = &self.win else { return };
         let (shape, opacity) = self.anim.frame(now);
         let (shape, opacity) = rise_frame(shape, opacity, self.rise.as_ref(), now);
@@ -4385,6 +4428,13 @@ impl App {
             mixer: self.mixer.as_deref(),
             shelf: &self.shelf.cards,
             shelf_drag: self.shelf.dragging,
+            devices: DevicesView {
+                list: &self.devices.list,
+                ejecting: &self.devices.ejecting,
+                vetoes: &self.devices.vetoes,
+                expanded: self.devices.expanded.as_deref(),
+                scroll: self.devices.scroll,
+            },
             notes: self.notes.list(),
             reminders: self.reminders.upcoming(),
             reminders_page: leaving.map_or(state.reminders_page(), |shown| shown.reminders_page),
@@ -5954,8 +6004,16 @@ unsafe extern "system" fn wnd_proc(
                 with_app(App::on_clip_hotkey);
             } else if wparam.0 as i32 == HOTKEY_SEARCH {
                 with_app(App::on_search_hotkey);
+            } else if wparam.0 as i32 == HOTKEY_DEVICES {
+                with_app(App::on_devices_hotkey);
             }
             LRESULT(0)
+        }
+        // A drive came or went: only an arrival or a removal of a volume or
+        // disk starts the pause before a scan. TRUE grants the request.
+        WM_DEVICECHANGE => {
+            with_app(|app| app.on_device_change(wparam.0, lparam.0));
+            LRESULT(1)
         }
         WM_ACTIVATE => {
             // The island lost activation (a click elsewhere, Alt+Tab): the
@@ -6044,6 +6102,7 @@ unsafe extern "system" fn wnd_proc(
             with_app(App::stop_sync);
             with_app(App::clip_shutdown);
             with_app(App::search_shutdown);
+            with_app(App::devices_shutdown);
             unsafe {
                 let _ = WTSUnRegisterSessionNotification(hwnd);
                 let note = DISPLAY_NOTIFY.replace(0);

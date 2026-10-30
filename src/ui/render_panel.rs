@@ -23,8 +23,8 @@ use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, ClipView, FolderMenuView, Frame, GroupShown, Progress, Renderer,
-    RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
+    CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, GroupShown, Progress,
+    Renderer, RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
 };
 use crate::audio::{self, MixerRow, Target};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -36,6 +36,7 @@ use crate::clipboard::kinds::hex_rgb;
 use crate::clipboard::store::ClipImage;
 use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::Style;
+use crate::devices::{self, DeviceKind};
 use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
 use crate::mole::{MoleGroup, MoleOpt};
@@ -56,12 +57,13 @@ use crate::ui::motion::{ease_out_cubic, page_fade_frame, panel_fade, panel_regio
 use crate::ui::panel_layout::{
     CLEAN_CHECK, CLEANER_READY, CLI_LINE_H, CLI_TERM_RADIUS, CLIP_RADIUS, CLIP_SCROLLBAR_W,
     CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
-    ClipButton, ClipLayout, HOUR_GUTTER, ListLayout, MENU_RADIUS, MENU_ROW_RADIUS, MIXER_TRACK_H,
+    ClipButton, ClipLayout, DEV_BAR_H, DevicesHead, DevicesLayout, HOUR_GUTTER, ListLayout,
+    MENU_RADIUS, MENU_ROW_RADIUS, MIXER_TRACK_H,
     MOLE_LOG_LINE_H, MOLE_LOG_PAD, MenuLayout, MeterLayout, MixerLayout, MoleFoot, MoleLayout,
     PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE, SearchLayout, ShelfLayout,
     ShortcutsLayout, SystemHead, SystemLayout, VOLUME_HUD_H, WEEK_HEAD_H, calendar_layout,
     cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions, clipboard_layout,
-    media_panel_layout, media_progress_layout, mixer_layout, mole_layout, notes_layout, page_dots,
+    device_shapes, devices_layout, media_panel_layout, media_progress_layout, mixer_layout, mole_layout, notes_layout, page_dots,
     pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
     reminders_layout, search_layout, shelf_layout, shortcuts_layout, system_layout, tile_parts,
     volume_hud_layout, waiting_strip,
@@ -121,6 +123,13 @@ const MENU_GAP: f32 = 8.0;
 const MENU_ON_TINT: f32 = 0.16;
 /// The System page: what stands for a figure before the first sample.
 const DASH: &str = "\u{2013}";
+/// The Devices page's buttons: the glyph, its gap to the label, the padding
+/// either side; a disabled one (ejecting) is dimmed; the refusal row's tint.
+const DEV_BTN_ICON: f32 = 12.0;
+const DEV_BTN_ICON_GAP: f32 = 5.0;
+const DEV_BTN_PAD_X: f32 = 12.0;
+const DEV_DIM: f32 = 0.5;
+const DEV_VETO_TINT: f32 = 0.16;
 /// The CPU line (`spark()`): 1.6 px over a 0.14 fill.
 const SPARK_STROKE: f32 = 1.6;
 const SPARK_FILL: f32 = 0.14;
@@ -535,6 +544,10 @@ impl Renderer {
                 PageLayout::Mixer(l) => l.rows.iter().map(|r| r.track).collect(),
                 _ => Vec::new(),
             };
+            self.regions.devices_list = match &layout {
+                PageLayout::Devices(l) => Some(l.list),
+                _ => None,
+            };
         }
         Ok(())
     }
@@ -641,6 +654,12 @@ impl Renderer {
             // plays (or that there is no device).
             Page::Search => PageLayout::Search(search_layout(s, strip, frame.search.results.len())),
             Page::Shelf => PageLayout::Shelf(shelf_layout(s, strip, frame.shelf.len())),
+            Page::Devices => {
+                let d = &frame.devices;
+                let head = self.devices_head(d.list.len());
+                let shapes = device_shapes(d.list, d.vetoes, d.expanded);
+                PageLayout::Devices(devices_layout(s, strip, &head, &shapes, d.scroll))
+            }
             Page::Mixer => PageLayout::Mixer(mixer_layout(
                 s,
                 strip,
@@ -703,6 +722,229 @@ impl Renderer {
                 self.paint_search(l, &frame.search);
                 Ok(())
             }
+            PageLayout::Devices(l) => {
+                self.paint_devices(l, &frame.devices);
+                Ok(())
+            }
+        }
+    }
+
+    /// The Devices page's header widths: the title, the count chip and
+    /// "Eject semua" (its icon, a gap and the label, with padding).
+    fn devices_head(&self, count: usize) -> DevicesHead {
+        let lang = i18n::lang();
+        let title_w = self
+            .text_width(text(lang, Key::PageDevices), &self.fonts.heading)
+            .ceil()
+            + 1.0;
+        let chip_w = self
+            .text_width(&i18n::devices_connected(lang, count), &self.fonts.small)
+            .ceil()
+            + 2.0 * CHIP_PAD_X;
+        let label = self
+            .text_width(text(lang, Key::DevicesEjectAll), &self.fonts.button)
+            .ceil();
+        DevicesHead {
+            title_w,
+            chip_w,
+            eject_all_w: 2.0 * DEV_BTN_PAD_X + DEV_BTN_ICON + DEV_BTN_ICON_GAP + label,
+        }
+    }
+
+    /// A rounded button `r` with an optional icon and a label centred
+    /// together: `fill` under `ink`, both at `alpha`.
+    fn paint_labelled_button(
+        &self,
+        r: Rect,
+        icon: Option<Icon>,
+        label: &str,
+        (fill, ink): (u32, u32),
+        alpha: f32,
+    ) {
+        self.set_color(fill, alpha);
+        self.fill_round(r, r.h / 2.0);
+        let label_w = self.text_width(label, &self.fonts.button).ceil();
+        let icon_w = icon.map_or(0.0, |_| DEV_BTN_ICON + DEV_BTN_ICON_GAP);
+        let mut x = r.x + (r.w - icon_w - label_w) / 2.0;
+        if let Some(icon) = icon {
+            let area = Rect {
+                x,
+                w: DEV_BTN_ICON,
+                ..r
+            };
+            self.icon_colored(icon, area, DEV_BTN_ICON, ink, alpha, None);
+            x += icon_w;
+        }
+        let area = Rect {
+            x,
+            w: label_w + 1.0,
+            ..r
+        };
+        self.text_colored(label, &self.fonts.button, area, ink, alpha);
+    }
+
+    /// The Devices page after the design's `dev()`: a card per device (icon
+    /// well, title and subtitle, folder / info / Eject buttons, the usage bar
+    /// with "used / total"), a red row under a refused eject with "Coba
+    /// lagi", the details of an expanded card. The cards are clipped to the
+    /// list, which scrolls.
+    fn paint_devices(&self, l: &DevicesLayout, view: &DevicesView) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.heading(text(lang, Key::PageDevices), l.header);
+        if let Some(chip) = l.chip {
+            self.set_color(p.raised, 1.0);
+            self.fill_round(chip, chip.h / 2.0);
+            let count = i18n::devices_connected(lang, view.list.len());
+            self.text_colored(&count, &self.fonts.small_center, chip, p.secondary, 1.0);
+        }
+        if let Some(r) = l.eject_all {
+            let alpha = if view.ejecting.is_empty() {
+                1.0
+            } else {
+                DEV_DIM
+            };
+            let label = text(lang, Key::DevicesEjectAll);
+            self.paint_labelled_button(r, Some(Icon::Eject), label, (p.raised, p.text), alpha);
+        }
+        if let Some(empty) = l.empty {
+            let (icon_area, text_area) = (
+                Rect {
+                    y: empty.y + empty.h / 2.0 - 34.0,
+                    h: 30.0,
+                    ..empty
+                },
+                Rect {
+                    y: empty.y + empty.h / 2.0 + 2.0,
+                    h: 20.0,
+                    ..empty
+                },
+            );
+            self.icon_colored(Icon::Usb, icon_area, 26.0, p.secondary, 1.0, None);
+            let hint = text(lang, Key::DevicesEmpty);
+            self.text_colored(hint, &self.fonts.eleven_center, text_area, p.secondary, 1.0);
+        }
+        let target = self.target.as_ref().expect("target ensured by paint");
+        unsafe {
+            target
+                .rt
+                .PushAxisAlignedClip(&d2d_rect(l.list), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
+        for (lay, dev) in l.cards.iter().zip(view.list) {
+            self.set_color(p.raised, 1.0);
+            self.fill_round(lay.card, radius::CARD);
+            self.set_color(p.track, 1.0);
+            self.fill_round(lay.well, 10.0);
+            let glyph = match dev.kind {
+                DeviceKind::Usb => Icon::Usb,
+                DeviceKind::Hdd => Icon::Hdd,
+                DeviceKind::Sd => Icon::Sd,
+            };
+            self.icon_colored(glyph, lay.well, 19.0, p.accent, 1.0, None);
+            let title = devices::title_line(dev);
+            self.text_colored(&title, &self.fonts.body_medium, lay.title, p.text, 1.0);
+            let sub = devices::subtitle(lang, dev);
+            self.text_colored(&sub, &self.fonts.small, lay.subtitle, p.secondary, 1.0);
+            for (r, icon) in [(lay.open, Icon::Folder), (lay.detail, Icon::Info)] {
+                self.set_color(p.raised_hi, 1.0);
+                self.fill_round(r, r.h / 2.0);
+                self.icon_colored(icon, r, DEV_BTN_ICON + 1.0, p.secondary, 1.0, None);
+            }
+            let ejecting = view.ejecting.contains(&dev.key);
+            let key = if ejecting {
+                Key::DevicesEjecting
+            } else {
+                Key::DevicesEject
+            };
+            let alpha = if ejecting { DEV_DIM } else { 1.0 };
+            self.paint_labelled_button(
+                lay.eject,
+                Some(Icon::Eject),
+                text(lang, key),
+                (p.accent, p.on_accent),
+                alpha,
+            );
+            // The bar: used over the whole device; a dash before the size is known.
+            self.set_color(p.track, 1.0);
+            self.fill_round(lay.bar, DEV_BAR_H / 2.0);
+            let usage = match devices::used_total(dev) {
+                Some((used, total)) => {
+                    let fill = Rect {
+                        w: lay.bar.w * (used as f32 / total as f32).clamp(0.0, 1.0),
+                        ..lay.bar
+                    };
+                    if fill.w > 0.0 {
+                        self.set_color(p.accent, 1.0);
+                        self.fill_round(fill, DEV_BAR_H / 2.0);
+                    }
+                    devices::used_total_text(lang, used, total)
+                }
+                None => DASH.to_owned(),
+            };
+            let w = self.text_width(&usage, &self.fonts.mono_small).ceil();
+            let area = Rect {
+                x: (lay.usage.right() - w).max(lay.usage.x),
+                w: w.min(lay.usage.w),
+                ..lay.usage
+            };
+            self.text_colored(&usage, &self.fonts.mono_small, area, p.secondary, 1.0);
+            if view.expanded == Some(dev.key.as_str()) && lay.rows.len() >= 3 {
+                self.paint_device_details(&lay.rows, dev);
+            }
+            if let (Some(veto), Some(found)) = (&lay.veto, view.vetoes.get(&dev.key)) {
+                let (title, detail) = devices::veto_message(lang, found);
+                self.set_color(theme::SOFT_RED, DEV_VETO_TINT);
+                self.fill_round(veto.row, radius::BLOCK);
+                let title_w = self.text_width(&title, &self.fonts.small_medium).ceil() + 4.0;
+                let head = Rect {
+                    w: title_w.min(veto.text.w),
+                    ..veto.text
+                };
+                let medium = &self.fonts.small_medium;
+                self.text_colored(&title, medium, head, theme::SOFT_RED, 1.0);
+                let rest = Rect {
+                    x: head.right(),
+                    w: (veto.text.w - head.w).max(0.0),
+                    ..veto.text
+                };
+                self.text_colored(&detail, &self.fonts.small, rest, theme::SOFT_RED, 0.9);
+                let alpha = if ejecting { DEV_DIM } else { 1.0 };
+                self.set_color(p.raised_hi, alpha);
+                self.fill_round(veto.retry, veto.retry.h / 2.0);
+                let retry = text(lang, Key::DevicesRetry);
+                self.text_colored(retry, &self.fonts.small_center, veto.retry, p.text, alpha);
+            }
+        }
+        unsafe { target.rt.PopAxisAlignedClip() };
+        if let Some(bar) = l.scrollbar {
+            self.set_color(p.secondary, 0.55);
+            self.fill_round(bar, CLIP_SCROLLBAR_W / 2.0);
+        }
+    }
+
+    /// The expanded card's rows: Model, Jalur, Sistem file, then each
+    /// partition ("F: · NTFS · 612 GB / 931 GB · label").
+    fn paint_device_details(&self, rows: &[(Rect, Rect)], dev: &devices::Device) {
+        let lang = i18n::lang();
+        let p = self.palette;
+        let fs = devices::fs_summary(dev);
+        let fixed = [
+            (Key::DeviceModel, dev.model.clone()),
+            (Key::DeviceConnection, devices::bus_label(lang, dev.bus)),
+            (Key::DeviceFileSystem, fs),
+        ];
+        for ((label, value), (key, shown)) in rows.iter().zip(fixed) {
+            self.text_colored(text(lang, key), &self.fonts.small, *label, p.secondary, 1.0);
+            let shown = if shown.is_empty() {
+                DASH.to_owned()
+            } else {
+                shown
+            };
+            self.text_colored(&shown, &self.fonts.small, *value, p.text, 1.0);
+        }
+        for ((_, value), part) in rows.iter().skip(3).zip(&dev.partitions) {
+            let line = devices::partition_line(lang, part);
+            self.text_colored(&line, &self.fonts.mono_small, *value, p.text, 1.0);
         }
     }
 

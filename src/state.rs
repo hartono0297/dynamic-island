@@ -67,6 +67,7 @@ fn notice_has_action(notice: &Notice) -> bool {
             | NoticeKind::SystemLow
             | NoticeKind::Pomodoro
             | NoticeKind::Screenshot { .. }
+            | NoticeKind::DevicePlugged { .. }
             | NoticeKind::App { app_id: Some(_) }
     )
 }
@@ -223,10 +224,11 @@ pub struct IslandState {
     /// The Clipboard search field has the keyboard; it keeps the panel open
     /// like the CLI input.
     clip_focused: bool,
-    /// The hotkey opened the panel: it stays open (no hover, no keyboard)
-    /// until the pointer comes (then hover holds it), the hotkey again, a
-    /// copy, or `ClipHoldEnd`.
-    clip_held: bool,
+    /// A hotkey opened the panel on this page (the Clipboard's or the
+    /// Devices'): it stays open (no hover, no keyboard) until the pointer
+    /// comes (then hover holds it), the hotkey again, a copy, or
+    /// `ClipHoldEnd`.
+    hotkey_held: Option<Page>,
     /// Files are being dragged over the island: the panel is open on the
     /// shelf for them. Hover takes over like it does from `clip_held`;
     /// `ShelfDrag(false)` ends it.
@@ -310,7 +312,7 @@ impl IslandState {
             cli_scroll: 0,
             cli_menu: false,
             clip_focused: false,
-            clip_held: false,
+            hotkey_held: None,
             shelf_held: false,
             shelf_drop: DropVisit::No,
             search_open: false,
@@ -396,6 +398,8 @@ impl IslandState {
                 | NoticeKind::MoleDone
                 | NoticeKind::ShotSaved
                 | NoticeKind::ShotDeleted
+                | NoticeKind::DevicePlugged { .. }
+                | NoticeKind::DeviceSafe
                 | NoticeKind::Pomodoro => self.queue.push_back(notice),
                 // A newer screenshot replaces an older preview and a
                 // "Disalin" (both kept, nothing deleted); it never removes
@@ -482,7 +486,7 @@ impl IslandState {
                 // The pointer arrived: hover holds the hotkey's panel now,
                 // and leaving closes it as usual.
                 if on {
-                    self.clip_held = false;
+                    self.hotkey_held = None;
                     self.shelf_held = false;
                 }
                 self.collapsed = match (self.collapsed, on) {
@@ -512,7 +516,8 @@ impl IslandState {
             Event::CliFocus(on) => self.cli_focused = on,
             Event::ClipFocus(on) => self.clip_focused = on,
             Event::ClipHotkey => self.clip_hotkey(),
-            Event::ClipHoldEnd => self.clip_held = false,
+            Event::ClipHoldEnd => self.hotkey_held = None,
+            Event::DevicesHotkey => self.devices_hotkey(),
             Event::SearchHotkey => self.search_hotkey(&mut effects),
             Event::SearchOpen => {
                 if self.search_open {
@@ -568,6 +573,7 @@ impl IslandState {
             | Event::ExplorerFolders { .. }
             | Event::SystemSample(_)
             | Event::Audio(..)
+            | Event::Devices(_)
             | Event::SearchIndex(_)
             | Event::SearchFiles(_)
             | Event::SearchDetail { .. }
@@ -679,8 +685,11 @@ impl IslandState {
             self.clip_focused = false;
             effects.push(Effect::ReleaseClipFocus);
         }
-        if self.clip_held && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
-            self.clip_held = false;
+        if self
+            .hotkey_held
+            .is_some_and(|page| self.page != page || self.collapsed != Collapse::No)
+        {
+            self.hotkey_held = None;
         }
         if self.shelf_held && (self.page != Page::Shelf || self.collapsed != Collapse::No) {
             self.shelf_held = false;
@@ -1084,7 +1093,7 @@ impl IslandState {
                 || self.editor_open
                 || self.cli_focused
                 || self.clip_focused
-                || self.clip_held
+                || self.hotkey_held.is_some()
                 || self.shelf_held
                 || self.search_open)
     }
@@ -1126,17 +1135,28 @@ impl IslandState {
         } else {
             Collapse::Left
         };
-        self.clip_held = false;
+        self.hotkey_held = None;
         self.shelf_held = false;
     }
 
-    /// The hotkey: the Clipboard page opens (a new visit, whatever closed
-    /// the panel before), or, when it shows already, the panel closes.
+    /// The Clipboard hotkey: the Clipboard page opens (a new visit, whatever
+    /// closed the panel before), or, when it shows already, the panel closes.
     fn clip_hotkey(&mut self) {
+        self.page_hotkey(Page::Clipboard);
+    }
+
+    /// The Devices hotkey: the same for the Devices page.
+    fn devices_hotkey(&mut self) {
+        self.page_hotkey(Page::Devices);
+    }
+
+    /// A page's hotkey: it opens `page` as a new visit held open until the
+    /// pointer comes, or, when `page` shows already, closes the panel.
+    fn page_hotkey(&mut self, page: Page) {
         if self.fullscreen {
             return;
         }
-        if self.view() == View::Panel(Page::Clipboard) {
+        if self.view() == View::Panel(page) {
             if self.hover
                 || self.editor_open
                 || self.cli_focused
@@ -1145,13 +1165,13 @@ impl IslandState {
             {
                 self.collapse();
             }
-            self.clip_held = false;
+            self.hotkey_held = None;
             return;
         }
-        self.page = Page::Clipboard;
+        self.page = page;
         self.collapsed = Collapse::No;
         // Under the pointer already: hover holds it, as for any visit.
-        self.clip_held = !self.hover;
+        self.hotkey_held = (!self.hover).then_some(page);
     }
 
     /// The quick search's hotkey: it opens over whatever page shows (a new
@@ -1230,9 +1250,22 @@ impl IslandState {
         self.search_open
     }
 
-    /// The hotkey holds the panel open.
+    /// A page's hotkey (the Clipboard's or the Devices') holds the panel
+    /// open.
+    pub fn hotkey_held(&self) -> bool {
+        self.hotkey_held.is_some()
+    }
+
+    /// The Clipboard hotkey holds the panel open.
+    #[cfg(test)]
     pub fn clip_held(&self) -> bool {
-        self.clip_held
+        self.hotkey_held == Some(Page::Clipboard)
+    }
+
+    /// The Devices hotkey holds the panel open.
+    #[cfg(test)]
+    pub fn devices_held(&self) -> bool {
+        self.hotkey_held == Some(Page::Devices)
     }
 
     /// How long ago hover opened the panel; `None` when it is closed or held
@@ -1285,6 +1318,15 @@ impl IslandState {
                         NoticeKind::SystemLow | NoticeKind::MoleDone | NoticeKind::MoleFailed
                     );
                     effects.extend(self.dismiss_visible_notice(now));
+                    // A plugged-in drive's "Buka": Explorer on its first
+                    // drive, and the panel stays out of the way like after a
+                    // tile.
+                    if let NoticeKind::DevicePlugged { letter } = n.kind
+                        && letter.is_ascii_alphabetic()
+                    {
+                        self.collapse();
+                        effects.push(Effect::OpenDrive(letter));
+                    }
                     if opens_panel {
                         self.hover_blocked = false;
                         if self.open_mode != OpenMode::Hover && !self.fullscreen {
@@ -1389,6 +1431,28 @@ impl IslandState {
             Hit::ShelfClear => {
                 if self.view() == View::Panel(Page::Shelf) {
                     effects.push(Effect::ShelfClear);
+                }
+            }
+            // The Devices page's buttons count only while it shows. A device
+            // that is opened gets the panel out of the way first.
+            Hit::DeviceEject(i) | Hit::DeviceRetry(i) => {
+                if self.view() == View::Panel(Page::Devices) {
+                    effects.push(Effect::DeviceEject(i));
+                }
+            }
+            Hit::DeviceDetail(i) => {
+                if self.view() == View::Panel(Page::Devices) {
+                    effects.push(Effect::DeviceDetail(i));
+                }
+            }
+            Hit::DevicesEjectAll => {
+                if self.view() == View::Panel(Page::Devices) {
+                    effects.push(Effect::DevicesEjectAll);
+                }
+            }
+            Hit::DeviceOpen(i) => {
+                if self.view() == View::Panel(Page::Devices) {
+                    self.collapse_for(Effect::DeviceOpen(i), effects);
                 }
             }
             // The offset buttons are drawn only with lyrics on.
@@ -3009,7 +3073,7 @@ mod tests {
         s.apply(Event::Hover(true), t0);
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Calendar));
-        s.apply(Event::Wheel(-120 * 10), t0);
+        s.apply(Event::Wheel(-120 * 20), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shortcuts));
@@ -3064,7 +3128,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_end_with_system_cli_then_shortcuts() {
+    fn pages_end_with_system_devices_cli_then_shortcuts() {
         assert_eq!(
             Page::ALL,
             [
@@ -3077,6 +3141,7 @@ mod tests {
                 Page::Clipboard,
                 Page::Shelf,
                 Page::System,
+                Page::Devices,
                 Page::Cli,
                 Page::Shortcuts,
             ]
@@ -3184,7 +3249,7 @@ mod tests {
         assert!(s.cleaner().is_some());
         // Off the page, or with the panel shut, nothing.
         s.apply(Event::Wheel(-120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert_eq!(s.view(), View::Panel(Page::Devices));
         assert!(s.apply(Event::Click(Hit::SystemClean), t0).is_empty());
         leave(&mut s, t0);
         assert!(s.apply(Event::Click(Hit::SystemProcess), t0).is_empty());
@@ -3280,7 +3345,7 @@ mod tests {
         // So does scrolling to another page.
         s.apply(Event::Click(Hit::SystemClean), t0);
         s.apply(Event::Wheel(-120), t0);
-        assert_eq!(s.view(), View::Panel(Page::Cli));
+        assert_eq!(s.view(), View::Panel(Page::Devices));
         assert!(s.cleaner().is_none());
         // Cleaner clicks off the cleaner do nothing.
         for hit in [
@@ -3738,13 +3803,16 @@ mod tests {
         // No Win+V, no collapse: the island's own page.
         assert_eq!(effects, vec![]);
         assert_eq!(s.view(), View::Panel(Page::Clipboard));
-        // The page sits between Mixer and the shelf, then Sistem and CLI.
+        // The page sits between Mixer and the shelf, then Sistem, Perangkat
+        // and CLI.
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Mixer));
         s.apply(Event::Wheel(-240), t0);
         assert_eq!(s.view(), View::Panel(Page::Shelf));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::System));
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Devices));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Cli));
     }
@@ -3825,6 +3893,183 @@ mod tests {
         s.apply(Event::Fullscreen(true), t0);
         s.apply(Event::ClipHotkey, t0);
         assert!(!s.clip_held());
+    }
+
+    #[test]
+    fn the_devices_hotkey_works_like_the_clipboards_and_the_holds_do_not_mix() {
+        let t0 = Instant::now();
+        let mut s = st();
+        assert_eq!(s.apply(Event::DevicesHotkey, t0), vec![]);
+        assert_eq!(s.view(), View::Panel(Page::Devices));
+        assert!(s.devices_held() && s.hotkey_held() && !s.clip_held());
+        // Pressed again while it shows: closed.
+        s.apply(Event::DevicesHotkey, t0);
+        assert_eq!(s.view(), View::Idle);
+        assert!(!s.hotkey_held());
+        // Not visited in time: closed (the one hold timer ends either).
+        s.apply(Event::DevicesHotkey, t0);
+        s.apply(Event::ClipHoldEnd, t0);
+        assert_eq!(s.view(), View::Idle);
+        assert!(!s.devices_held());
+        // Visited: hover holds it, leaving closes it.
+        s.apply(Event::DevicesHotkey, t0);
+        s.apply(Event::Hover(true), t0);
+        assert!(!s.devices_held());
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // The other hotkey takes the panel over: one hold, the Clipboard's.
+        s.apply(Event::DevicesHotkey, t0);
+        s.apply(Event::ClipHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Clipboard));
+        assert!(s.clip_held() && !s.devices_held());
+        s.apply(Event::DevicesHotkey, t0);
+        assert_eq!(s.view(), View::Panel(Page::Devices));
+        assert!(s.devices_held() && !s.clip_held());
+        // A page change ends the hold (the pointer comes and turns the page).
+        s.apply(Event::Hover(true), t0);
+        s.apply(Event::Wheel(-120), t0);
+        assert!(!s.hotkey_held());
+        s.apply(Event::Hover(false), t0);
+        // A tile that collapses the panel ends it too.
+        s.apply(Event::DevicesHotkey, t0);
+        assert!(s.devices_held());
+        s.apply(Event::Click(Hit::DeviceOpen(0)), t0);
+        assert!(!s.devices_held());
+        // Never over a fullscreen app.
+        let mut s = st();
+        s.apply(Event::Fullscreen(true), t0);
+        s.apply(Event::DevicesHotkey, t0);
+        assert!(!s.devices_held());
+    }
+
+    #[test]
+    fn the_devices_buttons_count_only_while_the_page_shows() {
+        let t0 = Instant::now();
+        let mut s = st();
+        // Closed, or on another page: nothing.
+        for hit in [
+            Hit::DeviceEject(0),
+            Hit::DeviceRetry(0),
+            Hit::DeviceDetail(0),
+            Hit::DeviceOpen(0),
+            Hit::DevicesEjectAll,
+        ] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), t0), vec![], "{hit:?}");
+        }
+        open_on(&mut s, Page::Calendar, t0);
+        assert_eq!(s.apply(Event::Click(Hit::DeviceEject(0)), t0), vec![]);
+        open_on(&mut s, Page::Devices, t0);
+        assert_eq!(
+            s.apply(Event::Click(Hit::DeviceEject(2)), t0),
+            vec![Effect::DeviceEject(2)]
+        );
+        // "Coba lagi" asks for the same eject.
+        assert_eq!(
+            s.apply(Event::Click(Hit::DeviceRetry(1)), t0),
+            vec![Effect::DeviceEject(1)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::DeviceDetail(0)), t0),
+            vec![Effect::DeviceDetail(0)]
+        );
+        assert_eq!(
+            s.apply(Event::Click(Hit::DevicesEjectAll), t0),
+            vec![Effect::DevicesEjectAll]
+        );
+        // The panel stays for those.
+        assert_eq!(s.view(), View::Panel(Page::Devices));
+        // The folder button gets the panel out of the way, like a drive's meter.
+        assert_eq!(
+            s.apply(Event::Click(Hit::DeviceOpen(1)), t0),
+            vec![Effect::DeviceOpen(1)]
+        );
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    #[test]
+    fn an_action_on_the_devices_page_keeps_the_panel_open_a_while() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Devices, t0);
+        s.apply(Event::Click(Hit::DeviceDetail(0)), t0);
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Devices), "the linger holds it");
+        s.apply(Event::Tick, t0 + ACTIVITY_LINGER + secs(1));
+        assert_eq!(s.view(), View::Idle);
+    }
+
+    fn plugged(letter: char) -> Notice {
+        Notice {
+            key: "device-plugged-k".into(),
+            source: "Perangkat".into(),
+            title: "SanDisk Ultra tersambung".into(),
+            body: "E: · 38,9 GB kosong".into(),
+            kind: NoticeKind::DevicePlugged { letter },
+        }
+    }
+
+    fn safe() -> Notice {
+        Notice {
+            key: "device-safe".into(),
+            source: "Perangkat".into(),
+            title: "Aman dicabut".into(),
+            body: "SanDisk Ultra".into(),
+            kind: NoticeKind::DeviceSafe,
+        }
+    }
+
+    #[test]
+    fn a_plugged_notice_has_a_button_and_its_click_opens_the_drive() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(plugged('E')), t0);
+        assert_eq!(s.view(), View::Notice(plugged('E')));
+        // Temporary, like the battery's.
+        assert_eq!(s.next_deadline(), Some(t0 + NOTICE_DURATION));
+        // It has a button: hover does not open the panel over it.
+        assert!(notice_has_action(&plugged('E')));
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Notice(plugged('E')));
+        // The click dismisses it, opens Explorer on the drive and keeps the
+        // panel shut until the pointer leaves and comes back.
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert_eq!(effects, vec![Effect::OpenDrive('E')]);
+        assert_eq!(s.view(), View::Idle);
+        s.apply(Event::Hover(false), t0);
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Calendar));
+        // A letter that is not one opens nothing.
+        let mut s = st();
+        s.apply(Event::Notice(plugged('\0')), t0);
+        s.apply(Event::Hover(true), t0);
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::OpenDrive(_))));
+    }
+
+    #[test]
+    fn the_safe_notice_is_temporary_and_a_click_only_dismisses_it() {
+        let t0 = Instant::now();
+        let mut s = st();
+        s.apply(Event::Notice(safe()), t0);
+        assert_eq!(s.view(), View::Notice(safe()));
+        assert_eq!(s.next_deadline(), Some(t0 + NOTICE_DURATION));
+        assert!(!notice_has_action(&safe()), "nothing to click for");
+        s.apply(Event::Hover(true), t0);
+        let effects = s.apply(Event::Click(Hit::Body), t0);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::OpenDrive(_))));
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // Without a click it goes on its own.
+        let mut s = st();
+        s.apply(Event::Notice(safe()), t0);
+        s.apply(Event::Tick, t0 + NOTICE_DURATION);
+        assert_eq!(s.view(), View::Idle);
+        // Both queue behind each other like any notice.
+        s.apply(Event::Notice(plugged('F')), t0);
+        s.apply(Event::Notice(safe()), t0);
+        assert_eq!(s.view(), View::Notice(plugged('F')));
+        s.apply(Event::Tick, t0 + NOTICE_DURATION);
+        assert_eq!(s.view(), View::Notice(safe()));
     }
 
     fn copied(body: &str) -> Notice {
@@ -4152,7 +4397,7 @@ mod tests {
         let mut s = st();
         open_on(&mut s, Page::Cli, t0);
         s.apply(Event::Wheel(120), t0);
-        assert_eq!(s.view(), View::Panel(Page::System));
+        assert_eq!(s.view(), View::Panel(Page::Devices));
     }
 
     #[test]

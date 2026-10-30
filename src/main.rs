@@ -13,6 +13,8 @@ mod cli_panel;
 mod clipboard;
 mod config;
 mod data_dir;
+mod devices;
+mod devices_win;
 mod dpapi;
 mod gestures;
 mod google;
@@ -67,8 +69,8 @@ fn opens_windows(arg: Option<&str>) -> bool {
         Some(media_log::FLAG) => true,
         #[cfg(debug_assertions)]
         Some(
-            "--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--demo-snap"
-            | "--demo-shot-editor" | "--settings",
+            "--demo" | "--demo-editor" | "--demo-cli" | "--demo-robot" | "--demo-devices"
+            | "--demo-snap" | "--demo-shot-editor" | "--settings",
         ) => true,
         Some(_) => false,
     }
@@ -131,6 +133,13 @@ fn main() {
             attach_parent_console();
             demo_lang_from_env();
             ui::demo::run_robot();
+        }
+        // Only the Devices page's scenes: made-up drives, no scan, no eject.
+        #[cfg(debug_assertions)]
+        Some("--demo-devices") => {
+            attach_parent_console();
+            demo_lang_from_env();
+            ui::demo::run_devices();
         }
         // The capture overlay on a desktop drawn in code: no screen grab, no
         // window list, no UI Automation.
