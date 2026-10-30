@@ -35,6 +35,10 @@
 //! The lyric scenes size the notch as the island does: the line measured
 //! by the renderer, capped by this screen's width (`lyric_max_w`).
 //!
+//! The copy preview's scenes (`clipboard-notice-text`, `-long`, `-image`,
+//! `-files`, each also as `...-plain` without Bata) draw fixed made-up text,
+//! a drawn thumbnail and three made-up file names; never the real clipboard.
+//!
 //! The cleaner's scenes (`cleaner`, `cleaner-confirm`, `cleaner-done`)
 //! use fixed sizes and never start the scanner or the cleaner. Its Mole
 //! scenes (`cleaner-mole`, `cleaner-mole-scanning`, `cleaner-mole-confirm`,
@@ -73,8 +77,8 @@ use super::motion::{
     reveal_frame,
 };
 use super::render::{
-    CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, MoleView, Progress,
-    Renderer, RobotFrame, SearchView, ShotView, SystemView,
+    CleanerView, CliView, ClipNoticeView, ClipView, DevicesView, FolderMenuView, Frame, MoleView,
+    Progress, Renderer, RobotFrame, SearchView, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::window::IslandWindow;
@@ -267,6 +271,14 @@ enum DemoNotice {
     MoleFailed,
     /// "Disalin" after copying the first Clipboard card.
     Copied,
+    /// The copy preview (rencana-v3.5 request 3): two lines of copied text.
+    ClipText,
+    /// A very long single line with tabs: one line, fitted to the box.
+    ClipLong,
+    /// A copied picture: its thumbnail in the badge spot, "1280 × 720".
+    ClipImage,
+    /// Three copied files.
+    ClipFiles,
     /// The screenshot preview (keputusan-v3.1 p6): 1280 × 720 · 245 KB.
     Shot,
     /// "Disimpan · Pictures\Screenshots" after Simpan.
@@ -278,6 +290,17 @@ enum DemoNotice {
     /// "Aman dicabut" after Eject: SanDisk Ultra.
     DeviceSafe,
 }
+
+/// The history entry the demo's copy previews name (`DemoNotice::Clip*`).
+const DEMO_CLIP_PREVIEW: u64 = 1;
+/// The copied text of `clipboard-notice-text`: two lines.
+const DEMO_COPY_TWO_LINES: &str =
+    "Denah lantai 2 sudah saya revisi\r\nTolong dicek bagian tangga dan void ya";
+/// And of `clipboard-notice-long`: one line far wider than the notch, with
+/// tabs between the words.
+const DEMO_COPY_LONG: &str = "Rekap\tbiaya\tpekerjaan\tstruktur\tlantai\t2\tdan\t3\t\
+\tRumah\tKemang\tRaya\tNo.\t12\t\tdikerjakan\toleh\tPT\tBangun\tCipta\tSejahtera\t\
+bersama\tkonsultan\tstruktur\tdan\tMEP\tuntuk\tkeperluan\ttender\tbulan\tdepan";
 
 /// The screenshot preview's id in the demo (`DemoNotice::Shot`).
 const DEMO_SHOT: u64 = 1;
@@ -527,7 +550,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 99] = [
+const SCENES: [Scene; 107] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -726,6 +749,37 @@ const SCENES: [Scene; 99] = [
         View0::Notice(DemoNotice::Copied),
         Expr::Happy,
     ),
+    // The copy preview (rencana-v3.5 request 3), with Bata happy and with
+    // the badge; the picture takes the badge spot either way, never Bata.
+    // Fixed text, a drawn thumbnail: never the real clipboard.
+    bata(
+        "clipboard-notice-text",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ClipText),
+        Expr::Happy,
+    ),
+    notice("clipboard-notice-text-plain", DemoNotice::ClipText),
+    bata(
+        "clipboard-notice-long",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ClipLong),
+        Expr::Happy,
+    ),
+    notice("clipboard-notice-long-plain", DemoNotice::ClipLong),
+    bata(
+        "clipboard-notice-image",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ClipImage),
+        Expr::Happy,
+    ),
+    notice("clipboard-notice-image-plain", DemoNotice::ClipImage),
+    bata(
+        "clipboard-notice-files",
+        ShapeKind::Notice,
+        View0::Notice(DemoNotice::ClipFiles),
+        Expr::Happy,
+    ),
+    notice("clipboard-notice-files-plain", DemoNotice::ClipFiles),
     // keputusan-v3.1 p6: the preview with Bata happy, then "Disimpan"
     // (happy) and "Dihapus" (at rest). Fixed figures and a drawn picture.
     bata(
@@ -1072,6 +1126,8 @@ fn run_scenes(scenes: &[Scene]) {
         ..media.clone()
     };
     let shot_thumb = demo_shot_thumb();
+    // The copied picture of `clipboard-notice-image`: the clipboard demo's.
+    let clip_thumb = demo_thumb();
     let today = Local::now().date_naive();
     let name = |var| std::env::var(var).unwrap_or_default();
     let palette = theme::island(
@@ -1366,6 +1422,12 @@ fn run_scenes(scenes: &[Scene]) {
                         bytes,
                     }
                 }),
+                clip_notice: (scene.view == View0::Notice(DemoNotice::ClipImage)).then_some(
+                    ClipNoticeView {
+                        id: DEMO_CLIP_PREVIEW,
+                        thumb: &clip_thumb,
+                    },
+                ),
                 transit: {
                     let reveal_at =
                         frozen_reveal.unwrap_or((into as f32 / REVEAL_MS as f32).min(1.0));
@@ -1616,6 +1678,51 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             crate::clipboard::store::preview(DEMO_CLIPS[0].2, 120),
             NoticeKind::Copied,
         ),
+        DemoNotice::ClipText | DemoNotice::ClipLong => {
+            let lang = crate::i18n::lang();
+            let text = if which == DemoNotice::ClipText {
+                DEMO_COPY_TWO_LINES
+            } else {
+                DEMO_COPY_LONG
+            };
+            let (title, second) = crate::clipboard::notice::clip_notice_lines(text);
+            let body = second.unwrap_or_else(|| {
+                crate::i18n::clip_text_meta(lang, ClipKind::Text, text.chars().count())
+            });
+            Notice {
+                key: crate::model::CLIP_PREVIEW_KEY.into(),
+                ..notice(
+                    tr(Key::ClipboardTitle),
+                    &title,
+                    body,
+                    NoticeKind::ClipPreview {
+                        id: DEMO_CLIP_PREVIEW,
+                    },
+                )
+            }
+        }
+        DemoNotice::ClipImage => Notice {
+            key: crate::model::CLIP_IMAGE_KEY.into(),
+            ..notice(
+                tr(Key::ClipboardTitle),
+                tr(Key::ClipPreviewImage),
+                crate::i18n::clip_preview_size(1280, 720),
+                NoticeKind::ClipPreview {
+                    id: DEMO_CLIP_PREVIEW,
+                },
+            )
+        },
+        DemoNotice::ClipFiles => Notice {
+            key: crate::model::CLIP_PREVIEW_KEY.into(),
+            ..notice(
+                tr(Key::ClipboardTitle),
+                tr(Key::ClipPreviewFiles),
+                crate::i18n::clip_files(crate::i18n::lang(), 3, "laporan.pdf"),
+                NoticeKind::ClipPreview {
+                    id: DEMO_CLIP_PREVIEW,
+                },
+            )
+        },
         DemoNotice::Shot => notice(
             tr(Key::ShotTitle),
             tr(Key::ShotTitle),

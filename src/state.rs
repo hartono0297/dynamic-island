@@ -28,6 +28,8 @@ pub const NOTICE_DURATION: Duration = Duration::from_secs(5);
 pub const GREETING_DURATION: Duration = Duration::from_secs(4);
 /// "Disalin" is only a confirmation.
 pub const COPIED_DURATION: Duration = Duration::from_millis(1500);
+/// The copy preview (text lines, a thumbnail) needs a little more to be read.
+pub const CLIP_NOTICE_DURATION: Duration = Duration::from_secs(3);
 
 /// "Disimpan" and "Dihapus" after a screenshot's button.
 pub const SHOT_DONE_DURATION: Duration = Duration::from_millis(2500);
@@ -40,6 +42,7 @@ fn duration_of(notice: &Notice) -> Duration {
     match notice.kind {
         NoticeKind::Greeting => GREETING_DURATION,
         NoticeKind::Copied => COPIED_DURATION,
+        NoticeKind::ClipPreview { .. } => CLIP_NOTICE_DURATION,
         NoticeKind::Screenshot { secs, .. } => Duration::from_secs(u64::from(secs)),
         NoticeKind::ShotSaved | NoticeKind::ShotDeleted => SHOT_DONE_DURATION,
         _ => NOTICE_DURATION,
@@ -52,6 +55,11 @@ fn shot_of(notice: &Notice) -> Option<u64> {
         NoticeKind::Screenshot { shot, .. } => Some(shot),
         _ => None,
     }
+}
+
+/// The copy preview (`ClipPreview`) in `notice`.
+fn is_clip_preview(notice: &Notice) -> bool {
+    matches!(notice.kind, NoticeKind::ClipPreview { .. })
 }
 
 /// A notice the pointer can act on: a button or a click target. Hover must
@@ -68,6 +76,7 @@ fn notice_has_action(notice: &Notice) -> bool {
             | NoticeKind::Pomodoro
             | NoticeKind::Screenshot { .. }
             | NoticeKind::DevicePlugged { .. }
+            | NoticeKind::ClipPreview { .. }
             | NoticeKind::App { app_id: Some(_) }
     )
 }
@@ -406,8 +415,11 @@ impl IslandState {
                 // another kind of notice and never shows over a game.
                 NoticeKind::Screenshot { .. } => {
                     if !self.fullscreen {
-                        let replaced =
-                            |n: &Notice| shot_of(n).is_some() || n.kind == NoticeKind::Copied;
+                        let replaced = |n: &Notice| {
+                            shot_of(n).is_some()
+                                || n.kind == NoticeKind::Copied
+                                || is_clip_preview(n)
+                        };
                         self.queue.retain(|n| !replaced(n));
                         if matches!(&self.current, Some((n, _)) if replaced(n)) {
                             self.current = None;
@@ -432,6 +444,20 @@ impl IslandState {
                         self.queue.push_back(notice);
                     }
                 }
+                // The preview of a copy made elsewhere: like "Disalin" only
+                // the latest is worth showing (it replaces an older preview
+                // or a "Disalin"), and none over a game.
+                NoticeKind::ClipPreview { .. } => {
+                    if !self.fullscreen {
+                        let replaced =
+                            |n: &Notice| n.kind == NoticeKind::Copied || is_clip_preview(n);
+                        self.queue.retain(|n| !replaced(n));
+                        if matches!(&self.current, Some((n, _)) if replaced(n)) {
+                            self.current = None;
+                        }
+                        self.queue.push_back(notice);
+                    }
+                }
             },
             Event::ClaudeActivity { session_id } => self.clear_sticky(Sticky::Session(&session_id)),
             Event::Fullscreen(on) => {
@@ -444,6 +470,11 @@ impl IslandState {
                 if on {
                     self.queue.retain(|n| shot_of(n).is_none());
                     if matches!(&self.current, Some((n, _)) if shot_of(n).is_some()) {
+                        self.current = None;
+                    }
+                    // A copy preview is stale by the time the game ends.
+                    self.queue.retain(|n| !is_clip_preview(n));
+                    if matches!(&self.current, Some((n, _)) if is_clip_preview(n)) {
                         self.current = None;
                     }
                 }
@@ -1313,10 +1344,13 @@ impl IslandState {
                     // These notices lead to the panel: it opens under the
                     // pointer after the click, and in the modes that keep it
                     // open, it stays (the pointer alone would not hold it).
+                    // The copy preview only when the Clipboard page is on in
+                    // "Halaman panel"; off, the click just dismisses it.
                     let opens_panel = matches!(
                         n.kind,
                         NoticeKind::SystemLow | NoticeKind::MoleDone | NoticeKind::MoleFailed
-                    );
+                    ) || (is_clip_preview(&n)
+                        && self.pages.is_on(Page::Clipboard));
                     effects.extend(self.dismiss_visible_notice(now));
                     // A plugged-in drive's "Buka": Explorer on its first
                     // drive, and the panel stays out of the way like after a
@@ -1874,6 +1908,14 @@ impl IslandState {
             // The panel the pointer opens next is the System page.
             NoticeKind::SystemLow => {
                 self.page = Page::System;
+                None
+            }
+            // The panel the pointer opens next is the Clipboard's (when that
+            // page is on; off, the click only dismisses).
+            NoticeKind::ClipPreview { .. } => {
+                if self.pages.is_on(Page::Clipboard) {
+                    self.page = Page::Clipboard;
+                }
                 None
             }
             _ => None,

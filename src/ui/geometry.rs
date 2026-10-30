@@ -784,6 +784,8 @@ pub fn badge_style(notice: &Notice, p: &Palette, pomo_next: Phase) -> BadgeStyle
         NoticeKind::Greeting => tint(p.accent, Icon::Sparkle),
         // With the robot off: the Clipboard icon, as on the Pintasan tile.
         NoticeKind::Copied => tint(p.accent, Icon::Clipboard),
+        // Text and files with the robot off, or an image whose entry is gone.
+        NoticeKind::ClipPreview { .. } => tint(p.accent, Icon::Clipboard),
         // With the robot off: the Camera, as on the Pintasan tile.
         NoticeKind::Screenshot { .. } => tint(p.accent, Icon::Camera),
         NoticeKind::ShotSaved => tint(p.sage, Icon::Download),
@@ -820,6 +822,8 @@ pub fn notice_action(kind: &NoticeKind, pomo: PomoStatus) -> Option<Key> {
         NoticeKind::SystemLow => Some(Key::Open),
         // The click opens Explorer on the drive.
         NoticeKind::DevicePlugged { .. } => Some(Key::Open),
+        // The click opens the panel on the Clipboard page.
+        NoticeKind::ClipPreview { .. } => Some(Key::ClipPreviewChip),
         // The click opens the cleaner on Mole's log.
         NoticeKind::MoleDone | NoticeKind::MoleFailed => Some(Key::MoleLog),
         _ => None,

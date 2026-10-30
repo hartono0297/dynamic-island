@@ -651,6 +651,10 @@ keys! {
     ClipOff => "Riwayat clipboard mati", "Clipboard history is off";
     ClipOffHint => "Nyalakan di Pengaturan → Clipboard", "Turn it on in Settings → Clipboard";
     ClipCopied => "Disalin", "Copied";
+    // The copy preview (`NoticeKind::ClipPreview`): an image, files, the chip.
+    ClipPreviewImage => "Gambar disalin", "Image copied";
+    ClipPreviewFiles => "Berkas disalin", "Files copied";
+    ClipPreviewChip => "Riwayat", "History";
     ClipImageSmall => "pratinjau kecil, aslinya tidak tersimpan",
         "small preview, the original is no longer kept";
     SecClipboard => "Clipboard", "Clipboard";
@@ -695,6 +699,9 @@ keys! {
     SearchHotkeyTaken => "Sudah dipakai", "In use";
     ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
     ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";
+    ClipCopyNotice => "Notifikasi salinan", "Copy notification";
+    ClipCopyNoticeDesc => "Pratinjau di notch setiap kali menyalin", "A preview in the notch on every copy";
+    ClipFeedbackAllReplaced => "Diganti pratinjau salinan di atas", "Replaced by the copy preview above";
     ClipClear => "Hapus riwayat", "Clear history";
     ClipClearDesc => "Item tersemat tetap disimpan", "Pinned items are kept";
     ClipClearButton => "Hapus", "Clear";
@@ -1498,6 +1505,27 @@ pub fn clip_files(lang: Lang, n: usize, first: &str) -> String {
         (Lang::Id, n) => format!("{n} file"),
         (Lang::En, n) => format!("{n} files"),
     }
+}
+
+/// The copy preview's meta line for a copied text that has no second line:
+/// "Teks · 42 karakter", "Code · 1 character". A link or a colour is its
+/// kind's name alone (the number tells nothing there).
+pub fn clip_text_meta(lang: Lang, kind: crate::clipboard::ClipKind, chars: usize) -> String {
+    use crate::clipboard::ClipKind;
+    let name = text(lang, clip_kind_key(kind));
+    if matches!(kind, ClipKind::Link | ClipKind::Color) {
+        return name.to_owned();
+    }
+    match (lang, chars) {
+        (Lang::Id, n) => format!("{name} · {n} karakter"),
+        (Lang::En, 1) => format!("{name} · 1 character"),
+        (Lang::En, n) => format!("{name} · {n} characters"),
+    }
+}
+
+/// The copy preview's body for an image: "1280 × 720".
+pub fn clip_preview_size(w: u32, h: u32) -> String {
+    format!("{w} × {h}")
 }
 
 /// The screenshot preview's size line: "1280 × 720 · 245 KB"; from

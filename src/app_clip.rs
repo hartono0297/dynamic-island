@@ -18,18 +18,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::App;
+use crate::clipboard::notice::{
+    NoticeCtx, NoticeGate, PREVIEW_CHARS, clip_notice_lines, clip_notice_wanted,
+};
 use crate::clipboard::persist::{self, Write};
 use crate::clipboard::store::{self, ClipSnapshot, Ingested, ingest};
 use crate::clipboard::win::{self, Read};
 use crate::clipboard::{Clip, ClipData, History};
 use crate::config::ClipHotkey;
 use crate::i18n::{self, Key, tr};
-use crate::model::{ClipAction, Event, Hit, Notice, NoticeKind, Page, View};
+use crate::model::{
+    CLIP_IMAGE_KEY, CLIP_PREVIEW_KEY, ClipAction, Event, Hit, Notice, NoticeKind, Page, View,
+};
 use crate::ui::cli_input::{CliInput, Key as InputKey};
 use crate::ui::editor;
 use crate::ui::geometry::{ShapeKind, shape_for};
 use crate::ui::panel_layout::{clip_max_scroll, clip_rows, clip_scroll_to, clip_wheel_step};
-use crate::ui::render::ClipView;
+use crate::ui::render::{ClipNoticeView, ClipView};
 
 /// One-shot: the clipboard was busy; read it again. (17 and 18 are the
 /// System page's timers in `app`.)
@@ -47,8 +52,6 @@ const HOLD_MS: u32 = 8000;
 pub(super) const HOTKEY_CLIP: i32 = 1;
 /// Characters the search field takes.
 pub(super) const SEARCH_LIMIT: usize = 256;
-/// The "Disalin" preview's length before the renderer fits it.
-const PREVIEW_CHARS: usize = 120;
 
 /// The history and the page's state that is not the reducer's.
 #[derive(Default)]
@@ -76,6 +79,8 @@ pub(super) struct ClipState {
     /// The keyboard moved the selection: the pointer selects nothing until it
     /// really moves (`pointer_moved`).
     pub keyboard_held: bool,
+    /// The entry the copy preview announced last, and when (`NoticeGate`).
+    pub gate: NoticeGate,
 }
 
 /// Whether a mouse move at `at` is the pointer really moving, `last` the
@@ -187,6 +192,71 @@ fn copied_notice(clip: &Clip) -> Notice {
         body,
         kind: NoticeKind::Copied,
     }
+}
+
+/// The copy preview for `clip`: text lines, "Gambar disalin" with its size,
+/// or "Berkas disalin" with the files. Never logged.
+pub(super) fn clip_preview_notice(clip: &Clip) -> Notice {
+    let lang = i18n::lang();
+    let (title, body, key) = match &clip.data {
+        ClipData::Text(t) => {
+            let (first, second) = clip_notice_lines(t);
+            let body =
+                second.unwrap_or_else(|| i18n::clip_text_meta(lang, clip.kind, t.chars().count()));
+            (first, body, CLIP_PREVIEW_KEY)
+        }
+        ClipData::Files(paths) => {
+            let first = paths
+                .first()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (
+                tr(Key::ClipPreviewFiles).to_owned(),
+                i18n::clip_files(lang, paths.len(), &first),
+                CLIP_PREVIEW_KEY,
+            )
+        }
+        ClipData::Image(img) => {
+            let title = if img.screenshot {
+                tr(Key::ShotTitle)
+            } else {
+                tr(Key::ClipPreviewImage)
+            };
+            (
+                title.to_owned(),
+                i18n::clip_preview_size(img.width, img.height),
+                CLIP_IMAGE_KEY,
+            )
+        }
+    };
+    Notice {
+        key: key.into(),
+        source: tr(Key::ClipboardTitle).into(),
+        title,
+        body,
+        kind: NoticeKind::ClipPreview { id: clip.id },
+    }
+}
+
+/// The thumbnail the frame draws in a copy preview's badge spot: only for an
+/// image entry still in the history (else the Clipboard badge shows).
+pub(super) fn clip_notice_view<'a>(
+    history: &'a History,
+    view: &View,
+) -> Option<ClipNoticeView<'a>> {
+    let View::Notice(Notice {
+        kind: NoticeKind::ClipPreview { id },
+        ..
+    }) = view
+    else {
+        return None;
+    };
+    let img = history.get(*id)?.image()?;
+    Some(ClipNoticeView {
+        id: *id,
+        thumb: &img.thumb,
+    })
 }
 
 impl App {
@@ -330,16 +400,38 @@ impl App {
             self.refresh(Instant::now());
             return;
         }
-        let notice = self
-            .config
-            .clipboard
-            .copied_feedback_all
-            .then(|| self.clip.history.get(id).map(copied_notice))
-            .flatten();
+        let notice = self.copy_feedback(id, outcome, shot);
         match notice {
             Some(n) => self.apply_now(Event::Notice(n)),
             None => self.redraw_clip(),
         }
+    }
+
+    /// What an external copy that went into the history says: the preview
+    /// ("Notifikasi salinan", which then supersedes "Disalin untuk semua
+    /// salinan" even when a rule keeps it quiet), else "Disalin" with that
+    /// setting, else nothing. A copy made from the island never gets here
+    /// (`Read::Own`); its "Disalin" is the card's own.
+    fn copy_feedback(&mut self, id: u64, outcome: Ingested, shot: bool) -> Option<Notice> {
+        let cfg = self.config.clipboard;
+        if cfg.copy_notice {
+            let ctx = NoticeCtx {
+                setting: true,
+                history: cfg.enabled,
+                outcome,
+                own: false,
+                shot,
+                clip_page_open: self.state.view() == View::Panel(Page::Clipboard),
+                fullscreen: self.state.fullscreen(),
+            };
+            let wanted = clip_notice_wanted(&ctx) && self.clip.gate.pass(id, Instant::now());
+            return wanted
+                .then(|| self.clip.history.get(id).map(clip_preview_notice))
+                .flatten();
+        }
+        cfg.copied_feedback_all
+            .then(|| self.clip.history.get(id).map(copied_notice))
+            .flatten()
     }
 
     /// A new image entry `id` arrived (a screenshot, a copied picture): it
@@ -695,6 +787,7 @@ impl App {
             ClipSetting::ClearOnLock(on) => cfg.clear_on_lock = on,
             ClipSetting::Hotkey(h) => cfg.hotkey = h,
             ClipSetting::FeedbackAll(on) => cfg.copied_feedback_all = on,
+            ClipSetting::CopyNotice(on) => cfg.copy_notice = on,
             ClipSetting::Clear => {
                 if self.clip.history.clear_unpinned() {
                     self.clip.selected = None;
@@ -746,6 +839,8 @@ pub enum ClipSetting {
     ClearOnLock(bool),
     Hotkey(ClipHotkey),
     FeedbackAll(bool),
+    /// "Notifikasi salinan".
+    CopyNotice(bool),
     /// "Hapus riwayat": everything not pinned.
     Clear,
 }
