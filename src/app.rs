@@ -4964,7 +4964,9 @@ impl LyricFit {
         let current = self
             .width
             .filter(|_| self.robot == robot && self.max_w == max_w);
-        self.width = Some(lyric_target_w(current, wanted).min(max_w));
+        // The cap never sits under the notch width the user set.
+        let cap = max_w.max(self.min_w);
+        self.width = Some(lyric_target_w(current, wanted).min(cap));
         self.since = Some(now);
         self.text_w = text_w;
         self.robot = robot;
@@ -6271,6 +6273,7 @@ unsafe extern "system" fn wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::geometry::{lyric_shape, lyric_width};
 
     #[test]
     fn greeting_waits_for_someone_at_an_unlocked_screen() {
@@ -6680,6 +6683,34 @@ mod tests {
         fit = LyricFit::default();
         fit.line(Some(100.0), t0, false, LYRIC_MAX_W);
         assert_eq!(fit.width(), LYRIC_MIN_W);
+    }
+
+    #[test]
+    fn lyric_fit_floors_at_the_users_notch_width() {
+        let t0 = Instant::now();
+        let mut fit = LyricFit::default();
+        // Wider than the lyric minimum: the empty notch takes it.
+        fit.set_min(300.0);
+        assert_eq!(fit.width(), 300.0);
+        fit.line(None, t0, false, 300.0_f32.max(LYRIC_MAX_W));
+        assert_eq!(fit.width(), 300.0);
+        // A short line stays at the floor; a long one grows past it.
+        fit.line(Some(100.0), t0, true, LYRIC_MAX_W);
+        assert_eq!(fit.width(), 300.0);
+        fit.line(Some(450.0), t0, true, LYRIC_MAX_W);
+        assert!(fit.width() > 450.0 && fit.width() <= LYRIC_MAX_W);
+        // Changing the width refits the same line; a narrower setting goes
+        // back to the lyric minimum.
+        fit.line(Some(100.0), t0, true, LYRIC_MAX_W);
+        fit.set_min(160.0);
+        assert_eq!(fit.width(), LYRIC_MIN_W);
+        fit.set_min(260.0);
+        assert_eq!(fit.width(), 260.0);
+        // The cap never sits under the floor.
+        let mut tight = LyricFit::default();
+        tight.set_min(300.0);
+        tight.line(Some(400.0), t0, false, 250.0);
+        assert_eq!(tight.width(), 250.0_f32.max(300.0));
     }
 
     #[test]

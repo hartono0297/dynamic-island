@@ -382,6 +382,7 @@ pub enum Hit {
 
 /// Which slider (Tampilan -> Notch).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(clippy::enum_variant_names)]
 pub enum SliderId {
     NotchWidth,
     NotchHeight,
@@ -3137,6 +3138,14 @@ mod tests {
                         accent: Accent::Ochre,
                         surface: Surface::Graphite,
                         window: WindowTheme::System,
+                        notch_width: if locked { NOTCH_W_MAX } else { NOTCH_W_MIN },
+                        notch_height: if locked { NOTCH_H_MAX } else { NOTCH_H_MIN },
+                        notch_fill: if locked {
+                            NotchFill::Transparent
+                        } else {
+                            NotchFill::Solid
+                        },
+                        notch_opacity: if locked { 0 } else { 100 },
                         idle_clock: locked,
                         stay_behind: !locked,
                         robot: !locked,
@@ -3597,9 +3606,16 @@ mod tests {
         let top = layout(Section::Appearance, &base, &Estimate);
         let view = top.viewport.expect("viewport");
         assert_eq!(top.scroll, 0.0);
-        // At the top only the robot toggle peeks in; nothing below the
-        // window takes a click.
-        assert_eq!(robot_hits(&top), [Hit::Robot]);
+        // At the top only the Notch card's width slider peeks in (Bata's card
+        // is below it); nothing below the window takes a click.
+        assert_eq!(robot_hits(&top), []);
+        let peeking: Vec<Hit> = top
+            .hits()
+            .into_iter()
+            .map(|(h, _)| h)
+            .filter(|h| matches!(h, Hit::Slider(_) | Hit::NotchReset | Hit::NotchFill(_)))
+            .collect();
+        assert_eq!(peeking, [Hit::Slider(SliderId::NotchWidth)]);
         for (_, r) in top.hits() {
             assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
         }
@@ -4982,5 +4998,212 @@ mod tests {
         for s in Section::ALL {
             assert_eq!(Section::ALL[s.index()], s);
         }
+    }
+
+    fn track() -> Rect {
+        Rect {
+            x: 100.0,
+            y: 50.0,
+            w: SLIDER_W,
+            h: SLIDER_THUMB,
+        }
+    }
+
+    #[test]
+    fn slider_value_and_x_round_trip() {
+        for id in [
+            SliderId::NotchWidth,
+            SliderId::NotchHeight,
+            SliderId::NotchOpacity,
+        ] {
+            let (min, max) = id.range();
+            for v in min..=max {
+                let x = slider_x(track(), v, min, max);
+                assert_eq!(slider_value(track(), x, min, max), v, "{id:?} {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn slider_ends_and_clamping() {
+        let t = track();
+        let (min, max) = SliderId::NotchWidth.range();
+        // The thumb's centre runs half a thumb in from each end.
+        assert_eq!(slider_x(t, min, min, max), t.x + SLIDER_THUMB / 2.0);
+        assert_eq!(slider_x(t, max, min, max), t.right() - SLIDER_THUMB / 2.0);
+        // A press past either end gives the end; the middle gives the middle.
+        assert_eq!(slider_value(t, t.x - 50.0, min, max), min);
+        assert_eq!(slider_value(t, t.right() + 50.0, min, max), max);
+        assert_eq!(slider_value(t, t.x + t.w / 2.0, 0, 100), 50);
+        // Values outside the range pin to the ends.
+        assert_eq!(slider_x(t, min - 10, min, max), slider_x(t, min, min, max));
+        assert_eq!(slider_x(t, max + 10, min, max), slider_x(t, max, min, max));
+        // A one-px step of the pointer never moves a value by more than the
+        // range allows over the track.
+        assert!(slider_value(t, t.x + 60.0, min, max) <= max);
+    }
+
+    #[test]
+    fn the_notch_card_sits_between_the_first_card_and_batas() {
+        for lang in [Lang::Id, Lang::En] {
+            let base = State {
+                lang,
+                notch_width: 190,
+                notch_height: 34,
+                notch_fill: NotchFill::Solid,
+                notch_opacity: 30,
+                robot: true,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &base, &Estimate);
+            // Preview, the first card, then Notch, then Bata's.
+            let notch = l.cards[2];
+            let toggle = l
+                .controls
+                .iter()
+                .find_map(|c| match c {
+                    Control::Toggle {
+                        hit: Hit::Robot,
+                        rect,
+                        ..
+                    } => Some(*rect),
+                    _ => None,
+                })
+                .expect("robot toggle");
+            assert!(notch.bottom() < toggle.y && l.cards[1].bottom() < notch.y);
+            assert_eq!(notch.h, 5.0 * ROW_H);
+            // Both sliders and the opacity one, in the card, with their labels.
+            let sliders: Vec<(SliderId, Rect, i32, bool)> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Slider {
+                        id,
+                        track,
+                        value,
+                        enabled,
+                        ..
+                    } => Some((*id, *track, *value, *enabled)),
+                    _ => None,
+                })
+                .collect();
+            let ids: Vec<SliderId> = sliders.iter().map(|s| s.0).collect();
+            assert_eq!(
+                ids,
+                [
+                    SliderId::NotchWidth,
+                    SliderId::NotchHeight,
+                    SliderId::NotchOpacity
+                ]
+            );
+            for (_, track, _, _) in &sliders {
+                assert!(track.y >= notch.y && track.bottom() <= notch.bottom());
+                assert!(track.right() < notch.right());
+            }
+            assert_eq!(
+                sliders.iter().map(|s| s.2).collect::<Vec<_>>(),
+                [190, 34, 30]
+            );
+            // The opacity slider is off while the background is solid, and
+            // takes no press.
+            assert!(!sliders[2].3);
+            let hits = l.hits();
+            let has = |h: Hit| hits.iter().any(|(x, _)| *x == h);
+            assert!(!has(Hit::Slider(SliderId::NotchOpacity)));
+            // At the default size Reset is off.
+            let all = buttons_of(&l);
+            assert!(!button(&all, Hit::NotchReset).2);
+            assert_eq!(button(&all, Hit::NotchReset).1, text(lang, Key::NotchReset));
+            // The labels read in both languages.
+            let labels: Vec<&str> = l.texts.iter().map(|t| t.text.as_str()).collect();
+            for key in [
+                Key::NotchWidth,
+                Key::NotchHeight,
+                Key::NotchDefaultSize,
+                Key::NotchFill,
+                Key::NotchFillDesc,
+                Key::NotchOpacity,
+            ] {
+                assert!(labels.contains(&text(lang, key)), "{lang:?} {key:?}");
+            }
+            assert!(labels.contains(&"190 px") && labels.contains(&"34 px"));
+            assert!(labels.contains(&"30 %"));
+
+            // Transparent with another size: the opacity slider takes
+            // presses, Reset too, and the values show.
+            let on = State {
+                notch_width: 240,
+                notch_height: 40,
+                notch_fill: NotchFill::Transparent,
+                notch_opacity: 0,
+                ..base.clone()
+            };
+            // The opacity row is below the first screenful: scroll to it
+            // (the robot card's scroll puts the Notch card just above).
+            let at = State {
+                scroll: robot_card_scroll(&on) - 2.0 * ROW_H,
+                ..on.clone()
+            };
+            let l = layout(Section::Appearance, &at, &Estimate);
+            let controls: Vec<(Hit, bool)> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Slider { id, enabled, .. } => Some((Hit::Slider(*id), *enabled)),
+                    _ => None,
+                })
+                .collect();
+            assert!(controls.iter().all(|c| matches!(c.0, Hit::Slider(_))));
+            assert!(controls.contains(&(Hit::Slider(SliderId::NotchOpacity), true)));
+            let all = buttons_of(&l);
+            assert!(button(&all, Hit::NotchReset).2);
+        }
+    }
+
+    #[test]
+    fn the_background_choice_follows_the_setting() {
+        for fill in NotchFill::ALL {
+            let s = State {
+                notch_fill: *fill,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let selected = l
+                .controls
+                .iter()
+                .find_map(|c| match c {
+                    Control::Segmented {
+                        group: Group::NotchFill,
+                        items,
+                        selected,
+                        ..
+                    } => Some((items.iter().map(|i| i.hit).collect::<Vec<_>>(), *selected)),
+                    _ => None,
+                })
+                .expect("the background segments");
+            assert_eq!(
+                selected.0,
+                [
+                    Hit::NotchFill(NotchFill::Solid),
+                    Hit::NotchFill(NotchFill::Transparent)
+                ]
+            );
+            assert_eq!(NotchFill::ALL[selected.1], *fill);
+        }
+    }
+
+    #[test]
+    fn labels_of_the_notch_card_differ_by_language() {
+        for key in [
+            Key::NotchWidth,
+            Key::NotchHeight,
+            Key::NotchFillSolid,
+            Key::NotchFillTransparent,
+            Key::NotchOpacity,
+        ] {
+            assert_ne!(text(Lang::Id, key), text(Lang::En, key), "{key:?}");
+        }
+        assert_eq!(text(Lang::Id, Key::NotchFillSolid), "Hitam");
+        assert_eq!(text(Lang::En, Key::NotchFillTransparent), "Transparent");
     }
 }

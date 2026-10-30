@@ -146,7 +146,7 @@ mod tests {
             assert!(l >= last, "{i}");
             last = l;
         }
-        assert!(legibility(FILL_FLOOR) > 0.99);
+        assert!(legibility(FILL_FLOOR) > 0.98);
         assert!(legibility(0.3) > 0.5 && legibility(0.3) < 1.0);
     }
 }

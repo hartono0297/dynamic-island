@@ -28,7 +28,7 @@ Music with synced lyrics, calendar, clipboard history, volume mixer, file shelf,
 
 - **Native and tiny.** One exe of about 2 MB, written in Rust (Win32 and Direct2D). No browser engine, no runtime to install.
 - **Made for Windows 11.** It reads Windows' own media sessions, notifications, audio and Explorer, so it works with Spotify, music in the browser, Teams and the apps you already use.
-- **Yours to shape.** Open it on hover, hover-and-stay or click; reorder or hide pages; pick the accent colour, the island fill, your own shortcut tiles and hotkeys. Indonesian and English.
+- **Yours to shape.** Open it on hover, hover-and-stay or click; reorder or hide pages; pick the accent colour, the island fill, the size of the closed notch (width and height) and a solid or see-through background, your own shortcut tiles and hotkeys. Indonesian and English.
 - **Private.** Notes, reminders, clipboard and files stay on your PC. No account, no telemetry.
 - **A small cat lives in the notch.** Its face and ears tell you what is going on: listening to music, focused on a pomodoro, thinking while Claude Code works, asleep when you are away.
 
