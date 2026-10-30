@@ -34,7 +34,10 @@ use windows::Win32::Devices::Usb::{
     GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
     USB_NODE_CONNECTION_INFORMATION_EX_V2, USB_PROTOCOLS,
 };
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY,
+    ERROR_SHARING_VIOLATION, GetLastError, HANDLE, WIN32_ERROR,
+};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
     GetDriveTypeW, GetFileAttributesW, GetLogicalDrives, GetVolumeInformationW,
@@ -672,7 +675,20 @@ fn system_disk(vols: &[Volume]) -> Option<u32> {
 fn holds_page_file(letter: char) -> bool {
     let path = HSTRING::from(format!("{letter}:\\pagefile.sys"));
     let attributes = unsafe { GetFileAttributesW(&path) };
+    // Read at once: nothing in between may reset the thread's last error.
+    let error = unsafe { GetLastError() };
+    page_file_present(attributes, error)
+}
+
+/// What `GetFileAttributesW` on `X:\pagefile.sys` says about the page file.
+/// A page file in use is refused with a sharing violation (checked live:
+/// `C:\pagefile.sys` gives `INVALID_FILE_ATTRIBUTES` and error 32 while
+/// Windows pages to it), and access denied also means the entry is there.
+/// Any other failure (not found, path not found, not ready) means absent.
+fn page_file_present(attributes: u32, error: WIN32_ERROR) -> bool {
     attributes != INVALID_FILE_ATTRIBUTES
+        || error == ERROR_SHARING_VIOLATION
+        || error == ERROR_ACCESS_DENIED
 }
 
 /// The drives plugged in now. Capacity is read as `capacity` says; what is
@@ -806,6 +822,32 @@ fn eject(key: &str) -> Result<(), Veto> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
+
+    #[test]
+    fn a_page_file_in_use_counts_as_present_though_its_attributes_are_refused() {
+        // A live page file: Windows refuses the call.
+        assert!(page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_SHARING_VIOLATION
+        ));
+        assert!(page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_ACCESS_DENIED
+        ));
+        // A page file not in use reads normally (hidden, system).
+        assert!(page_file_present(0x6, ERROR_SUCCESS));
+        // No page file on that volume.
+        assert!(!page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_FILE_NOT_FOUND
+        ));
+        assert!(!page_file_present(
+            INVALID_FILE_ATTRIBUTES,
+            ERROR_PATH_NOT_FOUND
+        ));
+        assert!(!page_file_present(INVALID_FILE_ATTRIBUTES, ERROR_NOT_READY));
+    }
 
     fn scan_req(seq: u64, capacity: Capacity) -> Req {
         Req::Scan { seq, capacity }

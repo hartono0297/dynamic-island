@@ -26,6 +26,11 @@ state in `src/app_devices.rs` (a child of `app`, like the shelf), layout in
   disk with no USB, Thunderbolt, USB4 or SD node on its chain is internal
   (`internal_disk`). NVMe is deliberately not in that bus list: a Thunderbolt 3
   enclosure's chain is plain PCI nodes and would vanish.
+- **A page file in use cannot be stat'ed**: `GetFileAttributesW` on a live
+  `pagefile.sys` (or `swapfile.sys`) returns `INVALID_FILE_ATTRIBUTES` with
+  `ERROR_SHARING_VIOLATION` (32), checked live on `C:`. So
+  `page_file_present` counts error 32 and access denied as "there"; only not
+  found and the like mean absent.
 - **The worker sets `SetThreadErrorMode(SEM_FAILCRITICALERRORS |
   SEM_NOOPENFILEERRORBOX)`** at its start: without it an empty card slot can
   raise "There is no disk in the drive" and block the thread until dismissed.
