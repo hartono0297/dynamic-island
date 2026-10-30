@@ -5,7 +5,7 @@ date: 2026-10-29
 
 # Panel pages: order and which ones the wheel shows
 
-Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all 11
+Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all 12
 pages (every page in `Page::ALL`) in the owner's order, each with an order
 stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
 
@@ -32,6 +32,10 @@ stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is th
 
 Related: [[settings-appearance-scroll]], [[v3-studio-overview]]
 
+**v3.5:** `Page::Devices` sits between System and CLI, so `Page::ALL` is 12
+pages ([[devices]]); a saved list without it gets it back right after System
+(`from_saved`, tested).
+
 ## The Settings card, remade (2026-10-29)
 
 The "− n +" order stepper was confusing and is gone. Settings → Tampilan →
@@ -41,7 +45,7 @@ Halaman panel now reads:
   buttons (`PanelPages::move_shown`: among the pages shown, stepping over
   hidden ones) and *Sembunyikan*. Under a small "Tersembunyi" title come the
   hidden pages, each with *Tampilkan*. The header says "Tampil di panel:
-  n/11" and holds *Kembalikan bawaan* (`PanelPages::default()`; off while
+  n/12" and holds *Kembalikan bawaan* (`PanelPages::default()`; off while
   the list already is the default).
 - **The last page shown cannot be hidden:** its button is disabled and the
   row says "Minimal satu halaman tampil".

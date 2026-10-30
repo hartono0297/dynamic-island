@@ -77,8 +77,7 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
     ClipHotkey, ClipboardSettings, Config, DevicesHotkey, OpenMode, ScreenshotSettings,
-    SearchHotkey, ShotIgnore,
-    ShotTool, Style,
+    SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};

@@ -22,7 +22,7 @@ Music with synced lyrics, calendar, clipboard history, volume mixer, file shelf,
   <a href="#credits">Credits</a>
 </p>
 
-<p align="center"><img src="assets/screenshots/tour.png" width="560" alt="Animated tour of Vale's pages: Calendar, Pomodoro, Reminders, Notes, Music with lyrics, Mixer, Clipboard, File shelf, System, CLI, Shortcuts and Search"></p>
+<p align="center"><img src="assets/screenshots/tour.png" width="560" alt="Animated tour of Vale's pages: Calendar, Pomodoro, Reminders, Notes, Music with lyrics, Mixer, Clipboard, File shelf, System, Devices, CLI, Shortcuts and Search"></p>
 
 ## Why Vale
 
@@ -86,6 +86,7 @@ Hover the notch to open it, scroll to change pages. The panel stays open for a f
 | **Reminders, Notes, Pomodoro** | Quick ones, right in the panel. |
 | **Notifications** | Windows toasts and [Claude Code](https://claude.com/claude-code) prompts in the notch. |
 | **System** | CPU, memory, disks, the busiest apps and a cleaner that asks before it deletes. |
+| **Devices** | Flash drives, external disks and memory cards, with Eject, Open, Detail and Eject all, the reason when Windows won't let go, and a notice when one is plugged in. |
 | **CLI** | A small terminal that starts in your Explorer folder. |
 | **Shortcuts** | Tiles for Windows tools, a jump to any panel page, Vale's own Settings, and your own apps, folders and links (added in Settings). |
 

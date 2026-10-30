@@ -163,9 +163,8 @@ pub fn vendor_product_name(vendor: &str, product: &str) -> String {
     if p.is_empty() {
         return v.to_owned();
     }
-    let repeated = p.len() >= v.len()
-        && p.is_char_boundary(v.len())
-        && p[..v.len()].eq_ignore_ascii_case(v);
+    let repeated =
+        p.len() >= v.len() && p.is_char_boundary(v.len()) && p[..v.len()].eq_ignore_ascii_case(v);
     if repeated {
         p.to_owned()
     } else {
@@ -210,7 +209,11 @@ pub fn app_name(raw: &str) -> Option<String> {
         return Some(stem.to_owned());
     }
     let mut chars = stem.chars();
-    let first: String = chars.next().into_iter().flat_map(char::to_uppercase).collect();
+    let first: String = chars
+        .next()
+        .into_iter()
+        .flat_map(char::to_uppercase)
+        .collect();
     Some(first + &chars.as_str().to_lowercase())
 }
 
@@ -530,7 +533,12 @@ mod tests {
             "SanDisk Ultra",
             DeviceKind::Usb,
             Bus::Usb3,
-            vec![part('E', "exFAT", 57 * GB + GB * 3 / 10, Some(38 * GB + GB * 9 / 10))],
+            vec![part(
+                'E',
+                "exFAT",
+                57 * GB + GB * 3 / 10,
+                Some(38 * GB + GB * 9 / 10),
+            )],
         )
     }
 
@@ -885,20 +893,32 @@ mod tests {
         };
         assert_eq!(fs_summary(&mixed), "NTFS, exFAT");
         assert_eq!(fs_summary(&sandisk()), "exFAT");
-        assert_eq!(fs_summary(&Device { partitions: vec![], ..sandisk() }), "");
+        assert_eq!(
+            fs_summary(&Device {
+                partitions: vec![],
+                ..sandisk()
+            }),
+            ""
+        );
     }
 
     #[test]
     fn diff_finds_arrivals_removals_both_and_nothing() {
         let a = sandisk();
-        let b = device("B", "WD", DeviceKind::Hdd, Bus::Usb, vec![part('F', "NTFS", GB, None)]);
+        let b = device(
+            "B",
+            "WD",
+            DeviceKind::Hdd,
+            Bus::Usb,
+            vec![part('F', "NTFS", GB, None)],
+        );
         let c = device("C", "Kartu", DeviceKind::Sd, Bus::CardReader, vec![]);
         let same = diff(&[a.clone(), b.clone()], &[b.clone(), a.clone()]);
         assert_eq!(same, Change::default());
-        let arrival = diff(&[a.clone()], &[a.clone(), b.clone()]);
+        let arrival = diff(std::slice::from_ref(&a), &[a.clone(), b.clone()]);
         assert_eq!(arrival.arrived, vec![b.clone()]);
         assert!(arrival.removed.is_empty());
-        let removal = diff(&[a.clone(), b.clone()], &[b.clone()]);
+        let removal = diff(&[a.clone(), b.clone()], std::slice::from_ref(&b));
         assert!(removal.arrived.is_empty());
         assert_eq!(removal.removed, vec![a.key.clone()]);
         let both = diff(&[a.clone(), b.clone()], &[b.clone(), c.clone()]);

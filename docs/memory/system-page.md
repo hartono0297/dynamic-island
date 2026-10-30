@@ -73,8 +73,9 @@ the warning logic live in `src/system.rs`; the page in
   (`merge_owned`). Settings → Umum shows them in a second card, so General
   now scrolls like [[settings-appearance-scroll]].
 - **Order.** `Page::System` sits between the file shelf ([[shelf]]) and
-  CLI, one of 11 pages in `Page::ALL`; the owner reorders them in Settings
-  ([[panel-pages]]).
+  the Devices page ([[devices]], v3.5), one of 12 pages in `Page::ALL`; the
+  owner reorders them in Settings ([[panel-pages]]). Removable and network
+  drives still never show here (only `DRIVE_FIXED`); Devices lists those.
 
 Demo: `system`, `system-low` and `bata-sistem` use fixed figures
 ([[demo-data-time-of-day]]). Shots `system` and `system-warning` are in

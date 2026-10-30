@@ -1438,7 +1438,10 @@ mod tests {
             notice_action(&NoticeKind::DevicePlugged { letter: 'E' }, PomoStatus::Idle),
             Some(Key::Open)
         );
-        assert_eq!(notice_action(&NoticeKind::DeviceSafe, PomoStatus::Idle), None);
+        assert_eq!(
+            notice_action(&NoticeKind::DeviceSafe, PomoStatus::Idle),
+            None
+        );
         // A finished clean: a click only dismisses it.
         assert_eq!(
             notice_action(&NoticeKind::CleanDone, PomoStatus::Idle),

@@ -35,9 +35,7 @@ use crate::i18n;
 use crate::model::{Event, Page};
 use crate::shortcuts;
 use crate::ui::geometry::{ShapeKind, ShapeRect, shape_for};
-use crate::ui::panel_layout::{
-    DEV_WHEEL_PX, device_shapes, devices_max_scroll, devices_reveal,
-};
+use crate::ui::panel_layout::{DEV_WHEEL_PX, device_shapes, devices_max_scroll, devices_reveal};
 
 /// One-shot: the pause after the last device change message, then a scan
 /// (`Capacity::NewOnly`). Every relevant message starts it again.
@@ -215,12 +213,12 @@ impl App {
     /// (or restarts) the pause before the scan. `lparam` is a
     /// `DEV_BROADCAST_HDR` for those messages.
     pub(super) fn on_device_change(&mut self, wparam: usize, lparam: isize) {
-        let device_type = (lparam != 0).then(|| {
+        // Only the two messages that carry a header have one to read: for
+        // the others `lparam` is not a pointer (or not ours to follow).
+        let device_type = (matches!(wparam, ARRIVAL | REMOVED) && lparam != 0).then(|| {
             let header = lparam as *const DEV_BROADCAST_HDR;
             unsafe { (*header).dbch_devicetype.0 }
         });
-        // Only read the header for the two messages that carry one.
-        let device_type = device_type.filter(|_| matches!(wparam, ARRIVAL | REMOVED));
         if relevant_device_change(wparam, device_type) {
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_DEVICES, DEBOUNCE_MS, None);
@@ -283,9 +281,7 @@ impl App {
     /// The Devices page is what the open panel shows (a notice over it
     /// does not count).
     fn devices_page_shown(&self) -> bool {
-        self.state.page() == Page::Devices
-            && self.state.panel_is_open()
-            && !self.state.fullscreen()
+        self.state.page() == Page::Devices && self.state.panel_is_open() && !self.state.fullscreen()
     }
 
     /// The Devices page just opened: one scan reading every size, and the
@@ -322,12 +318,11 @@ impl App {
 
     /// Remembers the keys of the cards this frame draws, before it draws.
     pub(super) fn devices_sync_drawn(&mut self) {
-        let same = self
+        let same = self.devices.drawn.iter().map(String::as_str).eq(self
             .devices
-            .drawn
+            .list
             .iter()
-            .map(String::as_str)
-            .eq(self.devices.list.iter().map(|d| d.key.as_str()));
+            .map(|d| d.key.as_str()));
         if !same {
             self.devices.drawn = self.devices.list.iter().map(|d| d.key.clone()).collect();
         }
@@ -351,7 +346,9 @@ impl App {
         }
         self.devices.vetoes.remove(&key);
         self.devices.ejecting.insert(key.clone());
-        if !self.devices_request(Req::Eject { keys: vec![key.clone()] }) {
+        if !self.devices_request(Req::Eject {
+            keys: vec![key.clone()],
+        }) {
             self.devices.ejecting.remove(&key);
         }
     }
@@ -582,14 +579,23 @@ mod tests {
         s.accept(1, vec![dev("A", "SanDisk"), dev("B", "WD")]);
         s.ejecting.insert("A".into());
         s.ejecting.insert("B".into());
-        s.vetoes.insert("A".into(), Veto { kind: VetoKind::Device, name: String::new() });
+        s.vetoes.insert(
+            "A".into(),
+            Veto {
+                kind: VetoKind::Device,
+                name: String::new(),
+            },
+        );
         let names = s.finish_eject(vec![
             ("A".into(), "SanDisk".into(), Ok(())),
             ("B".into(), "WD".into(), Err(veto())),
         ]);
         assert_eq!(names, vec!["SanDisk".to_owned()]);
         assert!(s.ejecting.is_empty());
-        assert!(!s.vetoes.contains_key("A"), "a success drops the old refusal");
+        assert!(
+            !s.vetoes.contains_key("A"),
+            "a success drops the old refusal"
+        );
         assert_eq!(s.vetoes.get("B"), Some(&veto()));
         // Nothing went: no names, so no notice.
         let none = s.finish_eject(vec![("B".into(), "WD".into(), Err(veto()))]);

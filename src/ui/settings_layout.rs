@@ -13,8 +13,8 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE,
-    DevicesHotkey, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, OpenMode, RAM_WARN_RANGE,
+    SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
@@ -4619,12 +4619,25 @@ mod tests {
                 // The last card, two rows under its own label.
                 let card = *l.cards.last().expect("cards");
                 assert_eq!(card.h, 2.0 * ROW_H);
-                assert!(l.texts.iter().any(|t| t.text == text(lang, Key::PageDevices).to_uppercase()));
-                for key in [Key::DeviceNotices, Key::DeviceNoticesDesc, Key::DevicesHotkey] {
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, Key::PageDevices).to_uppercase())
+                );
+                for key in [
+                    Key::DeviceNotices,
+                    Key::DeviceNoticesDesc,
+                    Key::DevicesHotkey,
+                ] {
                     assert!(l.texts.iter().any(|t| t.text == text(lang, key)), "{key:?}");
                 }
                 let toggle = l.controls.iter().find_map(|c| match c {
-                    Control::Toggle { hit: Hit::DeviceNotices, on, rect, .. } => Some((*on, *rect)),
+                    Control::Toggle {
+                        hit: Hit::DeviceNotices,
+                        on,
+                        rect,
+                        ..
+                    } => Some((*on, *rect)),
                     _ => None,
                 });
                 let (shown_on, rect) = toggle.expect("the notices toggle");
@@ -4647,8 +4660,14 @@ mod tests {
                 assert_eq!(items[selected].hit, Hit::DevicesHotkey(hotkey));
                 assert!(track.y >= card.y + ROW_H && track.bottom() <= card.bottom());
                 // "Taken by another app" replaces the description, in red.
-                let taken = l.texts.iter().any(|t| t.text == text(lang, Key::ClipHotkeyTaken));
-                let plain = l.texts.iter().any(|t| t.text == text(lang, Key::DevicesHotkeyDesc));
+                let taken = l
+                    .texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::ClipHotkeyTaken));
+                let plain = l
+                    .texts
+                    .iter()
+                    .any(|t| t.text == text(lang, Key::DevicesHotkeyDesc));
                 assert_eq!(taken, failed && hotkey != DevicesHotkey::Off);
                 assert_eq!(plain, !taken);
             }

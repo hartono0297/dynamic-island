@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   Each shot starts `vale.exe` in a demo mode (`--demo`,
-  `--demo-robot`, `--demo-cli`, `--demo-editor`, `--settings`) with
+  `--demo-robot`, `--demo-cli`, `--demo-devices`, `--demo-editor`,
+  `--settings`) with
   DI_LANG=en, waits for its window, and copies it from the screen twice: once
   over a black backdrop and once over a white one. The two copies give each
   pixel's alpha, so the PNG keeps the island's rounded shape (and the
@@ -196,6 +197,10 @@ $shots = @(
     # low-disk notice with Bata looking low.
     @{ name = 'system'; args = '--demo'; env = @{ DI_DEMO_STEP = 'system' } }
     @{ name = 'system-warning'; args = '--demo-robot'; env = @{ DI_DEMO_STEP = 'notch:bata-sistem' } }
+    # The Devices page with the design's three made-up drives (never this
+    # machine's, never an eject): SanDisk Ultra, WD Elements refused by Excel,
+    # Kartu SD.
+    @{ name = 'devices'; args = '--demo-devices'; env = @{ DI_DEMO_STEP = 'devices' } }
     # The cleaner over the System page with the design's sizes (never a real
     # scan), its button armed, and the happy notice when it is done.
     @{ name = 'cleaner'; args = '--demo'; env = @{ DI_DEMO_STEP = 'cleaner' } }

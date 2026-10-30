@@ -605,7 +605,10 @@ mod tests {
         saved.push(entry("GoShelf", true));
         let t = ShortcutTiles::from_saved(&saved);
         assert_eq!(t.shown(), 12, "room for one more: Devices is on");
-        assert!(t.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
+        assert!(
+            t.visible()
+                .contains(&Tile::Builtin(Shortcut::Go(Page::Devices)))
+        );
         // One more own tile: twelve shown, so Devices joins off.
         saved.push(TileEntry {
             tile: CUSTOM.into(),
@@ -616,7 +619,10 @@ mod tests {
         });
         let t = ShortcutTiles::from_saved(&saved);
         assert_eq!(t.shown(), 12);
-        assert!(!t.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
+        assert!(
+            !t.visible()
+                .contains(&Tile::Builtin(Shortcut::Go(Page::Devices)))
+        );
     }
 
     #[test]
@@ -884,7 +890,10 @@ mod tests {
         // so Devices has no room and joins off); a fresh install shows 12.
         let few = ShortcutTiles::from_saved(&saved[..9]);
         assert_eq!(few.shown(), 12);
-        assert!(!few.visible().contains(&Tile::Builtin(Shortcut::Go(Page::Devices))));
+        assert!(
+            !few.visible()
+                .contains(&Tile::Builtin(Shortcut::Go(Page::Devices)))
+        );
         assert_eq!(ShortcutTiles::default().shown(), 12);
     }
 

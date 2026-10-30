@@ -14,4 +14,6 @@ Implemented in `src/ui/icons.rs`. The shapes come from `icon()` in `docs/design/
 - SVG arc sweep flag 1 maps to `D2D1_SWEEP_DIRECTION_CLOCKWISE` (y down). The bell's dome rising to y = 5 is the unit test for this.
 - **Adding an icon:** copy its path from the design's `icon()` (24-unit grid) rather than drawing a new one, keep strokes at 1.5, and decide whether it can sit on the accent (then no duotone fill). Bata is drawn separately, see [[bata-robot-expressions]].
 
+**v3.5:** `Usb`, `Hdd`, `Sd` and `Eject` ([[devices]]) come from `ic()` in `docs/design/rencana-v3.5.html` (page 03). Line only, no duotone. The design draws the zero-length "dots" (`M11 5h0`, `h.01`) as round-capped paths; here they are `Part::Dot`s, since a zero-length segment is not reliably drawn.
+
 Part of [[v3-studio-overview]].

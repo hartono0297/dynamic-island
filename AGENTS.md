@@ -99,5 +99,5 @@ the MSVC target (`rustup`, `cargo`); CI builds with `cargo build --release --loc
 - Run locally: `cargo run --release`. The island is a single-instance UI at the
   top of the screen; stop any installed copy first (`Stop-Process -Name vale, dynamic-island`).
 - Demo and debug modes for visuals (no real user data, no media keys):
-  `--demo`, `--demo-editor`, `--demo-cli`, `--demo-robot`, `--settings`.
+  `--demo`, `--demo-editor`, `--demo-cli`, `--demo-robot`, `--demo-devices`, `--settings`.
 - Release: push a `v*` tag; `.github/workflows/release.yml` builds and publishes.

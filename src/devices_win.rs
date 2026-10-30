@@ -19,24 +19,22 @@ use std::mem::{size_of, size_of_val};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_DEVNODE_STATUS_FLAGS, CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_DevNode_Registry_PropertyW,
-    CM_Get_DevNode_Status, CM_Get_Device_IDW, CM_Get_Device_Interface_ListW, CM_Get_Parent,
-    CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_PROB, CM_DRP_ADDRESS, CM_Request_Device_EjectW,
-    CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, DN_REMOVABLE, HDEVINFO, PNP_VETO_TYPE,
-    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
-    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInterfaceDetailW,
+    CM_DEVNODE_STATUS_FLAGS, CM_DRP_ADDRESS, CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+    CM_Get_DevNode_Registry_PropertyW, CM_Get_DevNode_Status, CM_Get_Device_IDW,
+    CM_Get_Device_Interface_ListW, CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW,
+    CM_PROB, CM_Request_Device_EjectW, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
+    DN_REMOVABLE, HDEVINFO, PNP_VETO_TYPE, SP_DEVICE_INTERFACE_DATA,
+    SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList,
+    SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW,
 };
 use windows::Win32::Devices::Usb::{
     GUID_DEVINTERFACE_USB_HUB, IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
     USB_NODE_CONNECTION_INFORMATION_EX_V2, USB_PROTOCOLS,
 };
-use windows::Win32::Foundation::{
-    CloseHandle, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY, HANDLE,
-};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MEDIA_IN_DRIVE, ERROR_NOT_READY, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
+    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -308,8 +306,6 @@ struct Volume {
     letter: char,
     number: u32,
     desc: Descriptor,
-    label: String,
-    fs: String,
 }
 
 const DRIVE_UNKNOWN: u32 = 0;
@@ -327,9 +323,8 @@ fn wide_text(buf: &[u16]) -> String {
 /// it holds no media (an empty card slot).
 fn volume_info(root: &HSTRING) -> Result<(String, String), ()> {
     let (mut label, mut fs) = ([0u16; 261], [0u16; 64]);
-    match unsafe {
-        GetVolumeInformationW(root, Some(&mut label), None, None, None, Some(&mut fs))
-    } {
+    match unsafe { GetVolumeInformationW(root, Some(&mut label), None, None, None, Some(&mut fs)) }
+    {
         Ok(()) => Ok((wide_text(&label), wide_text(&fs))),
         Err(e)
             if e.code() == ERROR_NOT_READY.to_hresult()
@@ -343,9 +338,11 @@ fn volume_info(root: &HSTRING) -> Result<(String, String), ()> {
     }
 }
 
-/// Every local volume that sits on a disk with media, in letter order.
-/// Network drives, optical drives and letters with nothing behind them are
-/// left out.
+/// Every local volume on a disk, in letter order, with what the storage
+/// driver says about the disk (answered without touching the disk's
+/// contents, so an internal disk is never woken). Network drives, optical
+/// drives and letters with nothing behind them are left out. The volume's own
+/// label and file system are read only for the ones that get listed.
 fn volumes() -> Vec<Volume> {
     let mask = unsafe { GetLogicalDrives() };
     (0..26u8)
@@ -367,13 +364,10 @@ fn volumes() -> Vec<Volume> {
             if number.DeviceType != FILE_DEVICE_DISK {
                 return None;
             }
-            let (label, fs) = volume_info(&root).ok()?;
             Some(Volume {
                 letter,
                 number: number.DeviceNumber,
                 desc: desc?,
-                label,
-                fs,
             })
         })
         .collect()
@@ -429,8 +423,10 @@ fn disk_nodes() -> HashMap<u32, u32> {
             cbSize: size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
             ..Default::default()
         };
-        if unsafe { SetupDiEnumDeviceInterfaces(set.0, None, &GUID_DEVINTERFACE_DISK, index, &mut data) }
-            .is_err()
+        if unsafe {
+            SetupDiEnumDeviceInterfaces(set.0, None, &GUID_DEVINTERFACE_DISK, index, &mut data)
+        }
+        .is_err()
         {
             break;
         }
@@ -451,7 +447,14 @@ fn disk_nodes() -> HashMap<u32, u32> {
             ..Default::default()
         };
         let got = unsafe {
-            SetupDiGetDeviceInterfaceDetailW(set.0, &data, Some(detail), needed, None, Some(&mut info))
+            SetupDiGetDeviceInterfaceDetailW(
+                set.0,
+                &data,
+                Some(detail),
+                needed,
+                None,
+                Some(&mut info),
+            )
         };
         if got.is_err() {
             continue;
@@ -470,7 +473,11 @@ fn disk_nodes() -> HashMap<u32, u32> {
 /// The instance ID of device node `inst`.
 fn device_id(inst: u32) -> Option<String> {
     let mut buf = [0u16; 512];
-    (unsafe { CM_Get_Device_IDW(inst, &mut buf, 0) } == CR_SUCCESS).then(|| wide_text(&buf))
+    if unsafe { CM_Get_Device_IDW(inst, &mut buf, 0) } != CR_SUCCESS {
+        return None;
+    }
+    // An empty ID names no device (looked up, it would be the tree's root).
+    Some(wide_text(&buf)).filter(|id| !id.is_empty())
 }
 
 fn is_removable(inst: u32) -> bool {
@@ -630,6 +637,12 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
         let Some(found) = entry.as_ref() else {
             continue;
         };
+        // Only a listed drive is asked for its label: a card slot with no
+        // card says "not ready" and is left out.
+        let root = HSTRING::from(format!("{}:\\", vol.letter));
+        let Ok((label, fs)) = volume_info(&root) else {
+            continue;
+        };
         let known = last.iter().find(|d| d.key == found.key);
         let read = match capacity {
             Capacity::All => true,
@@ -645,8 +658,8 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
         };
         let partition = Partition {
             letter: vol.letter,
-            label: vol.label.clone(),
-            fs: vol.fs.clone(),
+            label: label.clone(),
+            fs,
             total,
             free,
         };
@@ -658,8 +671,8 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
         let model = vendor_product_name(&vol.desc.vendor, &vol.desc.product);
         let name = if !model.is_empty() {
             model.clone()
-        } else if !vol.label.is_empty() {
-            vol.label.clone()
+        } else if !label.is_empty() {
+            label
         } else {
             devices::kind_name(i18n::lang(), kind).to_owned()
         };
@@ -682,14 +695,28 @@ fn scan(capacity: Capacity, last: &[Device]) -> Vec<Device> {
 /// the time of the click. Passing a veto type and a name buffer also keeps
 /// Windows from showing its own dialog. A device that is no longer there
 /// counts as removed.
+///
+/// Two guards keep a wrong key from reaching Windows' eject. An empty ID
+/// would be looked up as the *root* of the device tree, so it is refused
+/// before any call; and only a node that is still flagged removable is ever
+/// asked (the root and every internal node are not).
 fn eject(key: &str) -> Result<(), Veto> {
-    let mut inst = 0u32;
-    let located = unsafe {
-        CM_Locate_DevNodeW(&mut inst, &HSTRING::from(key), CM_LOCATE_DEVNODE_NORMAL)
+    let refused = || Veto {
+        kind: devices::VetoKind::Unknown,
+        name: String::new(),
     };
+    if key.trim().is_empty() {
+        return Err(refused());
+    }
+    let mut inst = 0u32;
+    let located =
+        unsafe { CM_Locate_DevNodeW(&mut inst, &HSTRING::from(key), CM_LOCATE_DEVNODE_NORMAL) };
     if located != CR_SUCCESS {
         // CR_NO_SUCH_DEVNODE and CR_NO_SUCH_VALUE: gone already.
         return Ok(());
+    }
+    if !is_removable(inst) {
+        return Err(refused());
     }
     let mut veto = PNP_VETO_TYPE(0);
     let mut name = [0u16; 260];
@@ -744,6 +771,59 @@ mod tests {
         ));
     }
 
+    /// A device that is not there is gone already: nothing is asked of
+    /// Windows beyond looking the made-up ID up, so this ejects nothing real.
+    #[test]
+    fn ejecting_a_device_that_is_not_there_counts_as_removed() {
+        assert_eq!(eject("USB\\VID_0000&PID_0000\\NO-SUCH-DEVICE-0000"), Ok(()));
+    }
+
+    /// An empty ID is the root of the device tree to `CM_Locate_DevNodeW`:
+    /// it is refused before Windows is asked anything.
+    #[test]
+    fn an_empty_key_is_refused_and_never_looked_up() {
+        let refused = Err(Veto {
+            kind: devices::VetoKind::Unknown,
+            name: String::new(),
+        });
+        assert_eq!(eject(""), refused);
+        assert_eq!(eject("   "), refused);
+    }
+
+    /// Looks at this machine's drives (read-only: handles opened for no
+    /// access and closed again, sizes read) and prints them. Run by hand:
+    /// `cargo test live_scan -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads this machine's drives"]
+    fn live_scan_lists_only_removable_drives() {
+        // How far each local volume gets: its disk, the disk's device node
+        // and whether anything above it is removable.
+        let nodes = disk_nodes();
+        for v in volumes() {
+            let node = nodes.get(&v.number).copied();
+            let chain = node.map(chain).unwrap_or_default();
+            let removable = chain.iter().position(|(inst, _)| is_removable(*inst));
+            println!(
+                "{}: disk {} bus {} node {:?} chain {} removable at {:?}",
+                v.letter,
+                v.number,
+                v.desc.bus_type,
+                node,
+                chain.len(),
+                removable
+            );
+        }
+        let found = scan(Capacity::All, &[]);
+        for d in &found {
+            println!("{d:#?}");
+            assert!(!d.key.is_empty() && !d.partitions.is_empty());
+        }
+        // A second scan that keeps the sizes finds the same drives.
+        let again = scan(Capacity::Keep, &found);
+        assert_eq!(found, again);
+        println!("{} removable drive(s)", found.len());
+    }
+
     #[test]
     fn capacity_orders_from_nothing_to_everything() {
         assert!(Capacity::Keep < Capacity::NewOnly);
@@ -768,7 +848,10 @@ mod tests {
             usb,
         };
         let plain = node(None, &["USBSTOR\\DISK", "USB\\VID_1"]);
-        assert_eq!(bus_of(DeviceKind::Sd, BUS_TYPE_USB, &plain), Bus::CardReader);
+        assert_eq!(
+            bus_of(DeviceKind::Sd, BUS_TYPE_USB, &plain),
+            Bus::CardReader
+        );
         assert_eq!(bus_of(DeviceKind::Usb, BUS_TYPE_USB, &plain), Bus::Usb);
         let fast = node(Some(Bus::Usb3), &["USB\\VID_1"]);
         assert_eq!(bus_of(DeviceKind::Hdd, BUS_TYPE_USB, &fast), Bus::Usb3);

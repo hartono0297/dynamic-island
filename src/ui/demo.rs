@@ -427,7 +427,6 @@ const fn cleaner(name: &'static str, which: CleanDemo) -> Scene {
     }
 }
 
-
 /// The Devices page's states (rencana-v3.5.html p3): fixed, made-up drives
 /// and never a real scan or eject.
 #[derive(Clone, Copy, PartialEq)]
