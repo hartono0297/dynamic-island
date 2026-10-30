@@ -1,6 +1,6 @@
 export const meta = {
   name: 'build',
-  description: 'Plan (per-task light/heavy) -> build in worktrees -> heavy tasks: blind review/fix on a pinned commit, then check against a written checklist -> merge to main locally (the main session pushes)',
+  description: 'Plan (per-task light/heavy) -> build in worktrees -> heavy tasks: blind review/fix on a pinned commit, then check against a written checklist -> merge to main locally -> once everything is ready: update Obsidian memory + README, push',
   whenToUse: 'Every code change. args: a request string, or {request, defer: true} to build now and verify heavy tasks later, or {verify: [...]} for the deferred review/check pass',
   phases: [
     { title: 'Plan', detail: 'split into tasks, mark each light or heavy, write a checklist for heavy ones', model: 'opus' },
@@ -8,6 +8,7 @@ export const meta = {
     { title: 'Review', detail: 'heavy only: blind review of a pinned commit, fixes land in the builder worktree', model: 'opus' },
     { title: 'Check', detail: 'heavy only: tests + the written checklist', model: 'sonnet' },
     { title: 'Ship', detail: 'merge passing tasks into local main, test once; no push', model: 'sonnet' },
+    { title: 'Finish', detail: 'only when everything is ready: update Obsidian memory + README, commit, push main', model: 'sonnet' },
   ],
 }
 
@@ -105,6 +106,19 @@ const SHIP = {
   required: ['merged', 'base', 'head', 'tests_passed', 'notes'],
 }
 
+const FINISH = {
+  type: 'object',
+  properties: {
+    memory_updated: { type: 'boolean', description: 'docs/memory/ changed' },
+    readme_updated: { type: 'boolean', description: 'README.md changed' },
+    docs_sha: { type: 'string', description: 'sha of the docs commit, empty if nothing changed' },
+    pushed: { type: 'boolean' },
+    head: { type: 'string', description: 'main sha that was pushed (or would have been)' },
+    notes: { type: 'string', description: 'what was written, why a doc needed no change, or why the push did not happen' },
+  },
+  required: ['memory_updated', 'readme_updated', 'docs_sha', 'pushed', 'head', 'notes'],
+}
+
 // Rules every agent follows (see AGENTS.md)
 const TOOLS =
   `\n\nTool rules:\n` +
@@ -112,7 +126,14 @@ const TOOLS =
   `- For any library, framework, SDK, CLI or API: look up current docs with the Context7 MCP (resolve-library-id, then query-docs), matching the version the project uses. Do not rely on memory.\n` +
   `- Project memory is an Obsidian vault at docs/memory/ (start at docs/memory/index.md). Read the notes relevant to your work before starting.\n` +
   `- Never do anything that could interrupt the owner's other apps (media playback, calls, running builds). For visuals use the project's own demo or debug modes if it has any, never anything that touches real user data.\n` +
-  `- Never push to origin and never force-delete branches or worktrees. The main session does that.`
+  `- Never push to origin unless you are the Finish step, never force-push, and never force-delete branches or worktrees. The main session cleans those up.\n` +
+  `- Proof before claims: never report something as passing, fixed or working unless you ran the command in this session and saw its output.\n` +
+  `- Nobody can answer questions during this workflow. Do not stop to ask; decide from the brief and report assumptions in your summary or notes.`
+
+// Fixers find the cause before changing code
+const FIX_RULES =
+  `\nFor each finding: first reproduce it (a failing test where possible) and find the root cause, then fix the cause, not the symptom. ` +
+  `If you believe a finding is wrong, do not change code for it; explain why in your summary.`
 
 if (!args) throw new Error('Pass the request as args')
 const input = typeof args === 'string' ? { request: args } : args
@@ -171,10 +192,24 @@ async function ship(label, ready, request) {
     `1. If the working tree on main has uncommitted changes (other than the untracked .claude/worktrees/ folder), STOP and report; do not stash or discard them.\n` +
     `2. Check out main. Note its sha as base. Merge each branch into main with --no-ff. If a merge conflict is not trivial, abort that merge, skip the branch, and report it. A conflict in docs/memory/index.md is trivial: keep both sides' lines.\n` +
     `3. Run the full test suite once on main (the project's test command, see 'Project commands' in AGENTS.md). If it fails, report the failures. Note main's sha as head.\n` +
-    `4. If green, update project memory in docs/memory/ (Obsidian vault) only for decisions or gotchas not already written by the branches: one note each, frontmatter with tags and today's date, [[wikilinks]], linked from docs/memory/index.md; commit as "docs(memory): ...". Skip if nothing new.\n` +
-    `5. Do NOT push; the main session pushes after all work is finished. Do not delete branches or worktrees.\n\n` +
+    `4. Do NOT update docs and do NOT push; the Finish step does both once everything is ready. Do not delete branches or worktrees.\n\n` +
     `Request: ${request}\nTasks:\n${ready.map(r => `- ${r.id}: ${r.summary}`).join('\n')}` + TOOLS,
     { phase: 'Ship', model: SONNET, schema: SHIP }
+  )
+}
+
+// Runs only when every task is merged, reviewed/checked where required, and main is green
+async function finish(label, request, head, lines) {
+  return safe(
+    label,
+    `You are the Finish step. All work for this request is merged into local main, reviewed, checked and tested.\n` +
+    `1. Work in the main repository on branch main. Confirm ${head ? `git rev-parse HEAD is ${head}` : 'HEAD is main'} and the working tree is clean (the untracked .claude/worktrees/ folder is fine). If not, STOP: do not commit or push, and say why in notes.\n` +
+    `2. Obsidian memory (docs/memory/, index docs/memory/index.md): read the index, then add or update one note per decision, gotcha or convention this work introduced. Frontmatter with tags and today's date, [[wikilinks]] to related notes, a link from the index. Update an existing note instead of duplicating it, and don't record what the code or git history already says. If nothing is worth keeping, write nothing and say so.\n` +
+    `3. README.md: update every part this work made out of date or incomplete (features, usage, setup, commands, config, screenshots list). Keep its existing structure and tone. If no part is affected, leave it and say why.\n` +
+    `4. If anything changed, commit only those docs as "docs: update memory and README" and report the sha. Do not touch code.\n` +
+    `5. Push main to origin (git push origin main). Never force-push. If the push is rejected, do not pull, rebase or retry: report it with pushed=false.\n\n` +
+    `Request: ${request}\nWhat was done:\n${lines.join('\n')}` + TOOLS,
+    { phase: 'Finish', model: SONNET, schema: FINISH }
   )
 }
 
@@ -206,8 +241,8 @@ if (input.verify) {
         const fix = await safe(
           `fix:${it.id}#${attempt + 1}`,
           branch
-            ? `Work ONLY in the worktree ${worktree} (cd there; use git -C ${worktree}). Fix these findings and commit on branch ${branch}:\n- ${review.findings.join('\n- ')}` + TOOLS
-            : `Create a new branch "fix/${it.id}" from the current main (HEAD), fix these findings in the code that was added by ${it.base}..${it.head}, run the project's test command, commit, and report sha, branch and worktree path:\n- ${review.findings.join('\n- ')}` + TOOLS,
+            ? `Work ONLY in the worktree ${worktree} (cd there; use git -C ${worktree}). Fix these findings and commit on branch ${branch}:\n- ${review.findings.join('\n- ')}` + FIX_RULES + TOOLS
+            : `Create a new branch "fix/${it.id}" from the current main (HEAD), fix these findings in the code that was added by ${it.base}..${it.head}, run the project's test command, commit, and report sha, branch and worktree path:\n- ${review.findings.join('\n- ')}` + FIX_RULES + TOOLS,
           { phase: 'Review', isolation: branch ? undefined : 'worktree', model: OPUS, schema: FIX }
         )
         if (!fix || fix.sha === sha) { log(`${it.id}: the fix produced no new commit`); break }
@@ -233,8 +268,23 @@ if (input.verify) {
     phase('Ship')
     shipped = (await ship('ship:verify', fixed.map(r => ({ ...r, summary: `fixes for ${r.id}` })), 'deferred verification fixes')) || { merged: [], tests_passed: false, notes: 'ship agent failed' }
   }
+
+  const allReady =
+    rows.length === items.length &&
+    rows.every(r => r.verdict === 'SHIP' && r.check.passed) &&
+    (!fixed.length || (shipped.tests_passed && shipped.merged.length === fixed.length)) &&
+    !incomplete.length
+  let finished = null
+  if (allReady) {
+    phase('Finish')
+    finished = await finish('finish:verify', 'deferred verification of earlier batches', shipped.head, rows.map(r => `- ${r.id}: verified${r.branch ? ' (fixes merged from ' + r.branch + ')' : ''}`))
+  } else {
+    log('Not finished: some items are not SHIP + checked, or main is not green; docs and push skipped')
+  }
+
   return {
-    pushed: false,
+    pushed: !!(finished && finished.pushed),
+    finish: finished,
     shipNotes: shipped.notes,
     items: rows.map(r => ({ id: r.id, verdict: r.verdict, openFindings: r.openFindings, fixBranch: r.branch || null, checkPassed: r.check.passed, checkItems: r.check.items, checkNotes: r.check.notes })),
     manualChecks: manualChecks(rows),
@@ -268,7 +318,7 @@ const results = await pipeline(
   async task => {
     const b = await safe(
       `build:${task.id}`,
-      `Build this task. FIRST: your worktree may start from an older commit (the last pushed origin/main), not from the local main that holds all finished work. Before anything else run git log -1 --format=%H main and create your branch from that commit: git checkout -b "task/${task.id}" main. Verify with git merge-base --is-ancestor main HEAD. Then work and commit on that branch. Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Run the relevant tests (the project's test command, see 'Project commands' in AGENTS.md) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
+      `Build this task. FIRST: your worktree may start from an older commit (the last pushed origin/main), not from the local main that holds all finished work. Before anything else run git log -1 --format=%H main and create your branch from that commit: git checkout -b "task/${task.id}" main. Verify with git merge-base --is-ancestor main HEAD. Then work and commit on that branch. Commit early and often (a small WIP commit every time something compiles or a milestone is done) so the work survives if you are cut off; amend or squash at the end is optional. Test first: for each new behaviour or bug fix, write a test that fails, then the code that makes it pass; if some part has no test setup, say so in your summary. Run the relevant tests (the project's test command, see 'Project commands' in AGENTS.md) before finishing and make sure the build is warning-free. Report the branch, the final commit sha (git rev-parse HEAD) and this worktree's absolute path (git rev-parse --show-toplevel).\n\nBrief:\n${task.brief}` + TOOLS,
       { phase: 'Build', isolation: 'worktree', model: SONNET, schema: BUILD }
     )
     return b ? { ...b, id: task.id, weight: task.weight, state: 'built' } : { id: task.id, weight: task.weight, state: 'build-failed' }
@@ -287,7 +337,7 @@ const results = await pipeline(
       if (review.verdict === 'SHIP' || attempt === FIX_ROUNDS) break
       const fix = await safe(
         `fix:${task.id}#${attempt + 1}`,
-        `Work ONLY in the builder's worktree ${r.worktree} (cd there; use git -C ${r.worktree}); it has branch "${r.branch}" checked out. Do not create another branch and do not check the branch out anywhere else. Fix these findings, run the project's test command, and commit on that branch. Return the new sha (git rev-parse HEAD).\n- ${review.findings.join('\n- ')}` + TOOLS,
+        `Work ONLY in the builder's worktree ${r.worktree} (cd there; use git -C ${r.worktree}); it has branch "${r.branch}" checked out. Do not create another branch and do not check the branch out anywhere else. Fix these findings, run the project's test command, and commit on that branch. Return the new sha (git rev-parse HEAD).\n- ${review.findings.join('\n- ')}` + FIX_RULES + TOOLS,
         { phase: 'Review', model: OPUS, schema: FIX }
       )
       if (!fix || fix.sha === sha) { log(`${task.id}: the fix produced no new commit`); break }
@@ -319,9 +369,26 @@ if (ready.length) {
   shipped = (await ship('ship:main', ready, input.request)) || { merged: [], base: '', head: '', tests_passed: false, notes: 'the ship agent failed' }
 }
 
+// Finish: docs + push only when nothing is held, deferred or incomplete and main is green
+const allReady =
+  !input.defer &&
+  done.length === tasks.length &&
+  ready.length === done.length &&
+  shipped.tests_passed &&
+  shipped.merged.length === ready.length &&
+  !incomplete.length
+let finished = null
+if (allReady) {
+  phase('Finish')
+  finished = await finish('finish:main', input.request, shipped.head, ready.map(r => `- ${r.id} [${r.weight}]: ${r.summary}`))
+} else {
+  log(input.defer ? 'Deferred run: docs and push wait for the verify pass' : 'Not finished: some tasks are held, failed or main is not green; docs and push skipped')
+}
+
 const byId = Object.fromEntries(tasks.map(t => [t.id, t]))
 return {
-  pushed: false,
+  pushed: !!(finished && finished.pushed),
+  finish: finished,
   shipNotes: shipped.notes,
   testsPassedOnMain: shipped.tests_passed,
   base: shipped.base,

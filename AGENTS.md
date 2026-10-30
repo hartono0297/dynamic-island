@@ -9,6 +9,7 @@
 | Review and fix | Opus 5.5 (`claude-opus-5-5`) |
 | Check | Sonnet 5.5 (`claude-sonnet-5-5`) |
 | Ship | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Finish (memory, README, push) | Sonnet 5.5 (`claude-sonnet-5-5`) |
 
 - Spawning subagents (Agent tool) is allowed whenever it helps: parallel
   reading, independent tasks, blind reviewers, fixers. Set each agent's model
@@ -33,25 +34,63 @@ yourself in the main session.
   (the builder and Ship run the tests). Heavy tasks get build, a blind review of
   a pinned commit (fixes land in the builder's worktree), and a check against a
   written checklist. What the checker cannot test lands in `manualChecks` for me.
-- The workflow merges passing tasks into `main` locally and does not push. The
-  main session pushes `main` once all the requested work is finished. This
+- The workflow merges passing tasks into `main` locally. Once everything is
+  ready (every task merged, reviewed, fixed and checked where required, tests
+  green on `main`, nothing `incomplete`), its Finish step **always** updates the
+  Obsidian memory and `README.md`, commits those docs, and pushes `main`. This
   project uses a single branch (`main`), so that push is pre-approved. Deploy
   stays with me.
+- If anything is not ready, the workflow skips docs and push. Fix what it
+  reports first; don't push half-finished work from the main session.
 - For a long batch of runs, pass `args: {request, defer: true}` to build now,
   then run one verify pass with `args: {verify: [...]}` (the `deferred` list the
-  runs returned) at the end, before the push.
-- Closing step, always: once all requested work is merged and every heavy
-  task is reviewed, checked and fixed (the verify pass too, when `defer` was
-  used), update the README (feature list, pages table, install or usage notes
-  that changed) and the Obsidian memory in `docs/memory/` before the push. Add or
-  update one note per decision or gotcha from this round, write a
-  `vX-Y-handoff.md` note for a version (what landed, defaults chosen, what was
-  cancelled and why, owner checks, open findings), link them from
-  `docs/memory/index.md`, commit as `docs(memory): ...`, then push `main`.
-  Never push finished work without the README and memory update.
-- When it finishes, report: which tasks were merged and their weight, whether
-  `main` was pushed, `manualChecks`, `incomplete`, and any open findings or
-  failed checks.
+  runs returned) at the end. Deferred runs never push; the verify pass does the
+  Finish step.
+- When it finishes, report: which tasks were merged and their weight, what the
+  Finish step wrote to memory and README, whether `main` was pushed,
+  `manualChecks`, `incomplete`, and any open findings or failed checks.
+
+## Always brainstorm before `build`
+
+Agents inside the workflow cannot ask me anything, so every open question gets
+settled first, in the main session, with me. Before every `build` run:
+
+- Restate what you understood in a few lines, then ask about whatever is
+  unclear: the goal, who uses it, the exact behaviour and edge cases, what must
+  not change, and what "done" means. Ask a few focused questions at a time.
+- For larger or open-ended work, propose 2-3 approaches with trade-offs and
+  recommend one.
+- Even for a small, clear request, restate it in one or two lines and wait for
+  my OK.
+- Only when I confirm, run `build` with the agreed request written out
+  concretely, including the acceptance criteria.
+
+## Superpowers must be off (check every session)
+
+At the start of every session in this project, before the first task, check
+whether the Superpowers plugin is enabled: skills named `superpowers:*` are
+available in the session, or `enabledPlugins` in `~/.claude/settings.json`,
+`.claude/settings.json` or `.claude/settings.local.json` has
+`"superpowers@superpowers-marketplace": true` (on this machine the id is `superpowers@claude-plugins-official`).
+
+If it is on, do not turn it off yourself. Tell me, explain why, and ask me to
+confirm turning it off:
+
+- Its skills overlap with `build` (orchestration, worktrees, finishing
+  branches, code review), so two systems steer the same work: duplicate
+  branches and worktrees, slower runs.
+- Its "MUST" rules (such as brainstorming before any creative work) make
+  workflow agents stop to ask questions nobody inside the workflow can answer.
+- `using-superpowers` makes every agent check for skills before each reply,
+  which costs tokens in every workflow agent.
+- What is useful from it already lives here: brainstorming in the main session
+  (section above), and test-first, root-cause fixing and proof-before-claims in
+  the `build` prompts.
+
+If I agree, ask whether to turn it off for all projects (`~/.claude/settings.json`)
+or only this one (`.claude/settings.json`), set
+`"superpowers@superpowers-marketplace": false` there, and tell me to restart
+Claude Code. If I say keep it, don't ask again in this session.
 
 ## Preflight: once per project
 
@@ -87,7 +126,7 @@ place and install whatever is missing. Then create `.claude/preflight.done`
   - After work that taught something worth keeping (a decision, gotcha,
     convention), add or update one note per fact. Give it frontmatter with
     `tags` and `date`, `[[wikilinks]]` to related notes, and a link from the
-    index. The `build` workflow does this in its Ship step.
+    index. The `build` workflow does this in its Finish step.
   - Don't save what the code or git history already records. Update an
     existing note instead of creating a duplicate.
 
