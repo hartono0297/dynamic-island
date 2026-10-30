@@ -157,7 +157,7 @@ impl App {
             self.sync_clip_hotkey();
         }
         if self.prtsc.failed {
-            self.sync_prtsc_hotkey();
+            self.sync_prtsc_hook();
         }
     }
 

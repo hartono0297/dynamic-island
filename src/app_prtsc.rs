@@ -1,125 +1,268 @@
 //! The PrtSc key opens Vale's own screenshot (`capture` and the editor after
-//! it): the hotkey, its registration, what Settings shows when Windows or
-//! another app already has the key, and the one button that asks Windows to
-//! let go of it. A child of `app`, so it works on `App` directly.
+//! it): the keyboard hook that sees the key, what Settings shows when the
+//! hook could not be installed. A child of `app`, so it works on `App`
+//! directly.
 //!
-//! The key is registered bare (`MOD_NOREPEAT`, no other modifier): Alt+PrtSc,
-//! Win+PrtSc, Ctrl+PrtSc and Shift+PrtSc stay Windows'. Windows 11 gives the
-//! bare key to Snipping Tool (`PrintScreenKeyForSnippingEnabled`), in which
-//! case `RegisterHotKey` fails; the Settings row then offers to turn that off.
+//! Windows 11 owns the bare key (Snipping Tool, while
+//! `PrintScreenKeyForSnippingEnabled` is absent), so `RegisterHotKey` fails.
+//! A low-level keyboard hook (`WH_KEYBOARD_LL`) sees the key first and
+//! swallows it. The hook lives on its own thread: Windows waits for a
+//! low-level hook on every keystroke system-wide and silently removes a slow
+//! one, so the busy UI thread must not be the one that answers. The thread
+//! is started only while the setting is on and blocks in `GetMessageW`
+//! between keystrokes: no timer, nothing runs while nobody types. The proc
+//! does no work: it reads two statics, asks `prtsc_hook_action`, and posts
+//! `WM_APP_PRTSC` to the island.
 //!
-//! Power: no timer, no polling. A failed registration is tried again only
-//! when the tray menu opens or Settings opens (`retry_hotkeys`). A config
-//! save or read registers or lets go only when the setting itself moved
+//! The key is taken bare: Alt+PrtSc, Win+PrtSc, Ctrl+PrtSc and Shift+PrtSc go
+//! to Windows untouched. Vale writes nothing to the registry.
+//!
+//! A failed install (Settings shows a red note) is tried again only when the
+//! tray menu opens or Settings opens (`retry_hotkeys`). A config save or read
+//! starts or stops the hook only when the setting itself moved
 //! (`follows_config`), so a toggle click is one try and an unrelated save
-//! none. The registry is read once per failed try and kept, never on a
-//! Settings redraw.
+//! none.
 
-use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW, RegSetKeyValueW,
-};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::mpsc;
+use std::thread::JoinHandle;
+
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_SNAPSHOT,
+    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_SNAPSHOT,
 };
-use windows::core::w;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN, MSG, PM_NOREMOVE, PeekMessageW,
+    PostMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+};
 
 use super::App;
 use crate::model::Event;
-use crate::shortcuts;
 use crate::ui::settings_layout::PrtscRow;
 
-/// `RegisterHotKey` id of the PrtSc key (Clipboard 1, Search 2, Devices 3).
-pub(super) const HOTKEY_PRTSC: i32 = 4;
+/// Posted to the island by the hook proc when a bare PrtSc goes down.
+pub(super) const WM_APP_PRTSC: u32 = WM_APP + 60;
 
-/// Where Windows keeps "Use the Print screen button to open screen
-/// capture": under HKCU, a DWORD. 0 = off; 1 or absent = on (Windows 11
-/// treats an absent value as on).
-const KEYBOARD_KEY: windows::core::PCWSTR = w!("Control Panel\\Keyboard");
-const SNIPPING_VALUE: windows::core::PCWSTR = w!("PrintScreenKeyForSnippingEnabled");
-/// Where "Matikan di Windows" ends up when the retry after the registry write
-/// still fails: Windows' own keyboard page, for the owner to switch it off.
-const WINDOWS_KEYBOARD_PAGE: &str = "ms-settings:easeofaccess-keyboard";
+/// The island window the proc posts to (0: none). Set before the thread
+/// starts, cleared at shutdown.
+static ISLAND: AtomicIsize = AtomicIsize::new(0);
+/// A PrtSc key-down was swallowed and its key-up has not come yet. Only the
+/// hook thread touches it while the hook runs.
+static SWALLOWING: AtomicBool = AtomicBool::new(false);
 
-/// What the PrtSc key holds: whether Vale has the key, whether the last
-/// registration failed, Windows' value as read then, and whether that value
-/// is Vale's own write.
+/// What the proc does with one key event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HookAction {
+    /// Not ours: on to Windows and the other hooks.
+    Pass,
+    /// Ours, but nothing to start (auto-repeat, the key-up): swallowed.
+    Swallow,
+    /// A fresh press: swallowed, and the island is told.
+    SwallowAndFire,
+}
+
+/// The modifiers held when the key went down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Mods {
+    pub alt: bool,
+    pub win: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+}
+
+impl Mods {
+    fn any(self) -> bool {
+        self.alt || self.win || self.ctrl || self.shift
+    }
+}
+
+/// The decision for one key event, from the virtual key, whether it is a
+/// key-down, the modifiers and whether the last press was swallowed. Returns
+/// the action and the new "swallowing". Pure: the proc only reads state and
+/// calls this.
+pub(super) fn prtsc_hook_action(
+    vk: u32,
+    key_down: bool,
+    mods: Mods,
+    swallowing: bool,
+) -> (HookAction, bool) {
+    if vk != u32::from(VK_SNAPSHOT.0) {
+        return (HookAction::Pass, swallowing);
+    }
+    if key_down {
+        if swallowing {
+            // Auto-repeat of a press already taken: no second capture.
+            (HookAction::Swallow, true)
+        } else if mods.any() {
+            (HookAction::Pass, false)
+        } else {
+            (HookAction::SwallowAndFire, true)
+        }
+    } else if swallowing {
+        (HookAction::Swallow, false)
+    } else {
+        // A key-up of a press that went to Windows.
+        (HookAction::Pass, false)
+    }
+}
+
+/// Whether a modifier key is down right now.
+fn held(vk: u16) -> bool {
+    let state = unsafe { GetAsyncKeyState(i32::from(vk)) };
+    state < 0
+}
+
+/// The hook proc. Runs on the hook thread for every key in the system: no
+/// allocation, no locks, no logging.
+unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // HC_ACTION (0): a real key message; anything else must be passed on.
+    if code == 0 {
+        let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        if kb.vkCode == u32::from(VK_SNAPSHOT.0) {
+            let msg = wparam.0 as u32;
+            let down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+            let up = matches!(msg, WM_KEYUP | WM_SYSKEYUP);
+            if down || up {
+                let mods = Mods {
+                    alt: kb.flags.0 & LLKHF_ALTDOWN.0 != 0 || held(VK_MENU.0),
+                    win: held(VK_LWIN.0) || held(VK_RWIN.0),
+                    ctrl: held(VK_CONTROL.0),
+                    shift: held(VK_SHIFT.0),
+                };
+                let was = SWALLOWING.load(Ordering::Relaxed);
+                let (action, now) = prtsc_hook_action(kb.vkCode, down, mods, was);
+                SWALLOWING.store(now, Ordering::Relaxed);
+                match action {
+                    HookAction::Pass => {}
+                    HookAction::Swallow => return LRESULT(1),
+                    HookAction::SwallowAndFire => {
+                        let hwnd = ISLAND.load(Ordering::Relaxed);
+                        if hwnd != 0 {
+                            unsafe {
+                                let _ = PostMessageW(
+                                    Some(HWND(hwnd as *mut _)),
+                                    WM_APP_PRTSC,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                );
+                            }
+                        }
+                        return LRESULT(1);
+                    }
+                }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// The running hook thread.
+struct HookThread {
+    thread_id: u32,
+    handle: JoinHandle<()>,
+}
+
+impl HookThread {
+    /// Starts the thread and waits once for it to say whether the hook went
+    /// in. `None`: `SetWindowsHookExW` failed (or the thread did not start).
+    fn start(hwnd: HWND) -> Option<HookThread> {
+        ISLAND.store(hwnd.0 as isize, Ordering::Relaxed);
+        SWALLOWING.store(false, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel::<Option<u32>>();
+        let handle = std::thread::Builder::new()
+            .name("vale-prtsc-hook".into())
+            .spawn(move || hook_thread_main(tx))
+            .ok();
+        let started = handle.and_then(|handle| match rx.recv() {
+            Ok(Some(thread_id)) => Some(HookThread { thread_id, handle }),
+            _ => {
+                let _ = handle.join();
+                None
+            }
+        });
+        if started.is_none() {
+            ISLAND.store(0, Ordering::Relaxed);
+        }
+        started
+    }
+
+    /// `WM_QUIT` to the thread, which unhooks and ends; waits for it.
+    fn stop(self) {
+        unsafe {
+            let _ = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+        let _ = self.handle.join();
+        ISLAND.store(0, Ordering::Relaxed);
+        SWALLOWING.store(false, Ordering::Relaxed);
+    }
+}
+
+/// The hook thread: install, report, then block in the message loop until
+/// `WM_QUIT`.
+fn hook_thread_main(tx: mpsc::Sender<Option<u32>>) {
+    let hook = unsafe {
+        let module = GetModuleHandleW(None).ok();
+        SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), module.map(Into::into), 0)
+    };
+    let Ok(hook) = hook else {
+        let _ = tx.send(None);
+        return;
+    };
+    // Make the thread's message queue exist before `stop` can post to it.
+    let mut msg = MSG::default();
+    unsafe {
+        let _ = PeekMessageW(&mut msg, None, WM_QUIT, WM_QUIT, PM_NOREMOVE);
+    }
+    let _ = tx.send(Some(unsafe { GetCurrentThreadId() }));
+    // The low-level hook is called from inside this loop.
+    while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {}
+    unsafe {
+        let _ = UnhookWindowsHookEx(hook);
+    }
+}
+
+/// What the PrtSc hook holds: the running thread and whether the last
+/// install failed.
 #[derive(Default)]
 pub(super) struct PrtscState {
-    pub registered: bool,
+    hook: Option<HookThread>,
     pub failed: bool,
-    /// `PrintScreenKeyForSnippingEnabled` read at the last failed try
-    /// (`None`: absent). Not read while the key is Vale's.
-    windows_value: Option<u32>,
-    /// The button's write went through this run and Vale has not had the key
-    /// since. Windows 11 usually lets go of the key only after a sign-out, so
-    /// a 0 read back then is Vale's own, not the sign of another app.
-    wrote_off: bool,
 }
 
 impl PrtscState {
-    /// Keeps the outcome of a `RegisterHotKey` try. Only a failure reads
-    /// Windows' value (`read`), once, for the Settings row.
-    fn tried(&mut self, ok: bool, read: impl FnOnce() -> Option<u32>) {
-        self.registered = ok;
-        self.failed = !ok;
-        if ok {
-            // Windows let go: a 0 on a later failure is another app's.
-            self.wrote_off = false;
-        } else {
-            self.windows_value = read();
-        }
+    /// Whether the hook is installed.
+    pub fn installed(&self) -> bool {
+        self.hook.is_some()
     }
 
-    /// The button's registry write went through (set only by the click).
-    fn wrote_off(&mut self) {
-        self.wrote_off = true;
-    }
-
-    /// The Settings row, from what is kept (no registry read).
+    /// The Settings row, from what is kept.
     fn row(&self, on: bool) -> RowState {
-        prtsc_row(on, self.failed, self.windows_value, self.wrote_off)
-    }
-
-    /// The button writes only while its row offers it: a late click (the
-    /// key freed meanwhile from the tray or Settings) leaves Windows alone.
-    fn click_writes(&self, on: bool) -> bool {
-        self.row(on) == RowState::TakenByWindows
+        prtsc_row(on, self.failed)
     }
 }
 
 /// What the Settings row shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RowState {
-    /// The toggle is off: nothing registered, nothing to say.
+    /// The toggle is off: no hook, nothing to say.
     Off,
-    /// On and Vale has the key.
+    /// On and the hook is installed.
     Active,
-    /// On, registration failed, and Windows' own setting still gives the key
-    /// to Snipping Tool (value 1 or absent), or the 0 is Vale's own write that
-    /// Windows has not applied yet: "Dipakai Windows" and a button.
-    TakenByWindows,
-    /// On, registration failed, and Windows' setting is off by someone other
-    /// than Vale: another app holds the key. The usual "taken" text, no
-    /// button.
-    TakenByApp,
+    /// On, but `SetWindowsHookExW` failed.
+    Failed,
 }
 
-/// The row's state from the toggle, whether registration failed, the
-/// registry value (`None`: absent) and whether Vale wrote that value itself.
-pub(super) fn prtsc_row(
-    on: bool,
-    failed: bool,
-    windows_value: Option<u32>,
-    wrote_off: bool,
-) -> RowState {
+/// The row's state from the toggle and whether the last install failed.
+pub(super) fn prtsc_row(on: bool, failed: bool) -> RowState {
     if !on {
         RowState::Off
-    } else if !failed {
-        RowState::Active
-    } else if windows_value != Some(0) || wrote_off {
-        RowState::TakenByWindows
+    } else if failed {
+        RowState::Failed
     } else {
-        RowState::TakenByApp
+        RowState::Active
     }
 }
 
@@ -127,114 +270,53 @@ pub(super) fn prtsc_row(
 pub(super) fn ui_row(row: RowState) -> PrtscRow {
     match row {
         RowState::Off | RowState::Active => PrtscRow::Plain,
-        RowState::TakenByWindows => PrtscRow::TakenByWindows,
-        RowState::TakenByApp => PrtscRow::TakenByApp,
+        RowState::Failed => PrtscRow::Failed,
     }
 }
 
-/// What the button does after its registry write and the retry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Next {
-    /// The key is Vale's now.
-    Registered,
-    /// Still taken, whether or not the write went through (Windows may not
-    /// have picked it up yet): open Windows' keyboard settings for the owner.
-    OpenSettings,
+/// Whether a config save or read has to touch the hook: only when the
+/// setting no longer matches what is installed or was last tried (turned on
+/// and never tried, turned off while installed or failed). A failed hook that
+/// is still wanted waits for `retry_hotkeys`.
+pub(super) fn follows_config(want: bool, installed: bool, failed: bool) -> bool {
+    want != (installed || failed)
 }
 
-pub(super) fn after_disable_click(retry_ok: bool) -> Next {
-    if retry_ok {
-        Next::Registered
-    } else {
-        Next::OpenSettings
-    }
-}
-
-/// Whether a config save or read has to touch the registration: only when
-/// the setting no longer matches what is held or was last tried (turned on
-/// and never tried, turned off while held or failed). A failed key that is
-/// still wanted waits for `retry_hotkeys`.
-pub(super) fn follows_config(want: bool, registered: bool, failed: bool) -> bool {
-    want != (registered || failed)
-}
-
-/// What a sync has to do to the registration.
+/// What a sync has to do to the hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Plan {
     Nothing,
-    Register,
-    Unregister,
+    Install,
+    Uninstall,
 }
 
-/// The step from the setting, whether Vale holds the key and whether the
-/// last try failed. A failed key is tried again (`Register`) only while it
-/// is wanted; one that is held is left alone.
-pub(super) fn plan(want: bool, registered: bool) -> Plan {
-    match (want, registered) {
-        (true, false) => Plan::Register,
-        (false, true) => Plan::Unregister,
+/// The step from the setting and whether the hook is installed. A failed
+/// hook is tried again (`Install`) only while it is wanted; one that is
+/// installed is left alone.
+pub(super) fn plan(want: bool, installed: bool) -> Plan {
+    match (want, installed) {
+        (true, false) => Plan::Install,
+        (false, true) => Plan::Uninstall,
         _ => Plan::Nothing,
     }
 }
 
-/// `PrintScreenKeyForSnippingEnabled` as Windows has it. Read only.
-pub(super) fn read_windows_value() -> Option<u32> {
-    let mut value: u32 = 0;
-    let mut size = size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            KEYBOARD_KEY,
-            SNIPPING_VALUE,
-            RRF_RT_REG_DWORD,
-            None,
-            Some(&mut value as *mut u32 as *mut _),
-            Some(&mut size),
-        )
-    };
-    status.is_ok().then_some(value)
-}
-
-/// Writes `PrintScreenKeyForSnippingEnabled` = 0 (REG_DWORD, HKCU only). The
-/// only place Vale writes it, and only from the button's click.
-fn write_windows_value_off() -> bool {
-    let zero: u32 = 0;
-    unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            KEYBOARD_KEY,
-            SNIPPING_VALUE,
-            REG_DWORD.0,
-            Some(&zero as *const u32 as *const _),
-            size_of::<u32>() as u32,
-        )
-    }
-    .is_ok()
-}
-
 impl App {
-    /// Registers or lets go of the bare PrtSc key as the setting says. A
-    /// failure (Windows or another app has it) shows in Settings and is tried
-    /// again on the next sync, tray menu or Settings opening.
-    pub(super) fn sync_prtsc_hotkey(&mut self) {
+    /// Installs or removes the PrtSc hook as the setting says. A failure
+    /// shows in Settings and is tried again on the next sync, tray menu or
+    /// Settings opening.
+    pub(super) fn sync_prtsc_hook(&mut self) {
         let want = self.config.screenshot.print_screen;
-        match plan(want, self.prtsc.registered) {
+        match plan(want, self.prtsc.installed()) {
             Plan::Nothing => {}
-            Plan::Unregister => unsafe {
-                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_PRTSC);
-                self.prtsc.registered = false;
-            },
-            Plan::Register => {
-                let ok = unsafe {
-                    RegisterHotKey(
-                        Some(self.hwnd),
-                        HOTKEY_PRTSC,
-                        MOD_NOREPEAT,
-                        u32::from(VK_SNAPSHOT.0),
-                    )
+            Plan::Uninstall => {
+                if let Some(hook) = self.prtsc.hook.take() {
+                    hook.stop();
                 }
-                .is_ok();
-                self.prtsc.tried(ok, read_windows_value);
+            }
+            Plan::Install => {
+                self.prtsc.hook = HookThread::start(self.hwnd);
+                self.prtsc.failed = !self.prtsc.installed();
             }
         }
         if !want {
@@ -242,11 +324,11 @@ impl App {
         }
     }
 
-    /// `WM_HOTKEY`: Vale's own capture, whatever "Alat screenshot" says (that
-    /// choice is for the tile). Starts through the shortcut timer like the
-    /// tile, after an open panel or the search has collapsed, so it is not in
-    /// the picture. One overlay at a time: a press while it is up (or while
-    /// it is starting) does nothing.
+    /// `WM_APP_PRTSC`: Vale's own capture, whatever "Alat screenshot" says
+    /// (that choice is for the tile). Starts through the shortcut timer like
+    /// the tile, after an open panel or the search has collapsed, so it is
+    /// not in the picture. One overlay at a time: a press while it is up (or
+    /// while it is starting) does nothing.
     pub(super) fn on_prtsc_hotkey(&mut self) {
         if !self.config.screenshot.print_screen || crate::capture::overlay::active() {
             return;
@@ -254,53 +336,33 @@ impl App {
         self.apply_now(Event::PrintScreen);
     }
 
-    /// The Settings toggle: kept and saved; the key follows from
+    /// The Settings toggle: kept and saved; the hook follows from
     /// `adopt_config` (`prtsc_follow_config`), one try per click.
     pub(super) fn set_print_screen(&mut self, on: bool) {
         self.config.screenshot.print_screen = on;
         self.save_config();
     }
 
-    /// A config save or read (the toggle, a hand edit): the key follows a
-    /// changed setting. Not a retry of a failed key (`retry_hotkeys` is).
+    /// A config save or read (the toggle, a hand edit): the hook follows a
+    /// changed setting. Not a retry of a failed hook (`retry_hotkeys` is).
     pub(super) fn prtsc_follow_config(&mut self) {
         let want = self.config.screenshot.print_screen;
-        if follows_config(want, self.prtsc.registered, self.prtsc.failed) {
-            self.sync_prtsc_hotkey();
+        if follows_config(want, self.prtsc.installed(), self.prtsc.failed) {
+            self.sync_prtsc_hook();
         }
     }
 
-    /// The row's state for Settings, from the value kept at the last failed
-    /// try (no registry read: this runs on every refresh while Settings is
-    /// open).
+    /// The row's state for Settings.
     pub(super) fn prtsc_model(&self) -> PrtscRow {
         ui_row(self.prtsc.row(self.config.screenshot.print_screen))
     }
 
-    /// "Matikan di Windows", on click only and only while the row offers it:
-    /// Windows' own setting is switched off (HKCU), then the registration is
-    /// tried again (which reads the value back if it fails). Still taken,
-    /// written or not, Windows' keyboard settings open for the owner, and the
-    /// row keeps saying Windows has the key (`wrote_off`).
-    pub(super) fn turn_off_windows_print_screen(&mut self) {
-        if !self.prtsc.click_writes(self.config.screenshot.print_screen) {
-            return;
-        }
-        if write_windows_value_off() {
-            self.prtsc.wrote_off();
-        }
-        self.sync_prtsc_hotkey();
-        if after_disable_click(self.prtsc.registered) == Next::OpenSettings {
-            self.queue_shortcut(shortcuts::Action::Open(WINDOWS_KEYBOARD_PAGE));
-        }
-    }
-
-    /// `WM_DESTROY`: the key goes back.
+    /// `WM_DESTROY`: the hook goes.
     pub(super) fn prtsc_shutdown(&mut self) {
-        unsafe {
-            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_PRTSC);
+        ISLAND.store(0, Ordering::Relaxed);
+        if let Some(hook) = self.prtsc.hook.take() {
+            hook.stop();
         }
-        self.prtsc.registered = false;
     }
 }
 
@@ -308,151 +370,173 @@ impl App {
 mod tests {
     use super::*;
 
+    const SNAP: u32 = 0x2C;
+    const NONE: Mods = Mods {
+        alt: false,
+        win: false,
+        ctrl: false,
+        shift: false,
+    };
+
     #[test]
-    fn the_id_is_the_next_free_one() {
-        assert_eq!(HOTKEY_PRTSC, 4);
+    fn the_hotkey_ids_of_the_other_keys_stay_distinct() {
         assert_eq!(super::super::clip::HOTKEY_CLIP, 1);
         assert_eq!(super::super::HOTKEY_SEARCH, 2);
         assert_eq!(super::super::HOTKEY_DEVICES, 3);
     }
 
     #[test]
-    fn the_row_follows_the_toggle_the_registration_and_windows() {
-        for value in [None, Some(0), Some(1), Some(7)] {
-            for wrote in [false, true] {
-                assert_eq!(prtsc_row(false, false, value, wrote), RowState::Off);
-                // Off wins even when a stale failure is left.
-                assert_eq!(prtsc_row(false, true, value, wrote), RowState::Off);
-                assert_eq!(prtsc_row(true, false, value, wrote), RowState::Active);
+    fn the_message_id_collides_with_no_other_app_message() {
+        assert_eq!(WM_APP_PRTSC, WM_APP + 60);
+        // Every `WM_APP + n` the crate uses.
+        let taken = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 20, 21, 22, 41, 50, 51,
+        ];
+        for n in taken {
+            assert_ne!(WM_APP_PRTSC, WM_APP + n);
+        }
+    }
+
+    #[test]
+    fn a_bare_press_fires_once_and_is_swallowed() {
+        assert_eq!(
+            prtsc_hook_action(SNAP, true, NONE, false),
+            (HookAction::SwallowAndFire, true)
+        );
+    }
+
+    #[test]
+    fn auto_repeat_is_swallowed_without_a_second_fire() {
+        assert_eq!(
+            prtsc_hook_action(SNAP, true, NONE, true),
+            (HookAction::Swallow, true)
+        );
+        // Even if a modifier went down meanwhile: the press is still ours.
+        let shift = Mods { shift: true, ..NONE };
+        assert_eq!(
+            prtsc_hook_action(SNAP, true, shift, true),
+            (HookAction::Swallow, true)
+        );
+    }
+
+    #[test]
+    fn the_key_up_after_a_swallowed_press_is_swallowed_and_clears() {
+        assert_eq!(
+            prtsc_hook_action(SNAP, false, NONE, true),
+            (HookAction::Swallow, false)
+        );
+        // The whole press: down, repeat, repeat, up, then a new press fires.
+        let mut sw = false;
+        let mut fired = 0;
+        for (down, expect_swallow) in [(true, true), (true, true), (true, true), (false, true)] {
+            let (action, now) = prtsc_hook_action(SNAP, down, NONE, sw);
+            fired += usize::from(action == HookAction::SwallowAndFire);
+            assert_eq!(action != HookAction::Pass, expect_swallow);
+            sw = now;
+        }
+        assert_eq!(fired, 1);
+        assert!(!sw);
+        assert_eq!(
+            prtsc_hook_action(SNAP, true, NONE, sw),
+            (HookAction::SwallowAndFire, true)
+        );
+    }
+
+    #[test]
+    fn each_modifier_sends_the_key_to_windows() {
+        let cases = [
+            Mods { alt: true, ..NONE },
+            Mods { win: true, ..NONE },
+            Mods { ctrl: true, ..NONE },
+            Mods { shift: true, ..NONE },
+        ];
+        for mods in cases {
+            assert_eq!(
+                prtsc_hook_action(SNAP, true, mods, false),
+                (HookAction::Pass, false),
+                "{mods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_up_that_was_not_swallowed_passes() {
+        for mods in [NONE, Mods { alt: true, ..NONE }] {
+            assert_eq!(
+                prtsc_hook_action(SNAP, false, mods, false),
+                (HookAction::Pass, false)
+            );
+        }
+    }
+
+    #[test]
+    fn other_keys_pass_and_leave_the_swallowing_alone() {
+        for vk in [0x41, 0x1B, 0x2D, 0x5B, 0x70] {
+            for down in [true, false] {
+                for sw in [false, true] {
+                    assert_eq!(
+                        prtsc_hook_action(vk, down, NONE, sw),
+                        (HookAction::Pass, sw),
+                        "vk={vk:#x} down={down} sw={sw}"
+                    );
+                }
             }
         }
-        // Taken: Windows' setting on (1) or absent is Windows'.
-        assert_eq!(prtsc_row(true, true, None, false), RowState::TakenByWindows);
-        assert_eq!(
-            prtsc_row(true, true, Some(1), false),
-            RowState::TakenByWindows
-        );
-        // An explicit 0 Vale did not write means another app has the key.
-        assert_eq!(prtsc_row(true, true, Some(0), false), RowState::TakenByApp);
+    }
+
+    #[test]
+    fn the_row_follows_the_toggle_and_the_install() {
+        for failed in [false, true] {
+            assert_eq!(prtsc_row(false, failed), RowState::Off);
+        }
+        assert_eq!(prtsc_row(true, false), RowState::Active);
+        assert_eq!(prtsc_row(true, true), RowState::Failed);
         assert_eq!(ui_row(RowState::Off), PrtscRow::Plain);
         assert_eq!(ui_row(RowState::Active), PrtscRow::Plain);
-        assert_eq!(ui_row(RowState::TakenByWindows), PrtscRow::TakenByWindows);
-        assert_eq!(ui_row(RowState::TakenByApp), PrtscRow::TakenByApp);
+        assert_eq!(ui_row(RowState::Failed), PrtscRow::Failed);
+        let mut s = PrtscState::default();
+        assert_eq!(s.row(true), RowState::Active);
+        s.failed = true;
+        assert_eq!(s.row(true), RowState::Failed);
+        assert_eq!(s.row(false), RowState::Off);
+        assert!(!s.installed());
     }
 
     #[test]
-    fn a_failed_retry_after_the_click_opens_windows_keyboard_settings() {
-        assert_eq!(after_disable_click(true), Next::Registered);
-        // The usual Windows 11 case (the write landed but Windows has not let
-        // go of the key yet) and a failed write alike: Windows' own page.
-        assert_eq!(after_disable_click(false), Next::OpenSettings);
-        assert_eq!(WINDOWS_KEYBOARD_PAGE, "ms-settings:easeofaccess-keyboard");
-    }
-
-    #[test]
-    fn a_config_save_touches_the_key_only_when_the_setting_moved() {
-        // Wanted and held, or wanted and failed: an unrelated save (or the
-        // toggle's own save, already followed) neither registers again nor
-        // reads the registry. A failed key waits for `retry_hotkeys`.
+    fn a_config_save_touches_the_hook_only_when_the_setting_moved() {
+        // Wanted and installed, or wanted and failed: an unrelated save (or
+        // the toggle's own save, already followed) neither installs again nor
+        // stops anything. A failed hook waits for `retry_hotkeys`.
         assert!(!follows_config(true, true, false));
         assert!(!follows_config(true, false, true));
-        // Turned on (never tried, or let go): one try.
+        // Turned on (never tried, or removed): one try.
         assert!(follows_config(true, false, false));
-        // Turned off while held: let go; while failed: the failure clears.
+        // Turned off while installed: removed; while failed: the failure clears.
         assert!(follows_config(false, true, false));
         assert!(follows_config(false, false, true));
-        // Off and nothing held: nothing.
+        // Off and nothing installed: nothing.
         assert!(!follows_config(false, false, false));
-        // After the one try the toggle's save made, the same setting no
-        // longer moves anything, held or failed.
-        let mut s = PrtscState::default();
-        s.tried(false, || Some(1));
-        assert!(!follows_config(true, s.registered, s.failed));
-        s.tried(true, || None);
-        assert!(!follows_config(true, s.registered, s.failed));
     }
 
     #[test]
-    fn the_click_writes_only_while_the_row_offers_the_button() {
-        let mut s = PrtscState::default();
-        // Never failed: nothing to turn off.
-        assert!(!s.click_writes(true));
-        s.tried(false, || Some(1));
-        assert!(s.click_writes(true));
-        // The toggle switched off meanwhile.
-        assert!(!s.click_writes(false));
-        // A retry from the tray or Settings got the key first: a late click
-        // on the button still on screen writes nothing.
-        s.tried(true, || panic!("a success reads nothing"));
-        assert!(!s.click_writes(true));
-        // Another app (an explicit 0 Vale did not write): no button either.
-        s.tried(false, || Some(0));
-        assert!(!s.click_writes(true));
-    }
-
-    #[test]
-    fn a_zero_vale_wrote_itself_still_reads_as_windows_holding_the_key() {
-        // Windows 11 default: the value absent, the key Snipping Tool's.
-        let mut s = PrtscState::default();
-        s.tried(false, || None);
-        assert_eq!(s.row(true), RowState::TakenByWindows);
-        assert!(s.click_writes(true));
-        // The click's write lands, but Windows lets go only after a sign-out:
-        // the retry fails and reads Vale's own 0 back. Still Windows', with
-        // the button, not "another app".
-        s.wrote_off();
-        s.tried(false, || Some(0));
-        assert_eq!(s.row(true), RowState::TakenByWindows);
-        assert!(s.click_writes(true));
-        // Later retries (tray, Settings) read the same 0: still Windows'.
-        s.tried(false, || Some(0));
-        assert_eq!(s.row(true), RowState::TakenByWindows);
-        // Once Vale has had the key, Windows has let go: a 0 on a later
-        // failure is another app's doing.
-        s.tried(true, || panic!("a success reads nothing"));
-        s.tried(false, || Some(0));
-        assert_eq!(s.row(true), RowState::TakenByApp);
-        assert!(!s.click_writes(true));
-        // The pure helper: Vale's write keeps a 0 Windows'; off stays off.
-        assert_eq!(
-            prtsc_row(true, true, Some(0), true),
-            RowState::TakenByWindows
-        );
-        assert_eq!(prtsc_row(true, true, Some(0), false), RowState::TakenByApp);
-        assert_eq!(prtsc_row(false, true, Some(0), true), RowState::Off);
-        assert_eq!(prtsc_row(true, false, Some(0), true), RowState::Active);
-    }
-
-    #[test]
-    fn the_registry_is_read_once_per_failed_try_never_for_the_row() {
-        let reads = std::cell::Cell::new(0);
-        let read = || {
-            reads.set(reads.get() + 1);
-            None
-        };
-        let mut s = PrtscState::default();
-        s.tried(true, read);
-        assert_eq!(reads.get(), 0, "a success reads nothing");
-        s.tried(false, read);
-        assert_eq!(reads.get(), 1);
-        // Settings redraws use what was kept.
-        for _ in 0..10 {
-            assert_eq!(s.row(true), RowState::TakenByWindows);
-        }
-        assert_eq!(reads.get(), 1);
-        // The next failed try refreshes it (a 0 Vale did not write: another
-        // app).
-        s.tried(false, || Some(0));
-        assert_eq!(s.row(true), RowState::TakenByApp);
-    }
-
-    #[test]
-    fn registration_is_planned_from_the_setting_and_what_is_held() {
-        // Off: nothing held, nothing to do; held: let go.
+    fn the_hook_is_planned_from_the_setting_and_what_is_installed() {
+        // Off: nothing installed, nothing to do; installed: remove.
         assert_eq!(plan(false, false), Plan::Nothing);
-        assert_eq!(plan(false, true), Plan::Unregister);
-        // On: not held (never tried, failed, or let go): try; held: leave.
-        assert_eq!(plan(true, false), Plan::Register);
+        assert_eq!(plan(false, true), Plan::Uninstall);
+        // On: not installed (never tried, failed, or removed): install, which
+        // is also the retry of a failed one; installed: leave.
+        assert_eq!(plan(true, false), Plan::Install);
         assert_eq!(plan(true, true), Plan::Nothing);
+    }
+
+    #[test]
+    fn a_retry_happens_only_for_a_failed_hook_that_is_still_wanted() {
+        // `retry_hotkeys` calls the sync only while `failed`; the plan then
+        // installs only while wanted, and `follows_config` stays quiet.
+        let (want, installed, failed) = (true, false, true);
+        assert!(!follows_config(want, installed, failed));
+        assert_eq!(plan(want, installed), Plan::Install);
+        // Wanted off meanwhile: no retry install.
+        assert_eq!(plan(false, installed), Plan::Nothing);
     }
 }
