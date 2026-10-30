@@ -2842,13 +2842,16 @@ impl App {
     /// Retargets the animation at the state's view and re-arms the notice deadline.
     fn refresh(&mut self, now: Instant) {
         self.sync_lyrics(now);
-        self.sync_lyric_line(now);
-        let view = self.state.view();
         // The notch peek only lives on a quiet compact view; anything else
         // (a notice, the panel, fullscreen, stay-behind) ends it at once.
         self.peek_guard();
         let was_eyes = std::mem::replace(&mut self.eyes, self.peek.is_shrunk());
         let eyes_swap = was_eyes != self.eyes;
+        // After the eyes are settled: the shrunk notch draws no lyric, so its
+        // crossfade and scroll need no frames; back at full size they go on
+        // from where the line is now.
+        self.sync_lyric_line(now);
+        let view = self.state.view();
         // The cat's look goes back to the centre when it cannot follow.
         self.sync_look(now);
         // Bata: an alert that just appeared bounces; a lift or bounce needs frames.
@@ -2889,9 +2892,10 @@ impl App {
             Some(shape) => self.anim.to != shape || self.anim.to_opacity != 1.0,
             None => self.anim.to_opacity != 0.0,
         };
-        // Hidden, or something else on screen: a press made before must not
-        // pair with a release on what shows now.
-        if view == View::Hidden || view != self.drawn {
+        // Hidden, something else on screen, or the notch swapped with the
+        // eyes: a press made before must not pair with a release on what
+        // shows now.
+        if press_ends(&view, &self.drawn, eyes_swap) {
             self.click.clear();
         }
         // Only the width changes while the lyric view stays: a quicker morph.
@@ -3125,7 +3129,12 @@ impl App {
         if changed || self.lyric_fit.width.is_none() {
             self.fit_lyric_line(now);
         }
-        if self.lyrics.fading(now) {
+        // The shrunk notch shows no lyric: the line still advances, but
+        // its crossfade draws nothing. (A fade that ended is let go by the
+        // frame tick, after its settled frame.)
+        if !lyric_moves(&view, self.eyes) {
+            self.lyric_fading = false;
+        } else if self.lyrics.fading(now) {
             self.lyric_fading = true;
             self.ensure_clock();
         }
@@ -3242,7 +3251,7 @@ impl App {
     /// scrolling, then the frame clock until it reaches its end. Nothing
     /// for a line that fits, outside the lyric view or once it has ended.
     fn sync_lyric_scroll(&mut self, now: Instant) {
-        let shows = self.state.view() == View::MediaLyric;
+        let shows = lyric_moves(&self.state.view(), self.eyes);
         let span = shows
             .then(|| self.lyric_fit.scroll_span())
             .flatten()
@@ -3755,7 +3764,7 @@ impl App {
         else {
             return;
         };
-        self.pointer_near = ((pt.y - origin.1) as f32) < behind::NEAR_TOP_DIP * scale;
+        self.pointer_near = pointer_watch::near_top(pt.y - origin.1, scale);
         if self.peek_eligible() {
             self.peek_tick(pt, now);
         }
@@ -5196,6 +5205,19 @@ impl ClickPair {
     fn clear(&mut self) {
         self.pressed = None;
     }
+}
+
+/// A pending press ends when the island hides, another view shows, or the
+/// notch swapped with the eyes (`eyes_swap`): its release lands on something
+/// else, even at the same spot.
+fn press_ends(view: &View, drawn: &View, eyes_swap: bool) -> bool {
+    *view == View::Hidden || view != drawn || eyes_swap
+}
+
+/// The lyric's crossfade and scroll run (and need frames) only while the
+/// lyric view shows it: not while the notch is shrunk to the eyes.
+fn lyric_moves(view: &View, eyes: bool) -> bool {
+    *view == View::MediaLyric && !eyes
 }
 
 /// A middle release plays or pauses only when its press was on the island
@@ -7004,6 +7026,62 @@ mod tests {
         assert_eq!(c.release(Some(Hit::Body)), None);
         c.press(Some(Hit::Body));
         assert_eq!(c.release(None), None);
+    }
+
+    #[test]
+    fn a_press_on_the_eyes_held_past_the_dwell_opens_nothing() {
+        // The pointer rests on the eyes ~450 ms, presses, holds past 500 ms
+        // and lets go: the dwell restored the notch under the held button.
+        let (mut peek, t0) = (Peek::default(), Instant::now());
+        let on_pill = PeekInputs {
+            eligible: true,
+            in_zone: true,
+            over_pill: true,
+            window_under: true,
+            ..PeekInputs::default()
+        };
+        peek.step(
+            PeekInputs {
+                over_pill: false,
+                ..on_pill
+            },
+            t0,
+        );
+        assert!(peek.is_shrunk());
+        peek.step(on_pill, t0);
+        assert!(peek.step(on_pill, t0 + Duration::from_millis(450)) != PeekState::Restored);
+        let mut c = ClickPair::default();
+        // Pressed on the eyes (their pill hits as the body).
+        c.press(Some(Hit::Body));
+        let was = peek.is_shrunk();
+        assert_eq!(
+            peek.step(on_pill, t0 + Duration::from_millis(500)),
+            PeekState::Restored
+        );
+        let eyes_swap = was != peek.is_shrunk();
+        // Same view before and after: only the swap ends the press.
+        if press_ends(&View::Idle, &View::Idle, eyes_swap) {
+            c.clear();
+        }
+        // The release on the restored notch, same spot: no click, no panel.
+        assert_eq!(c.release(Some(Hit::Body)), None);
+    }
+
+    #[test]
+    fn a_press_ends_with_the_view_or_the_eyes_swap() {
+        assert!(!press_ends(&View::Idle, &View::Idle, false));
+        assert!(press_ends(&View::Idle, &View::Idle, true));
+        assert!(press_ends(&View::MediaCompact, &View::Idle, false));
+        assert!(press_ends(&View::Hidden, &View::Hidden, false));
+    }
+
+    #[test]
+    fn the_lyric_moves_only_while_its_view_shows_unshrunk() {
+        assert!(lyric_moves(&View::MediaLyric, false));
+        // Shrunk to the eyes: no crossfade, no scroll, no frame clock.
+        assert!(!lyric_moves(&View::MediaLyric, true));
+        assert!(!lyric_moves(&View::MediaCompact, false));
+        assert!(!lyric_moves(&View::Idle, false));
     }
 
     #[test]

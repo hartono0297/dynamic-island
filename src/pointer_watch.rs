@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::behind;
 use crate::model::View;
-use crate::ui::geometry::{Rect, ShapeRect};
+use crate::ui::geometry::{AA_MARGIN, Rect, ShapeRect};
 
 /// How far past the normal notch (left, right and below) the pointer counts as
 /// near it, in logical pixels.
@@ -60,6 +60,13 @@ pub fn poll_ms(follow_on: bool, peek_on: bool, near_top: bool) -> u32 {
             }
         }
     }
+}
+
+/// The pointer is near the island's monitor's top edge: `dy_px` physical
+/// pixels below it (negative above it, on a monitor stacked on top) and less
+/// than `behind::NEAR_TOP_DIP` down at `scale`. Above the edge is not near.
+pub fn near_top(dy_px: i32, scale: f32) -> bool {
+    dy_px >= 0 && (dy_px as f32) < behind::NEAR_TOP_DIP * scale
 }
 
 /// The views whose closed island may shrink to the eyes: the quiet compact
@@ -188,9 +195,10 @@ impl Peek {
 }
 
 /// The zone round the normal notch `s`: it reaches `PEEK_ZONE_DIP` past its
-/// left, right and bottom, and up past the top of the screen.
+/// left, right and bottom, and up to the monitor's top edge (`AA_MARGIN`
+/// past it, no further: a monitor that sits above is another screen).
 pub fn peek_zone(s: ShapeRect) -> Rect {
-    const ABOVE: f32 = 10_000.0;
+    const ABOVE: f32 = AA_MARGIN;
     Rect {
         x: s.x - PEEK_ZONE_DIP,
         y: -ABOVE,
@@ -528,8 +536,19 @@ mod tests {
         assert!(z.contains(s.x - 49.0, 20.0) && !z.contains(s.x - 51.0, 20.0));
         assert!(z.contains(s.x + s.w + 49.0, 20.0) && !z.contains(s.x + s.w + 51.0, 20.0));
         assert!(z.contains(300.0, s.y + s.h + 49.0) && !z.contains(300.0, s.y + s.h + 51.0));
-        // Up to the screen's top edge and beyond.
-        assert!(z.contains(300.0, 0.0) && z.contains(300.0, -30.0));
+        // Up to the screen's top edge, not onto a monitor stacked above it.
+        assert!(z.contains(300.0, 0.0) && z.contains(300.0, -AA_MARGIN));
+        assert!(!z.contains(300.0, -2.0) && !z.contains(300.0, -30.0));
+    }
+
+    #[test]
+    fn a_pointer_on_a_monitor_above_is_not_near_the_top() {
+        assert!(near_top(0, 1.0) && near_top(149, 1.0));
+        assert!(!near_top(150, 1.0));
+        // 150 dip at 150 % is 225 px.
+        assert!(near_top(224, 1.5) && !near_top(225, 1.5));
+        // Above the island's monitor (another screen stacked on top).
+        assert!(!near_top(-1, 1.0) && !near_top(-5_000, 1.5));
     }
 
     #[test]
