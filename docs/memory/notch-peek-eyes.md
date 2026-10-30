@@ -58,9 +58,12 @@ there to drop on. A notch already shrunk stays so.
 
 - `ShapeKind::Eyes`: 34 x 14 dip (`EYES_W`, `EYES_H`), at the compact shapes'
   top (Pill 8, Notch 0), centred like them, no robot widening. Fully rounded in
-  the Pill style. In the Notch style `corner_radius` holds the bottom corners
-  to what the 12 dip shoulders leave of a 14 dip height (2), so it hangs from
-  the screen edge as a small tab, not a full pill. Accepted.
+  both styles (radius 7). In the Notch style the shoulders are
+  `shoulder_depth(s)` = `min(12, h / 2)`: 12 for every closed and open shape
+  (28 dip and taller), 7 for the eyes, shrinking with the morph's height, so
+  the bottom corners keep the other half of the height. With fixed 12 dip
+  shoulders `corner_radius` held them to 2 and the eyes hung as a small tab.
+  `notch_path`, `corner_radius` and the hit test (`in_shoulder`) all use it.
 - `refresh` targets the Eyes shape while the peek is Shrunk (`App::eyes`).
   Shrinking and coming back count as a compact swap: the content fades in with
   the morph (the cat too while the eyes morph runs, `Frame::robot_fades`).

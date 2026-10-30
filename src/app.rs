@@ -1389,9 +1389,10 @@ impl App {
             .bata
             .brain
             .pose(spot, now, motion.moves(), self.bata.blinking);
-        // The idle cat turns toward the pointer; nowhere else.
+        // The idle cat turns toward the pointer; nowhere else, and only with
+        // a face that looks (nothing floating beside its head).
         if spot == Spot::Idle && self.look.value() != 0.0 {
-            pose = pose.looking(self.look.value());
+            pose = pose.looking_as(expr, self.look.value());
         }
         Some(RobotFrame { expr, pose })
     }
@@ -3664,9 +3665,9 @@ impl App {
     }
 
     /// The cat follows the pointer: it is on, motion is Full (after Energy
-    /// Saver), the idle view shows it, and the notch is not shrunk. In the
-    /// compact music, lyric and timer views its slot is tight, so it stays
-    /// still there.
+    /// Saver), the idle view shows it with a face that looks (`Expr::looks`:
+    /// not asleep, not thinking), and the notch is not shrunk. In the compact
+    /// music, lyric and timer views its slot is tight, so it stays still there.
     fn look_eligible(&self, now: Instant) -> bool {
         let view = self.state.view();
         self.config.robot
@@ -3675,7 +3676,9 @@ impl App {
             && !self.peek.is_shrunk()
             && !self.fullscreen
             && !self.screen_away()
-            && self.robot_frame(&view, now).is_some()
+            && self
+                .robot_frame(&view, now)
+                .is_some_and(|frame| frame.expr.looks())
     }
 
     /// The closed view's notch as it is without the peek, in logical px;
@@ -3696,17 +3699,23 @@ impl App {
 
     /// Where the cat's look goes when it cannot follow the pointer (or has
     /// nothing to follow): back to the centre, eased while the cat is still
-    /// on screen with Full motion, at once otherwise. Nothing to do while it
-    /// follows.
+    /// on screen with Full motion and a face that looks, at once otherwise
+    /// (a locked session or a dark display shows nobody the ease; a face that
+    /// does not look is already drawn centred). Nothing to do while it follows.
     fn sync_look(&mut self, now: Instant) {
         if self.look_eligible(now) {
             return;
         }
+        let view = self.state.view();
         let on_screen = self.config.robot
             && self.motion().moves()
-            && self.state.view() == View::Idle
+            && view == View::Idle
             && !self.peek.is_shrunk()
-            && !self.fullscreen;
+            && !self.fullscreen
+            && !self.screen_away()
+            && self
+                .robot_frame(&view, now)
+                .is_some_and(|frame| frame.expr.looks());
         if on_screen {
             if self.look.release() {
                 self.look_at = None;
@@ -5233,8 +5242,6 @@ fn primary_button_vk(swapped: bool) -> VIRTUAL_KEY {
     if swapped { VK_RBUTTON } else { VK_LBUTTON }
 }
 
-/// Whether the logical left (primary) button is down right now, the one that
-/// sends `WM_LBUTTONDOWN`.
 /// An ordinary window (not the desktop, not click-through, not Vale's own)
 /// lies under the normal notch `normal` (logical px in the island's window
 /// at screen `origin`, `scale` physical px per logical px).
@@ -5248,6 +5255,8 @@ fn window_under_notch(origin: (i32, i32), scale: f32, normal: ShapeRect) -> bool
     !crate::capture::win::top_windows(bounds).is_empty()
 }
 
+/// Whether the logical left (primary) button is down right now, the one that
+/// sends `WM_LBUTTONDOWN`.
 fn left_button_down() -> bool {
     let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
     let vk = primary_button_vk(swapped);

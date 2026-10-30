@@ -132,8 +132,8 @@ pub fn shape_sized(style: Style, size: NotchSize, kind: ShapeKind) -> ShapeRect 
     let radius = match kind {
         ShapeKind::Panel | ShapeKind::PanelTall | ShapeKind::PanelClean => radius::PANEL,
         ShapeKind::Notice | ShapeKind::NoticeShot => radius::NOTICE,
-        // Fully rounded. In the Notch style `corner_radius` holds it to
-        // what the 12 dip shoulders leave of this height.
+        // Fully rounded; in the Notch style its shoulders are half its
+        // height (`shoulder_depth`), so the bottom corners keep this too.
         ShapeKind::Eyes => EYES_H / 2.0,
         _ if style == Style::Pill => h / 2.0,
         _ => NOTCH_COMPACT_RADIUS,
@@ -303,12 +303,20 @@ pub fn ease_out_back(t: f32) -> f32 {
 /// Depth of the Notch's inward-curved top shoulders, drawn outside `w`.
 pub const SHOULDER: f32 = 12.0;
 
+/// The shoulders' depth for `s`: `SHOULDER`, or half the height of a shape
+/// shorter than two of them (the notch shrunk to the eyes, and the morph to
+/// it), so the bottom corners keep half the height and it stays a fully
+/// rounded tab. Every closed and open shape (28 dip and taller) keeps 12.
+pub fn shoulder_depth(s: ShapeRect) -> f32 {
+    SHOULDER.min(s.h / 2.0).max(0.0)
+}
+
 /// Corner radius actually drawn: the stored radius clamped so mid-morph
 /// (and overshooting) shapes never produce a self-crossing outline.
 pub fn corner_radius(style: Style, s: ShapeRect) -> f32 {
     let vertical = match style {
         Style::Pill => s.h / 2.0,
-        Style::Notch => s.h - SHOULDER,
+        Style::Notch => s.h - shoulder_depth(s),
     };
     s.radius.min(s.w / 2.0).min(vertical).max(0.0)
 }
@@ -358,21 +366,22 @@ pub fn island_contains(style: Style, s: ShapeRect, x: f32, y: f32, margin: f32) 
 }
 
 /// A Notch shoulder: the square beside the shape's top corner, outside the
-/// circle its inward curve follows (centred `SHOULDER` out and down).
+/// circle its inward curve follows (centred `shoulder_depth` out and down).
 fn in_shoulder(s: ShapeRect, x: f32, y: f32, margin: f32) -> bool {
-    if y < s.y - margin || y > s.y + SHOULDER {
+    let d = shoulder_depth(s);
+    if y < s.y - margin || y > s.y + d {
         return false;
     }
     let (left, right) = (s.x, s.x + s.w);
-    let cx = if x >= left - SHOULDER - margin && x <= left {
-        left - SHOULDER
-    } else if x >= right && x <= right + SHOULDER + margin {
-        right + SHOULDER
+    let cx = if x >= left - d - margin && x <= left {
+        left - d
+    } else if x >= right && x <= right + d + margin {
+        right + d
     } else {
         return false;
     };
-    let cy = s.y + SHOULDER;
-    (x - cx).powi(2) + (y - cy).powi(2) >= (SHOULDER - margin).powi(2)
+    let cy = s.y + d;
+    (x - cx).powi(2) + (y - cy).powi(2) >= (d - margin).powi(2)
 }
 
 /// What a client point is over, for the pointer's own messages.
@@ -1037,8 +1046,13 @@ mod tests {
         let mut s = shape_for(Style::Pill, ShapeKind::Notice);
         s.h = 20.0;
         assert_eq!(corner_radius(Style::Pill, s), 10.0);
-        // Notch sides start below the shoulder, so the radius leaves room for it.
-        assert_eq!(corner_radius(Style::Notch, s), 20.0 - SHOULDER);
+        // Notch sides start below the shoulder, so the radius leaves room
+        // for it; a shape this short has shoulders half its height.
+        assert_eq!(shoulder_depth(s), 10.0);
+        assert_eq!(corner_radius(Style::Notch, s), 20.0 - shoulder_depth(s));
+        s.h = 28.0;
+        assert_eq!(shoulder_depth(s), SHOULDER);
+        assert_eq!(corner_radius(Style::Notch, s), 28.0 - SHOULDER);
         let c = shape_for(Style::Pill, ShapeKind::Idle);
         assert_eq!(corner_radius(Style::Pill, c), 17.0);
     }
@@ -1230,23 +1244,33 @@ mod tests {
         }
     }
 
-    /// A point of the cat (px, drawn in `area`) as `RobotPainter::paint`
-    /// moves it for `pose`: turned by the tilt about the grid point (32, 40),
-    /// then slid by the head's offset.
-    fn looked(area: Rect, pose: crate::ui::robot::Pose, (x, y): (f32, f32)) -> (f32, f32) {
+    /// A grid point of the cat as `RobotPainter::paint` draws it in `area`
+    /// for `face` and `pose`, in px: a face mark (`mark`) first slides by the
+    /// eye offset; then the face's and the look's tilt about (32, 40), the
+    /// face's bob, the scale, and the head's slide.
+    fn drawn(
+        area: Rect,
+        face: &crate::ui::robot::Face,
+        pose: crate::ui::robot::Pose,
+        (gx, gy): (f32, f32),
+        mark: bool,
+    ) -> (f32, f32) {
         let k = area.w / crate::ui::robot::GRID;
-        let (cx, cy) = (area.x + 32.0 * k, area.y + 40.0 * k);
-        let a = pose.tilt_deg.to_radians();
-        let (dx, dy) = (x - cx, y - cy);
-        (
-            cx + dx * a.cos() - dy * a.sin() + pose.head_dx_dip,
-            cy + dx * a.sin() + dy * a.cos(),
-        )
+        let gx = if mark { gx + pose.eye_dx_dip / k } else { gx };
+        let a = (face.tilt + pose.tilt_deg).to_radians();
+        let (dx, dy) = (gx - 32.0, gy - 40.0);
+        let (x, y) = (
+            32.0 + dx * a.cos() - dy * a.sin(),
+            40.0 + dx * a.sin() + dy * a.cos() + face.bob,
+        );
+        (area.x + x * k + pose.head_dx_dip, area.y + y * k)
     }
 
     #[test]
     fn the_looking_cat_stays_in_the_idle_island() {
-        use crate::ui::robot::{GRID, Pose};
+        use crate::ui::robot::{EAR_STROKE, Expr, GRID, Pose, Side, ear_drawn, face, mark_bounds};
+        // Every face the idle view shows (`choose_expr`), open-eyed and blinking.
+        let faces = [Expr::Idle, Expr::Happy, Expr::Think, Expr::Sad, Expr::Sleep];
         for style in [Style::Pill, Style::Notch] {
             for w in [NOTCH_W_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX] {
                 for h in [NOTCH_H_MIN, NOTCH_H_DEFAULT, NOTCH_H_MAX] {
@@ -1256,31 +1280,63 @@ mod tests {
                         let l = idle_layout(s, true, clock);
                         let area = l.robot.expect("the cat is drawn");
                         let k = area.w / GRID;
-                        // The head's outline and the ear tips, and the ears'
-                        // round strokes at their outer bases.
-                        let mut points = head_outline(area);
-                        points.extend([(6.5, 37.0), (57.5, 37.0)].map(|(x, y)| {
-                            (area.x + x * k, area.y + y * k)
-                        }));
-                        for v in [-1.0, -0.5, 0.5, 1.0] {
-                            let pose = Pose::default().looking(v);
-                            for &p in &points {
-                                let (x, y) = looked(area, pose, p);
-                                assert!(
-                                    shape_contains(style, s, x, y),
-                                    "{style:?} {size:?} v {v}: ({x}, {y}) leaves the island"
-                                );
-                                if let Some(c) = l.clock {
-                                    assert!(
-                                        x < c.x,
-                                        "{style:?} {size:?} v {v}: ({x}, {y}) reaches the clock"
-                                    );
+                        // The head's outline, in grid units.
+                        let head: Vec<(f32, f32)> = head_outline(area)
+                            .into_iter()
+                            .take(36)
+                            .map(|(x, y)| ((x - area.x) / k, (y - area.y) / k))
+                            .collect();
+                        for (expr, blink) in faces.iter().flat_map(|&e| [(e, false), (e, true)]) {
+                            let f = face(expr, blink);
+                            // The ears' round strokes around their turned corners.
+                            let mut cat = head.clone();
+                            for side in [Side::Left, Side::Right] {
+                                for (x, y) in ear_drawn(side, f.ears) {
+                                    cat.extend((0..16).map(|i| {
+                                        let a = (i as f32 * 22.5).to_radians();
+                                        let r = EAR_STROKE / 2.0;
+                                        (x + r * a.cos(), y + r * a.sin())
+                                    }));
                                 }
                             }
-                            // The eyes slide on inside the head, with room to spare.
-                            let (eye_l, eye_r) = (21.2 + pose.eye_dx_dip / k, 42.8 + pose.eye_dx_dip / k);
-                            assert!(eye_l > 11.0 && eye_r < 53.0, "v {v}: eyes {eye_l}..{eye_r}");
+                            // Every mark's box corners: the eyes and what floats beside the head.
+                            let marks: Vec<(f32, f32)> = f
+                                .parts
+                                .iter()
+                                .flat_map(|part| {
+                                    let (l, t, r, b) = mark_bounds(part);
+                                    [(l, t), (r, t), (r, b), (l, b)]
+                                })
+                                .collect();
+                            for v in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+                                let pose = Pose::default().looking_as(expr, v);
+                                let at = |p, mark| drawn(area, &f, pose, p, mark);
+                                for &p in &cat {
+                                    let (x, y) = at(p, false);
+                                    assert!(
+                                        shape_contains(style, s, x, y),
+                                        "{style:?} {size:?} {expr:?} v {v}: ({x}, {y}) leaves the island"
+                                    );
+                                }
+                                let drawn_points = cat
+                                    .iter()
+                                    .map(|&p| at(p, false))
+                                    .chain(marks.iter().map(|&p| at(p, true)));
+                                if let Some(c) = l.clock {
+                                    for (x, y) in drawn_points {
+                                        assert!(
+                                            x < c.x,
+                                            "{style:?} {size:?} {expr:?} blink {blink} v {v}: ({x}, {y}) reaches the clock at {}",
+                                            c.x
+                                        );
+                                    }
+                                }
+                            }
                         }
+                        // The open eyes slide on inside the head, with room to spare.
+                        let pose = Pose::default().looking(1.0);
+                        let (eye_l, eye_r) = (21.2 - pose.eye_dx_dip / k, 42.8 + pose.eye_dx_dip / k);
+                        assert!(eye_l > 11.0 && eye_r < 53.0, "eyes {eye_l}..{eye_r}");
                     }
                 }
             }
@@ -1297,6 +1353,22 @@ mod tests {
             // The same top as the compact shapes, centred like them.
             assert_eq!(eyes.y, normal.y);
             assert_eq!(eyes.x * 2.0 + eyes.w, WINDOW_W);
+            // Fully rounded in both styles: the Notch's shoulders give up
+            // half the height so the bottom corners keep the other half.
+            assert_eq!(corner_radius(style, eyes), EYES_H / 2.0, "{style:?}");
+            if style == Style::Notch {
+                assert_eq!(shoulder_depth(eyes), EYES_H / 2.0);
+                // The bottom corner's arc: off the very corner, on its circle's inside.
+                let r = EYES_H / 2.0;
+                let (bx, by) = (eyes.x + 0.5, eyes.y + eyes.h - 0.5);
+                assert!(!shape_contains(style, eyes, bx, by));
+                assert!(shape_contains(style, eyes, eyes.x + r, eyes.y + eyes.h - 0.5));
+                // The shoulders still curve in from the screen edge.
+                assert!(island_contains(style, eyes, eyes.x - 1.0, eyes.y + 0.5, 0.0));
+                assert!(!island_contains(style, eyes, eyes.x - 1.0, eyes.y + r - 0.5, 0.0));
+                // The notch it shrinks from keeps its 12 dip shoulders.
+                assert_eq!(shoulder_depth(normal), SHOULDER);
+            }
             assert_eq!(
                 shape_with_robot(style, ShapeKind::Eyes, true),
                 eyes,

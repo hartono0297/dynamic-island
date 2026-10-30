@@ -47,11 +47,11 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS, SHOULDER,
+    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
     EYES_H, ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
     corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
     lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
-    shot_regions,
+    shot_regions, shoulder_depth,
 };
 use super::icons::{Icon, IconSet};
 use super::motion::Transit;
@@ -1985,6 +1985,7 @@ impl Renderer {
     /// rounded bottom corners.
     fn notch_path(&self, s: ShapeRect, r: f32) -> Result<ID2D1PathGeometry> {
         let (left, right, top, bottom) = (s.x, s.x + s.w, s.y, s.y + s.h);
+        let shoulder = shoulder_depth(s);
         let arc = |x: f32, y: f32, radius: f32, sweep: D2D1_SWEEP_DIRECTION| D2D1_ARC_SEGMENT {
             point: Vector2::new(x, y),
             size: D2D_SIZE_F {
@@ -2002,14 +2003,14 @@ impl Renderer {
         unsafe {
             let path = self.d2d.CreatePathGeometry()?;
             let sink = path.Open()?;
-            sink.BeginFigure(Vector2::new(left - SHOULDER, top), D2D1_FIGURE_BEGIN_FILLED);
-            sink.AddArc(&arc(left, top + SHOULDER, SHOULDER, cw));
+            sink.BeginFigure(Vector2::new(left - shoulder, top), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddArc(&arc(left, top + shoulder, shoulder, cw));
             sink.AddLine(Vector2::new(left, bottom - r));
             sink.AddArc(&arc(left + r, bottom, r, ccw));
             sink.AddLine(Vector2::new(right - r, bottom));
             sink.AddArc(&arc(right, bottom - r, r, ccw));
-            sink.AddLine(Vector2::new(right, top + SHOULDER));
-            sink.AddArc(&arc(right + SHOULDER, top, SHOULDER, cw));
+            sink.AddLine(Vector2::new(right, top + shoulder));
+            sink.AddArc(&arc(right + shoulder, top, shoulder, cw));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             sink.Close()?;
             Ok(path)

@@ -88,6 +88,17 @@ impl Expr {
         )
     }
 
+    /// The face turns toward the pointer (`Pose::looking_as`): only the faces
+    /// with nothing floating beside the head. The thought dots and the z's
+    /// sit beside the right ear, a few dip from the idle clock, and would
+    /// slide into it; a sleeping or thinking cat does not follow anyway.
+    pub fn looks(self) -> bool {
+        !matches!(
+            self,
+            Expr::Think | Expr::Sleep | Expr::Music | Expr::Sing | Expr::Wave
+        )
+    }
+
     /// The name the demo sheet labels it with.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn key(self) -> Key {
@@ -109,9 +120,11 @@ impl Expr {
 /// How far the idle cat turns toward a pointer at the far edge of the screen
 /// (a look of 1): the head and ears slide `LOOK_HEAD_DIP`, tilt `LOOK_TILT_DEG`
 /// degrees toward it, and the eyes slide `LOOK_EYE_DIP` further across the
-/// face. Small enough that the head, ears and eyes stay inside the idle
-/// island and clear of its clock (`the_looking_cat_stays_in_the_idle_island`).
-pub const LOOK_HEAD_DIP: f32 = 8.0;
+/// face. Small enough that the head, the ears (a sad cat's drooped ones
+/// too) and every mark of a face that looks stay inside the idle island and
+/// clear of its clock (`the_looking_cat_stays_in_the_idle_island`); at 8 the
+/// sad cat's drooped right ear touched the clock.
+pub const LOOK_HEAD_DIP: f32 = 7.0;
 pub const LOOK_TILT_DEG: f32 = 6.0;
 pub const LOOK_EYE_DIP: f32 = 4.0;
 
@@ -142,6 +155,12 @@ impl Pose {
             eye_dx_dip: LOOK_EYE_DIP * v,
             ..self
         }
+    }
+
+    /// `looking(v)` for a face that looks (`Expr::looks`); any other face
+    /// keeps the pose as it is, centred.
+    pub fn looking_as(self, expr: Expr, v: f32) -> Pose {
+        if expr.looks() { self.looking(v) } else { self }
     }
 }
 
@@ -418,6 +437,41 @@ pub fn face(expr: Expr, blink: bool) -> Face {
     }
 }
 
+/// The grid box `(left, top, right, bottom)` a face mark is drawn in, stroke
+/// width included (a curve's control points bound it). For the tests that
+/// keep the cat clear of what is beside it.
+#[cfg(test)]
+pub fn mark_bounds(part: &Part) -> (f32, f32, f32, f32) {
+    let points = |segs: Vec<Seg>, pad: f32| {
+        let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        let mut add = |x: f32, y: f32| {
+            b = (b.0.min(x - pad), b.1.min(y - pad), b.2.max(x + pad), b.3.max(y + pad));
+        };
+        for seg in segs {
+            match seg {
+                Seg::Move(x, y) | Seg::Line(x, y) => add(x, y),
+                Seg::Quad(a, b, x, y) => {
+                    add(a, b);
+                    add(x, y);
+                }
+                Seg::Cubic(a, b, c, d, x, y) => {
+                    add(a, b);
+                    add(c, d);
+                    add(x, y);
+                }
+                Seg::Close => {}
+            }
+        }
+        b
+    };
+    match *part {
+        Part::Pill { x, y, w, h, .. } => (x, y, x + w, y + h),
+        Part::Dot { cx, cy, r, .. } => (cx - r, cy - r, cx + r, cy + r),
+        Part::Stroke(line) => points(line.segments(), line.width() / 2.0),
+        Part::Heart { x, y } => points(heart(x, y), 0.0),
+    }
+}
+
 /// The idle face's two open eyes: the pills the shrunk notch shows alone.
 pub fn eye_pills() -> Vec<Part> {
     face(Expr::Idle, false)
@@ -445,7 +499,7 @@ pub fn eyes_area(centre: (f32, f32)) -> Rect {
 /// Head: x 7 y 24, 50 × 30, a dome on top (radius 17) and a flat base.
 pub const HEAD: (f32, f32, f32, f32, f32) = (7.0, 24.0, 50.0, 30.0, 17.0);
 /// How far an ear's stroke (width 5, round joins) reaches past its triangle.
-const EAR_STROKE: f32 = 5.0;
+pub const EAR_STROKE: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -478,6 +532,19 @@ pub fn ear(side: Side, up: f32) -> [(f32, f32); 3] {
         Side::Left => [(9.0, 37.0), (12.0, 10.0 - up), (27.0, 26.0)],
         Side::Right => [(55.0, 37.0), (52.0, 10.0 - up), (37.0, 26.0)],
     }
+}
+
+/// `ear(side, ears.up)` turned for `ears.droop` as `RobotPainter::paint`
+/// draws it, in grid units. For the tests that keep the cat clear of what
+/// is beside it.
+#[cfg(test)]
+pub fn ear_drawn(side: Side, ears: Ears) -> [(f32, f32); 3] {
+    let p = side.pivot();
+    let a = side.turn(ears.droop).to_radians();
+    ear(side, ears.up).map(|(x, y)| {
+        let (dx, dy) = (x - p.X, y - p.Y);
+        (p.X + dx * a.cos() - dy * a.sin(), p.Y + dx * a.sin() + dy * a.cos())
+    })
 }
 
 /// The head's rounded rect for a cat drawn in `area` (a square), in px:
@@ -1367,14 +1434,14 @@ mod tests {
         let right = Pose::default().looking(1.0);
         assert_eq!(
             (right.head_dx_dip, right.tilt_deg, right.eye_dx_dip),
-            (8.0, 6.0, 4.0)
+            (7.0, 6.0, 4.0)
         );
         assert_eq!(
             (left.head_dx_dip, left.tilt_deg, left.eye_dx_dip),
-            (-8.0, -6.0, -4.0)
+            (-7.0, -6.0, -4.0)
         );
         // Half way is half the way; past the ends is clamped.
-        assert_eq!(Pose::default().looking(0.5).head_dx_dip, 4.0);
+        assert_eq!(Pose::default().looking(0.5).head_dx_dip, 3.5);
         assert_eq!(Pose::default().looking(9.0), right);
         // Blink, lift and bounce carry on under the look.
         let lifted = Pose {
@@ -1385,6 +1452,16 @@ mod tests {
         };
         let looked = lifted.looking(1.0);
         assert!(looked.blink && looked.lift_px == 2.0 && looked.bounce_px == 1.0);
+        // A sleeping or thinking cat keeps still: its z's and thought dots
+        // float beside the right ear, a few dip from the idle clock.
+        for expr in [Expr::Sleep, Expr::Think] {
+            assert!(!expr.looks(), "{expr:?}");
+            assert_eq!(lifted.looking_as(expr, 1.0), lifted, "{expr:?}");
+        }
+        for expr in [Expr::Idle, Expr::Happy, Expr::Sad] {
+            assert!(expr.looks(), "{expr:?}");
+            assert_eq!(lifted.looking_as(expr, 1.0), looked, "{expr:?}");
+        }
     }
 
     #[test]

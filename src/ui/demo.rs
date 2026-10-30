@@ -75,7 +75,7 @@
 //! fixed ("14:32", "23:48"), so nothing depends on the time of day. The
 //! scenes `bata-look-left` and `bata-look-right` draw the idle cat looking at
 //! a pointer at the far left and right of the screen (the largest turn: head
-//! 8 dip, tilt 6 degrees, eyes 4 dip further).
+//! 7 dip, tilt 6 degrees, eyes 4 dip further).
 //!
 //! The notch peek's scenes `peek-eyes` (robot on) and `peek-eyes-plain`
 //! (robot off) draw the notch shrunk to the cat's two eyes: a 34 x 14 pill,
