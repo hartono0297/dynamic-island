@@ -42,12 +42,13 @@ yourself in the main session.
   runs returned) at the end, before the push.
 - Closing step, always: once all requested work is merged and every heavy
   task is reviewed, checked and fixed (the verify pass too, when `defer` was
-  used), update the Obsidian memory in `docs/memory/` before the push. Add or
+  used), update the README (feature list, pages table, install or usage notes
+  that changed) and the Obsidian memory in `docs/memory/` before the push. Add or
   update one note per decision or gotcha from this round, write a
   `vX-Y-handoff.md` note for a version (what landed, defaults chosen, what was
   cancelled and why, owner checks, open findings), link them from
   `docs/memory/index.md`, commit as `docs(memory): ...`, then push `main`.
-  Never push finished work without this memory update.
+  Never push finished work without the README and memory update.
 - When it finishes, report: which tasks were merged and their weight, whether
   `main` was pushed, `manualChecks`, `incomplete`, and any open findings or
   failed checks.
