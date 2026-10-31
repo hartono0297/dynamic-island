@@ -4750,6 +4750,30 @@ impl App {
                 self.save_config();
                 self.refresh(now);
             }
+            SettingsAction::CatColor(color) => {
+                self.config.cat_color = color;
+                self.save_config();
+                // The cat and (on Auto) the island's surface change now.
+                self.draw(now);
+            }
+            SettingsAction::CatAccessory(accessory) => {
+                self.config.cat_accessory = accessory;
+                self.save_config();
+                self.draw(now);
+            }
+            SettingsAction::CatFollow(on) => {
+                self.config.cat_follow_pointer = on;
+                self.save_config();
+                // `follow_pointer_settings` (from the save) starts or stops
+                // the pointer poll and puts the look back at the centre.
+                self.refresh(now);
+            }
+            SettingsAction::NotchPeek(on) => {
+                self.config.notch_peek = on;
+                self.save_config();
+                // A shrunk notch comes back at once; the poll follows.
+                self.refresh(now);
+            }
             SettingsAction::Greeting(on) => {
                 self.config.morning_greeting = on;
                 self.save_config();

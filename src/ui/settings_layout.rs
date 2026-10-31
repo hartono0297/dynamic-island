@@ -20,7 +20,7 @@ use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
 use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
-use crate::theme::{Accent, Surface, WindowTheme};
+use crate::theme::{Accent, CatAccessory, CatColor, Surface, WindowTheme};
 use crate::tiles::{CustomKind, MAX_CUSTOM, MAX_SHOWN, ShortcutTiles, Tile, TileGroup, group};
 use crate::ui::geometry::{
     NOTCH_H_DEFAULT, NOTCH_H_MAX, NOTCH_H_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX, NOTCH_W_MIN,
@@ -125,30 +125,41 @@ pub const GUIDE_URL: &str = "https://github.com/hartono0297/dynamic-island#setup
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
-    Appearance,
+    /// Umum: language, autostart, the search hotkey, the warnings.
     General,
+    /// Tampilan: the island's look (style, colours, the notch, the window).
+    Appearance,
+    /// Kucing: the cat's colour, accessory, motion and greeting.
+    Cat,
+    /// Panel: how it opens, its pages, its shortcut tiles.
+    Panel,
     Clipboard,
-    Pomodoro,
+    /// Fitur: the pomodoro, music, the CLI, devices, the cleaner.
+    Features,
     Integrations,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
-        Section::Appearance,
+    pub const ALL: [Section; 8] = [
         Section::General,
+        Section::Appearance,
+        Section::Cat,
+        Section::Panel,
         Section::Clipboard,
-        Section::Pomodoro,
+        Section::Features,
         Section::Integrations,
         Section::About,
     ];
 
     pub fn key(self) -> Key {
         match self {
-            Section::Appearance => Key::SecAppearance,
             Section::General => Key::SecGeneral,
+            Section::Appearance => Key::SecAppearance,
+            Section::Cat => Key::SecCat,
+            Section::Panel => Key::SecPanel,
             Section::Clipboard => Key::SecClipboard,
-            Section::Pomodoro => Key::SecPomodoro,
+            Section::Features => Key::SecFeatures,
             Section::Integrations => Key::SecIntegrations,
             Section::About => Key::SecAbout,
         }
@@ -157,10 +168,12 @@ impl Section {
     /// The section's icon in the sidebar.
     pub fn icon(self) -> Icon {
         match self {
-            Section::Appearance => Icon::Palette,
             Section::General => Icon::Gear,
+            Section::Appearance => Icon::Palette,
+            Section::Cat => Icon::Cat,
+            Section::Panel => Icon::Grid,
             Section::Clipboard => Icon::Clipboard,
-            Section::Pomodoro => Icon::Timer,
+            Section::Features => Icon::Sparkle,
             Section::Integrations => Icon::Link,
             Section::About => Icon::Info,
         }
@@ -171,17 +184,64 @@ impl Section {
     }
 
     /// "appearance", "general", ... (also accepts the Indonesian names), for
-    /// the debug `--settings` mode.
+    /// the debug `--settings` mode. "pomodoro" (a section before v3.8) is
+    /// Features now.
     #[cfg(any(test, debug_assertions))]
     pub fn from_name(name: &str) -> Option<Section> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "appearance" | "tampilan" => Some(Section::Appearance),
             "general" | "umum" => Some(Section::General),
+            "appearance" | "tampilan" => Some(Section::Appearance),
+            "cat" | "kucing" => Some(Section::Cat),
+            "panel" => Some(Section::Panel),
             "clipboard" => Some(Section::Clipboard),
-            "pomodoro" => Some(Section::Pomodoro),
+            "features" | "fitur" | "pomodoro" => Some(Section::Features),
             "integrations" | "integrasi" => Some(Section::Integrations),
             "about" | "tentang" => Some(Section::About),
             _ => None,
+        }
+    }
+}
+
+/// The face the Kucing page's preview shows, chosen with its chips: window
+/// state only, never saved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CatFace {
+    #[default]
+    Idle,
+    Happy,
+    Blink,
+    Sleep,
+    Wave,
+}
+
+impl CatFace {
+    pub const ALL: [CatFace; 5] = [
+        CatFace::Idle,
+        CatFace::Happy,
+        CatFace::Blink,
+        CatFace::Sleep,
+        CatFace::Wave,
+    ];
+
+    pub fn key(self) -> Key {
+        match self {
+            CatFace::Idle => Key::ExprIdle,
+            CatFace::Happy => Key::ExprHappy,
+            CatFace::Blink => Key::ExprBlink,
+            CatFace::Sleep => Key::ExprSleep,
+            CatFace::Wave => Key::ExprWave,
+        }
+    }
+
+    /// The face, and whether its eyes are shut for a blink.
+    pub fn expr(self) -> (super::robot::Expr, bool) {
+        use super::robot::Expr;
+        match self {
+            CatFace::Idle => (Expr::Idle, false),
+            CatFace::Happy => (Expr::Happy, false),
+            CatFace::Blink => (Expr::Idle, true),
+            CatFace::Sleep => (Expr::Sleep, false),
+            CatFace::Wave => (Expr::Wave, false),
         }
     }
 }
@@ -287,12 +347,22 @@ pub enum Hit {
     Style(Style),
     Accent(Accent),
     Surface(Surface),
+    /// Settings → Kucing: "Warna" (a coat) and "Aksesori" (a tile).
+    CatColor(CatColor),
+    CatAccessory(CatAccessory),
+    /// "Ikuti kursor" and "Mengecil jadi mata".
+    CatFollow,
+    NotchPeek,
+    /// "Ubah" beside "Latar: ...": goes to Tampilan.
+    CatBackdrop,
+    /// A chip of the preview: which face it shows (window state).
+    CatFace(CatFace),
     /// A slider: the press and the drag are handled by the window (a press
     /// jumps there, a drag follows), not as a click.
     Slider(SliderId),
     /// "Ukuran bawaan": 190 x 34 again.
     NotchReset,
-    /// "Latar notch": Hitam or Transparan.
+    /// "Isi notch": Solid or Tembus.
     NotchFill(NotchFill),
     WindowMode(WindowTheme),
     Lang(Lang),
@@ -304,20 +374,20 @@ pub enum Hit {
     /// "Mode buka": Hover, Hover & tetap or Klik.
     OpenMode(OpenMode),
     SearchHotkey(SearchHotkey),
-    /// "Notice perangkat": the plug-in and safe-to-remove notices.
+    /// "Notifikasi perangkat": the plug-in and safe-to-remove notices.
     DeviceNotices,
-    /// "Pintasan Perangkat".
+    /// "Tombol pintas" of the Devices page.
     DevicesHotkey(DevicesHotkey),
     /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
     CliStart(CliStart),
     Shell(Shell),
-    /// "Asisten di notch".
+    /// "Kucing di notch".
     Robot,
     /// "Animasi": Penuh, Hemat, Mati.
     Motion(Motion),
     /// "Tidur setelah", one step down (−1) or up.
     RobotSleep(i32),
-    /// "Sapaan pagi".
+    /// "Sapaan".
     Greeting,
     /// Settings → Clipboard: "Riwayat clipboard", "Jumlah item" (−1 / +1),
     /// "Simpan setelah restart", "Hapus saat layar dikunci", "Pintasan",
@@ -455,7 +525,8 @@ pub struct Text {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     Style,
-    Surface,
+    /// The Kucing preview's expression chips.
+    CatFace,
     NotchFill,
     Window,
     Lang,
@@ -552,6 +623,25 @@ pub enum Control {
         items: Vec<(Accent, Rect)>,
         selected: Accent,
     },
+    /// "Warna dasar": Ikuti kucing first, then the five surfaces. Off
+    /// (`enabled` false): faded, no clicks.
+    SurfaceSwatches {
+        items: Vec<(Surface, Rect)>,
+        selected: Surface,
+        enabled: bool,
+    },
+    /// "Warna" of the cat: its four coats.
+    CatSwatches {
+        items: Vec<(CatColor, Rect)>,
+        selected: CatColor,
+        enabled: bool,
+    },
+    /// "Aksesori": a tile for each, the cat wearing it.
+    AccessoryTiles {
+        items: Vec<(CatAccessory, Rect)>,
+        selected: CatAccessory,
+        enabled: bool,
+    },
     /// A track with a round thumb; `track` is the hit area (the thumb's
     /// height), the line is drawn through its middle. Off (`enabled` false):
     /// faded, no clicks.
@@ -592,6 +682,20 @@ impl Control {
                 .iter()
                 .map(|(a, r)| (Hit::Accent(*a), inflate(*r, SWATCH_SLOP)))
                 .collect(),
+            Control::SurfaceSwatches { enabled: false, .. }
+            | Control::CatSwatches { enabled: false, .. }
+            | Control::AccessoryTiles { enabled: false, .. } => Vec::new(),
+            Control::SurfaceSwatches { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::Surface(*v), inflate(*r, SWATCH_SLOP)))
+                .collect(),
+            Control::CatSwatches { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::CatColor(*v), inflate(*r, SWATCH_SLOP)))
+                .collect(),
+            Control::AccessoryTiles { items, .. } => {
+                items.iter().map(|(v, r)| (Hit::CatAccessory(*v), *r)).collect()
+            }
             Control::Slider {
                 id,
                 track,
@@ -634,6 +738,21 @@ impl Control {
                     down(r);
                 }
             }
+            Control::SurfaceSwatches { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
+            Control::CatSwatches { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
+            Control::AccessoryTiles { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
             Control::Slider { track, .. } => down(track),
             Control::Button(b) => down(&mut b.rect),
             Control::IconButton { rect, .. } => down(rect),
@@ -650,6 +769,21 @@ impl Control {
             Control::Swatches { items, .. } => items
                 .iter()
                 .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::SurfaceSwatches { items, .. } => items
+                .iter()
+                .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::CatSwatches { items, .. } => items
+                .iter()
+                .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::AccessoryTiles { items, .. } => items
+                .iter()
+                .map(|(_, r)| *r)
                 .reduce(union)
                 .unwrap_or_default(),
             Control::Slider { track, .. } => *track,
@@ -691,6 +825,9 @@ pub struct Layout {
     pub chips: Vec<Chip>,
     /// The live island preview (Appearance).
     pub preview: Option<Rect>,
+    /// The cat's preview card (Kucing): the cat on its surface and the idle
+    /// notch at real size.
+    pub cat_preview: Option<Rect>,
     /// The large logo (About).
     pub about_logo: Option<Rect>,
     /// Info glyph before a note (Pomodoro while locked).
@@ -858,6 +995,13 @@ pub struct State<'a> {
     pub robot_motion: Motion,
     pub robot_sleep: u32,
     pub greeting: bool,
+    /// The cat's coat and accessory, "Ikuti kursor" and "Mengecil jadi mata".
+    pub cat_color: CatColor,
+    pub cat_accessory: CatAccessory,
+    pub cat_follow: bool,
+    pub notch_peek: bool,
+    /// The face the Kucing preview shows (window state, not saved).
+    pub cat_face: CatFace,
     /// How far a section taller than the window is scrolled (clamped).
     pub scroll: f32,
     /// Synced lyrics in the notch.
@@ -1643,10 +1787,12 @@ pub fn layout(section: Section, s: &State, m: &dyn Measure) -> Layout {
         align: Align::Left,
     });
     match section {
-        Section::Appearance => appearance(&mut b, s),
         Section::General => general(&mut b, s),
+        Section::Appearance => appearance(&mut b, s),
+        Section::Cat => cat_page(&mut b, s),
+        Section::Panel => panel_page(&mut b, s),
         Section::Clipboard => clipboard_page(&mut b, s),
-        Section::Pomodoro => pomodoro_page(&mut b, s),
+        Section::Features => features_page(&mut b, s),
         Section::Integrations => integrations(&mut b, s),
         Section::About => about(&mut b, s),
     }
@@ -1701,6 +1847,7 @@ fn scroll(l: &mut Layout, scroll: f32) {
     }
     for r in [
         &mut l.preview,
+        &mut l.cat_preview,
         &mut l.about_logo,
         &mut l.note_glyph,
         &mut l.lifted,
@@ -1716,11 +1863,18 @@ fn index_of<T: PartialEq>(all: &[T], v: &T) -> usize {
     all.iter().position(|x| x == v).unwrap_or(0)
 }
 
+/// An uppercase title over the card that follows (the whole content width).
+fn titled(b: &mut Builder, key: Key) {
+    b.eyebrow(key, CONTENT_W - 4.0);
+}
+
+/// Tampilan: the preview, then the cards "Island", "Notch" and "Jendela".
 fn appearance(b: &mut Builder, s: &State) {
     let preview = b.card(PREVIEW_H);
     b.l.preview = Some(preview);
-    let card = b.card(5.0 * ROW_H);
-    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    titled(b, Key::GroupIsland);
+    let card = b.card(4.0 * ROW_H);
+    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let styles = [
@@ -1766,25 +1920,50 @@ fn appearance(b: &mut Builder, s: &State) {
     );
     b.divider(card, rows[1]);
 
-    let surfaces = [
-        (Surface::Espresso, Key::SurfaceEspresso),
-        (Surface::Graphite, Key::SurfaceGraphite),
-    ];
-    let items = surfaces
+    // "Warna dasar": Ikuti kucing first, then the five fills, as swatches;
+    // the row's description is the chosen name (and what Auto gives now).
+    let n = Surface::ALL.len() as f32;
+    let total = n * SWATCH + (n - 1.0) * SWATCH_GAP;
+    let x0 = RIGHT - total;
+    let items = Surface::ALL
         .iter()
-        .map(|(v, k)| (Hit::Surface(*v), b.t(*k)))
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: x0 + i as f32 * (SWATCH + SWATCH_GAP),
+                y: cy(rows[2]) - SWATCH / 2.0,
+                w: SWATCH,
+                h: SWATCH,
+            };
+            (*v, r)
+        })
         .collect();
-    let x = b.segmented(
-        Group::Surface,
-        RIGHT,
-        cy(rows[2]),
+    b.l.controls.push(Control::SurfaceSwatches {
         items,
-        index_of(Surface::ALL, &s.surface),
+        selected: s.surface,
+        enabled: true,
+    });
+    let name = surface_label(b.lang, s.surface, s.cat_color, s.robot);
+    let desc = Some((name, Tone::Secondary));
+    b.row_text(
+        card,
+        rows[2],
+        b.t(Key::IslandSurface),
+        desc,
+        false,
+        x0 - SWATCH_SLOP,
     );
-    let desc = Some((b.t(Key::IslandSurfaceDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::IslandSurface), desc, false, x);
     b.divider(card, rows[2]);
 
+    let x = b.toggle(Hit::IdleClock, RIGHT, cy(rows[3]), s.idle_clock);
+    let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::IdleClock), desc, false, x);
+    b.divider(card, rows[3]);
+
+    notch_card(b, s);
+
+    titled(b, Key::GroupWindow);
+    let card = b.card(ROW_H);
     let modes = [
         (WindowTheme::System, Key::ModeSystem),
         (WindowTheme::Dark, Key::ModeDark),
@@ -1797,23 +1976,54 @@ fn appearance(b: &mut Builder, s: &State) {
     let x = b.segmented(
         Group::Window,
         RIGHT,
-        cy(rows[3]),
+        card.y + ROW_H / 2.0,
         items,
         index_of(WindowTheme::ALL, &s.window),
     );
     let desc = Some((b.t(Key::WindowModeDesc), Tone::Secondary));
-    b.row_text(card, rows[3], b.t(Key::WindowMode), desc, false, x);
-    b.divider(card, rows[3]);
+    b.row_text(card, card.y, b.t(Key::WindowMode), desc, false, x);
+}
 
-    let x = b.toggle(Hit::IdleClock, RIGHT, cy(rows[4]), s.idle_clock);
-    let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
-    b.row_text(card, rows[4], b.t(Key::IdleClock), desc, false, x);
-    b.divider(card, rows[4]);
+/// The name of a surface choice: "Espresso", ...; Ikuti kucing says what it
+/// gives for the cat now ("Ikuti kucing · Laut").
+pub fn surface_label(lang: Lang, surface: Surface, cat: CatColor, robot: bool) -> String {
+    let name = |v: Surface| text(lang, surface_key(v));
+    match surface {
+        Surface::Auto => format!("{} · {}", name(surface), name(surface.resolve(cat, robot))),
+        v => name(v).to_owned(),
+    }
+}
 
-    notch_card(b, s);
-    robot_card(b, s);
-    pages_card(b, s);
-    tiles_card(b, s);
+pub fn surface_key(v: Surface) -> Key {
+    match v {
+        Surface::Auto => Key::SurfaceAuto,
+        Surface::Espresso => Key::SurfaceEspresso,
+        Surface::Graphite => Key::SurfaceGraphite,
+        Surface::Sea => Key::SurfaceSea,
+        Surface::Night => Key::SurfaceNight,
+        Surface::Plum => Key::SurfacePlum,
+    }
+}
+
+pub fn cat_color_key(v: CatColor) -> Key {
+    match v {
+        CatColor::Terracotta => Key::CatColorTerracotta,
+        CatColor::Calico => Key::CatColorCalico,
+        CatColor::White => Key::CatColorWhite,
+        CatColor::Black => Key::CatColorBlack,
+    }
+}
+
+pub fn accessory_key(v: CatAccessory) -> Key {
+    match v {
+        CatAccessory::None => Key::AccNone,
+        CatAccessory::Glasses => Key::AccGlasses,
+        CatAccessory::Bow => Key::AccBow,
+        CatAccessory::Nightcap => Key::AccNightcap,
+        CatAccessory::Scarf => Key::AccScarf,
+        CatAccessory::Flower => Key::AccFlower,
+        CatAccessory::Crown => Key::AccCrown,
+    }
 }
 
 /// "190 px": a size slider's value.
@@ -1827,9 +2037,10 @@ pub fn percent_value(pct: u8) -> String {
 }
 
 /// The closed island's size and background: width and height sliders, a
-/// reset to 190 x 34, "Hitam" or "Transparan", and the opacity slider, which
-/// fades and takes no clicks while the background is solid.
+/// reset to 190 x 34, "Solid" or "Tembus", and the opacity slider, which
+/// fades and takes no clicks unless it is Tembus.
 fn notch_card(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupNotch);
     let card = b.card(5.0 * ROW_H);
     let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -2361,11 +2572,161 @@ fn wrapped_row_h(lines: usize) -> f32 {
     ROW_H + lines.saturating_sub(1) as f32 * DESC_LINE_H
 }
 
-/// Bata's four rows under Tampilan; with the robot off the other three
-/// stay visible but faded and take no clicks. The Animasi description wraps
-/// beside its three segments (the design's full sentence), and that row
-/// grows by a line.
-fn robot_card(b: &mut Builder, s: &State) {
+/// "10 mnt", "10 min": the sleep stepper's value.
+pub fn sleep_value(lang: Lang, minutes: u32) -> String {
+    format!("{minutes} {}", text(lang, Key::MinutesShort))
+}
+
+/// The height of the Kucing preview card: the cat's tile and the idle notch
+/// above, the expression chips under them.
+pub const CAT_PREVIEW_H: f32 = 158.0;
+/// The cat's tile in the preview (the cat about 64 px on it).
+pub const CAT_TILE: f32 = 96.0;
+/// The tiles of the "Aksesori" row, and the gap between them.
+const ACC_TILE: f32 = 54.0;
+const ACC_ROW_H: f32 = ROW_H + ACC_TILE + 12.0;
+
+/// Kucing: the preview, then the cards "Kucing", "Gerak" and "Sapaan". While
+/// the cat is off the rows that need it fade and take no clicks;
+/// "Mengecil jadi mata" does not need it (the eyes show without the cat).
+fn cat_page(b: &mut Builder, s: &State) {
+    let preview = b.card(CAT_PREVIEW_H);
+    b.l.cat_preview = Some(preview);
+    let items: Vec<(Hit, String)> = CatFace::ALL
+        .iter()
+        .map(|f| (Hit::CatFace(*f), b.t(f.key())))
+        .collect();
+    let selected = index_of(&CatFace::ALL, &s.cat_face);
+    b.segmented(
+        Group::CatFace,
+        RIGHT,
+        preview.bottom() - 12.0 - CONTROL_H / 2.0,
+        items,
+        selected,
+    );
+
+    let on = s.robot;
+    titled(b, Key::GroupCat);
+    let card = b.card(3.0 * ROW_H + ACC_ROW_H);
+    let rows = [
+        card.y,
+        card.y + ROW_H,
+        card.y + 2.0 * ROW_H,
+        card.y + 3.0 * ROW_H,
+    ];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let x = b.toggle(Hit::Robot, RIGHT, cy(rows[0]), on);
+    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
+
+    // "Warna": the four coats; the chosen one's name is the description.
+    let n = CatColor::ALL.len() as f32;
+    let x0 = RIGHT - (n * SWATCH + (n - 1.0) * SWATCH_GAP);
+    let items = CatColor::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: x0 + i as f32 * (SWATCH + SWATCH_GAP),
+                y: cy(rows[1]) - SWATCH / 2.0,
+                w: SWATCH,
+                h: SWATCH,
+            };
+            (*v, r)
+        })
+        .collect();
+    b.l.controls.push(Control::CatSwatches {
+        items,
+        selected: s.cat_color,
+        enabled: on,
+    });
+    let desc = Some((b.t(cat_color_key(s.cat_color)), Tone::Secondary));
+    b.row_text(
+        card,
+        rows[1],
+        b.t(Key::CatColorLabel),
+        desc,
+        false,
+        x0 - SWATCH_SLOP,
+    );
+    b.divider(card, rows[1]);
+
+    // "Latar: <name>" and "Ubah": the picker lives in Tampilan.
+    let change = b.t(Key::CatBackdropChange);
+    let w = b.button_w(&[&change], ButtonKind::Secondary);
+    let item = (Hit::CatBackdrop, change, ButtonKind::Secondary, on, w);
+    let x = b.buttons(RIGHT, cy(rows[2]), vec![item]);
+    let shown = s.surface.resolve(s.cat_color, s.robot);
+    let label = format!(
+        "{}: {}",
+        b.t(Key::CatBackdrop),
+        text(b.lang, surface_key(shown))
+    );
+    let desc = (s.surface == Surface::Auto).then(|| (b.t(Key::SurfaceAuto), Tone::Secondary));
+    b.row_text(card, rows[2], label, desc, false, x);
+    b.divider(card, rows[2]);
+
+    // "Aksesori": the chosen one's name, and a tile for each below it.
+    let name = b.t(accessory_key(s.cat_accessory));
+    b.row_text(
+        card,
+        rows[3],
+        b.t(Key::CatAccessoryLabel),
+        Some((name, Tone::Secondary)),
+        false,
+        RIGHT,
+    );
+    let n = CatAccessory::ALL.len() as f32;
+    let gap = (RIGHT - (card.x + INSET) - n * ACC_TILE) / (n - 1.0);
+    let items = CatAccessory::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: card.x + INSET + i as f32 * (ACC_TILE + gap),
+                y: rows[3] + ROW_H,
+                w: ACC_TILE,
+                h: ACC_TILE,
+            };
+            (*v, r)
+        })
+        .collect();
+    b.l.controls.push(Control::AccessoryTiles {
+        items,
+        selected: s.cat_accessory,
+        enabled: on,
+    });
+    b.divider(card, rows[3]);
+
+    cat_motion_card(b, s);
+
+    titled(b, Key::GroupGreeting);
+    let periods = b.wrap(
+        &b.t(Key::CatGreetingPeriods),
+        Font::Desc,
+        CONTENT_W - 2.0 * INSET,
+    );
+    let card = b.card(ROW_H + periods.len() as f32 * DESC_LINE_H + 14.0);
+    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(card.y), s.greeting, on);
+    let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
+    b.row_text(card, card.y, b.t(Key::CatGreeting), desc, false, x);
+    b.divider(card, card.y + ROW_H);
+    for (i, line) in periods.into_iter().enumerate() {
+        let rect = Rect {
+            x: card.x + INSET,
+            y: card.y + ROW_H + 8.0 + i as f32 * DESC_LINE_H,
+            w: CONTENT_W - 2.0 * INSET,
+            h: 16.0,
+        };
+        b.text(rect, line, Font::Desc, Tone::Secondary, Align::Left);
+    }
+}
+
+/// "Gerak": Animasi, Tidur setelah, Ikuti kursor and Mengecil jadi mata. The
+/// Animasi description wraps beside its three segments (the design's full
+/// sentence) and that row grows by a line.
+fn cat_motion_card(b: &mut Builder, s: &State) {
     let modes = [
         (Motion::Full, Key::MotionFull),
         (Motion::Saver, Key::MotionSaver),
@@ -2385,8 +2746,9 @@ fn robot_card(b: &mut Builder, s: &State) {
     let motion_desc = b.wrap(&b.t(Key::RobotMotionDesc), Font::Desc, desc_w);
     let motion_h = wrapped_row_h(motion_desc.len());
 
+    titled(b, Key::GroupMotion);
     let card = b.card(3.0 * ROW_H + motion_h);
-    let heights = [ROW_H, motion_h, ROW_H, ROW_H];
+    let heights = [motion_h, ROW_H, ROW_H, ROW_H];
     let mut rows = [card.y; 4];
     for i in 1..4 {
         rows[i] = rows[i - 1] + heights[i - 1];
@@ -2394,20 +2756,15 @@ fn robot_card(b: &mut Builder, s: &State) {
     let cy = |i: usize| rows[i] + heights[i] / 2.0;
     let on = s.robot;
 
-    let x = b.toggle(Hit::Robot, RIGHT, cy(0), on);
-    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
-
     let selected = index_of(Motion::ALL, &s.robot_motion);
-    let x = b.segmented_if(Group::Motion, RIGHT, cy(1), items, selected, on);
+    let x = b.segmented_if(Group::Motion, RIGHT, cy(0), items, selected, on);
     let label = b.t(Key::RobotMotion);
-    b.row_text_lines(card, rows[1], label, motion_desc, Tone::Secondary, x);
-    b.divider(card, rows[1]);
+    b.row_text_lines(card, rows[0], label, motion_desc, Tone::Secondary, x);
 
     let m = s.robot_sleep;
     let x = b.stepper(
         RIGHT,
-        cy(2),
+        cy(1),
         sleep_value(b.lang, m),
         Hit::RobotSleep(-1),
         Hit::RobotSleep(1),
@@ -2415,23 +2772,44 @@ fn robot_card(b: &mut Builder, s: &State) {
         on && s.robot_motion != Motion::Off,
     );
     let desc = Some((b.t(Key::RobotSleepDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::RobotSleep), desc, false, x);
+    b.row_text(card, rows[1], b.t(Key::RobotSleep), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let x = b.toggle_if(Hit::CatFollow, RIGHT, cy(2), s.cat_follow, on);
+    let desc = Some((b.t(Key::CatFollowDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::CatFollow), desc, false, x);
     b.divider(card, rows[2]);
 
-    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(3), s.greeting, on);
-    let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
-    b.row_text(card, rows[3], b.t(Key::MorningGreeting), desc, false, x);
+    // The eyes need stay-behind off, not the cat.
+    let x = b.toggle_if(
+        Hit::NotchPeek,
+        RIGHT,
+        cy(3),
+        s.notch_peek,
+        !s.stay_behind,
+    );
+    let desc = if s.stay_behind {
+        b.t(Key::CatPeekBehind)
+    } else {
+        b.t(Key::CatPeekDesc)
+    };
+    b.row_text(
+        card,
+        rows[3],
+        b.t(Key::CatPeek),
+        Some((desc, Tone::Secondary)),
+        false,
+        x,
+    );
     b.divider(card, rows[3]);
 }
 
-/// "10 mnt", "10 min": the sleep stepper's value.
-pub fn sleep_value(lang: Lang, minutes: u32) -> String {
-    format!("{minutes} {}", text(lang, Key::MinutesShort))
-}
-
+/// Umum: "Dasar" (language, autostart, the search hotkey) and "Peringatan"
+/// (battery, disk and RAM, and how to turn off Windows' pop-ups).
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(10.0 * ROW_H);
-    let rows: [f32; 10] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    titled(b, Key::GroupBasics);
+    let card = b.card(3.0 * ROW_H);
+    let rows: [f32; 3] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -2449,74 +2827,6 @@ fn general(b: &mut Builder, s: &State) {
     b.divider(card, rows[1]);
 
     let items = vec![
-        (Hit::OpenMode(OpenMode::Hover), b.t(Key::OpenModeHover)),
-        (Hit::OpenMode(OpenMode::HoverStay), b.t(Key::OpenModeStay)),
-        (Hit::OpenMode(OpenMode::Click), b.t(Key::OpenModeClick)),
-    ];
-    let selected = index_of(OpenMode::ALL, &s.open_mode);
-    let x = b.segmented(Group::OpenMode, RIGHT, cy(rows[2]), items, selected);
-    let desc = Some((b.t(Key::OpenModeDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::OpenModeSetting), desc, false, x);
-    b.divider(card, rows[2]);
-
-    let (min, max, _) = BATTERY_RANGE;
-    let t = s.battery_threshold;
-    let x = b.stepper(
-        RIGHT,
-        cy(rows[3]),
-        format!("{t}%"),
-        Hit::Battery(-1),
-        Hit::Battery(1),
-        (t > min, t < max),
-        true,
-    );
-    let desc = if s.has_battery {
-        (b.t(Key::BatteryAlertDesc), Tone::Secondary)
-    } else {
-        (b.t(Key::NoBattery), Tone::Secondary)
-    };
-    b.row_text(card, rows[3], b.t(Key::BatteryAlert), Some(desc), false, x);
-    b.divider(card, rows[3]);
-
-    let label = b.t(Key::ShowHow);
-    let w = b.button_w(&[&label], ButtonKind::Secondary);
-    let item = (Hit::DndHelp, label, ButtonKind::Secondary, true, w);
-    let x = b.buttons(RIGHT, cy(rows[4]), vec![item]);
-    let desc = Some((b.t(Key::PopupsHelpDesc), Tone::Secondary));
-    b.row_text(card, rows[4], b.t(Key::PopupsHelp), desc, false, x);
-    b.divider(card, rows[4]);
-
-    // The description doubles as the privacy note.
-    let x = b.toggle(Hit::Lyrics, RIGHT, cy(rows[5]), s.lyrics);
-    let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[5], b.t(Key::LyricsInNotch), desc, false, x);
-    b.divider(card, rows[5]);
-
-    // Just before the shell, as in keputusan-v3.1.html.
-    let items = vec![
-        (
-            Hit::CliStart(CliStart::Explorer),
-            b.t(Key::CliStartExplorer),
-        ),
-        (Hit::CliStart(CliStart::Last), b.t(Key::CliStartLast)),
-    ];
-    let selected = index_of(&CliStart::ALL, &s.cli_start);
-    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[6]), items, selected);
-    let desc = Some((b.t(Key::CliStartFolderDesc), Tone::Secondary));
-    b.row_text(card, rows[6], b.t(Key::CliStartFolder), desc, false, x);
-    b.divider(card, rows[6]);
-
-    let items = vec![
-        (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
-        (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
-    ];
-    let selected = index_of(&Shell::ALL, &s.shell);
-    let x = b.segmented(Group::Shell, RIGHT, cy(rows[7]), items, selected);
-    let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
-    b.row_text(card, rows[7], b.t(Key::ShellCli), desc, false, x);
-    b.divider(card, rows[7]);
-
-    let items = vec![
         (
             Hit::SearchHotkey(SearchHotkey::Off),
             b.t(Key::ClipHotkeyNone),
@@ -2531,7 +2841,7 @@ fn general(b: &mut Builder, s: &State) {
         ),
     ];
     let selected = index_of(SearchHotkey::ALL, &s.search_hotkey);
-    let x = b.segmented(Group::SearchHotkey, RIGHT, cy(rows[8]), items, selected);
+    let x = b.segmented(Group::SearchHotkey, RIGHT, cy(rows[2]), items, selected);
     let desc = if s.search_hotkey_failed && s.search_hotkey != SearchHotkey::Off {
         (b.t(Key::SearchHotkeyTaken), Tone::Bad)
     } else {
@@ -2539,21 +2849,200 @@ fn general(b: &mut Builder, s: &State) {
     };
     b.row_text(
         card,
-        rows[8],
+        rows[2],
         b.t(Key::SearchHotkeySetting),
         Some(desc),
         false,
         x,
     );
-    b.divider(card, rows[8]);
-
-    let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[9]), s.stay_behind);
-    let desc = Some((b.t(Key::StayBehindDesc), Tone::Secondary));
-    b.row_text(card, rows[9], b.t(Key::StayBehind), desc, false, x);
-    b.divider(card, rows[9]);
+    b.divider(card, rows[2]);
 
     warnings_card(b, s);
+}
+
+/// "Peringatan": the battery, disk and RAM steppers and the Windows pop-ups
+/// help. The battery stepper is off on a PC without one.
+fn warnings_card(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupAlerts);
+    let card = b.card(4.0 * ROW_H);
+    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let (min, max, _) = BATTERY_RANGE;
+    let t = s.battery_threshold;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[0]),
+        format!("{t}%"),
+        Hit::Battery(-1),
+        Hit::Battery(1),
+        (t > min, t < max),
+        s.has_battery,
+    );
+    let desc = if s.has_battery {
+        (b.t(Key::BatteryAlertDesc), Tone::Secondary)
+    } else {
+        (b.t(Key::NoBattery), Tone::Secondary)
+    };
+    b.row_text(card, rows[0], b.t(Key::BatteryAlert), Some(desc), false, x);
+
+    let (min, max, _) = DISK_WARN_RANGE;
+    let gb = s.disk_warn_gb;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[1]),
+        disk_warn_value(gb),
+        Hit::DiskWarn(-1),
+        Hit::DiskWarn(1),
+        (gb > min, gb < max),
+        true,
+    );
+    let desc = Some((b.t(Key::DiskAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::DiskAlert), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let (min, max, _) = RAM_WARN_RANGE;
+    let pct = s.ram_warn_percent;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[2]),
+        format!("{pct}%"),
+        Hit::RamWarn(-1),
+        Hit::RamWarn(1),
+        (pct > min, pct < max),
+        true,
+    );
+    let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::RamAlert), desc, false, x);
+    b.divider(card, rows[2]);
+
+    let label = b.t(Key::ShowHow);
+    let w = b.button_w(&[&label], ButtonKind::Secondary);
+    let item = (Hit::DndHelp, label, ButtonKind::Secondary, true, w);
+    let x = b.buttons(RIGHT, cy(rows[3]), vec![item]);
+    let desc = Some((b.t(Key::PopupsHelpDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::PopupsHelp), desc, false, x);
+    b.divider(card, rows[3]);
+}
+
+/// Panel: "Perilaku" (Mode buka, Di belakang jendela), then the lists "Halaman
+/// panel", "Pintasan" and "Tersedia".
+fn panel_page(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupBehavior);
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let items = vec![
+        (Hit::OpenMode(OpenMode::Hover), b.t(Key::OpenModeHover)),
+        (Hit::OpenMode(OpenMode::HoverStay), b.t(Key::OpenModeStay)),
+        (Hit::OpenMode(OpenMode::Click), b.t(Key::OpenModeClick)),
+    ];
+    let selected = index_of(OpenMode::ALL, &s.open_mode);
+    let x = b.segmented(Group::OpenMode, RIGHT, cy(rows[0]), items, selected);
+    let desc = Some((b.t(Key::OpenModeDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::OpenModeSetting), desc, false, x);
+
+    let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[1]), s.stay_behind);
+    let desc = Some((b.t(Key::StayBehindDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::StayBehind), desc, false, x);
+    b.divider(card, rows[1]);
+
+    pages_card(b, s);
+    tiles_card(b, s);
+}
+
+/// Fitur: "Pomodoro" (its four steppers and the running note), "Musik",
+/// "CLI", "Perangkat" and "Pembersih".
+fn features_page(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupPomodoro);
+    let card = b.card(4.0 * ROW_H);
+    let fields = [
+        (PomoField::Focus, Key::Focus, Key::FocusDesc),
+        (PomoField::ShortBreak, Key::Break, Key::BreakDesc),
+        (PomoField::LongBreak, Key::LongBreak, Key::LongBreakDesc),
+        (PomoField::Sessions, Key::Sessions, Key::SessionsDesc),
+    ];
+    for (i, (field, label, desc)) in fields.into_iter().enumerate() {
+        let y = card.y + i as f32 * ROW_H;
+        let v = pomo_get(&s.pomodoro, field);
+        let (min, max, _) = pomodoro::range(field);
+        let x = b.stepper(
+            RIGHT,
+            y + ROW_H / 2.0,
+            pomo_value(b.lang, field, v),
+            Hit::Pomo(field, -1),
+            Hit::Pomo(field, 1),
+            (v > min, v < max),
+            !s.pomodoro_locked,
+        );
+        let desc = Some((b.t(desc), Tone::Secondary));
+        b.row_text(card, y, b.t(label), desc, false, x);
+        if i > 0 {
+            b.divider(card, y);
+        }
+    }
+    if s.pomodoro_locked {
+        let y = card.bottom() + 12.0;
+        b.l.note_glyph = Some(Rect {
+            x: CONTENT_X + 4.0,
+            y,
+            w: 16.0,
+            h: 18.0,
+        });
+        let rect = Rect {
+            x: CONTENT_X + 26.0,
+            y,
+            w: CONTENT_W - 26.0,
+            h: 18.0,
+        };
+        let note = b.t(Key::PomodoroLocked);
+        b.text(rect, note, Font::Desc, Tone::Secondary, Align::Left);
+        // The next title clears the note.
+        b.y = y + 18.0 + 10.0;
+    }
+
+    titled(b, Key::GroupMusic);
+    let card = b.card(ROW_H);
+    // The description doubles as the privacy note.
+    let x = b.toggle(Hit::Lyrics, RIGHT, card.y + ROW_H / 2.0, s.lyrics);
+    let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
+    b.row_text(card, card.y, b.t(Key::LyricsInNotch), desc, false, x);
+
+    titled(b, Key::GroupCli);
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+    // Just before the shell, as in keputusan-v3.1.html.
+    let items = vec![
+        (
+            Hit::CliStart(CliStart::Explorer),
+            b.t(Key::CliStartExplorer),
+        ),
+        (Hit::CliStart(CliStart::Last), b.t(Key::CliStartLast)),
+    ];
+    let selected = index_of(&CliStart::ALL, &s.cli_start);
+    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[0]), items, selected);
+    let desc = Some((b.t(Key::CliStartFolderDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::CliStartFolder), desc, false, x);
+
+    let items = vec![
+        (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
+        (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
+    ];
+    let selected = index_of(&Shell::ALL, &s.shell);
+    let x = b.segmented(Group::Shell, RIGHT, cy(rows[1]), items, selected);
+    let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::ShellCli), desc, false, x);
+    b.divider(card, rows[1]);
+
     devices_card(b, s);
+
+    titled(b, Key::GroupCleaner);
+    let card = b.card(ROW_H);
+    let x = b.toggle(Hit::MoleProtect, RIGHT, card.y + ROW_H / 2.0, s.mole_protect);
+    let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
+    b.row_text(card, card.y, b.t(Key::MoleProtectSetting), desc, false, x);
 }
 
 /// "Perangkat" (the Devices page): the plug-in and safe-to-remove notices,
@@ -2591,49 +3080,6 @@ fn devices_card(b: &mut Builder, s: &State) {
     b.divider(card, rows[1]);
 }
 
-/// The System page's warnings (keputusan-v3.1.html p4) and the cleaner's
-/// Mole protection, in a second card under Umum's seven rows; the section
-/// scrolls to reach it, like Tampilan.
-fn warnings_card(b: &mut Builder, s: &State) {
-    let card = b.card(3.0 * ROW_H);
-    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
-    let cy = |y: f32| y + ROW_H / 2.0;
-
-    let (min, max, _) = DISK_WARN_RANGE;
-    let gb = s.disk_warn_gb;
-    let x = b.stepper(
-        RIGHT,
-        cy(rows[0]),
-        disk_warn_value(gb),
-        Hit::DiskWarn(-1),
-        Hit::DiskWarn(1),
-        (gb > min, gb < max),
-        true,
-    );
-    let desc = Some((b.t(Key::DiskAlertDesc), Tone::Secondary));
-    b.row_text(card, rows[0], b.t(Key::DiskAlert), desc, false, x);
-
-    let (min, max, _) = RAM_WARN_RANGE;
-    let pct = s.ram_warn_percent;
-    let x = b.stepper(
-        RIGHT,
-        cy(rows[1]),
-        format!("{pct}%"),
-        Hit::RamWarn(-1),
-        Hit::RamWarn(1),
-        (pct > min, pct < max),
-        true,
-    );
-    let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
-    b.row_text(card, rows[1], b.t(Key::RamAlert), desc, false, x);
-    b.divider(card, rows[1]);
-
-    let x = b.toggle(Hit::MoleProtect, RIGHT, cy(rows[2]), s.mole_protect);
-    let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::MoleProtectSetting), desc, false, x);
-    b.divider(card, rows[2]);
-}
-
 /// "Jumlah item" one step (10) up or down, kept in 10–200; a hand-edited
 /// value off the grid snaps onto it.
 pub fn clip_items_step(n: u32, dir: i32) -> u32 {
@@ -2651,6 +3097,7 @@ pub fn clip_items_step(n: u32, dir: i32) -> u32 {
 /// fade and take no clicks.
 fn clipboard_page(b: &mut Builder, s: &State) {
     let c = s.clip;
+    titled(b, Key::GroupHistory);
     let card = b.card(8.0 * ROW_H);
     let rows: [f32; 8] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -2792,15 +3239,17 @@ fn screenshot_card(b: &mut Builder, s: &State) {
     ];
     let selected = index_of(ShotTool::ALL, &c.tool);
     let x = b.segmented(Group::ShotTool, RIGHT, cy(rows[0]), items, selected);
-    b.row_text(card, rows[0], b.t(Key::ShotToolSetting), None, false, x);
+    let desc = Some((b.t(Key::ShotToolDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::ShotToolSetting), desc, false, x);
 
     // The PrtSc key, right after the tool and never faded by the preview:
     // it starts Vale's capture whatever the tool is. When the keyboard hook
-    // could not be installed: a red note, nothing to click.
+    // could not be installed: a red note in place of its description, nothing
+    // to click.
     let x = b.toggle(Hit::ShotPrintScreen, RIGHT, cy(rows[1]), c.print_screen);
     let desc = match prtsc {
         PrtscRow::Failed => Some((b.t(Key::PrtscHookFailed), Tone::Bad)),
-        PrtscRow::Plain => None,
+        PrtscRow::Plain => Some((b.t(Key::ShotPrintScreenDesc), Tone::Secondary)),
     };
     b.row_text(card, rows[1], b.t(Key::ShotPrintScreen), desc, false, x);
     b.divider(card, rows[1]);
@@ -2842,52 +3291,6 @@ pub enum PrtscRow {
     Plain,
     /// On, but `SetWindowsHookExW` failed: a red note.
     Failed,
-}
-
-fn pomodoro_page(b: &mut Builder, s: &State) {
-    let card = b.card(4.0 * ROW_H);
-    let fields = [
-        (PomoField::Focus, Key::Focus, Key::FocusDesc),
-        (PomoField::ShortBreak, Key::Break, Key::BreakDesc),
-        (PomoField::LongBreak, Key::LongBreak, Key::LongBreakDesc),
-        (PomoField::Sessions, Key::Sessions, Key::SessionsDesc),
-    ];
-    for (i, (field, label, desc)) in fields.into_iter().enumerate() {
-        let y = card.y + i as f32 * ROW_H;
-        let v = pomo_get(&s.pomodoro, field);
-        let (min, max, _) = pomodoro::range(field);
-        let x = b.stepper(
-            RIGHT,
-            y + ROW_H / 2.0,
-            pomo_value(b.lang, field, v),
-            Hit::Pomo(field, -1),
-            Hit::Pomo(field, 1),
-            (v > min, v < max),
-            !s.pomodoro_locked,
-        );
-        let desc = Some((b.t(desc), Tone::Secondary));
-        b.row_text(card, y, b.t(label), desc, false, x);
-        if i > 0 {
-            b.divider(card, y);
-        }
-    }
-    if s.pomodoro_locked {
-        let y = card.bottom() + 12.0;
-        b.l.note_glyph = Some(Rect {
-            x: CONTENT_X + 4.0,
-            y,
-            w: 16.0,
-            h: 18.0,
-        });
-        let rect = Rect {
-            x: CONTENT_X + 26.0,
-            y,
-            w: CONTENT_W - 26.0,
-            h: 18.0,
-        };
-        let note = b.t(Key::PomodoroLocked);
-        b.text(rect, note, Font::Desc, Tone::Secondary, Align::Left);
-    }
 }
 
 fn integrations(b: &mut Builder, s: &State) {
@@ -3036,7 +3439,6 @@ fn integrations(b: &mut Builder, s: &State) {
     }
 
     // Claude Code hooks.
-    b.y += EYEBROW_GAP;
     b.eyebrow(Key::ClaudeCode, CONTENT_W - 2.0);
     let card = b.card(ROW_H);
     let (install, remove) = (b.t(Key::InstallHooks), b.t(Key::RemoveHooks));
@@ -3111,6 +3513,7 @@ fn about(b: &mut Builder, s: &State) {
         Align::Left,
     );
     b.y = top + ABOUT_LOGO + 18.0;
+    titled(b, Key::GroupLinks);
 
     let card = b.card(3.0 * ROW_H);
     // Web pages open from a bare "open" glyph; the data folder has a button.

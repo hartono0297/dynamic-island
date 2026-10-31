@@ -468,17 +468,17 @@ keys! {
     AccentClay => "Lempung", "Clay";
     AccentOlive => "Zaitun", "Olive";
     AccentPlum => "Plum", "Plum";
-    IslandSurface => "Latar island", "Island fill";
+    IslandSurface => "Warna dasar", "Base color";
     IslandSurfaceDesc => "Warna dasar island", "The island's base color";
     NotchWidth => "Lebar notch", "Notch width";
     NotchHeight => "Tinggi notch", "Notch height";
     NotchDefaultSize => "Ukuran bawaan", "Default size";
     NotchReset => "Atur ulang", "Reset";
-    NotchFill => "Latar notch", "Notch background";
+    NotchFill => "Isi notch", "Notch fill";
     NotchFillDesc => "Panel tetap solid", "The open panel stays solid";
-    NotchFillSolid => "Hitam", "Solid";
-    NotchFillTransparent => "Transparan", "Transparent";
-    NotchOpacity => "Opasitas latar", "Background opacity";
+    NotchFillSolid => "Solid", "Solid";
+    NotchFillTransparent => "Tembus", "See-through";
+    NotchOpacity => "Opasitas", "Opacity";
     SurfaceEspresso => "Espresso", "Espresso";
     SurfaceGraphite => "Grafit", "Graphite";
     WindowMode => "Mode jendela", "Window mode";
@@ -535,10 +535,10 @@ keys! {
     VetoRights => "Butuh izin administrator.", "Needs administrator rights.";
     VetoPower => "Dayanya tidak cukup.", "Not enough power.";
     VetoRefused => "Windows menolak melepasnya.", "Windows refused to remove it.";
-    DeviceNotices => "Notice perangkat", "Device notices";
+    DeviceNotices => "Notifikasi perangkat", "Device notifications";
     DeviceNoticesDesc => "Saat flashdisk dicolok dan saat aman dicabut",
         "When a drive is plugged in and when it is safe to remove";
-    DevicesHotkey => "Pintasan Perangkat", "Devices hotkey";
+    DevicesHotkey => "Tombol pintas", "Hotkey";
     DevicesHotkeyDesc => "Buka halaman Perangkat", "Open the Devices page";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
@@ -616,7 +616,7 @@ keys! {
     OpenDataFolder => "Buka folder data", "Open data folder";
 
     // Vale's cat, the notch assistant (Settings → Tampilan).
-    RobotInNotch => "Asisten di notch", "Assistant in notch";
+    RobotInNotch => "Kucing di notch", "Cat in the notch";
     RobotInNotchDesc => "Tampilkan kucing Vale di samping jam dan notice",
         "Show Vale's cat beside the clock and notices";
     RobotMotion => "Animasi", "Animation";
@@ -675,7 +675,7 @@ keys! {
     ClipPersistDesc => "Terenkripsi DPAPI, hanya akun ini", "Encrypted with DPAPI, this account only";
     ClipClearOnLock => "Hapus saat layar dikunci", "Clear when the screen locks";
     ClipClearOnLockDesc => "Item tersemat tetap", "Pinned items stay";
-    ClipHotkey => "Pintasan", "Shortcut";
+    ClipHotkey => "Tombol pintas", "Hotkey";
     ClipHotkeyDesc => "Buka halaman Clipboard", "Open the Clipboard page";
     ClipHotkeyTaken => "Dipakai aplikasi lain", "Taken by another app";
     ClipHotkeyNone => "Tidak ada", "None";
@@ -704,12 +704,12 @@ keys! {
     SearchCopy => "Enter untuk menyalin", "Enter to copy";
     SearchKindWeb => "Cari di web", "Search the web";
     // Settings → Umum → Pencarian cepat.
-    SearchHotkeySetting => "Pencarian", "Search";
+    SearchHotkeySetting => "Tombol pintas pencarian", "Search hotkey";
     SearchHotkeyDesc => "Cari dan hitung", "Find and calculate";
     SearchHotkeyTaken => "Sudah dipakai", "In use";
     ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
-    ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";
-    ClipCopyNotice => "Notifikasi salinan", "Copy notification";
+    ClipFeedbackAllDesc => "Hanya saat pratinjau mati", "Only while the preview is off";
+    ClipCopyNotice => "Pratinjau salinan", "Copy preview";
     ClipCopyNoticeDesc => "Pratinjau di notch setiap kali menyalin", "A preview in the notch on every copy";
     ClipFeedbackAllReplaced => "Diganti pratinjau salinan di atas", "Replaced by the copy preview above";
     ClipClear => "Hapus riwayat", "Clear history";
@@ -736,7 +736,7 @@ keys! {
     ShotNoFile => "tidak ada file", "no file found";
     ShotFileStays => "file masih ada", "the file is still there";
     SecScreenshot => "Screenshot", "Screenshot";
-    ShotPreviewSetting => "Preview di notch", "Preview in the notch";
+    ShotPreviewSetting => "Pratinjau di notch", "Preview in the notch";
     ShotIgnoreSetting => "Jika diabaikan", "If ignored";
     ShotIgnoreDesc => "Setelah waktu tampil habis", "Once its time on screen runs out";
     ShotShowFor => "Lama tampil", "Show for";
@@ -746,7 +746,9 @@ keys! {
     ShotToolVale => "Vale", "Vale";
     ShotToolWindows => "Snipping Tool", "Snipping Tool";
     // The bare PrtSc key opens Vale's own capture (Settings → Clipboard).
-    ShotPrintScreen => "Tombol PrtSc membuka screenshot Vale", "PrtSc key opens Vale's screenshot";
+    ShotPrintScreen => "Tombol PrtSc", "PrtSc key";
+    ShotPrintScreenDesc => "Buka screenshot Vale", "Opens Vale's screenshot";
+    ShotToolDesc => "Yang dibuka tile Screenshot", "What the Screenshot tile opens";
     PrtscHookFailed => "Tombol PrtSc tidak bisa dipasang", "Could not hook the PrtSc key";
     SnapHint => "Klik atau seret · Enter ambil · Esc batal",
         "Click or drag · Enter to capture · Esc to cancel";
@@ -782,6 +784,55 @@ keys! {
     DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";
     DemoClaudeAsks => "izin menjalankan perintah", "permission to run a command";
     DemoFilesChanged => "3 file diubah", "3 files changed";
+
+    // Settings, v3.8: the Kucing page, the new sections and the cards' titles.
+    SecCat => "Kucing", "Cat";
+    SecPanel => "Panel", "Panel";
+    SecFeatures => "Fitur", "Features";
+    GroupBasics => "Dasar", "Basics";
+    GroupAlerts => "Peringatan", "Alerts";
+    GroupIsland => "Island", "Island";
+    GroupNotch => "Notch", "Notch";
+    GroupWindow => "Jendela", "Window";
+    GroupCat => "Kucing", "Cat";
+    GroupMotion => "Gerak", "Motion";
+    GroupGreeting => "Sapaan", "Greeting";
+    GroupBehavior => "Perilaku", "Behavior";
+    GroupHistory => "Riwayat", "History";
+    GroupPomodoro => "Pomodoro", "Pomodoro";
+    GroupMusic => "Musik", "Music";
+    GroupCli => "CLI", "CLI";
+    GroupCleaner => "Pembersih", "Cleaner";
+    GroupLinks => "Tautan", "Links";
+    SurfaceAuto => "Ikuti kucing", "Match cat";
+    SurfaceSea => "Laut", "Sea";
+    SurfaceNight => "Malam", "Night";
+    SurfacePlum => "Ungu", "Plum";
+    CatColorTerracotta => "Terakota", "Terracotta";
+    CatColorCalico => "Calico", "Calico";
+    CatColorWhite => "Putih", "White";
+    CatColorBlack => "Hitam", "Black";
+    CatColorLabel => "Warna", "Color";
+    CatBackdrop => "Latar", "Backdrop";
+    CatBackdropChange => "Ubah", "Change";
+    CatAccessoryLabel => "Aksesori", "Accessory";
+    AccNone => "Tanpa", "None";
+    AccGlasses => "Kacamata", "Glasses";
+    AccBow => "Pita", "Bow";
+    AccNightcap => "Topi tidur", "Nightcap";
+    AccScarf => "Syal", "Scarf";
+    AccFlower => "Bunga", "Flower";
+    AccCrown => "Mahkota", "Crown";
+    CatFollow => "Ikuti kursor", "Follow the pointer";
+    CatFollowDesc => "Kepala menoleh ke arah kursor", "The head turns toward the pointer";
+    CatPeek => "Mengecil jadi mata", "Shrink to eyes";
+    CatPeekDesc => "Notch jadi dua mata saat kursor dekat di atas jendela",
+        "The notch shrinks to two eyes when the pointer nears it over a window";
+    CatPeekBehind => "Mati selama \u{201C}Di belakang jendela\u{201D} menyala",
+        "Off while \u{201C}Stay behind windows\u{201D} is on";
+    CatGreeting => "Sapaan", "Greeting";
+    CatGreetingPeriods => "Pagi 04-11 Selamat pagi · Siang 11-15 Selamat siang · Sore 15-18 Selamat sore · Malam 18-24 Selamat malam · Dini hari 00-04 Masih begadang?",
+        "Morning 04-11 Good morning · Noon 11-15 Good afternoon · Afternoon 15-18 Good afternoon · Evening 18-24 Good evening · Late night 00-04 Up late?";
 }
 
 /// `key` in `lang`.
@@ -3387,7 +3438,7 @@ mod copy_preview_tests {
             assert_eq!(text(lang, Key::ClipPreviewFiles), files);
             assert_eq!(text(lang, Key::ClipPreviewChip), chip);
         }
-        assert_eq!(text(Lang::Id, Key::ClipCopyNotice), "Notifikasi salinan");
-        assert_eq!(text(Lang::En, Key::ClipCopyNotice), "Copy notification");
+        assert_eq!(text(Lang::Id, Key::ClipCopyNotice), "Pratinjau salinan");
+        assert_eq!(text(Lang::En, Key::ClipCopyNotice), "Copy preview");
     }
 }

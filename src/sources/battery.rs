@@ -47,6 +47,26 @@ impl BatteryMonitor {
     }
 }
 
+/// `BatteryFlag` value meaning the status could not be read.
+const FLAG_UNKNOWN: u8 = 255;
+
+/// Whether `BatteryFlag` says there is a battery: bit 128 means none; 255
+/// (unknown) counts as one, so a stepper that needs it is not switched off
+/// on a guess.
+fn flag_has_battery(flag: u8) -> bool {
+    flag == FLAG_UNKNOWN || flag & FLAG_NO_BATTERY == 0
+}
+
+/// This PC has a battery (Settings → Umum → Peringatan): the power status
+/// says so, or cannot be read at all.
+pub fn battery_present() -> bool {
+    let mut status = SYSTEM_POWER_STATUS::default();
+    match unsafe { GetSystemPowerStatus(&mut status) } {
+        Ok(()) => flag_has_battery(status.BatteryFlag),
+        Err(_) => true,
+    }
+}
+
 /// Current charge percentage and whether the charger is connected, or `None`
 /// when there is no battery or its level is unknown.
 pub fn read_battery() -> Option<(u8, bool)> {
@@ -101,6 +121,17 @@ pub fn probe() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_no_battery_flag_switches_the_stepper_off() {
+        assert!(!flag_has_battery(128), "no system battery");
+        assert!(flag_has_battery(255), "unknown counts as present");
+        for flag in [0, 1, 2, 4, 8, 9] {
+            assert!(flag_has_battery(flag), "{flag}");
+        }
+        // 128 with other bits (charging, low) is still "no battery".
+        assert!(!flag_has_battery(128 | 8));
+    }
 
     #[test]
     fn alerts_once_when_crossing() {

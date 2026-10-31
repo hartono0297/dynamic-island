@@ -124,11 +124,14 @@ pub enum Icon {
     Eject,
     /// The quick search's back button: an arrow to the left. Line only.
     Back,
+    /// The Kucing section and the base-colour swatch that follows the cat: the
+    /// cat head as an outline (the notch cat's dome, two ears, two eyes).
+    Cat,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 67] = [
+    pub const ALL: [Icon; 68] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -196,6 +199,7 @@ impl Icon {
         Icon::Sd,
         Icon::Eject,
         Icon::Back,
+        Icon::Cat,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -451,6 +455,13 @@ impl Icon {
             Icon::Sd => &[Part::Path("M7 3h8l3 3v15H7zM10 3v3M12.5 3v3M15 3v2")],
             Icon::Eject => &[Part::Path("M12 5l7 8H5zM5 17h14")],
             Icon::Back => &[Part::Path("M19 12H5M11 6l-6 6 6 6")],
+            // The cat head: a flat base, a dome between two pointed ears, two eyes.
+            Icon::Cat => &[
+                Part::Fill("M4.5 19.5v-8.2L5.8 4.5l4.3 3.2a9 9 0 0 1 3.8 0l4.3-3.2 1.3 6.8v8.2z"),
+                Part::Path("M4.5 19.5v-8.2L5.8 4.5l4.3 3.2a9 9 0 0 1 3.8 0l4.3-3.2 1.3 6.8v8.2z"),
+                Part::Dot(9.0, 13.5),
+                Part::Dot(15.0, 13.5),
+            ],
         }
     }
 }

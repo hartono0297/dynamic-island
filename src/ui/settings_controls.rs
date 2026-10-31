@@ -36,21 +36,24 @@ use windows_numerics::{Matrix3x2, Vector2};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_COUNT, BAR_GAP, BAR_W, NotchSize, SHOULDER, ShapeKind, compact_layout,
+    idle_layout,
     compact_layout_robot, shape_with_robot_sized,
 };
 use super::icons::{Icon, IconSet};
 use super::notch_fill::legibility;
 use super::cat_style::CatLook;
+use crate::theme;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::settings_layout::{
-    Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
+    Align, Button, ButtonKind, CARD_RADIUS, CAT_TILE, CONTROL_RADIUS, CatFace, Chip, Control,
+    EXTERNAL_GLYPH,
     FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect, SEGMENT_RADIUS,
     SLIDER_THUMB, SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone, accent_key,
     slider_x,
 };
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
-use crate::theme::{Accent, Palette, WindowPalette};
+use crate::theme::{Accent, CatAccessory, CatColor, Palette, Surface, WindowPalette};
 
 /// The Vale logo's fixed brand colours, whatever the accent: the terracotta
 /// cat head and its ears, the espresso pill eyes.
@@ -76,6 +79,8 @@ pub struct Scene<'a> {
     pub robot: bool,
     /// The cat's colour and accessory in the preview.
     pub cat: CatLook,
+    /// The face the Kucing preview shows.
+    pub cat_face: CatFace,
     pub lang: Lang,
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
@@ -592,6 +597,9 @@ impl Painter<'_> {
             self.fill_round(r, CONTROL_RADIUS, self.p.field, 1.0);
             self.stroke_round(r, CONTROL_RADIUS, self.p.border);
         }
+        if let Some(r) = l.cat_preview {
+            self.cat_preview(r, s);
+        }
         if let Some(r) = l.preview {
             self.preview(r, s);
         }
@@ -668,6 +676,39 @@ impl Painter<'_> {
                             *accent == *selected,
                             s.hover == Some(Hit::Accent(*accent)),
                         );
+                    }
+                }
+                Control::SurfaceSwatches {
+                    items,
+                    selected,
+                    enabled,
+                } => {
+                    let p = self.dimmed(*enabled);
+                    for (surface, r) in items {
+                        let hover = *enabled && s.hover == Some(Hit::Surface(*surface));
+                        p.surface_swatch(*r, *surface, *surface == *selected, hover, s);
+                    }
+                }
+                Control::CatSwatches {
+                    items,
+                    selected,
+                    enabled,
+                } => {
+                    let p = self.dimmed(*enabled);
+                    for (color, r) in items {
+                        let hover = *enabled && s.hover == Some(Hit::CatColor(*color));
+                        p.cat_swatch(*r, *color, *color == *selected, hover);
+                    }
+                }
+                Control::AccessoryTiles {
+                    items,
+                    selected,
+                    enabled,
+                } => {
+                    let p = self.dimmed(*enabled);
+                    for (accessory, r) in items {
+                        let hover = *enabled && s.hover == Some(Hit::CatAccessory(*accessory));
+                        p.accessory_tile(*r, *accessory, *accessory == *selected, hover, s);
                     }
                 }
                 Control::Slider {
@@ -810,6 +851,196 @@ impl Painter<'_> {
             self.ring(cx, cy, ring, SWATCH_RING_W, self.p.secondary, 0.7);
         }
         self.circle(cx, cy, r.w / 2.0, accent.rgb(), 1.0);
+    }
+
+    /// The ring a chosen swatch or tile gets: text-coloured, with a gap; the
+    /// one under the pointer a fainter one.
+    fn choice_ring(&self, cx: f32, cy: f32, radius: f32, selected: bool, hover: bool) {
+        if selected {
+            self.ring(cx, cy, radius, SWATCH_RING_W, self.p.text, 1.0);
+        } else if hover {
+            self.ring(cx, cy, radius, SWATCH_RING_W, self.p.secondary, 0.7);
+        }
+    }
+
+    /// A base-color dot: the surface itself, with a hairline so a dark fill
+    /// stands off the card. "Ikuti kucing" is the color it gives now, with a
+    /// small cat outline.
+    fn surface_swatch(&self, r: Rect, surface: Surface, selected: bool, hover: bool, s: &Scene) {
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let ring = r.w / 2.0 + SWATCH_RING_GAP + SWATCH_RING_W / 2.0;
+        self.choice_ring(cx, cy, ring, selected, hover);
+        let shown = surface.resolve(s.cat.color, s.robot);
+        self.circle(cx, cy, r.w / 2.0, shown.rgb(), 1.0);
+        self.ring(cx, cy, r.w / 2.0 - 0.5, 1.0, self.p.secondary, 0.5);
+        if surface == Surface::Auto {
+            let ink = theme::island(Accent::default(), shown).secondary;
+            self.icon(Icon::Cat, r, 14.0, ink, 1.0, false);
+        }
+    }
+
+    /// A coat dot: the cat's head colour (Calico shows its two patches,
+    /// Black its rim).
+    fn cat_swatch(&self, r: Rect, color: CatColor, selected: bool, hover: bool) {
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let ring = r.w / 2.0 + SWATCH_RING_GAP + SWATCH_RING_W / 2.0;
+        self.choice_ring(cx, cy, ring, selected, hover);
+        let look = CatLook {
+            color,
+            accessory: CatAccessory::None,
+        };
+        let radius = r.w / 2.0;
+        if let Some(rim) = look.rim() {
+            self.circle(cx, cy, radius, rim, 1.0);
+            self.circle(cx, cy, radius - 1.6, look.head_rgb(), 1.0);
+        } else {
+            self.circle(cx, cy, radius, look.head_rgb(), 1.0);
+        }
+        if color == CatColor::Calico {
+            // The orange patch on the left, the dark one on the right, as a
+            // half circle each.
+            for (dx, rgb) in [(-1.0, super::cat_style::PATCH_ORANGE), (1.0, super::cat_style::PATCH_DARK)] {
+                self.circle(cx + dx * radius * 0.42, cy - radius * 0.2, radius * 0.38, rgb, 1.0);
+            }
+        }
+        self.ring(cx, cy, radius - 0.5, 1.0, self.p.secondary, 0.35);
+    }
+
+    /// An accessory's tile: the cat in the current coat wearing it, on the
+    /// island's own surface; the chosen one is outlined.
+    fn accessory_tile(
+        &self,
+        r: Rect,
+        accessory: CatAccessory,
+        selected: bool,
+        hover: bool,
+        s: &Scene,
+    ) {
+        let fill = s.island.surface;
+        self.fill_round(r, CONTROL_RADIUS, fill, 1.0);
+        if selected {
+            self.set(self.p.accent, 1.0);
+            self.outline(r, CONTROL_RADIUS, 2.0);
+        } else if hover {
+            self.set(self.p.secondary, 0.7);
+            self.outline(r, CONTROL_RADIUS, 1.5);
+        } else {
+            self.stroke_round(r, CONTROL_RADIUS, self.p.border);
+        }
+        let size = 40.0;
+        let area = Rect {
+            x: r.x + (r.w - size) / 2.0,
+            y: r.y + (r.h - size) / 2.0,
+            w: size,
+            h: size,
+        };
+        self.gfx.robot.paint(
+            self.rt,
+            self.brush,
+            area,
+            Expr::Idle,
+            Pose::default(),
+            self.alpha,
+            CatLook {
+                color: s.cat.color,
+                accessory,
+            },
+        );
+    }
+
+    /// The Kucing preview: the cat about 64 px on the surface it will have,
+    /// the idle notch at its real size (style, width, height, fill) with the
+    /// clock beside the cat, and the face the chips chose. Still: nothing here
+    /// moves or runs a timer.
+    fn cat_preview(&self, card: Rect, s: &Scene) {
+        let pal = s.island;
+        // The tile: the surface with the cat on it.
+        let tile = Rect {
+            x: card.x + 16.0,
+            y: card.y + 12.0,
+            w: CAT_TILE,
+            h: CAT_TILE,
+        };
+        self.fill_round(tile, CARD_RADIUS, pal.surface, 1.0);
+        self.stroke_round(tile, CARD_RADIUS, self.p.border);
+        let (expr, blink) = s.cat_face.expr();
+        let pose = Pose {
+            blink,
+            ..Pose::default()
+        };
+        let cat = Rect {
+            x: tile.x + (tile.w - 64.0) / 2.0,
+            y: tile.y + (tile.h - 64.0) / 2.0,
+            w: 64.0,
+            h: 64.0,
+        };
+        self.gfx
+            .robot
+            .paint(self.rt, self.brush, cat, expr, pose, self.alpha, s.cat);
+
+        // The screen sketch, with the notch at the top.
+        let screen = Rect {
+            x: tile.right() + 12.0,
+            y: tile.y,
+            w: card.right() - 16.0 - (tile.right() + 12.0),
+            h: CAT_TILE,
+        };
+        let wash = if self.p.light { 0.18 } else { 0.14 };
+        let (top, bottom) = (self.p.button, mix(self.p.bg, pal.accent, wash));
+        self.gradient_round(screen, CONTROL_RADIUS, top, bottom);
+        self.stroke_round(screen, CONTROL_RADIUS, self.p.border);
+        let base = shape_with_robot_sized(s.style, s.notch, ShapeKind::Idle, s.robot);
+        let shape = super::geometry::ShapeRect {
+            x: screen.x + (screen.w - base.w) / 2.0,
+            y: screen.y + base.y,
+            ..base
+        };
+        if s.notch_alpha < 1.0 {
+            self.checker(Rect {
+                x: shape.x - 24.0,
+                y: screen.y,
+                w: shape.w + 48.0,
+                h: shape.y - screen.y + shape.h + 8.0,
+            });
+        }
+        self.set(pal.surface, s.notch_alpha);
+        unsafe {
+            match s.style {
+                Style::Pill => {
+                    self.rt.FillRoundedRectangle(
+                        &rounded(
+                            Rect {
+                                x: shape.x,
+                                y: shape.y,
+                                w: shape.w,
+                                h: shape.h,
+                            },
+                            shape.h / 2.0,
+                        ),
+                        self.brush,
+                    );
+                }
+                Style::Notch => {
+                    if let Ok(path) = notch_path(&self.gfx.d2d, shape) {
+                        self.rt.FillGeometry(&path, self.brush, None);
+                    }
+                }
+            }
+        }
+        let l = idle_layout(shape, s.robot, true);
+        if let Some(area) = l.robot {
+            self.gfx
+                .robot
+                .paint(self.rt, self.brush, area, expr, pose, self.alpha, s.cat);
+        }
+        if let Some(clock) = l.clock {
+            let style = TextStyle {
+                format: &self.gfx.island_text,
+                tabular: true,
+                tracked: None,
+            };
+            self.draw_str("14:32", style, clock, pal.text, 0.9);
+        }
     }
 
     fn button(&self, b: &Button, s: &Scene) {
