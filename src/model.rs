@@ -9,6 +9,7 @@ use crate::clean::{CleanCat, CleanEvent, CleanMode};
 use crate::cli::CliEvent;
 use crate::config::OpenMode;
 use crate::devices::DevicesEvent;
+use crate::greeting::DayPeriod;
 use crate::lyrics::LyricsFound;
 use crate::mole::{MoleEvent, MoleOpt, MoleOpts};
 use crate::pages::PanelPages;
@@ -56,9 +57,12 @@ pub enum NoticeKind {
     Reminder {
         id: String,
     },
-    /// The morning greeting: today's events and reminders, from Bata. Shows
-    /// `GREETING_DURATION`, never in fullscreen.
-    Greeting,
+    /// The cat's greeting for a part of the day (`period` picks its face and
+    /// words): events and reminders, from Bata. Shows `GREETING_DURATION`,
+    /// never in fullscreen.
+    Greeting {
+        period: DayPeriod,
+    },
     /// A fixed drive below the disk limit, or RAM above its limit for a
     /// minute (`system::WarnMonitor`). Clicking it opens the panel on the
     /// System page.

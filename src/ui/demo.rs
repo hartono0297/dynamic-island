@@ -1785,12 +1785,24 @@ fn demo_notice(which: DemoNotice, renderer: &Renderer) -> Notice {
             "Denah lantai 2 sudah saya kirim, cek ya".into(),
             NoticeKind::App { app_id: None },
         ),
-        DemoNotice::Greeting => notice(
-            tr(Key::SourceVale),
-            tr(Key::GoodMorning),
-            crate::i18n::greeting_body(crate::i18n::lang(), 3, 2),
-            NoticeKind::Greeting,
-        ),
+        DemoNotice::Greeting => {
+            // DI_GREET_PERIOD: morning (default), midday, afternoon, evening, night.
+            let period = std::env::var("DI_GREET_PERIOD")
+                .ok()
+                .and_then(|v| crate::greeting::DayPeriod::from_id(v.trim()))
+                .unwrap_or(crate::greeting::DayPeriod::Morning);
+            let lang = crate::i18n::lang();
+            let counts = crate::greeting::GreetCounts {
+                events: 3,
+                reminders: 2,
+            };
+            notice(
+                tr(Key::SourceVale),
+                crate::i18n::greeting_title(lang, period),
+                crate::i18n::greeting_body(lang, period, counts),
+                NoticeKind::Greeting { period },
+            )
+        }
         DemoNotice::Copied => notice(
             tr(Key::ClipboardTitle),
             tr(Key::ClipCopied),

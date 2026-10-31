@@ -11,6 +11,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::clean::CleanCat;
+use crate::greeting::{DayPeriod, GreetCounts};
 use crate::reminders::{self, Repeat};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -844,22 +845,84 @@ pub fn more_count(lang: Lang, n: usize) -> String {
     }
 }
 
-/// The morning greeting's line: "3 acara dan 2 pengingat hari ini",
-/// "1 event and 2 reminders today"; a free day says so.
-pub fn greeting_body(lang: Lang, events: usize, reminders: usize) -> String {
+/// The greeting's title for `period`; the morning one is `Key::GoodMorning`.
+pub fn greeting_title(lang: Lang, period: DayPeriod) -> &'static str {
+    match (period, lang) {
+        (DayPeriod::Morning, _) => text(lang, Key::GoodMorning),
+        (DayPeriod::Midday, Lang::Id) => "Selamat siang",
+        (DayPeriod::Afternoon, Lang::Id) => "Selamat sore",
+        (DayPeriod::Midday | DayPeriod::Afternoon, Lang::En) => "Good afternoon",
+        (DayPeriod::Evening, Lang::Id) => "Selamat malam",
+        (DayPeriod::Evening, Lang::En) => "Good evening",
+        (DayPeriod::Night, Lang::Id) => "Masih begadang?",
+        (DayPeriod::Night, Lang::En) => "Up late?",
+    }
+}
+
+/// The greeting's line for `period`, from `counts` (never a "0 acara": a zero
+/// part is dropped, and a day with nothing says so):
+/// - Morning: "3 acara dan 2 pengingat hari ini" (today's).
+/// - Midday and Afternoon: "Masih 2 acara dan 1 pengingat hari ini" (left today).
+/// - Evening: "Besok 2 acara" (tomorrow's events; reminders are not counted).
+/// - Night: "Sudah larut. Besok 2 acara" (the coming day's events).
+pub fn greeting_body(lang: Lang, period: DayPeriod, counts: GreetCounts) -> String {
+    let GreetCounts { events, reminders } = counts;
+    let (id, en): (&str, &str) = match period {
+        DayPeriod::Morning => ("Hari ini belum ada acara", "Nothing planned today"),
+        DayPeriod::Midday | DayPeriod::Afternoon => ("Sisa hari ini kosong", "Nothing left today"),
+        DayPeriod::Evening => ("Besok belum ada acara", "Nothing planned tomorrow"),
+        DayPeriod::Night => (
+            "Sudah larut. Besok belum ada acara",
+            "It's late. Nothing planned tomorrow",
+        ),
+    };
+    let today = matches!(
+        period,
+        DayPeriod::Morning | DayPeriod::Midday | DayPeriod::Afternoon
+    );
+    let reminders = if today { reminders } else { 0 };
+    if events == 0 && reminders == 0 {
+        return match lang {
+            Lang::Id => id,
+            Lang::En => en,
+        }
+        .into();
+    }
     match lang {
-        Lang::Id if events == 0 && reminders == 0 => "Hari ini belum ada acara".into(),
-        Lang::Id => format!("{events} acara dan {reminders} pengingat hari ini"),
-        Lang::En if events == 0 && reminders == 0 => "Nothing planned today".into(),
+        Lang::Id => {
+            let mut parts = Vec::new();
+            if events > 0 {
+                parts.push(format!("{events} acara"));
+            }
+            if reminders > 0 {
+                parts.push(format!("{reminders} pengingat"));
+            }
+            let list = parts.join(" dan ");
+            match period {
+                DayPeriod::Morning => format!("{list} hari ini"),
+                DayPeriod::Midday | DayPeriod::Afternoon => format!("Masih {list} hari ini"),
+                DayPeriod::Evening => format!("Besok {list}"),
+                DayPeriod::Night => format!("Sudah larut. Besok {list}"),
+            }
+        }
         Lang::En => {
             let plural = |n: usize, one: &str, many: &str| {
                 format!("{n} {}", if n == 1 { one } else { many })
             };
-            format!(
-                "{} and {} today",
-                plural(events, "event", "events"),
-                plural(reminders, "reminder", "reminders")
-            )
+            let mut parts = Vec::new();
+            if events > 0 {
+                parts.push(plural(events, "event", "events"));
+            }
+            if reminders > 0 {
+                parts.push(plural(reminders, "reminder", "reminders"));
+            }
+            let list = parts.join(" and ");
+            match period {
+                DayPeriod::Morning => format!("{list} today"),
+                DayPeriod::Midday | DayPeriod::Afternoon => format!("{list} left today"),
+                DayPeriod::Evening => format!("{list} tomorrow"),
+                DayPeriod::Night => format!("It's late. {list} tomorrow"),
+            }
         }
     }
 }
@@ -2824,6 +2887,14 @@ mod tests {
             .collect()
     }
 
+    const ALL_PERIODS: [DayPeriod; 5] = [
+        DayPeriod::Morning,
+        DayPeriod::Midday,
+        DayPeriod::Afternoon,
+        DayPeriod::Evening,
+        DayPeriod::Night,
+    ];
+
     fn assert_no_leak(lang: Lang, what: &str, s: &str) {
         let banned = match lang {
             Lang::Id => ENGLISH,
@@ -2905,8 +2976,15 @@ mod tests {
                 day_date_short(lang, today),
                 time_label(lang, hm(9, 30)),
             ];
-            for (events, reminders) in [(0, 0), (1, 1), (3, 2)] {
-                all.push(greeting_body(lang, events, reminders));
+            for period in ALL_PERIODS {
+                all.push(greeting_title(lang, period).into());
+                for (events, reminders) in [(0, 0), (1, 1), (3, 2), (2, 0), (0, 2)] {
+                    all.push(greeting_body(
+                        lang,
+                        period,
+                        GreetCounts { events, reminders },
+                    ));
+                }
             }
             for ms in [2_100, 72_000, 3_900_000] {
                 all.push(run_duration(lang, Duration::from_millis(ms)));
@@ -3189,24 +3267,83 @@ mod tests {
     fn greeting_in_both_languages() {
         assert_eq!(text(Lang::Id, Key::GoodMorning), "Selamat pagi");
         assert_eq!(text(Lang::En, Key::GoodMorning), "Good morning");
+        let c = |events, reminders| GreetCounts { events, reminders };
+        let body = |lang, p, e, r| greeting_body(lang, p, c(e, r));
+        use DayPeriod::*;
+        for (p, id, en) in [
+            (Morning, "Selamat pagi", "Good morning"),
+            (Midday, "Selamat siang", "Good afternoon"),
+            (Afternoon, "Selamat sore", "Good afternoon"),
+            (Evening, "Selamat malam", "Good evening"),
+            (Night, "Masih begadang?", "Up late?"),
+        ] {
+            assert_eq!(greeting_title(Lang::Id, p), id, "{p:?}");
+            assert_eq!(greeting_title(Lang::En, p), en, "{p:?}");
+        }
+        // Morning: today's.
         assert_eq!(
-            greeting_body(Lang::Id, 3, 2),
+            body(Lang::Id, Morning, 3, 2),
             "3 acara dan 2 pengingat hari ini"
         );
+        assert_eq!(body(Lang::Id, Morning, 0, 2), "2 pengingat hari ini");
+        assert_eq!(body(Lang::Id, Morning, 3, 0), "3 acara hari ini");
+        assert_eq!(body(Lang::Id, Morning, 0, 0), "Hari ini belum ada acara");
         assert_eq!(
-            greeting_body(Lang::En, 3, 2),
+            body(Lang::En, Morning, 3, 2),
             "3 events and 2 reminders today"
         );
         assert_eq!(
-            greeting_body(Lang::En, 1, 1),
+            body(Lang::En, Morning, 1, 1),
             "1 event and 1 reminder today"
         );
+        assert_eq!(body(Lang::En, Morning, 0, 2), "2 reminders today");
+        assert_eq!(body(Lang::En, Morning, 1, 0), "1 event today");
+        assert_eq!(body(Lang::En, Morning, 0, 0), "Nothing planned today");
+        // Midday and Afternoon: what is left today.
+        for p in [Midday, Afternoon] {
+            assert_eq!(
+                body(Lang::Id, p, 2, 1),
+                "Masih 2 acara dan 1 pengingat hari ini"
+            );
+            assert_eq!(body(Lang::Id, p, 0, 1), "Masih 1 pengingat hari ini");
+            assert_eq!(body(Lang::Id, p, 2, 0), "Masih 2 acara hari ini");
+            assert_eq!(body(Lang::Id, p, 0, 0), "Sisa hari ini kosong");
+            assert_eq!(
+                body(Lang::En, p, 2, 1),
+                "2 events and 1 reminder left today"
+            );
+            assert_eq!(body(Lang::En, p, 0, 2), "2 reminders left today");
+            assert_eq!(body(Lang::En, p, 1, 0), "1 event left today");
+            assert_eq!(body(Lang::En, p, 0, 0), "Nothing left today");
+        }
+        // Evening: tomorrow's events; reminders are not counted.
+        assert_eq!(body(Lang::Id, Evening, 2, 0), "Besok 2 acara");
+        assert_eq!(body(Lang::Id, Evening, 2, 5), "Besok 2 acara");
+        assert_eq!(body(Lang::Id, Evening, 0, 0), "Besok belum ada acara");
+        assert_eq!(body(Lang::Id, Evening, 0, 3), "Besok belum ada acara");
+        assert_eq!(body(Lang::En, Evening, 2, 0), "2 events tomorrow");
+        assert_eq!(body(Lang::En, Evening, 1, 0), "1 event tomorrow");
+        assert_eq!(body(Lang::En, Evening, 0, 0), "Nothing planned tomorrow");
+        // Night: "late", then the coming day's events.
+        assert_eq!(body(Lang::Id, Night, 2, 0), "Sudah larut. Besok 2 acara");
         assert_eq!(
-            greeting_body(Lang::En, 0, 2),
-            "0 events and 2 reminders today"
+            body(Lang::Id, Night, 0, 0),
+            "Sudah larut. Besok belum ada acara"
         );
-        assert_eq!(greeting_body(Lang::Id, 0, 0), "Hari ini belum ada acara");
-        assert_eq!(greeting_body(Lang::En, 0, 0), "Nothing planned today");
+        assert_eq!(body(Lang::En, Night, 2, 0), "It's late. 2 events tomorrow");
+        assert_eq!(
+            body(Lang::En, Night, 0, 0),
+            "It's late. Nothing planned tomorrow"
+        );
+        // Never a zero part.
+        for lang in [Lang::Id, Lang::En] {
+            for p in ALL_PERIODS {
+                for (e, r) in [(0, 0), (0, 2), (3, 0), (1, 1)] {
+                    let s = body(lang, p, e, r);
+                    assert!(!s.starts_with('0') && !s.contains(" 0 "), "{s:?}");
+                }
+            }
+        }
         // The settings rows, as in the design.
         // The cat has no name yet (the owner picks it): it is Vale's cat.
         assert_eq!(

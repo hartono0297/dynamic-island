@@ -68,6 +68,7 @@ use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::data_dir;
 use crate::gestures;
 use crate::google::client::{self, Client};
+use crate::greeting::{DayPeriod, GreetCounts, GreetMark};
 use crate::halo;
 use crate::i18n::{self, Key, tr};
 use crate::lyrics::{self, DiskCache, LyricsState, LyricsWorker, Query};
@@ -1487,36 +1488,45 @@ impl App {
         query_session_locked().unwrap_or(self.session_locked)
     }
 
-    /// Once a day before noon, at startup, a wake by the user or unlock:
-    /// "Selamat pagi" with today's events and reminders, for 4 s. Not on a
-    /// locked session (`greet_may_try`) nor over a fullscreen app: then it
-    /// waits for the next chance. The day is saved when it shows.
+    /// Once per period of the day (`greeting`), at startup, a wake by the
+    /// user or unlock: the cat's greeting for that period with the counts
+    /// that fit it, for 4 s. Not on a locked session (`greet_may_try`) nor
+    /// over a fullscreen app: then it waits for the next chance. The day and
+    /// period are saved when it shows.
     fn maybe_greet(&mut self, trigger: GreetTrigger) {
         if !greet_may_try(trigger, self.session_locked()) {
             return;
         }
-        let local = Local::now();
-        let today = local.date_naive();
+        let now = Local::now().naive_local();
         let settings = GreetSettings {
             robot: self.config.robot,
             greeting: self.config.morning_greeting,
         };
-        if !should_greet(self.config.last_greeting, today, local.time(), settings)
-            || self.state.fullscreen()
-        {
+        let Some(period) = should_greet(self.config.last_greeting, now, settings) else {
+            return;
+        };
+        if self.state.fullscreen() {
             return;
         }
-        let (events, reminders) =
-            greeting_counts(&self.calendar.events, self.reminders.upcoming(), today);
+        let counts = greeting_counts(
+            &self.calendar.events,
+            self.reminders.upcoming(),
+            now,
+            period,
+        );
+        let lang = i18n::lang();
         let notice = Notice {
             key: "bata-greeting".into(),
             source: tr(Key::SourceVale).into(),
-            title: tr(Key::GoodMorning).into(),
-            body: i18n::greeting_body(i18n::lang(), events, reminders),
-            kind: NoticeKind::Greeting,
+            title: i18n::greeting_title(lang, period).into(),
+            body: i18n::greeting_body(lang, period, counts),
+            kind: NoticeKind::Greeting { period },
         };
         self.apply_now(Event::Notice(notice));
-        self.config.last_greeting = Some(today);
+        self.config.last_greeting = Some(GreetMark {
+            date: now.date(),
+            period,
+        });
         self.save_config();
     }
 
@@ -5758,18 +5768,62 @@ fn quiet_face(view: &View, on: bool) -> Option<robot::Expr> {
     choose_expr(&inputs).filter(|_| on)
 }
 
-/// Today's events and today's reminders not yet done, for the greeting.
+/// What the greeting for `period` counts at `now`:
+/// - Morning: today's events and today's reminders not yet done.
+/// - Midday and Afternoon: what is left today: events that have not ended
+///   (all-day ones count) and undone reminders due at or after `now`.
+/// - Evening: tomorrow's events (the date after `now`'s).
+/// - Night (00:00-03:59): the coming day's events: the current calendar
+///   date, since the user has not slept yet.
 fn greeting_counts(
     events: &[CalEvent],
     reminders: &[Reminder],
-    today: NaiveDate,
-) -> (usize, usize) {
-    let events = crate::calendar::events_on(events, today).len();
-    let reminders = reminders
-        .iter()
-        .filter(|r| !r.done && reminders::local_time(r.due_unix).is_some_and(|t| t.date() == today))
-        .count();
-    (events, reminders)
+    now: NaiveDateTime,
+    period: DayPeriod,
+) -> GreetCounts {
+    let today = now.date();
+    let due_today = |r: &&Reminder| {
+        !r.done && reminders::local_time(r.due_unix).is_some_and(|t| t.date() == today)
+    };
+    match period {
+        DayPeriod::Morning => GreetCounts {
+            events: crate::calendar::events_on(events, today).len(),
+            reminders: reminders.iter().filter(due_today).count(),
+        },
+        DayPeriod::Midday | DayPeriod::Afternoon => GreetCounts {
+            events: crate::calendar::events_on(events, today)
+                .into_iter()
+                .filter(|ev| !event_over(ev, now))
+                .count(),
+            reminders: reminders
+                .iter()
+                .filter(due_today)
+                .filter(|r| reminders::local_time(r.due_unix).is_some_and(|t| t >= now))
+                .count(),
+        },
+        DayPeriod::Evening => GreetCounts {
+            events: today
+                .succ_opt()
+                .map_or(0, |d| crate::calendar::events_on(events, d).len()),
+            reminders: 0,
+        },
+        DayPeriod::Night => GreetCounts {
+            events: crate::calendar::events_on(events, today).len(),
+            reminders: 0,
+        },
+    }
+}
+
+/// A timed event whose end has passed at `now` (a zero-length one, when its
+/// start has). An all-day event lasts the whole day.
+fn event_over(ev: &CalEvent, now: NaiveDateTime) -> bool {
+    match (&ev.start, &ev.end) {
+        (crate::calendar::EventTime::At(s), crate::calendar::EventTime::At(e)) => {
+            let (s, e) = (s.naive_local(), e.naive_local());
+            if e <= s { s < now } else { e <= now }
+        }
+        _ => false,
+    }
 }
 
 /// The shape and opacity to draw at `now` with a rise in progress: the
@@ -7738,9 +7792,10 @@ mod tests {
     }
 
     #[test]
-    fn greeting_counts_today_only() {
+    fn greeting_counts_follow_the_period() {
         use crate::calendar::EventTime;
-        let event = |id: &str, d: u32| CalEvent {
+        use chrono::TimeZone;
+        let all_day = |id: &str, d: u32| CalEvent {
             id: id.into(),
             calendar_id: "c".into(),
             title: id.into(),
@@ -7750,7 +7805,28 @@ mod tests {
             color: None,
             editable: true,
         };
-        let events = [event("a", 27), event("b", 27), event("c", 28)];
+        let stamp = |d: u32, h: u32, m: u32| {
+            EventTime::At(
+                Local
+                    .from_local_datetime(&date(d).and_hms_opt(h, m, 0).unwrap())
+                    .earliest()
+                    .unwrap(),
+            )
+        };
+        let timed = |id: &str, d: u32, from: (u32, u32), to: (u32, u32)| CalEvent {
+            start: stamp(d, from.0, from.1),
+            end: stamp(d, to.0, to.1),
+            ..all_day(id, d)
+        };
+        let events = [
+            all_day("a", 27),
+            all_day("b", 27),
+            all_day("c", 28),
+            timed("over", 27, (9, 0), (10, 0)),
+            timed("running", 27, (11, 30), (12, 30)),
+            timed("later", 27, (13, 0), (14, 0)),
+            timed("tomorrow", 28, (9, 0), (10, 0)),
+        ];
         let at = |d: u32, h: u32| local_unix(date(d), h, 0);
         let reminder = |id: &str, due: i64, done: bool| Reminder {
             id: id.into(),
@@ -7766,8 +7842,36 @@ mod tests {
             reminder("done", at(27, 9), true),
             reminder("tomorrow", at(28, 9), false),
         ];
-        assert_eq!(greeting_counts(&events, &list, date(27)), (2, 2));
-        assert_eq!(greeting_counts(&[], &[], date(27)), (0, 0));
+        let now = |d: u32, h: u32, m: u32| date(d).and_hms_opt(h, m, 0).unwrap();
+        let counts = |now, period| greeting_counts(&events, &list, now, period);
+        let c = |events, reminders| GreetCounts { events, reminders };
+        // Morning: all of today (5 events, the 2 undone reminders).
+        assert_eq!(counts(now(27, 8, 0), DayPeriod::Morning), c(5, 2));
+        // Midday and Afternoon: what is left. At 12:00 "over" is gone, the
+        // 07:00 reminder too; all-day ones stay.
+        assert_eq!(counts(now(27, 12, 0), DayPeriod::Midday), c(4, 1));
+        assert_eq!(counts(now(27, 13, 30), DayPeriod::Midday), c(3, 1));
+        assert_eq!(counts(now(27, 15, 0), DayPeriod::Afternoon), c(2, 1));
+        assert_eq!(counts(now(27, 16, 0), DayPeriod::Afternoon), c(2, 1));
+        assert_eq!(counts(now(27, 17, 0), DayPeriod::Afternoon), c(2, 0));
+        // Evening: tomorrow's events; the all-day "c" and the timed one.
+        assert_eq!(counts(now(27, 20, 0), DayPeriod::Evening), c(2, 0));
+        // Night (after midnight): the current calendar date's events.
+        assert_eq!(counts(now(28, 1, 0), DayPeriod::Night), c(2, 0));
+        // Nothing at all.
+        for period in [
+            DayPeriod::Morning,
+            DayPeriod::Midday,
+            DayPeriod::Afternoon,
+            DayPeriod::Evening,
+            DayPeriod::Night,
+        ] {
+            assert_eq!(
+                greeting_counts(&[], &[], now(27, 12, 0), period),
+                GreetCounts::default(),
+                "{period:?}"
+            );
+        }
     }
 
     #[test]
