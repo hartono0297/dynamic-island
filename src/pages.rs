@@ -222,10 +222,7 @@ mod tests {
         assert_eq!(page_name(Page::Devices), "Devices");
         assert_eq!(page_from_name(" devices "), Some(Page::Devices));
         assert_eq!(page_name(Page::Notifications), "Notifications");
-        assert_eq!(
-            page_from_name(" notifications "),
-            Some(Page::Notifications)
-        );
+        assert_eq!(page_from_name(" notifications "), Some(Page::Notifications));
     }
 
     #[test]

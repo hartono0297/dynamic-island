@@ -13,8 +13,9 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, NotchFill, NotifSettings, OpenMode,
-    RAM_WARN_RANGE, SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, NotchFill, NotifSettings,
+    OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore,
+    ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};

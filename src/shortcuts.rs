@@ -337,6 +337,16 @@ mod tests {
         assert_eq!(label(Shortcut::Go(Page::Shelf)), Key::ShortcutGoShelf);
         assert_eq!(icon(Shortcut::Go(Page::Devices)), Icon::Usb);
         assert_eq!(label(Shortcut::Go(Page::Devices)), Key::PageDevices);
+        // The Notifikasi tile: the inbox tray, not the Reminders' bell.
+        assert_eq!(icon(Shortcut::Go(Page::Notifications)), Icon::Inbox);
+        assert_eq!(
+            label(Shortcut::Go(Page::Notifications)),
+            Key::PageNotifications
+        );
+        assert_ne!(
+            icon(Shortcut::Go(Page::Notifications)),
+            icon(Shortcut::Go(Page::Reminders))
+        );
     }
 
     #[test]

@@ -2521,7 +2521,12 @@ pub fn notif_layout(
         .skip(scroll)
         .take(if no_access { 0 } else { rows_fit })
         .map(|(i, &id)| {
-            let row = rect(list.x, list.y + (i - scroll) as f32 * pitch, list.w, NOTIF_ROW_H);
+            let row = rect(
+                list.x,
+                list.y + (i - scroll) as f32 * pitch,
+                list.w,
+                NOTIF_ROW_H,
+            );
             let logo = rect(
                 row.x + NOTIF_PAD_X,
                 row.y + (NOTIF_ROW_H - NOTIF_LOGO) / 2.0,
@@ -2529,7 +2534,12 @@ pub fn notif_layout(
                 NOTIF_LOGO,
             );
             let text_x = logo.right() + 8.0;
-            let time = rect(row.right() - NOTIF_PAD_X - NOTIF_TIME_W, row.y + 5.0, NOTIF_TIME_W, 16.0);
+            let time = rect(
+                row.right() - NOTIF_PAD_X - NOTIF_TIME_W,
+                row.y + 5.0,
+                NOTIF_TIME_W,
+                16.0,
+            );
             let dot = rect(
                 time.x - 8.0 - NOTIF_DOT,
                 row.y + 5.0 + (16.0 - NOTIF_DOT) / 2.0,
@@ -2539,7 +2549,12 @@ pub fn notif_layout(
             let name = rect(text_x, row.y + 5.0, dot.x - 6.0 - text_x, 16.0);
             let buttons = (Some(id) == selected).then(|| {
                 let y = row.y + 21.0;
-                let remove = rect(row.right() - NOTIF_PAD_X - NOTIF_X_W, y, NOTIF_X_W, NOTIF_BTN_H);
+                let remove = rect(
+                    row.right() - NOTIF_PAD_X - NOTIF_X_W,
+                    y,
+                    NOTIF_X_W,
+                    NOTIF_BTN_H,
+                );
                 let mute = rect(
                     remove.x - NOTIF_BTN_GAP - NOTIF_MUTE_W,
                     y,
@@ -3656,7 +3671,10 @@ mod tests {
         ] {
             let ids: Vec<u64> = (1..=n).rev().collect();
             let l = notif_layout(s, strip, &head, &ids, selected, scroll, note, no_access);
-            out.push((format!("notifications {name}"), PageLayout::Notifications(l)));
+            out.push((
+                format!("notifications {name}"),
+                PageLayout::Notifications(l),
+            ));
         }
         out
     }

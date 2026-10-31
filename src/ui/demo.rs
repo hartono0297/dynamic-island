@@ -120,8 +120,7 @@ use super::motion::{
 use super::notch_fill::{self, fill_alpha};
 use super::render::{
     CleanerView, CliView, ClipNoticeView, ClipView, DevicesView, FolderMenuView, Frame, MoleView,
-    NotifView,
-    Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
+    NotifView, Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::shelf_motion::{SHELF_ENTER_MS, SHELF_MOVE_MS, SHELF_STAGGER_MS, ShelfMotion};
@@ -133,7 +132,6 @@ use crate::cli_folders::{FolderList, ListKind};
 use crate::cli_panel::{Echoes, RunState};
 use crate::clipboard::image::Thumb;
 use crate::clipboard::store::ClipImage;
-use crate::notif::NotifEntry;
 use crate::clipboard::{Clip, ClipData, ClipKind};
 use crate::config::{NotchFill, Style};
 use crate::devices::{self, Bus, Device, DeviceKind, Partition, Veto, VetoKind};
@@ -142,6 +140,7 @@ use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::mole::{CleanRun, GroupSize, MoleOpts, MoleReport, PreviewSummary};
 use crate::notes::Note;
+use crate::notif::NotifEntry;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
 use crate::state::MolePhase;
@@ -1824,7 +1823,14 @@ const DEMO_NOTIFS: [(&str, Option<&str>, &str, &str, i64, bool); 8] = [
         3 * 3600,
         false,
     ),
-    ("WhatsApp", Some(DEMO_LOGO_KEY), "Tim Studio", "", 6 * 3600, true),
+    (
+        "WhatsApp",
+        Some(DEMO_LOGO_KEY),
+        "Tim Studio",
+        "",
+        6 * 3600,
+        true,
+    ),
     (
         "Teams",
         None,

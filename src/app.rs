@@ -5054,11 +5054,8 @@ impl App {
             search_sel,
             clip_focused,
         );
-        let notif = notif_page::notif_view(
-            &self.notif,
-            self.config.notifications,
-            state.notif_armed(),
-        );
+        let notif =
+            notif_page::notif_view(&self.notif, self.config.notifications, state.notif_armed());
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),

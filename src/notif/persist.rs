@@ -317,7 +317,9 @@ mod tests {
         Thumb {
             w: side,
             h: side,
-            bgra: (0..side * side * 4).map(|i| (i as u8).wrapping_add(seed)).collect(),
+            bgra: (0..side * side * 4)
+                .map(|i| (i as u8).wrapping_add(seed))
+                .collect(),
         }
     }
 
@@ -354,7 +356,10 @@ mod tests {
         assert_eq!(back.next_id, 8);
         assert_eq!(back.items[2].body, "");
         assert_eq!(back.items[1].app_id, None);
-        assert_eq!(decode(&encode(&Saved::default())).unwrap(), Saved::default());
+        assert_eq!(
+            decode(&encode(&Saved::default())).unwrap(),
+            Saved::default()
+        );
     }
 
     #[test]

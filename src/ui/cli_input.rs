@@ -21,17 +21,16 @@ use windows::Win32::UI::Input::Ime::{
     CFS_POINT, COMPOSITIONFORM, ImmGetContext, ImmReleaseContext, ImmSetCompositionWindow,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, SetFocus, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_NEXT,
-    VK_PRIOR,
-    VK_RETURN, VK_TAB, VK_UP,
+    GetFocus, GetKeyState, SetFocus, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE,
+    VK_NEXT, VK_PRIOR, VK_RETURN, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetDlgCtrlID, GetParent, GetWindowTextLengthW,
-    GetWindowTextW, HMENU, PostMessageW, SendMessageW, SetWindowTextW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLEAR, WM_CUT, WM_GETDLGCODE, WM_IME_COMPOSITION,
-    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PASTE,
-    WM_SETFOCUS, WM_UNDO, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetDlgCtrlID, GetParent,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, PostMessageW, SendMessageW, SetWindowTextW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLEAR, WM_CUT, WM_GETDLGCODE,
+    WM_IME_COMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEWHEEL,
+    WM_NCDESTROY, WM_PASTE, WM_SETFOCUS, WM_UNDO, WS_CHILD, WS_VISIBLE,
 };
 use windows::core::{HSTRING, Result, w};
 

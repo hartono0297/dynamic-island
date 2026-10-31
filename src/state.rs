@@ -9,9 +9,8 @@ use crate::config::OpenMode;
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
-    CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, NotifAction, Notice,
-    NoticeKind, Page,
-    Shortcut, ShotAction, Timeline, View,
+    CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind,
+    NotifAction, Page, Shortcut, ShotAction, Timeline, View,
 };
 use crate::mole::MoleOpts;
 use crate::pages::PanelPages;
@@ -4242,6 +4241,153 @@ mod tests {
             vec![Effect::ReleaseClipFocus]
         );
         assert_eq!(s.view(), View::Panel(Page::Notifications));
+    }
+
+    #[test]
+    fn hapus_semua_arms_then_clears_on_a_second_click_inside_the_confirm_time() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut s = st();
+        open_on(&mut s, Page::Notifications, t0);
+        assert!(!s.notif_armed());
+        // The first click only arms: no effect, a deadline on the one timer.
+        assert_eq!(s.apply(Event::Click(Hit::NotifClear), t0), vec![]);
+        assert!(s.notif_armed());
+        assert_eq!(s.next_deadline(), Some(t0 + CLEAN_CONFIRM));
+        // A second one inside it clears, and disarms.
+        assert_eq!(
+            s.apply(Event::Click(Hit::NotifClear), ms(1000)),
+            vec![Effect::Notif(NotifAction::ClearAll)]
+        );
+        assert!(!s.notif_armed());
+        // Armed and left alone, it turns back when the time is up.
+        s.apply(Event::Click(Hit::NotifClear), ms(2000));
+        assert!(s.notif_armed());
+        s.apply(
+            Event::Tick,
+            ms(2000) + CLEAN_CONFIRM + Duration::from_millis(1),
+        );
+        assert!(!s.notif_armed(), "expired");
+        // A click after it expired arms again instead of clearing.
+        let late = ms(2000) + CLEAN_CONFIRM + Duration::from_millis(5);
+        assert_eq!(s.apply(Event::Click(Hit::NotifClear), late), vec![]);
+        assert!(s.notif_armed());
+    }
+
+    #[test]
+    fn hapus_semua_disarms_on_any_other_click_a_page_change_and_the_panel_closing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notifications, t0);
+        s.apply(Event::Click(Hit::NotifClear), t0);
+        assert!(s.notif_armed());
+        // Another button of the page: it acts and the first click is spent.
+        assert_eq!(
+            s.apply(Event::Click(Hit::NotifPause), t0),
+            vec![Effect::Notif(NotifAction::TogglePause)]
+        );
+        assert!(!s.notif_armed());
+        assert_eq!(
+            s.apply(Event::Click(Hit::NotifClear), t0),
+            vec![],
+            "so the next click only arms again"
+        );
+        // A page change.
+        s.apply(Event::Wheel(-120), t0);
+        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        assert!(!s.notif_armed());
+        // The panel closing (the linger, like the confirm time, is four
+        // seconds, so this shows the two end together, not which came first).
+        s.apply(Event::Wheel(120), t0);
+        s.apply(Event::Click(Hit::NotifClear), t0);
+        assert!(s.notif_armed());
+        s.apply(Event::Hover(false), t0);
+        let later = t0 + ACTIVITY_LINGER + Duration::from_millis(1);
+        s.apply(Event::Tick, later);
+        assert_eq!(s.view(), View::Idle);
+        assert!(!s.notif_armed());
+    }
+
+    #[test]
+    fn the_notifikasi_buttons_do_nothing_when_the_page_is_not_showing() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Media, t0);
+        for hit in [
+            Hit::NotifRow(1),
+            Hit::NotifOpen(1),
+            Hit::NotifMute(1),
+            Hit::NotifRemove(1),
+            Hit::NotifPause,
+            Hit::NotifClear,
+            Hit::NotifFocus,
+            Hit::NotifSettings,
+        ] {
+            assert_eq!(s.apply(Event::Click(hit.clone()), t0), vec![], "{hit:?}");
+        }
+        assert!(!s.notif_armed());
+    }
+
+    #[test]
+    fn rows_and_buttons_ask_for_their_action_and_the_background_asks_for_the_keyboard() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notifications, t0);
+        let fx = |hit: Hit, s: &mut IslandState| s.apply(Event::Click(hit), t0);
+        // A row and its Buka both open (mark read, bring the app forward).
+        assert_eq!(
+            fx(Hit::NotifRow(4), &mut s),
+            vec![Effect::Notif(NotifAction::Open(4))]
+        );
+        assert_eq!(
+            fx(Hit::NotifOpen(4), &mut s),
+            vec![Effect::Notif(NotifAction::Open(4))]
+        );
+        assert_eq!(
+            fx(Hit::NotifMute(4), &mut s),
+            vec![Effect::Notif(NotifAction::Mute(4))]
+        );
+        assert_eq!(
+            fx(Hit::NotifRemove(4), &mut s),
+            vec![Effect::Notif(NotifAction::Remove(4))]
+        );
+        assert_eq!(
+            fx(Hit::NotifSettings, &mut s),
+            vec![Effect::Notif(NotifAction::OpenSettings)]
+        );
+        // The background asks to focus the page's input; the island only
+        // activates for it when `App` says so (it sends `NotifFocus(true)`).
+        assert_eq!(fx(Hit::NotifFocus, &mut s), vec![Effect::FocusNotifInput]);
+        assert!(!s.notif_focused());
+    }
+
+    #[test]
+    fn the_notifikasi_input_holds_the_panel_and_lets_go_with_its_page_or_a_collapse() {
+        let t0 = Instant::now();
+        let mut s = st();
+        open_on(&mut s, Page::Notifications, t0);
+        s.apply(Event::NotifFocus(true), t0);
+        assert!(s.notif_focused());
+        // The pointer leaves: the keyboard still holds the panel open.
+        s.apply(Event::Hover(false), t0);
+        assert_eq!(s.view(), View::Panel(Page::Notifications));
+        // The keyboard going away lets the panel close with the pointer away.
+        s.apply(Event::NotifFocus(false), t0);
+        assert_eq!(s.view(), View::Idle);
+        // A page change lets go (the keyboard goes back to its window).
+        s.apply(Event::Hover(true), t0);
+        assert_eq!(s.view(), View::Panel(Page::Notifications));
+        s.apply(Event::NotifFocus(true), t0);
+        assert_eq!(
+            s.apply(Event::Wheel(-120), t0),
+            vec![Effect::ReleaseNotifFocus]
+        );
+        assert!(!s.notif_focused());
+        // Another page's input takes over from it: the search field.
+        s.apply(Event::Wheel(120), t0);
+        s.apply(Event::NotifFocus(true), t0);
+        s.apply(Event::SearchHotkey, t0);
+        assert!(!s.notif_focused(), "the quick search has the keyboard now");
     }
 
     #[test]

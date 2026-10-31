@@ -408,11 +408,7 @@ fn decode_logo(bytes: &[u8]) -> Option<Thumb> {
         converter
             .CopyPixels(std::ptr::null(), tw * 4, &mut bgra)
             .ok()?;
-        Some(Thumb {
-            w: tw,
-            h: th,
-            bgra,
-        })
+        Some(Thumb { w: tw, h: th, bgra })
     }
 }
 

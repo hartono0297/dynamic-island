@@ -199,7 +199,13 @@ mod tests {
     use super::*;
 
     fn push(h: &mut NotifHistory, n: i64) -> u64 {
-        h.push(n, "WhatsApp", Some("5319.WhatsApp!App"), &format!("t{n}"), "b")
+        h.push(
+            n,
+            "WhatsApp",
+            Some("5319.WhatsApp!App"),
+            &format!("t{n}"),
+            "b",
+        )
     }
 
     #[test]

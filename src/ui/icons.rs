@@ -469,8 +469,12 @@ impl Icon {
             // The tray: two raised sides, a body, and a front edge that dips
             // in the middle.
             Icon::Inbox => &[
-                Part::Fill("M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z"),
-                Part::Path("M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z"),
+                Part::Fill(
+                    "M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z",
+                ),
+                Part::Path(
+                    "M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z",
+                ),
                 Part::Path("M3 13h4.5l1.2 2.5h6.6l1.2-2.5H21"),
             ],
         }

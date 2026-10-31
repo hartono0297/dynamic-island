@@ -535,6 +535,37 @@ mod tests {
     }
 
     #[test]
+    fn the_notifikasi_tile_is_available_but_off_by_default_and_joins_off_in_an_old_config() {
+        let n = Shortcut::Go(Page::Notifications);
+        assert!(Shortcut::ALL.contains(&n), "an available tile");
+        assert!(!n.default_on());
+        assert_eq!(shortcut_name(n), "GoNotifications");
+        assert_eq!(shortcut_from_name(" gonotifications "), Some(n));
+        assert_eq!(group(&Tile::Builtin(n)), TileGroup::Pages);
+        let t = ShortcutTiles::default();
+        assert!(
+            t.entries()
+                .iter()
+                .any(|(x, on)| *x == Tile::Builtin(n) && !on)
+        );
+        assert!(!t.visible().contains(&Tile::Builtin(n)));
+        // An older config that never named it: it joins right after
+        // Mixer's tile, and off.
+        let saved: Vec<TileEntry> = Shortcut::ALL
+            .iter()
+            .filter(|s| **s != n)
+            .map(|s| entry(&shortcut_name(*s), s.default_on()))
+            .collect();
+        let t = ShortcutTiles::from_saved(&saved);
+        let listed = names(&t);
+        let at = listed.iter().position(|x| x == "(GoNotifications)");
+        let mixer = listed.iter().position(|x| x == "(GoMixer)");
+        assert!(at.is_some(), "{listed:?}");
+        assert_eq!(at, mixer.map(|m| m + 1));
+        assert_eq!(t.shown(), 12, "the page is as it was");
+    }
+
+    #[test]
     fn built_in_names_round_trip_in_any_case() {
         for s in Shortcut::ALL {
             assert_eq!(shortcut_from_name(&shortcut_name(s)), Some(s), "{s:?}");

@@ -24,8 +24,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
     CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, GroupShown, NotifView,
-    Progress,
-    Renderer, RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
+    Progress, Renderer, RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
 };
 use crate::audio::{self, MixerRow, Target};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -64,15 +63,15 @@ use crate::ui::panel_layout::{
     CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
     ClipButton, ClipLayout, DEV_BAR_H, DevicesHead, DevicesLayout, HOUR_GUTTER, ListLayout,
     MENU_RADIUS, MENU_ROW_RADIUS, MIXER_TRACK_H, MOLE_LOG_LINE_H, MOLE_LOG_PAD, MenuLayout,
-    MeterLayout, MixerLayout, MoleFoot, MoleLayout, NOTIF_DOT, NOTIF_RADIUS, NotifHead, NotifLayout,
-    PageLayout, PomodoroLayout, RING_STROKE,
-    SEG_PAD, SYS_RING_STROKE, SearchLayout, ShelfLayout, ShortcutsLayout, SystemHead, SystemLayout,
-    VOLUME_HUD_H, WEEK_HEAD_H, calendar_layout, cleaner_layout, cli_folder_menu, cli_layout,
-    cli_suggestions, clipboard_layout, device_shapes, devices_layout, media_panel_layout,
-    media_progress_layout, mixer_layout, mole_layout, notes_layout, notif_layout, page_dots,
-    pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
-    reminders_layout, search_layout, shelf_card_layout, shelf_layout, shortcuts_layout,
-    system_layout, tile_parts, volume_hud_layout, waiting_strip,
+    MeterLayout, MixerLayout, MoleFoot, MoleLayout, NOTIF_DOT, NOTIF_RADIUS, NotifHead,
+    NotifLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE, SearchLayout,
+    ShelfLayout, ShortcutsLayout, SystemHead, SystemLayout, VOLUME_HUD_H, WEEK_HEAD_H,
+    calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
+    clipboard_layout, device_shapes, devices_layout, media_panel_layout, media_progress_layout,
+    mixer_layout, mole_layout, notes_layout, notif_layout, page_dots, pomodoro_compact_layout,
+    pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, search_layout,
+    shelf_card_layout, shelf_layout, shortcuts_layout, system_layout, tile_parts,
+    volume_hud_layout, waiting_strip,
 };
 use crate::ui::robot::{Expr, Pose};
 use crate::ui::shelf_motion::Drawn;
@@ -1124,7 +1123,13 @@ impl Renderer {
         }
         if let (Some(label), Some(switch)) = (l.pause_label, l.pause_switch) {
             let ink = if view.paused { p.text } else { p.secondary };
-            self.text_colored(text(lang, Key::NotifPause), &self.fonts.small, label, ink, 1.0);
+            self.text_colored(
+                text(lang, Key::NotifPause),
+                &self.fonts.small,
+                label,
+                ink,
+                1.0,
+            );
             self.set_color(if view.paused { p.accent } else { p.track }, 1.0);
             self.fill_round(switch, switch.h / 2.0);
             let d = switch.h - 4.0;
@@ -1138,7 +1143,14 @@ impl Renderer {
                 w: d,
                 h: d,
             };
-            self.set_color(if view.paused { p.on_accent } else { p.secondary }, 1.0);
+            self.set_color(
+                if view.paused {
+                    p.on_accent
+                } else {
+                    p.secondary
+                },
+                1.0,
+            );
             self.fill_round(knob, d / 2.0);
         }
         if let Some(r) = l.clear {
@@ -1153,7 +1165,13 @@ impl Renderer {
             }
         }
         if let Some(note) = l.note {
-            self.text_colored(text(lang, Key::NotifOff), &self.fonts.small, note, p.secondary, 1.0);
+            self.text_colored(
+                text(lang, Key::NotifOff),
+                &self.fonts.small,
+                note,
+                p.secondary,
+                1.0,
+            );
         }
         if let Some(area) = l.empty {
             let mid = area.y + area.h / 2.0;
@@ -1180,7 +1198,13 @@ impl Renderer {
             );
             if let Some(hint) = hint {
                 let hint = text(lang, hint);
-                self.text_colored(hint, &self.fonts.small_center, line(mid + 6.0), p.secondary, 1.0);
+                self.text_colored(
+                    hint,
+                    &self.fonts.small_center,
+                    line(mid + 6.0),
+                    p.secondary,
+                    1.0,
+                );
             }
         }
         if let Some(r) = l.settings_button {
@@ -1211,7 +1235,13 @@ impl Renderer {
             drawn.push(entry.logo_key());
             self.paint_notif_logo(row.logo, entry, view)?;
             let name_ink = if entry.read { p.secondary } else { p.text };
-            self.text_colored(&entry.source, &self.fonts.body_medium, row.name, name_ink, 1.0);
+            self.text_colored(
+                &entry.source,
+                &self.fonts.body_medium,
+                row.name,
+                name_ink,
+                1.0,
+            );
             let when = relative_time(entry.at, view.now, lang);
             self.text_colored(&when, &self.fonts.small_right, row.time, p.secondary, 1.0);
             if !entry.read {
@@ -1224,7 +1254,13 @@ impl Renderer {
                 format!("{} \u{2014} {}", entry.title, entry.body)
             };
             let ink = if entry.read { p.secondary } else { p.text };
-            self.text_colored(&line, &self.fonts.small, row.text, ink, if entry.read { 1.0 } else { 0.9 });
+            self.text_colored(
+                &line,
+                &self.fonts.small,
+                row.text,
+                ink,
+                if entry.read { 1.0 } else { 0.9 },
+            );
             if let Some(b) = row.buttons {
                 let open = text(lang, Key::NotifOpen);
                 self.paint_labelled_button(b.open, None, open, (p.accent, p.on_accent), 1.0);

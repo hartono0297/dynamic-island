@@ -22,7 +22,7 @@ use super::App;
 use super::clip::pointer_moved;
 use crate::clipboard::image::Thumb;
 use crate::config::{self, NotifSettings};
-use crate::model::{Event, Hit, NotifAction, NoticeKind, Page, Toast, View};
+use crate::model::{Event, Hit, NoticeKind, NotifAction, Page, Toast, View};
 use crate::notif::persist::{self, Saved, Write};
 use crate::notif::store::clamp_cap;
 use crate::notif::{NotifHistory, route_toast};
@@ -152,7 +152,10 @@ impl App {
         self.notif.access = notifications::access_allowed();
         if self.notif.access && !self.notif.poller_started {
             self.notif.poller_started = true;
-            notifications::spawn_poller(self.tx.clone(), super::poster(self.hwnd, super::WM_APP_EVENT));
+            notifications::spawn_poller(
+                self.tx.clone(),
+                super::poster(self.hwnd, super::WM_APP_EVENT),
+            );
         }
         if was != self.notif.access {
             self.redraw_notif();
@@ -324,7 +327,11 @@ impl App {
     /// The selection must be a listed row.
     fn fix_notif_selection(&mut self) {
         let history = &self.notif.history;
-        if self.notif.selected.is_some_and(|id| history.get(id).is_none()) {
+        if self
+            .notif
+            .selected
+            .is_some_and(|id| history.get(id).is_none())
+        {
             self.notif.selected = None;
         }
     }
@@ -384,11 +391,7 @@ impl App {
         if self.state.view() != View::Panel(Page::Notifications) {
             return;
         }
-        if !pointer_moved(
-            &mut self.notif.pointer,
-            at,
-            &mut self.notif.keyboard_held,
-        ) {
+        if !pointer_moved(&mut self.notif.pointer, at, &mut self.notif.keyboard_held) {
             return;
         }
         // Every mouse move comes here: only a row or one of its buttons that
@@ -659,7 +662,10 @@ mod tests {
         );
         // Already selected: no change.
         assert_eq!(hover_target(&ids, Some(20), Some(&Hit::NotifRow(20))), None);
-        assert_eq!(hover_target(&ids, Some(20), Some(&Hit::NotifOpen(20))), None);
+        assert_eq!(
+            hover_target(&ids, Some(20), Some(&Hit::NotifOpen(20))),
+            None
+        );
         // A chosen row that is no longer listed counts as none.
         assert_eq!(
             hover_target(&ids, Some(99), Some(&Hit::NotifRow(10))),
@@ -708,7 +714,11 @@ mod tests {
         let ids = [4, 3, 2, 1];
         assert_eq!(selection_after_remove(&ids, 3), Some(2));
         assert_eq!(selection_after_remove(&ids, 4), Some(3));
-        assert_eq!(selection_after_remove(&ids, 1), Some(2), "the last: the one before");
+        assert_eq!(
+            selection_after_remove(&ids, 1),
+            Some(2),
+            "the last: the one before"
+        );
         assert_eq!(selection_after_remove(&[7], 7), None);
         assert_eq!(selection_after_remove(&ids, 9), None);
     }
@@ -723,7 +733,10 @@ mod tests {
         assert_eq!(view.selected, Some(a));
         assert!(!view.no_access && view.record && !view.paused);
         notif.selected = Some(a + 5);
-        assert_eq!(notif_view(&notif, NotifSettings::default(), true).selected, None);
+        assert_eq!(
+            notif_view(&notif, NotifSettings::default(), true).selected,
+            None
+        );
         assert!(notif_view(&notif, NotifSettings::default(), true).armed);
         notif.access = false;
         assert!(notif_view(&notif, NotifSettings::default(), false).no_access);

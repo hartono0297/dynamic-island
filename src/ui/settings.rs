@@ -70,8 +70,7 @@ use super::settings_layout::{
     CLIENT_H, CLIENT_W, CatFace, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit,
     Layout, List, PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State,
     TileForm, Tone, battery_step, clip_items_step, disk_warn_step, drop_index, layout,
-    notif_items_step,
-    ram_warn_step, scroll_by, shot_secs_step, slider_value,
+    notif_items_step, ram_warn_step, scroll_by, shot_secs_step, slider_value,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -79,8 +78,7 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
     ClipHotkey, ClipboardSettings, Config, DevicesHotkey, NotchFill, NotifSettings, OpenMode,
-    ScreenshotSettings,
-    SearchHotkey, ShotIgnore, ShotTool, Style,
+    ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::google::client;
 use crate::i18n::{Key, Lang, text};
@@ -915,6 +913,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
     set_icons(hwnd, dpi);
     restyle();
     relayout_and_place();
+    set_name_cue();
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
@@ -1022,6 +1021,7 @@ pub fn update(model: Model) {
         unsafe {
             let _ = SetWindowTextW(hwnd, &HSTRING::from(text(lang, Key::SettingsTitle)));
         }
+        set_name_cue();
     }
     for (edit, value) in changes.fields {
         unsafe {
@@ -1427,16 +1427,8 @@ impl Settings {
                 oc.copied_feedback_all,
                 nc.copied_feedback_all,
             ),
-            (
-                Hit::NotifRecord,
-                old.notif.record,
-                new.notif.record,
-            ),
-            (
-                Hit::NotifPersist,
-                old.notif.persist,
-                new.notif.persist,
-            ),
+            (Hit::NotifRecord, old.notif.record, new.notif.record),
+            (Hit::NotifPersist, old.notif.persist, new.notif.persist),
             (Hit::ShotPreview, old.shot.preview, new.shot.preview),
             (
                 Hit::ShotPrintScreen,
@@ -2111,6 +2103,23 @@ fn reset_form() {
     set_cue(CustomKind::App);
 }
 
+/// The Nama field's hint: "Nama aplikasi" while Fitur uses it for the
+/// excluded apps, the form's "Gmail" otherwise.
+fn set_name_cue() {
+    let Some((name, _)) = tile_edits() else {
+        return;
+    };
+    let Some((lang, features)) = with(|st| (st.model.lang, st.section == Section::Features)) else {
+        return;
+    };
+    let cue = if features {
+        HSTRING::from(text(lang, Key::NotifMutedHint))
+    } else {
+        HSTRING::from("Gmail")
+    };
+    send(name, EM_SETCUEBANNER, 0, cue.as_ptr() as isize);
+}
+
 fn set_cue(kind: CustomKind) {
     if let Some((_, target)) = tile_edits() {
         send(target, EM_SETCUEBANNER, 0, cue_for(kind).0 as isize);
@@ -2197,6 +2206,7 @@ fn set_section(hwnd: HWND, section: Section) {
         // apps: what was typed for one is not the other's.
         if was == Some(Section::Features) || section == Section::Features {
             reset_form();
+            set_name_cue();
         }
         // A focused field is about to hide; keep the keyboard on the window.
         unsafe {
