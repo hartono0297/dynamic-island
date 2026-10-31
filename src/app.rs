@@ -3665,7 +3665,7 @@ impl App {
     /// mode has its own way of getting out of the way), nothing is fullscreen,
     /// the screen is on, and the view is a quiet compact one.
     fn peek_eligible(&self) -> bool {
-        !self.config.stay_behind
+        pointer_watch::peek_allowed(self.config.notch_peek, self.config.stay_behind)
             && !self.fullscreen
             && !self.screen_away()
             && self.win.is_some()
@@ -3688,7 +3688,7 @@ impl App {
     /// music, lyric and timer views its slot is tight, so it stays still there.
     fn look_eligible(&self, now: Instant) -> bool {
         let view = self.state.view();
-        self.config.robot
+        pointer_watch::look_allowed(self.config.robot, self.config.cat_follow_pointer)
             && self.motion().moves()
             && view == View::Idle
             && !self.peek.is_shrunk()
