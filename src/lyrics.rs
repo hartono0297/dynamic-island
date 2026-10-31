@@ -25,10 +25,6 @@ pub const RESYNC_MS: u64 = 100;
 /// Bluetooth 150-300 ms), so a line at exactly its time looks early. 3.2.0
 /// went 150 ms *early* instead, which read as "too fast".
 pub const OUTPUT_LAG_MS: i64 = 100;
-/// "Offset lirik" in ms: (min, max, step). The offset is added to the
-/// position: positive shows each line sooner, negative later (the Music
-/// page's "-" is "later").
-pub const OFFSET_RANGE: (i32, i32, i32) = (-5_000, 5_000, 100);
 /// Crossfade between two lyric lines.
 pub const FADE: Duration = Duration::from_millis(150);
 /// The worker waits this long for a newer query before looking one up, so a
@@ -236,36 +232,20 @@ fn usable_rate(rate: f32) -> f64 {
 }
 
 /// The farthest lyric position this track can reach: `position_at` stops at
-/// its end, so with the offset applied (`lyric_position`) a line after this
-/// never comes. `None` when the player reports no length.
-pub fn lyric_reach(end_ms: u64, offset_ms: i32) -> Option<u64> {
-    (end_ms > 0).then(|| lyric_position(end_ms, offset_ms))
+/// its end, so with the output lag applied (`lyric_position`) a line after
+/// this never comes. `None` when the player reports no length.
+pub fn lyric_reach(end_ms: u64) -> Option<u64> {
+    (end_ms > 0).then(|| lyric_position(end_ms))
 }
 
-/// The position the lyric line is chosen at: the playback position plus the
-/// user's offset (`lyrics_offset_ms`) minus `OUTPUT_LAG_MS`, never before 0.
-/// At offset 0 a line is therefore never chosen before its time.
-pub fn lyric_position(raw_ms: u64, offset_ms: i32) -> u64 {
+/// The position the lyric line is chosen at: the playback position minus
+/// `OUTPUT_LAG_MS`, never before 0. A line is therefore never chosen before
+/// its time.
+pub fn lyric_position(raw_ms: u64) -> u64 {
     let shifted = i64::try_from(raw_ms)
         .unwrap_or(i64::MAX)
-        .saturating_add(i64::from(offset_ms))
         .saturating_sub(OUTPUT_LAG_MS);
     u64::try_from(shifted).unwrap_or(0)
-}
-
-/// The offset one step (`dir` −1 or +1) on, kept in `OFFSET_RANGE`; a
-/// hand-edited value off the grid snaps onto it.
-pub fn step_offset(offset_ms: i32, dir: i32) -> i32 {
-    let (min, max, step) = OFFSET_RANGE;
-    let on_grid = offset_ms.div_euclid(step) * step;
-    let stepped = if dir > 0 {
-        on_grid + step
-    } else if offset_ms == on_grid {
-        on_grid - step
-    } else {
-        on_grid
-    };
-    stepped.clamp(min, max)
 }
 
 /// The same moment re-expressed at `now`: the position then, as of now. Used
@@ -1266,18 +1246,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lyric_position_adds_offset_minus_the_output_lag_and_never_goes_below_zero() {
+    fn the_lyric_position_is_the_position_minus_the_output_lag_and_never_goes_below_zero() {
         let lag = OUTPUT_LAG_MS as u64;
-        assert_eq!(lyric_position(10_000, 0), 10_000 - lag);
-        assert_eq!(lyric_position(10_000, -300), 10_000 - 300 - lag);
-        assert_eq!(lyric_position(10_000, 500), 10_000 + 500 - lag);
-        assert_eq!(lyric_position(0, -5_000), 0);
-        assert_eq!(lyric_position(50, 0), 0);
-        assert_eq!(lyric_position(u64::MAX, 5_000), i64::MAX as u64 - lag);
+        assert_eq!(lyric_position(10_000), 10_000 - lag);
+        assert_eq!(lyric_position(0), 0);
+        assert_eq!(lyric_position(50), 0);
+        assert_eq!(lyric_position(u64::MAX), i64::MAX as u64 - lag);
     }
 
     #[test]
-    fn at_the_default_offset_a_line_never_shows_before_its_time() {
+    fn a_line_never_shows_before_its_time() {
         let lines = vec![l(1_000, "one"), l(5_000, "two"), l(9_000, "three")];
         // Walking the player's position in small steps: the line chosen is
         // never one whose time has not come, and each shows `OUTPUT_LAG_MS`
@@ -1285,7 +1263,7 @@ mod tests {
         let mut raw = 0;
         let mut first_seen = [None; 3];
         while raw < 12_000 {
-            let chosen = current_line(&lines, lyric_position(raw, 0)).map(|(i, _)| i);
+            let chosen = current_line(&lines, lyric_position(raw)).map(|(i, _)| i);
             if let Some(i) = chosen {
                 assert!(raw >= lines[i].at_ms, "line {i} early at {raw}");
                 first_seen[i].get_or_insert(raw);
@@ -1344,7 +1322,7 @@ mod tests {
             Some(vec![l(1_000, "a"), l(5_000, "b"), l(9_500, "c")]),
             false,
         ));
-        let reach = lyric_reach(9_000, 0);
+        let reach = lyric_reach(9_000);
         assert_eq!(reach, Some(8_900), "the end minus the output lag");
         assert_eq!(st.wait_ms(2_000, 1.0, reach), Some(3_001), "b is reachable");
         assert_eq!(st.wait_ms(6_000, 1.0, reach), None, "c never comes");
@@ -1352,31 +1330,12 @@ mod tests {
         // (it used to re-arm every few hundred ms until the next track).
         let t0 = Instant::now();
         let t = tl(8_990, 9_000, t0);
-        let pos = lyric_position(position_at(&t, true, t0 + Duration::from_secs(5)), 0);
+        let pos = lyric_position(position_at(&t, true, t0 + Duration::from_secs(5)));
         assert_eq!(pos, 8_900);
         assert_eq!(st.wait_ms(pos, 1.0, reach), None);
-        // A large negative offset moves the reach back with the lines.
-        let reach = lyric_reach(9_000, -5_000);
-        assert_eq!(reach, Some(3_900));
-        assert_eq!(st.wait_ms(2_000, 1.0, reach), None, "b now lies past it");
-        assert_eq!(st.wait_ms(500, 1.0, reach), Some(501));
         // No reported length: nothing to cut off.
-        assert_eq!(lyric_reach(0, 0), None);
+        assert_eq!(lyric_reach(0), None);
         assert_eq!(st.wait_ms(6_000, 1.0, None), Some(3_501));
-    }
-
-    #[test]
-    fn the_offset_steps_by_a_tenth_within_its_range_and_snaps_onto_the_grid() {
-        assert_eq!(step_offset(0, 1), 100);
-        assert_eq!(step_offset(0, -1), -100);
-        assert_eq!(step_offset(-100, 1), 0);
-        assert_eq!(step_offset(5_000, 1), 5_000);
-        assert_eq!(step_offset(-5_000, -1), -5_000);
-        // Hand-edited, off the grid: the next step lands on it.
-        assert_eq!(step_offset(130, 1), 200);
-        assert_eq!(step_offset(130, -1), 100);
-        assert_eq!(step_offset(-130, 1), -100);
-        assert_eq!(step_offset(-130, -1), -200);
     }
 
     #[test]

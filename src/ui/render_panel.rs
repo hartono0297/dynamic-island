@@ -741,7 +741,6 @@ impl Renderer {
                 l,
                 frame.media,
                 frame.lyrics_on,
-                frame.lyric_offset_ms,
                 frame.progress,
                 frame.volume,
             ),
@@ -3519,7 +3518,6 @@ impl Renderer {
         l: &ExpandedLayout,
         media: Option<&MediaInfo>,
         lyrics_on: bool,
-        lyric_offset_ms: i32,
         progress: Option<Progress>,
         volume: Option<f32>,
     ) -> Result<()> {
@@ -3536,9 +3534,6 @@ impl Renderer {
             self.paint_volume(strip, level, 0.72);
         }
         self.paint_lyrics_button(l.lyrics, lyrics_on);
-        if lyrics_on {
-            self.paint_lyric_offset(&l.lyric_adj, lyric_offset_ms);
-        }
         let Some(media) = media else {
             self.text(
                 i18n::tr(Key::NothingPlaying),
@@ -3632,24 +3627,6 @@ impl Renderer {
         self.text2(&elapsed, &self.fonts.track_time, m.elapsed);
         let total = track_time(progress.end_ms);
         self.text2(&total, &self.fonts.track_time_right, m.total);
-    }
-
-    /// "−  −0,3 dtk  +" left of "Lirik": two small round buttons and the
-    /// value between them, in the accent colour once it is not 0.
-    fn paint_lyric_offset(&self, adj: &[Rect; 3], offset_ms: i32) {
-        let p = self.palette;
-        for (r, symbol) in [(adj[0], "−"), (adj[2], "+")] {
-            self.set_color(p.raised, 1.0);
-            self.fill_round(r, r.h / 2.0);
-            self.text_colored(symbol, &self.fonts.small_center, r, p.secondary, 1.0);
-        }
-        let ink = if offset_ms == 0 {
-            p.secondary
-        } else {
-            p.accent
-        };
-        let value = i18n::lyric_offset(i18n::lang(), offset_ms);
-        self.text_colored(&value, &self.fonts.small_center, adj[1], ink, 1.0);
     }
 
     /// "Lirik" with a quote mark: outlined in the accent while lyrics show in

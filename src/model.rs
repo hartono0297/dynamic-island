@@ -356,10 +356,6 @@ pub enum Hit {
     RemindersMore,
     /// The Musik page's "Lirik" button: lyrics in the notch on or off.
     LyricsToggle,
-    /// The lyric offset one step earlier (−1) or later (+1) on the Music page.
-    LyricOffset(i8),
-    /// The offset back to 0.
-    LyricOffsetReset,
     /// The strip at the top of the open panel: the newest Claude waiting or
     /// due reminder notice.
     Strip,
@@ -491,9 +487,6 @@ pub enum Effect {
     ReminderDone(String),
     /// The Musik page's lyric button changed the setting; save it.
     SaveLyrics(bool),
-    /// The lyric offset one step earlier (−1) or later (+1), or back to 0
-    /// (`None`): `App` keeps it in the config and re-syncs the line.
-    LyricOffset(Option<i32>),
     /// Run a shortcut once the panel has collapsed.
     RunShortcut(Shortcut),
     /// Vale's own capture, whatever the "Alat screenshot" choice is (the

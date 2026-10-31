@@ -1121,10 +1121,6 @@ const MEDIA_SIDE_W: f32 = 32.0;
 const MEDIA_BUTTON_GAP: f32 = 12.0;
 const LYRICS_W: f32 = 66.0;
 const LYRICS_H: f32 = 26.0;
-/// The lyric offset's buttons and the value between them, and the gaps.
-pub const LYRIC_ADJ_BTN: f32 = 18.0;
-const LYRIC_ADJ_VALUE_W: f32 = 38.0;
-const LYRIC_ADJ_GAP: f32 = 2.0;
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect {
@@ -1893,25 +1889,6 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
         LYRICS_W,
         LYRICS_H,
     );
-    // Left of "Lirik", centred on the transport row.
-    let adj_w = 2.0 * LYRIC_ADJ_BTN + LYRIC_ADJ_VALUE_W + 2.0 * LYRIC_ADJ_GAP;
-    let adj_x = lyrics.x - 8.0 - adj_w;
-    let adj_y = row_y + (MEDIA_PLAY - LYRIC_ADJ_BTN) / 2.0;
-    let lyric_adj = [
-        rect(adj_x, adj_y, LYRIC_ADJ_BTN, LYRIC_ADJ_BTN),
-        rect(
-            adj_x + LYRIC_ADJ_BTN + LYRIC_ADJ_GAP,
-            adj_y,
-            LYRIC_ADJ_VALUE_W,
-            LYRIC_ADJ_BTN,
-        ),
-        rect(
-            adj_x + adj_w - LYRIC_ADJ_BTN,
-            adj_y,
-            LYRIC_ADJ_BTN,
-            LYRIC_ADJ_BTN,
-        ),
-    ];
     ExpandedLayout {
         art,
         label,
@@ -1919,7 +1896,6 @@ pub fn media_panel_layout(s: ShapeRect, strip: bool) -> ExpandedLayout {
         artist,
         buttons: [prev, play, next],
         lyrics,
-        lyric_adj,
     }
 }
 
@@ -2940,10 +2916,6 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
             add(play, Hit::PlayPause);
             add(next, Hit::Next);
             add(l.lyrics, Hit::LyricsToggle);
-            let [less, value, more] = l.lyric_adj;
-            add(less, Hit::LyricOffset(-1));
-            add(value, Hit::LyricOffsetReset);
-            add(more, Hit::LyricOffset(1));
         }
         PageLayout::Cli(l) => {
             let folder = l.chips[..l.folder_chips].iter().filter(|c| c.w > 0.0);
@@ -4731,22 +4703,18 @@ mod tests {
 
         let media = media_panel_layout(s, false);
         let r = regions(s, &PageLayout::Media(media), false);
-        for hit in [
-            Hit::Prev,
-            Hit::PlayPause,
-            Hit::Next,
-            Hit::LyricsToggle,
-            Hit::LyricOffset(-1),
-            Hit::LyricOffsetReset,
-            Hit::LyricOffset(1),
-        ] {
+        for hit in [Hit::Prev, Hit::PlayPause, Hit::Next, Hit::LyricsToggle] {
             assert!(has(&r, hit.clone()), "{hit:?}");
         }
-        // The offset sits left of "Lirik", clear of the transport buttons.
-        let [less, value, more] = media.lyric_adj;
-        assert!(less.x + less.w <= value.x && value.x + value.w <= more.x);
-        assert!(more.x + more.w <= media.lyrics.x);
-        assert!(media.buttons.iter().all(|b| b.x + b.w <= less.x));
+        // Only the four buttons: no lyric offset region is left.
+        assert_eq!(r.len(), 4);
+        // "Lirik" ends at the text column's right edge, clear of the transport
+        // buttons.
+        assert_eq!(
+            media.lyrics.x + media.lyrics.w,
+            media.title.x + media.title.w
+        );
+        assert!(media.buttons.iter().all(|b| b.x + b.w <= media.lyrics.x));
         // The progress bar shows the position only: no click lands on it.
         let bar = media_progress_layout(&media).bar;
         let mid = (bar.x + bar.w / 2.0, bar.y + bar.h / 2.0);
