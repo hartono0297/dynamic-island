@@ -533,6 +533,7 @@ fn candidate_of(item: &serde_json::Value) -> Option<Candidate> {
 
 /// The entries of a search body that have synced lyrics, in order. A body
 /// that is over `MAX_BODY_BYTES` or not a list is read as none.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn candidates(body: &str) -> Vec<Candidate> {
     if body.len() > MAX_BODY_BYTES {
         return Vec::new();
@@ -2281,17 +2282,14 @@ mod tests {
             provisional: false,
         };
         let http = Http::new().unwrap();
-        let (status, body, retry_after) = http
-            .get_with_headers_capped_retry(
+        let (status, body) = http
+            .get_with_headers_capped(
                 &lrclib_url(&q),
                 &[("User-Agent", USER_AGENT)],
                 MAX_BODY_BYTES,
             )
             .unwrap();
-        println!(
-            "status {status}, {} bytes, retry-after {retry_after:?}",
-            body.len()
-        );
+        println!("status {status}, {} bytes", body.len());
         let Reading::Found(found) = read_reply(status, &body, false) else {
             panic!("no synced lyrics: status {status}");
         };
