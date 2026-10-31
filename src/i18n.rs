@@ -345,7 +345,7 @@ keys! {
 
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
-    // Settings → Tampilan → Pintasan.
+    // Settings → Panel → Pintasan.
     TileKindApp => "Aplikasi", "App";
     TileKindFolder => "Folder", "Folder";
     TileKindUrl => "Alamat web", "Web address";
@@ -362,7 +362,7 @@ keys! {
     ShortcutLock => "Kunci layar", "Lock screen";
     ShortcutValeSettings => "Setelan Vale", "Vale Settings";
     ShortcutGoShelf => "Rak", "Shelf";
-    // Settings → Tampilan → Halaman panel and Pintasan: the lists.
+    // Settings → Panel → Halaman panel and Pintasan: the lists.
     PagesShown => "Tampil di panel", "Shown on the panel";
     PagesHidden => "Tersembunyi", "Hidden";
     PagesLastShown => "Minimal satu halaman tampil", "At least one page must show";
@@ -616,7 +616,7 @@ keys! {
     DataFolder => "Folder data", "Data folder";
     OpenDataFolder => "Buka folder data", "Open data folder";
 
-    // Vale's cat, the notch assistant (Settings → Tampilan).
+    // Vale's cat, the notch assistant (Settings → Kucing).
     RobotInNotch => "Kucing di notch", "Cat in the notch";
     RobotInNotchDesc => "Tampilkan kucing Vale di samping jam dan notice",
         "Show Vale's cat beside the clock and notices";
@@ -703,7 +703,7 @@ keys! {
     SearchKindSetting => "Pengaturan Windows", "Windows Settings";
     SearchCopy => "Enter untuk menyalin", "Enter to copy";
     SearchKindWeb => "Cari di web", "Search the web";
-    // Settings → Umum → Pencarian cepat.
+    // Settings → Umum → Dasar → Tombol pintas pencarian.
     SearchHotkeySetting => "Tombol pintas pencarian", "Search hotkey";
     SearchHotkeyDesc => "Cari dan hitung", "Find and calculate";
     SearchHotkeyTaken => "Sudah dipakai", "In use";

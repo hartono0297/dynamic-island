@@ -69,7 +69,7 @@ pub struct CalendarLayout {
     pub offline: Option<Rect>,
 }
 
-/// The timer and its controls only; durations are set in Settings → Pomodoro.
+/// The timer and its controls only; durations are set in Settings → Fitur → Pomodoro.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PomodoroLayout {
     /// "Pomodoro".

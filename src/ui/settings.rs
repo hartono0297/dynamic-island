@@ -145,9 +145,9 @@ pub enum Action {
     ClipPersist(bool),
     ClipClearOnLock(bool),
     ClipHotkey(ClipHotkey),
-    /// Settings → Umum → Pencarian cepat.
+    /// Settings → Umum → Dasar → Tombol pintas pencarian.
     SearchHotkey(SearchHotkey),
-    /// Settings → Umum → Perangkat: the plug-in and safe-to-remove notices,
+    /// Settings → Fitur → Perangkat: the plug-in and safe-to-remove notices,
     /// and the Devices page's hotkey.
     DeviceNotices(bool),
     DevicesHotkey(DevicesHotkey),

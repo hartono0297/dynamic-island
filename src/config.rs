@@ -47,7 +47,7 @@ pub struct Config {
     /// The closed island's height, kept in `NOTCH_H_MIN..=NOTCH_H_MAX`.
     #[serde(deserialize_with = "notch_height")]
     pub notch_height: u32,
-    /// "Latar notch": a solid black closed island or a see-through one (a typo
+    /// "Isi notch": a solid black closed island or a see-through one (a typo
     /// reads as Solid). The open panel is always solid.
     pub notch_fill: NotchFill,
     /// How opaque the see-through fill is, in percent (0..=100, default 30).
@@ -120,7 +120,7 @@ pub struct Config {
     /// "Mole" (by name; a typo is Own).
     pub clean_mode: CleanMode,
     /// Before Mole's first preview, add the Cargo and Autodesk caches to
-    /// Mole's whitelist (Settings → Umum).
+    /// Mole's whitelist (Settings → Fitur → Pembersih).
     pub mole_protect_defaults: bool,
     /// That was done once: an entry the user removes later is never added
     /// back.
@@ -139,10 +139,10 @@ pub struct Config {
     #[serde(deserialize_with = "shortcut_tiles")]
     pub shortcut_tiles: Vec<TileEntry>,
     /// A notice when a flash drive or disk is plugged in, and when Vale's
-    /// Eject says it is safe to remove (Settings → Umum → Perangkat). On
+    /// Eject says it is safe to remove (Settings → Fitur → Perangkat). On
     /// unless switched off here.
     pub device_notices: bool,
-    /// "Pintasan Perangkat": the hotkey that opens the Devices page. None by
+    /// "Tombol pintas" (Perangkat): the hotkey that opens the Devices page. None by
     /// default.
     pub devices_hotkey: DevicesHotkey,
     /// "Warna" (Settings -> Kucing): the notch cat's coat. A bad value reads
@@ -183,7 +183,7 @@ fn cat_accessory<'de, D: Deserializer<'de>>(d: D) -> Result<CatAccessory, D::Err
 }
 
 crate::theme::named_enum! {
-    /// "Latar notch": what the closed island's background is. Solid is the
+    /// "Isi notch": what the closed island's background is. Solid is the
     /// island as always; Transparent lets the desktop show through at
     /// `notch_opacity`. Any other name reads as `Solid`.
     NotchFill { Solid, Transparent }
@@ -288,7 +288,7 @@ crate::theme::named_enum! {
 }
 
 crate::theme::named_enum! {
-    /// "Pintasan Perangkat": the hotkey that opens the Devices page, like the
+    /// "Tombol pintas" (Perangkat): the hotkey that opens the Devices page, like the
     /// Clipboard's. None by default; any other name reads as `Off`.
     DevicesHotkey { Off, CtrlAltD }
 }
