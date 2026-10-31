@@ -10,9 +10,9 @@
 //! from `EqShared` without ever waiting on the worker, and the worker never
 //! wakes or posts to the UI: the existing equalizer timer is the only repaint.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
@@ -232,7 +232,11 @@ pub struct Analyzer {
 
 impl Analyzer {
     pub fn new(sample_rate: u32) -> Self {
-        let rate = if sample_rate == 0 { 48_000.0 } else { sample_rate as f32 };
+        let rate = if sample_rate == 0 {
+            48_000.0
+        } else {
+            sample_rate as f32
+        };
         Self {
             filters: std::array::from_fn(|i| Biquad::band(i, rate)),
             hop: ((rate * HOP_SECS) as usize).max(1),
@@ -300,7 +304,11 @@ impl Analyzer {
             } else {
                 norm.clamp(0.0, 1.0).powf(SHAPE)
             };
-            let tau = if target > self.level[i] { ATTACK_TAU } else { DECAY_TAU };
+            let tau = if target > self.level[i] {
+                ATTACK_TAU
+            } else {
+                DECAY_TAU
+            };
             let alpha = 1.0 - (-dt / tau).exp();
             self.level[i] += (target - self.level[i]) * alpha;
         }
@@ -339,8 +347,18 @@ impl EqShared {
         }
     }
 
+    /// A session just opened: the levels are real from now on, and `muted`
+    /// is the new device's own state, read at open.
+    fn opened(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+        self.live.store(true, Ordering::Relaxed);
+    }
+
+    /// No session: sine fallback, zero levels, and no mute carried over to
+    /// the next device.
     fn reset(&self) {
         self.live.store(false, Ordering::Relaxed);
+        self.muted.store(false, Ordering::Relaxed);
         self.store([0.0; BANDS]);
     }
 }
@@ -427,7 +445,7 @@ fn serve(rx: &Receiver<bool>, shared: &EqShared) {
             }
             match Session::open(now) {
                 Some(s) => {
-                    shared.live.store(true, Ordering::Relaxed);
+                    shared.opened(s.read_mute());
                     session = Some(s);
                 }
                 None => {
@@ -491,7 +509,9 @@ impl Session {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia).ok()?;
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .ok()?;
             let id = device_id(&device)?;
             let client: IAudioClient = device.Activate(CLSCTX_ALL, None).ok()?;
             let wfx = client.GetMixFormat().ok()?;
@@ -511,9 +531,11 @@ impl Session {
             let (fmt, rate) = parsed?;
             init?.ok()?;
             let capture: IAudioCaptureClient = client.GetService().ok()?;
-            let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None).ok();
+            let volume = device
+                .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+                .ok();
             client.Start().ok()?;
-            let session = Self {
+            Some(Self {
                 enumerator,
                 id,
                 client,
@@ -525,9 +547,7 @@ impl Session {
                 last_tick: now,
                 last_mute: now,
                 last_device: now,
-            };
-            session.read_mute();
-            Some(session)
+            })
         }
     }
 
@@ -579,8 +599,7 @@ impl Session {
                 if flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 || data.is_null() {
                     self.mono.resize(frames_n, 0.0);
                 } else {
-                    let bytes =
-                        std::slice::from_raw_parts(data, frames_n * self.fmt.block_align);
+                    let bytes = std::slice::from_raw_parts(data, frames_n * self.fmt.block_align);
                     mix_to_mono(bytes, &self.fmt, &mut self.mono);
                 }
                 self.analyzer.push(&self.mono);
@@ -598,7 +617,9 @@ impl Session {
         };
         unsafe {
             volume.GetMute().is_ok_and(|m| m.as_bool())
-                || volume.GetMasterVolumeLevelScalar().is_ok_and(|v| v <= 0.001)
+                || volume
+                    .GetMasterVolumeLevelScalar()
+                    .is_ok_and(|v| v <= 0.001)
         }
     }
 }
@@ -729,7 +750,10 @@ mod tests {
             an.push(&sine(centre(band), 0.5, 0.5));
             let rms = an.pending.last().expect("a hop closed")[band];
             let expect = 0.5 / 2f32.sqrt();
-            assert!((rms - expect).abs() < 0.02, "band {band}: {rms} vs {expect}");
+            assert!(
+                (rms - expect).abs() < 0.02,
+                "band {band}: {rms} vs {expect}"
+            );
         }
     }
 
@@ -788,7 +812,10 @@ mod tests {
         let quiet = mean_tail(0.1); // -20 dB
         let loud = mean_tail(0.5); // -6 dB
         for b in 0..BANDS {
-            assert!((quiet[b] - loud[b]).abs() < 0.1, "band {b}: {quiet:?} vs {loud:?}");
+            assert!(
+                (quiet[b] - loud[b]).abs() < 0.1,
+                "band {b}: {quiet:?} vs {loud:?}"
+            );
             assert!(quiet[b] > 0.2, "band {b} should move: {quiet:?}");
         }
     }
@@ -823,12 +850,34 @@ mod tests {
         }
         assert!(last.iter().all(|&l| l < 0.05), "{last:?}");
         // Unmuting brings them back at once (the auto-gain kept its peaks).
-        let back = *play(&mut an, &song([0.2; BANDS], 0.2, false)).last().unwrap();
+        let back = *play(&mut an, &song([0.2; BANDS], 0.2, false))
+            .last()
+            .unwrap();
         assert!(back.iter().all(|&l| l > 0.5), "{back:?}");
         // Zero input never lights anything.
         let mut an = Analyzer::new(FS);
         let levels = play(&mut an, &vec![0.0; FS as usize]);
         assert!(levels.iter().all(|l| l.iter().all(|&v| v == 0.0)));
+    }
+
+    #[test]
+    fn a_new_session_never_inherits_the_old_mute() {
+        let shared = EqShared::new();
+        // A muted device was open, then the session closed.
+        shared.opened(true);
+        shared.store([0.7; BANDS]);
+        shared.reset();
+        assert!(!shared.live.load(Ordering::Relaxed));
+        assert!(!shared.muted.load(Ordering::Relaxed));
+        assert_eq!(shared.levels(), [0.0; BANDS]);
+        // The next device's own mute state is there from the first tick.
+        shared.opened(true);
+        assert!(shared.live.load(Ordering::Relaxed));
+        assert!(shared.muted.load(Ordering::Relaxed));
+        shared.reset();
+        shared.opened(false);
+        assert!(shared.live.load(Ordering::Relaxed));
+        assert!(!shared.muted.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -838,7 +887,10 @@ mod tests {
         an.push(&sine(centre(1), 0.3, 0.1));
         for dt in [f32::NAN, -1.0, 0.0, f32::INFINITY, 1e9] {
             let levels = an.advance(dt, false);
-            assert!(levels.iter().all(|l| (0.0..=1.0).contains(l)), "{dt}: {levels:?}");
+            assert!(
+                levels.iter().all(|l| (0.0..=1.0).contains(l)),
+                "{dt}: {levels:?}"
+            );
         }
     }
 
@@ -860,12 +912,24 @@ mod tests {
             })
         };
         assert_eq!(f(3, 2, 32, 8, None), fmt(Sample::F32, 2, 8));
-        assert_eq!(f(0xFFFE, 2, 32, 8, Some(SUBTYPE_FLOAT)), fmt(Sample::F32, 2, 8));
+        assert_eq!(
+            f(0xFFFE, 2, 32, 8, Some(SUBTYPE_FLOAT)),
+            fmt(Sample::F32, 2, 8)
+        );
         assert_eq!(f(1, 2, 16, 4, None), fmt(Sample::I16, 2, 4));
-        assert_eq!(f(0xFFFE, 6, 16, 12, Some(SUBTYPE_PCM)), fmt(Sample::I16, 6, 12));
+        assert_eq!(
+            f(0xFFFE, 6, 16, 12, Some(SUBTYPE_PCM)),
+            fmt(Sample::I16, 6, 12)
+        );
         assert_eq!(f(1, 2, 24, 6, None), fmt(Sample::I24, 2, 6));
-        assert_eq!(f(0xFFFE, 2, 24, 6, Some(SUBTYPE_PCM)), fmt(Sample::I24, 2, 6));
-        assert_eq!(f(0xFFFE, 2, 32, 8, Some(SUBTYPE_PCM)), fmt(Sample::I32, 2, 8));
+        assert_eq!(
+            f(0xFFFE, 2, 24, 6, Some(SUBTYPE_PCM)),
+            fmt(Sample::I24, 2, 6)
+        );
+        assert_eq!(
+            f(0xFFFE, 2, 32, 8, Some(SUBTYPE_PCM)),
+            fmt(Sample::I32, 2, 8)
+        );
         assert_eq!(f(3, 1, 32, 4, None), fmt(Sample::F32, 1, 4));
     }
 

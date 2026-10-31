@@ -1896,7 +1896,10 @@ mod tests {
     #[test]
     fn audio_bars_rest_at_a_fifth_and_rise_with_the_level() {
         let rest = BAR_MAX_H * EQ_REST;
-        assert_eq!(audio_bar_heights([0.0; BAR_COUNT], false), [rest; BAR_COUNT]);
+        assert_eq!(
+            audio_bar_heights([0.0; BAR_COUNT], false),
+            [rest; BAR_COUNT]
+        );
         assert_eq!(
             audio_bar_heights([1.0; BAR_COUNT], false),
             [BAR_MAX_H; BAR_COUNT]

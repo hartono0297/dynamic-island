@@ -7805,11 +7805,20 @@ mod tests {
         }
         assert!(eq_timer_wanted(true, true, false, false, false));
         // Each condition alone stops it.
-        assert!(!eq_timer_wanted(false, true, false, false, false), "another view");
+        assert!(
+            !eq_timer_wanted(false, true, false, false, false),
+            "another view"
+        );
         assert!(!eq_timer_wanted(true, false, false, false, false), "paused");
         assert!(!eq_timer_wanted(true, true, true, false, false), "eyes");
-        assert!(!eq_timer_wanted(true, true, false, true, false), "fullscreen");
-        assert!(!eq_timer_wanted(true, true, false, false, true), "locked or display off");
+        assert!(
+            !eq_timer_wanted(true, true, false, true, false),
+            "fullscreen"
+        );
+        assert!(
+            !eq_timer_wanted(true, true, false, false, true),
+            "locked or display off"
+        );
     }
 
     #[test]

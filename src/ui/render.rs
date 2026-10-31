@@ -49,11 +49,11 @@ use super::cat_style::CatLook;
 use super::dock::{DockFrame, DockZone};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_COUNT, BAR_GAP, BAR_W, EYES_H, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
-    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
-    corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
-    lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
-    shot_regions, shoulder_depth,
+    BAR_COUNT, BAR_GAP, BAR_W, EYES_H, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD,
+    SHOT_THUMB_RADIUS, ShapeRect, Under, badge_letter, badge_style, compact_layout,
+    compact_layout_robot, corner_radius, equalizer_heights, idle_layout, lyric_layout,
+    lyric_layout_robot, lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit,
+    shot_layout, shot_regions, shoulder_depth,
 };
 use super::icons::{Icon, IconSet};
 use super::motion::Transit;
