@@ -93,7 +93,7 @@ Hover the notch to open it, scroll to change pages. Hover the page dots under th
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/screenshots/music-lyrics.png" alt="Music page: cover, the title Senja di Kemang, a progress bar, playback controls and the Lyrics button with a timing offset"><br><b>Music</b> with synced lyrics and a timing nudge</td>
+    <td width="50%"><img src="assets/screenshots/music-lyrics.png" alt="Music page: cover, the title Senja di Kemang, a progress bar, playback controls and the Lyrics button"><br><b>Music</b> with synced lyrics</td>
     <td width="50%"><img src="assets/screenshots/mixer.png" alt="Mixer page: master volume and sliders for Spotify, Chrome and a muted Teams"><br><b>Mixer</b>: one slider per app</td>
   </tr>
   <tr>

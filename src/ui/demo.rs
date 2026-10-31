@@ -1552,7 +1552,6 @@ fn run_scenes(scenes: &[Scene]) {
                 lyric_scroll: scroll,
                 lyric_prev_scroll: 0.0,
                 lyrics_on: scene.lyrics_on,
-                lyric_offset_ms: if scene.lyrics_on { -300 } else { 0 },
                 volume: scene.volume,
                 cli: cli.view(),
                 clip: clip_view(&clips, scene.clip),

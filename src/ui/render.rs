@@ -173,8 +173,6 @@ pub struct Frame<'a> {
     pub lyric_prev_scroll: f32,
     /// "Lirik di notch" is on: the Musik page's button is lit.
     pub lyrics_on: bool,
-    /// The lyric offset in ms, shown beside "Lirik" while it is on.
-    pub lyric_offset_ms: i32,
     /// The volume the wheel is turning (0..1): a plate shows it for a moment.
     pub volume: Option<f32>,
     /// The CLI page.

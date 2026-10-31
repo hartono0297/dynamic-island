@@ -63,11 +63,6 @@ pub struct Config {
     /// While music plays, the compact island shows the current synced lyric
     /// line (looked up at lrclib.net) instead of the artist.
     pub lyrics: bool,
-    /// Added to the playback position when a lyric line is chosen: positive
-    /// shows lines sooner, negative later. Kept in `lyrics::OFFSET_RANGE`
-    /// (+-5 s); the Music page nudges it 0.1 s at a time.
-    #[serde(deserialize_with = "lyrics_offset")]
-    pub lyrics_offset_ms: i32,
     /// The shell the CLI page runs commands in.
     pub cli_shell: Shell,
     /// Where the CLI page starts when it opens: the last active Explorer
@@ -426,7 +421,6 @@ impl Default for Config {
             idle_clock: true,
             stay_behind: false,
             lyrics: false,
-            lyrics_offset_ms: 0,
             gestures: true,
             scroll_volume: true,
             search_hotkey: SearchHotkey::CtrlAltSpace,
@@ -457,15 +451,6 @@ impl Default for Config {
             eq_follow_audio: true,
         }
     }
-}
-
-/// Any number, kept in `OFFSET_RANGE`; a non-number is 0.
-fn lyrics_offset<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    let (min, max, _) = crate::lyrics::OFFSET_RANGE;
-    Ok(v.as_f64().map_or(0, |n| {
-        n.clamp(f64::from(min), f64::from(max)).round() as i32
-    }))
 }
 
 /// `panel_pages` read entry by entry: anything that is not a list, and any
@@ -576,7 +561,6 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         idle_clock: mem.idle_clock,
         stay_behind: mem.stay_behind,
         lyrics: mem.lyrics,
-        lyrics_offset_ms: mem.lyrics_offset_ms,
         search_hotkey: mem.search_hotkey,
         cli_shell: mem.cli_shell,
         cli_start: mem.cli_start,
@@ -932,7 +916,6 @@ mod tests {
             idle_clock: false,
             stay_behind: true,
             lyrics: true,
-            lyrics_offset_ms: -300,
             cli_shell: Shell::Cmd,
             cli_start: CliStart::Last,
             open_mode: OpenMode::Click,
@@ -1452,26 +1435,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lyric_offset_is_kept_in_range_and_read_from_old_files() {
-        assert_eq!(Config::default().lyrics_offset_ms, 0);
-        assert_eq!(parse(r#"{"style":"Notch"}"#).lyrics_offset_ms, 0);
-        assert_eq!(parse(r#"{"lyrics_offset_ms":-300}"#).lyrics_offset_ms, -300);
-        // Out of range is kept in range, a non-number is none.
-        assert_eq!(
-            parse(r#"{"lyrics_offset_ms":9000}"#).lyrics_offset_ms,
-            5_000
-        );
-        assert_eq!(
-            parse(r#"{"lyrics_offset_ms":-9000}"#).lyrics_offset_ms,
-            -5_000
-        );
-        assert_eq!(parse(r#"{"lyrics_offset_ms":"x"}"#).lyrics_offset_ms, 0);
-        // The island's own setting: the file's stale value does not win.
-        let mem = Config {
-            lyrics_offset_ms: 400,
-            ..Config::default()
-        };
-        assert_eq!(merge_owned(Config::default(), &mem).lyrics_offset_ms, 400);
+    fn an_old_file_with_the_removed_offset_key_still_loads_and_drops_the_key() {
+        let text = r#"{"style":"Notch","lyrics":true,"lyrics_offset_ms":-300}"#;
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let old = try_parse(text).expect("an unknown key is ignored, not an error");
+        assert_eq!(old.style, Style::Notch);
+        assert!(old.lyrics, "the other fields are kept");
+        assert_eq!(value["lyrics_offset_ms"], -300);
+        let saved = serde_json::to_string_pretty(&old).unwrap();
+        assert!(!saved.contains("lyrics_offset_ms"), "{saved}");
+        assert!(saved.contains("\"lyrics\": true"), "{saved}");
     }
 
     #[test]

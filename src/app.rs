@@ -1567,17 +1567,6 @@ impl App {
                 self.config.lyrics = on;
                 self.save_config();
             }
-            Effect::LyricOffset(step) => {
-                let now = Instant::now();
-                self.config.lyrics_offset_ms = match step {
-                    Some(dir) => lyrics::step_offset(self.config.lyrics_offset_ms, dir),
-                    None => 0,
-                };
-                self.save_config();
-                // The line on screen follows the new offset at once.
-                self.sync_lyric_line(now);
-                self.refresh(now);
-            }
             // The Clipboard tile has no action: the reducer opened its page.
             Effect::RunShortcut(s) => self.queue_shortcut(shortcuts::shortcut_action(s)?),
             Effect::RunCustom(tile) => self.queue_shortcut(shortcuts::Action::Custom(tile)),
@@ -3132,16 +3121,14 @@ impl App {
     /// the lyric view the timer stops. True when the line changed.
     fn sync_lyric_line(&mut self, now: Instant) -> bool {
         let view = self.state.view();
-        let offset = self.config.lyrics_offset_ms;
         let (position, rate, playing, reach) = match (self.state.timeline(), self.state.media()) {
             (Some(t), Some(m)) if view == View::MediaLyric => (
-                Some(lyrics::lyric_position(
-                    lyrics::position_at(t, m.playing, now),
-                    offset,
-                )),
+                Some(lyrics::lyric_position(lyrics::position_at(
+                    t, m.playing, now,
+                ))),
                 t.rate,
                 m.playing,
-                lyrics::lyric_reach(t.end_ms, offset),
+                lyrics::lyric_reach(t.end_ms),
             ),
             _ => (None, 1.0, false, None),
         };
@@ -5109,7 +5096,6 @@ impl App {
             },
             lyric_prev_scroll: self.lyric_fit.prev_scroll,
             lyrics_on: state.lyrics_on(),
-            lyric_offset_ms: self.config.lyrics_offset_ms,
             volume: self.volume_hud,
             cli: CliView {
                 output: &self.cli.output,

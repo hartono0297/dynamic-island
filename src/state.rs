@@ -1499,17 +1499,6 @@ impl IslandState {
                     self.collapse_for(Effect::DeviceOpen(i), effects);
                 }
             }
-            // The offset buttons are drawn only with lyrics on.
-            Hit::LyricOffset(dir) => {
-                if self.lyrics_on && self.view() == View::Panel(Page::Media) {
-                    effects.push(Effect::LyricOffset(Some(i32::from(dir.signum()))));
-                }
-            }
-            Hit::LyricOffsetReset => {
-                if self.lyrics_on && self.view() == View::Panel(Page::Media) {
-                    effects.push(Effect::LyricOffset(None));
-                }
-            }
             // The strip shows the newest sticky notice; clicking it dismisses that one.
             Hit::Strip => {
                 if matches!(self.view(), View::Panel(_)) {
@@ -6520,32 +6509,6 @@ mod tests {
             vec![Effect::ShelfOpen(1)]
         );
         assert!(!s.panel_is_open());
-    }
-
-    #[test]
-    fn the_lyric_offset_buttons_work_only_with_lyrics_on_and_the_music_page_open() {
-        let t0 = Instant::now();
-        let mut s = st();
-        open_on(&mut s, Page::Media, t0);
-        // Lyrics off: the buttons are not drawn, a click does nothing.
-        assert!(s.apply(Event::Click(Hit::LyricOffset(1)), t0).is_empty());
-        s.apply(Event::Click(Hit::LyricsToggle), t0);
-        assert_eq!(
-            s.apply(Event::Click(Hit::LyricOffset(-1)), t0),
-            vec![Effect::LyricOffset(Some(-1))]
-        );
-        assert_eq!(
-            s.apply(Event::Click(Hit::LyricOffset(1)), t0),
-            vec![Effect::LyricOffset(Some(1))]
-        );
-        assert_eq!(
-            s.apply(Event::Click(Hit::LyricOffsetReset), t0),
-            vec![Effect::LyricOffset(None)]
-        );
-        // Another page: nothing.
-        open_on(&mut s, Page::Notes, t0);
-        assert!(s.apply(Event::Click(Hit::LyricOffset(1)), t0).is_empty());
-        assert!(s.apply(Event::Click(Hit::LyricOffsetReset), t0).is_empty());
     }
 
     #[test]
