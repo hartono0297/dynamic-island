@@ -1276,9 +1276,20 @@ mod tests {
         use crate::ui::robot::{EAR_STROKE, Expr, GRID, Pose, Side, ear_drawn, face, mark_bounds};
         // Every face the idle view shows (`choose_expr`), open-eyed and blinking.
         let faces = [Expr::Idle, Expr::Happy, Expr::Think, Expr::Sad, Expr::Sleep];
+        // Every notch size the sliders give, stepped: each 10 px across and
+        // 2 px down, the defaults and both ends included.
+        let steps = |min: u32, max: u32, step: usize, default: u32| {
+            let mut v: Vec<u32> = (min..=max).step_by(step).chain([default, max]).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let widths = steps(NOTCH_W_MIN, NOTCH_W_MAX, 10, NOTCH_W_DEFAULT);
+        let heights = steps(NOTCH_H_MIN, NOTCH_H_MAX, 2, NOTCH_H_DEFAULT);
+        assert_eq!((widths.len(), heights.len()), (15, 9));
         for style in [Style::Pill, Style::Notch] {
-            for w in [NOTCH_W_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX] {
-                for h in [NOTCH_H_MIN, NOTCH_H_DEFAULT, NOTCH_H_MAX] {
+            for &w in &widths {
+                for &h in &heights {
                     let size = NotchSize::from_px(w, h);
                     let s = shape_with_robot_sized(style, size, ShapeKind::Idle, true);
                     for clock in [true, false] {

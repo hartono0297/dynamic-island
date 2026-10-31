@@ -48,7 +48,11 @@ that fades the cat does it with a layer round `paint` (the renderer's
   (the head's slide and tilt, plus the eyes' extra slide).
 - **Bow**: at (45, 23) on the right ear, raspberry #D23F6A, knot #F07A9A.
 - **Nightcap**: a navy #2F4A7A cone over the dome with its tip to the upper
-  left (clear of the z's by the right ear), a cream band and pompom.
+  left (clear of the z's by the right ear), a cream band and pompom at
+  (14.5, 7). The pompom first sat at (10, 5), on the wave's cream heart at
+  (4, 1): both cream, they merged into one blob. The test
+  `no_accessory_covers_a_faces_cream_extras` keeps every piece's box off
+  every face's cream extras (heart, z's, notes, thought dots).
 - **Scarf**: a mustard #E0A526 band over the head's base and a short darker
   tail on the left.
 - **Flower**: pink #F29BB5, five petals, amber #F2B33D centre, at (16, 23) on
@@ -65,7 +69,7 @@ and tilt (`Pose::looking`). Checked legible at the notch's 26 px and in the
 `the_looking_cat_stays_in_the_idle_island` (`geometry.rs`) now also takes
 `accessory_corners(accessory, ears)` (every piece's box, the ear pieces
 turned and lifted with their ear): inside the idle island and left of the
-clock box, both styles, every notch size 160..300 x 28..44, with and without
+clock box, both styles, every notch size 160..300 x 28..44 (each 10 px x 2 px), with and without
 the clock, for the five idle faces, open and blinking, at v -1..1. All seven
 passed with the shapes above; `LOOK_HEAD_DIP` stays 7
 ([[cat-looks-at-pointer]]).

@@ -231,8 +231,8 @@ pub fn pieces(accessory: CatAccessory) -> Vec<(Anchor, Piece)> {
                     segs: vec![
                         Move(19.0, 25.8),
                         Quad(32.0, 21.5, 45.0, 25.8),
-                        Quad(40.0, 6.0, 10.0, 5.0),
-                        Quad(11.0, 16.0, 19.0, 25.8),
+                        Quad(40.0, 6.0, 14.5, 7.0),
+                        Quad(10.5, 17.0, 19.0, 25.8),
                         Close,
                     ],
                     fill: fixed(NAVY),
@@ -250,8 +250,8 @@ pub fn pieces(accessory: CatAccessory) -> Vec<(Anchor, Piece)> {
             (
                 Anchor::Head,
                 Piece::Dot {
-                    cx: 10.0,
-                    cy: 5.0,
+                    cx: 14.5,
+                    cy: 7.0,
                     r: 3.0,
                     tone: fixed(CREAM),
                 },
@@ -356,9 +356,19 @@ pub fn pieces(accessory: CatAccessory) -> Vec<(Anchor, Piece)> {
 /// `geometry.rs`.
 #[cfg(test)]
 pub fn accessory_corners(accessory: CatAccessory, ears: Ears) -> Vec<((f32, f32), bool)> {
+    accessory_piece_corners(accessory, ears)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// `accessory_corners`, kept apart per piece (each piece's four corners).
+#[cfg(test)]
+fn accessory_piece_corners(accessory: CatAccessory, ears: Ears) -> Vec<Vec<((f32, f32), bool)>> {
     let mut out = Vec::new();
     for (anchor, piece) in pieces(accessory) {
         let (l, t, r, b) = piece_bounds(&piece);
+        let mut corners = Vec::with_capacity(4);
         for (x, y) in [(l, t), (r, t), (r, b), (l, b)] {
             let p = match anchor {
                 Anchor::Head | Anchor::Eyes => (x, y),
@@ -372,8 +382,9 @@ pub fn accessory_corners(accessory: CatAccessory, ears: Ears) -> Vec<((f32, f32)
                     )
                 }
             };
-            out.push((p, anchor == Anchor::Eyes));
+            corners.push((p, anchor == Anchor::Eyes));
         }
+        out.push(corners);
     }
     out
 }
@@ -661,7 +672,7 @@ pub(super) fn solid(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::robot::{Expr, Part, face};
+    use crate::ui::robot::{Expr, Part, face, mark_bounds};
     use windows::Win32::Graphics::Direct2D::{
         D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Factory,
     };
@@ -805,6 +816,53 @@ mod tests {
                 droop: 8.0
             })
         );
+    }
+
+    /// Every accessory is drawn on every face, painted last: none of its
+    /// pieces may cover the cream extras beside the head (the wave's heart,
+    /// the z's, the notes, the thought dots), or a cream piece merges with
+    /// them and the mark cannot be read.
+    #[test]
+    fn no_accessory_covers_a_faces_cream_extras() {
+        let overlap = |a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)| {
+            a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
+        };
+        for expr in Expr::ALL {
+            for blink in [false, true] {
+                let f = face(expr, blink);
+                let cream: Vec<_> = f
+                    .parts
+                    .iter()
+                    .filter(|part| match part {
+                        Part::Pill { .. } => false,
+                        Part::Dot { ink, .. } => *ink == Ink::Cream,
+                        Part::Stroke(line) => line.ink() == Ink::Cream,
+                        Part::Heart { .. } => true,
+                    })
+                    .collect();
+                if cream.is_empty() {
+                    continue;
+                }
+                // The marks slide with the eyes and the head's pieces do not;
+                // a face with extras never looks, so both share one transform.
+                assert!(!expr.looks(), "{expr:?}");
+                for accessory in CatAccessory::ALL {
+                    for corners in accessory_piece_corners(*accessory, f.ears) {
+                        let piece = corners.iter().fold(
+                            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+                            |b, &((x, y), _)| (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y)),
+                        );
+                        for part in &cream {
+                            let mark = mark_bounds(part);
+                            assert!(
+                                !overlap(piece, mark),
+                                "{accessory:?} piece {piece:?} covers {expr:?}'s {part:?} at {mark:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
