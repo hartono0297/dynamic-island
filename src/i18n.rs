@@ -629,7 +629,6 @@ keys! {
     MotionOff => "Mati", "Off";
     RobotSleep => "Tidur setelah", "Sleep after";
     RobotSleepDesc => "Tanpa aktivitas", "Without activity";
-    MorningGreeting => "Sapaan pagi", "Morning greeting";
     MorningGreetingDesc => "Ringkasan acara dan pengingat hari ini",
         "Today's events and reminders";
     GoodMorning => "Selamat pagi", "Good morning";
@@ -832,8 +831,6 @@ keys! {
     CatPeekBehind => "Mati selama \u{201C}Di belakang jendela\u{201D} menyala",
         "Off while \u{201C}Stay behind windows\u{201D} is on";
     CatGreeting => "Sapaan", "Greeting";
-    CatGreetingPeriods => "Pagi 04-11 Selamat pagi · Siang 11-15 Selamat siang · Sore 15-18 Selamat sore · Malam 18-24 Selamat malam · Dini hari 00-04 Masih begadang?",
-        "Morning 04-11 Good morning · Noon 11-15 Good afternoon · Afternoon 15-18 Good afternoon · Evening 18-24 Good evening · Late night 00-04 Up late?";
 }
 
 /// `key` in `lang`.
@@ -908,6 +905,41 @@ pub fn greeting_title(lang: Lang, period: DayPeriod) -> &'static str {
         (DayPeriod::Night, Lang::Id) => "Masih begadang?",
         (DayPeriod::Night, Lang::En) => "Up late?",
     }
+}
+
+/// The short name of `period` in the Settings period line: "Pagi", "Siang",
+/// "Sore", "Malam", "Dini hari".
+pub fn greeting_period_name(lang: Lang, period: DayPeriod) -> &'static str {
+    match (period, lang) {
+        (DayPeriod::Morning, Lang::Id) => "Pagi",
+        (DayPeriod::Morning, Lang::En) => "Morning",
+        (DayPeriod::Midday, Lang::Id) => "Siang",
+        (DayPeriod::Midday, Lang::En) => "Noon",
+        (DayPeriod::Afternoon, Lang::Id) => "Sore",
+        (DayPeriod::Afternoon, Lang::En) => "Afternoon",
+        (DayPeriod::Evening, Lang::Id) => "Malam",
+        (DayPeriod::Evening, Lang::En) => "Evening",
+        (DayPeriod::Night, Lang::Id) => "Dini hari",
+        (DayPeriod::Night, Lang::En) => "Late night",
+    }
+}
+
+/// The five periods as one line for Settings → Kucing → Sapaan: name, first
+/// and last hour (two digits) and the greeting's title, joined by " · ".
+/// Built from `greeting.rs` so the hours cannot drift from `period_at`.
+pub fn greeting_periods_line(lang: Lang) -> String {
+    DayPeriod::ALL
+        .iter()
+        .map(|&p| {
+            let (from, to) = p.hours();
+            format!(
+                "{} {from:02}-{to:02} {}",
+                greeting_period_name(lang, p),
+                greeting_title(lang, p)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The greeting's line for `period`, from `counts` (never a "0 acara": a zero
@@ -3027,8 +3059,10 @@ mod tests {
                 day_date_short(lang, today),
                 time_label(lang, hm(9, 30)),
             ];
+            all.push(greeting_periods_line(lang));
             for period in ALL_PERIODS {
                 all.push(greeting_title(lang, period).into());
+                all.push(greeting_period_name(lang, period).into());
                 for (events, reminders) in [(0, 0), (1, 1), (3, 2), (2, 0), (0, 2)] {
                     all.push(greeting_body(
                         lang,
@@ -3312,6 +3346,18 @@ mod tests {
         assert_eq!(ram_high_title(Lang::En, 93), "RAM 93% used");
         assert_eq!(text(Lang::Id, Key::System), "Sistem");
         assert_eq!(text(Lang::En, Key::SystemSoon), "soon");
+    }
+
+    #[test]
+    fn greeting_periods_line_is_built_from_the_greeting_code() {
+        assert_eq!(
+            greeting_periods_line(Lang::Id),
+            "Pagi 04-10 Selamat pagi · Siang 11-14 Selamat siang · Sore 15-17 Selamat sore · Malam 18-23 Selamat malam · Dini hari 00-03 Masih begadang?"
+        );
+        assert_eq!(
+            greeting_periods_line(Lang::En),
+            "Morning 04-10 Good morning · Noon 11-14 Good afternoon · Afternoon 15-17 Good afternoon · Evening 18-23 Good evening · Late night 00-03 Up late?"
+        );
     }
 
     #[test]

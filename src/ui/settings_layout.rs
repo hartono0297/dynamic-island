@@ -2736,8 +2736,9 @@ fn cat_page(b: &mut Builder, s: &State) {
     cat_motion_card(b, s);
 
     titled(b, Key::GroupGreeting);
+    let line = crate::i18n::greeting_periods_line(b.lang);
     let periods = b.wrap(
-        &b.t(Key::CatGreetingPeriods),
+        &line,
         Font::Desc,
         CONTENT_W - 2.0 * INSET,
     );
@@ -3119,7 +3120,6 @@ fn devices_card(b: &mut Builder, s: &State) {
     let x = b.toggle(Hit::DeviceNotices, RIGHT, cy(rows[0]), s.device_notices);
     let desc = Some((b.t(Key::DeviceNoticesDesc), Tone::Secondary));
     b.row_text(card, rows[0], b.t(Key::DeviceNotices), desc, false, x);
-    b.divider(card, rows[0]);
 
     let items = vec![
         (
@@ -5752,6 +5752,45 @@ mod tests {
     }
 
     #[test]
+    fn no_divider_sits_on_a_cards_top_edge() {
+        for lang in [Lang::Id, Lang::En] {
+            for section in Section::ALL {
+                let s = State {
+                    lang,
+                    ..states()[0].clone()
+                };
+                let l = layout(section, &s, &Estimate);
+                for card in &l.cards {
+                    for d in &l.dividers {
+                        assert!(
+                            (d.y + 0.5 - card.y).abs() > 0.01,
+                            "{section:?}: a divider on the top edge of the card at y={}",
+                            card.y
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_devices_card_has_one_divider_between_its_two_rows() {
+        let s = State {
+            scroll: 1e6,
+            ..states()[0].clone()
+        };
+        let l = layout(Section::Features, &s, &Estimate);
+        let card = l.cards[l.cards.len() - 2];
+        let inside_card: Vec<&Rect> = l
+            .dividers
+            .iter()
+            .filter(|d| d.y >= card.y - 1.0 && d.y <= card.bottom() + 1.0)
+            .collect();
+        assert_eq!(inside_card.len(), 1);
+        assert!((inside_card[0].y + 0.5 - (card.y + ROW_H)).abs() < 0.01);
+    }
+
+    #[test]
     fn studio_radius_scale() {
         assert_eq!(
             (CARD_RADIUS, CONTROL_RADIUS, SEGMENT_RADIUS),
@@ -6128,7 +6167,7 @@ mod tests {
                 // static line under it, inside the last card.
                 assert_eq!(toggle(Hit::Greeting), Some((true, true)));
                 let card = *l.cards.last().unwrap();
-                let periods = text(lang, Key::CatGreetingPeriods);
+                let periods = crate::i18n::greeting_periods_line(lang);
                 let lines: Vec<&Text> = l
                     .texts
                     .iter()
@@ -6148,12 +6187,15 @@ mod tests {
                 }
             }
         }
-        // The five periods and their titles, as the owner listed them.
+        // The five periods and their titles, built from the greeting code.
         assert_eq!(
-            text(Lang::Id, Key::CatGreetingPeriods),
-            "Pagi 04-11 Selamat pagi · Siang 11-15 Selamat siang · Sore 15-18 Selamat sore · Malam 18-24 Selamat malam · Dini hari 00-04 Masih begadang?"
+            crate::i18n::greeting_periods_line(Lang::Id),
+            "Pagi 04-10 Selamat pagi · Siang 11-14 Selamat siang · Sore 15-17 Selamat sore · Malam 18-23 Selamat malam · Dini hari 00-03 Masih begadang?"
         );
-        assert!(text(Lang::En, Key::CatGreetingPeriods).ends_with("Up late?"));
+        assert_eq!(
+            crate::i18n::greeting_periods_line(Lang::En),
+            "Morning 04-10 Good morning · Noon 11-14 Good afternoon · Afternoon 15-17 Good afternoon · Evening 18-23 Good evening · Late night 00-03 Up late?"
+        );
     }
 
     #[test]
