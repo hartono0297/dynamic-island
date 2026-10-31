@@ -75,7 +75,7 @@ pub struct Scene<'a> {
     /// the preview draws it that big, see-through when the alpha is below 1.
     pub notch: NotchSize,
     pub notch_alpha: f32,
-    /// Bata is on: the preview shows it in the album art's place.
+    /// The cat is on: the preview shows it in the album art's place.
     pub robot: bool,
     /// The cat's colour and accessory in the preview.
     pub cat: CatLook,
@@ -110,7 +110,7 @@ pub struct Gfx {
     plain: IDWriteTypography,
     /// Studio icon geometries, built on `d2d`.
     icons: IconSet,
-    /// Bata, for the preview.
+    /// The cat, for the previews and the accessory tiles.
     robot: RobotPainter,
     /// The preview island's line of text.
     island_text: IDWriteTextFormat,
@@ -1239,7 +1239,7 @@ impl Painter<'_> {
         };
         let art = l.art;
         if s.robot {
-            // Bata listening, as on the island.
+            // The cat listening, as on the island.
             self.gfx.robot.paint(
                 self.rt,
                 self.brush,

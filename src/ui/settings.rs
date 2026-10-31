@@ -543,7 +543,7 @@ struct Settings {
     dpi: u32,
     model: Model,
     section: Section,
-    /// How far Appearance (taller than the window) is scrolled.
+    /// How far the section (when it is taller than the window) is scrolled.
     scroll: f32,
     layout: Layout,
     gfx: Gfx,
@@ -776,7 +776,7 @@ fn outer_size(dpi: u32) -> (i32, i32) {
     (rc.right - rc.left, rc.bottom - rc.top)
 }
 
-/// Opens the window on `section` (Appearance by default), or brings the open
+/// Opens the window on `section` (Umum by default), or brings the open
 /// one forward (restored if minimized) with the model brought up to date.
 pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND> {
     let existing = SETTINGS.with(|cell| {

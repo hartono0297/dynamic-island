@@ -31,7 +31,16 @@
 //!   `shelf-move` takes the third of nine off (three rows become two, so
 //!   every card changes place). Made-up names only.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
-//! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
+//! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme
+//!   (`espresso`, `graphite`, `sea`, `night`, `plum`; without it, or `auto`,
+//!   the surface follows the cat's colour as in the app).
+//! - `DI_CAT_COLOR=calico` (`terracotta`, `calico`, `white`, `black`) and
+//!   `DI_CAT_ACCESSORY=crown` (`none`, `glasses`, `bow`, `nightcap`, `scarf`,
+//!   `flower`, `crown`) dress the cat in every scene, like `DI_NOTCH`; the
+//!   scenes `bata-colors` (the four coats, each on the surface `auto` gives
+//!   it) and `bata-accessories` (all seven accessories, five faces and the
+//!   notch's 26 px, in the chosen coat) show them side by side
+//!   (`--demo-robot`, or `DI_DEMO_STEP=bata-colors` in `--demo`).
 //! - `DI_CLOCK=0` draws the idle island without its clock.
 //! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
 //!   LRC (`DEMO_LRC`); `DI_DEMO_FADE=0.5` freezes the crossfade from the

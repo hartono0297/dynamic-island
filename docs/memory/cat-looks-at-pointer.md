@@ -86,6 +86,13 @@ poll's `GetCursorPos` and at most one `WindowFromPoint` a second, never the
 frame clock or a draw. The look stays where it was and goes on from there
 once the island rises or the window moves away.
 
+v3.8: **"Ikuti kursor"** (`cat_follow_pointer`, Settings → Kucing → Gerak, on
+by default) is part of "When": `look_eligible` needs
+`pointer_watch::look_allowed(robot, cat_follow_pointer)`; off, the cat stays
+centred and the poll may stop ([[bata-idle-power-budget]]). The clamp test
+also takes every accessory's box now ([[cat-accessories]]); `LOOK_HEAD_DIP`
+stayed 7. Accessories follow the same slide and tilt (the glasses the eyes').
+
 Demo scenes: `bata-look-left`, `bata-look-right` (the idle cat at -1 / +1).
 
 Not verified live: the feel of the ease with a real pointer, and how the tilt

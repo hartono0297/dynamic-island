@@ -128,7 +128,7 @@ pub struct Config {
     /// second card).
     pub screenshot: ScreenshotSettings,
     /// "Halaman panel": the pages' order and which the wheel shows. Empty
-    /// means the default (all nine); `pages::PanelPages` fills in the rest.
+    /// means the default (every page in `Page::ALL`); `pages::PanelPages` fills in the rest.
     #[serde(deserialize_with = "panel_pages")]
     pub panel_pages: Vec<PageEntry>,
     /// "Pintasan": the tiles' order, which show, and the custom ones. Empty

@@ -992,7 +992,7 @@ pub struct State<'a> {
     pub idle_clock: bool,
     /// "Di belakang jendela" (experimental).
     pub stay_behind: bool,
-    /// Bata in the notch, how it moves, when it sleeps, the greeting.
+    /// The cat in the notch, how it moves, when it sleeps, the greeting.
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
@@ -5101,8 +5101,8 @@ mod tests {
         );
     }
 
-    /// The scroll that brings Bata's card (no longer the last in Tampilan)
-    /// to the top of the viewport.
+    /// The scroll that brings the Kucing card (the cat's own rows) to the top
+    /// of the viewport.
     fn robot_card_scroll(s: &State) -> f32 {
         let top = State {
             scroll: 0.0,

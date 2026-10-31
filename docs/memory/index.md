@@ -59,7 +59,10 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[mixer]]: Mixer page, per-app volume through a Core Audio worker thread
 - [[devices]]: Devices page (Perangkat), safe eject of flash drives, external disks and cards through a worker thread, no polling
 - [[notch-peek-eyes]]: with stay-behind off, the notch shrinks to the cat's two eyes while the pointer is near it over a window, comes back on a 500 ms rest or a click; shares TIMER_POINTER (33)
-- [[cat-looks-at-pointer]]: the idle cat turns head, ears and eyes toward the pointer sideways, eased on the frame clock, clamp checked by a test
+- [[cat-looks-at-pointer]]: the idle cat turns head, ears and eyes toward the pointer sideways, eased on the frame clock, clamp checked by a test; "Ikuti kursor" turns it off (v3.8)
+- [[cat-colours-and-surfaces]]: four coats (Terracotta, Calico, White, Black), five island surfaces plus "follow the cat", contrast numbers, lenient config (v3.8)
+- [[cat-accessories]]: seven accessories, the one-silhouette paint order (rim, ears and head, calico patches cut to the whole silhouette, marks, accessories), the rejected mockups, the clamp test (v3.8)
+- [[settings-structure]]: Settings in eight sections (Umum, Tampilan, Kucing, Panel, Clipboard, Fitur, Integrasi, Tentang), titled cards, renamed labels, which sections scroll (v3.8)
 
 ## Gotchas
 

@@ -10,6 +10,13 @@ notch cat's head: a terracotta flat-based dome, two ears, two plain espresso
 pill eyes; geometry and the three files to keep in step are in
 [[studio-bata-logo-sources]].
 
+**v3.8: the brand stays terracotta.** The notch cat can now be Calico, White
+or Black ([[cat-colours-and-surfaces]]), but the logo everywhere below (exe
+icon, tray, Settings sidebar and About, README, site, Store package) is not
+routed through `cat_color`: it is always the terracotta head, so the brand
+does not change with a setting. The Kucing page's own cat drawings use the
+chosen coat.
+
 Where it shows, and what loads it:
 - **exe, Explorer, Start Menu, Alt+Tab, tray:** the embedded `1 ICON
   "assets/icon.ico"` (`app.rc`). The tray asks `ui::app_icon` for the small
