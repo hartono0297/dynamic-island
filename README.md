@@ -29,7 +29,7 @@ Music with synced lyrics, calendar, clipboard history, volume mixer, file shelf,
 - **Native and tiny.** One exe of about 2 MB, written in Rust (Win32 and Direct2D). No browser engine, no runtime to install.
 - **Made for Windows 11.** It reads Windows' own media sessions, notifications, audio and Explorer, so it works with Spotify, music in the browser, Teams and the apps you already use.
 - **Yours to shape.** Open it on hover, hover-and-stay or click; reorder or hide pages; pick the accent colour, the size of the closed notch (width and height), a solid or see-through fill and the island's background (it follows the cat, or one of five colours), your own shortcut tiles and hotkeys. Indonesian and English.
-- **Private.** Notes, reminders, clipboard and files stay on your PC. No account, no telemetry.
+- **Private.** Notes, reminders, clipboard, notification history and files stay on your PC. No account, no telemetry.
 - **The equalizer follows the music.** The five bars beside the song title move with what is actually playing (bass to treble), not a made-up wave. It listens only while the compact music view is on screen, and one switch in Settings turns it off.
 - **A small cat lives in the notch.** Its face and ears tell you what is going on: listening to music, focused on a pomodoro, thinking while Claude Code works, asleep when you are away. It greets you by the time of day (morning, midday, afternoon, evening, late night), once per period. Pick its coat (Terracotta, Calico, White or Black) and an accessory (glasses, bow, nightcap, scarf, flower or crown).
 
@@ -57,7 +57,7 @@ Open **PowerShell** and run:
 irm https://raw.githubusercontent.com/hartono0297/dynamic-island/main/uninstall.ps1 | iex
 ```
 
-This quits Vale and removes its program folder, Start Menu shortcut, autostart entry and its Claude Code hooks. **Your data is kept** in `%APPDATA%\Vale` (settings, notes, reminders, clipboard history, Google login), so a later install picks up where you left off.
+This quits Vale and removes its program folder, Start Menu shortcut, autostart entry and its Claude Code hooks. **Your data is kept** in `%APPDATA%\Vale` (settings, notes, reminders, clipboard and notification history, Google login), so a later install picks up where you left off.
 
 To remove your data as well:
 
@@ -85,7 +85,7 @@ Hover the notch to open it, scroll to change pages. Hover the page dots under th
 | **Search** | `Ctrl+Alt+Space`: apps, files and folders, calculator, Windows settings, web. |
 | **Calendar** | Google Calendar with day, week and month views; add and edit events. |
 | **Reminders, Notes, Pomodoro** | Quick ones, right in the panel. |
-| **Notifications** | Windows toasts and [Claude Code](https://claude.com/claude-code) prompts in the notch. |
+| **Notifications** | Windows toasts and [Claude Code](https://claude.com/claude-code) prompts in the notch. The Notifications page keeps a short history of the toasts Vale caught while it ran (app logo, time, title and body), with pause, per-app exclusion and an optional encrypted copy that survives a restart. It never clears the Windows Action Center. |
 | **System** | CPU, memory, disks, the busiest apps and a cleaner that asks before it deletes. |
 | **Devices** | Flash drives, external disks and memory cards, with Eject, Open, Detail and Eject all, the reason when Windows won't let go, and a notice when one is plugged in. |
 | **CLI** | A small terminal that starts in your Explorer folder. |
@@ -116,7 +116,7 @@ Everything is set in **Settings**, from the tray icon, in eight sections: Genera
 
 ## Privacy
 
-Notes, reminders, clipboard history and the shelf stay on your PC; the clipboard history file is encrypted with Windows DPAPI. Nothing is sent anywhere except to Google Calendar (when you connect it) and, with lyrics on, the artist, title and length of the playing track to [LRCLIB](https://lrclib.net). There is no telemetry. Details in the [guide](docs/guide.md#data-and-privacy).
+Notes, reminders, clipboard history, notification history and the shelf stay on your PC; the clipboard and notification history files are encrypted with Windows DPAPI. Nothing is sent anywhere except to Google Calendar (when you connect it) and, with lyrics on, the artist, title and length of the playing track to [LRCLIB](https://lrclib.net). There is no telemetry. Details in the [guide](docs/guide.md#data-and-privacy).
 
 ## Build from source
 
