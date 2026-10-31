@@ -15,7 +15,7 @@ integrations / integrasi, about / tentang. The window opens on Umum.
 | Section | Cards (eyebrow titles) |
 |---|---|
 | Umum | **Dasar**: Bahasa, Jalan saat Windows mulai, Tombol pintas pencarian. **Peringatan**: Baterai (off on a PC without one), Disk, RAM, Popup Windows with "Buka petunjuk" |
-| Tampilan | the preview; **Island**: Gaya island, Warna aksen, Warna dasar (swatches), Jam saat kosong. **Notch**: Lebar, Tinggi, Ukuran bawaan, Isi notch (Solid / Tembus), Opasitas. **Jendela**: Mode jendela |
+| Tampilan | the preview; **Island**: Gaya island, Warna aksen, Warna dasar (swatches), Jam saat kosong, Equalizer ikut irama ([[eq-follow-audio]]). **Notch**: Lebar, Tinggi, Ukuran bawaan, Isi notch (Solid / Tembus), Opasitas. **Jendela**: Mode jendela |
 | Kucing | the preview (cat about 64 px on the resolved surface, the idle notch at real size with the clock, chips Diam / Senang / Kedip / Tidur / Menyapa); **Kucing**: Kucing di notch, Warna, "Latar: <name>" with "Ubah", Aksesori tiles; **Gerak**: Animasi, Tidur setelah, Ikuti kursor, Mengecil jadi mata; **Sapaan**: the toggle (one key, `CatGreeting`, with `MorningGreetingDesc` under it) and one read-only line of the five periods, built from `greeting.rs` (`DayPeriod::ALL`, `hours()`) and `i18n::greeting_title` by `i18n::greeting_periods_line`, so the hours cannot drift from `period_at` ([[greeting-periods]]) |
 | Panel | **Perilaku**: Mode buka, Di belakang jendela. **Halaman panel**, **Pintasan**, **Tersedia** (the lists and the own-tile form, [[panel-pages]], [[shortcut-tiles]]) |
 | Clipboard | **Riwayat**; **Screenshot** ([[screenshot-preview]]) |
