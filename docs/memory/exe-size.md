@@ -78,6 +78,12 @@ no single thing to cut.
   (`serde_json/preserve_order` pulls `indexmap`, 5 KiB), static CRT (changes
   the redistributable story), `build-std` (needs nightly).
 
+## Equalizer capture (2026-10-31)
+
+[[eq-follow-audio]] added about 31 KB (2,508,288 -> 2,539,008 bytes, +1.2 %):
+the analyzer, the WASAPI client and the Settings row. No new crate and no new
+`windows` feature.
+
 ## Idle RAM and CPU
 
 Not measured. The release exe is single-instance and reads real user data, and

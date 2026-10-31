@@ -70,6 +70,14 @@ The PrtSc key ([[screenshot-snap]]) adds a thread, not a timer: a
 exists only while the setting is on, and whose proc does no work but post one
 message.
 
+The equalizer's capture ([[eq-follow-audio]]) adds a thread, not a timer: the
+`eq-capture` thread exists after the first time a playing compact media view
+shows, blocks in `recv()` while stopped, and runs (a 15 ms wait) only while
+`TIMER_EQ` runs and "Equalizer ikut irama" is on. `TIMER_EQ` itself is now
+also off while fullscreen and while the session is locked or the display is off
+(`screen_away`, re-synced by `sync_pointer_polls`), through
+`eq_timer_wanted`.
+
 ## Pointer polls (v3.2.1 review, 2026-10-29)
 
 A measured review found ~78 main-thread wake-ups a second at idle (v3.1.0:

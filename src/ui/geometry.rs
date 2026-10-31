@@ -477,6 +477,25 @@ pub fn equalizer_heights(t: f32, playing: bool) -> [f32; BAR_COUNT] {
     })
 }
 
+/// How low a bar rests when the music is silent or muted, as a share of
+/// `BAR_MAX_H`.
+pub const EQ_REST: f32 = 0.2;
+
+/// Equalizer bar heights from the live band levels (`eq_audio`, each 0..=1):
+/// a bar rests at `EQ_REST` of `BAR_MAX_H` and rises to the full height with
+/// its level. A level that is not a number counts as 0; a muted output keeps
+/// every bar at rest.
+pub fn audio_bar_heights(levels: [f32; BAR_COUNT], muted: bool) -> [f32; BAR_COUNT] {
+    levels.map(|level| {
+        let level = if muted || level.is_nan() {
+            0.0
+        } else {
+            level.clamp(0.0, 1.0)
+        };
+        BAR_MAX_H * (EQ_REST + (1.0 - EQ_REST) * level)
+    })
+}
+
 /// Text box between `left` and `right`; never negative while a shape is still small.
 fn text_box(left: f32, right: f32, y: f32, h: f32) -> Rect {
     Rect {
@@ -1872,6 +1891,43 @@ mod tests {
             assert!((h - BAR_MAX_H * 0.675).abs() < 1e-4);
         }
         assert_eq!(paused, equalizer_heights(0.0, false), "static");
+    }
+
+    #[test]
+    fn audio_bars_rest_at_a_fifth_and_rise_with_the_level() {
+        let rest = BAR_MAX_H * EQ_REST;
+        assert_eq!(
+            audio_bar_heights([0.0; BAR_COUNT], false),
+            [rest; BAR_COUNT]
+        );
+        assert_eq!(
+            audio_bar_heights([1.0; BAR_COUNT], false),
+            [BAR_MAX_H; BAR_COUNT]
+        );
+        let mid = audio_bar_heights([0.5; BAR_COUNT], false)[0];
+        assert!((mid - BAR_MAX_H * 0.6).abs() < 1e-4);
+        // Heights follow the levels bar by bar and never fall as a level rises.
+        let h = audio_bar_heights([0.0, 0.25, 0.5, 0.75, 1.0], false);
+        assert!(h.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn audio_bars_stay_in_range_and_survive_bad_levels() {
+        let (lo, hi) = (BAR_MAX_H * EQ_REST, BAR_MAX_H);
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -3.0, 7.5];
+        for h in audio_bar_heights(bad, false) {
+            assert!((lo..=hi).contains(&h), "{h}");
+        }
+        assert_eq!(audio_bar_heights(bad, false)[0], lo, "NaN is silence");
+    }
+
+    #[test]
+    fn muted_audio_bars_all_rest() {
+        let rest = BAR_MAX_H * EQ_REST;
+        assert_eq!(
+            audio_bar_heights([1.0, 0.7, 0.3, 1.0, 0.5], true),
+            [rest; BAR_COUNT]
+        );
     }
 
     #[test]

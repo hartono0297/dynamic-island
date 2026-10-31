@@ -16,6 +16,7 @@ mod data_dir;
 mod devices;
 mod devices_win;
 mod dpapi;
+mod eq_audio;
 mod gestures;
 mod google;
 mod greeting;
