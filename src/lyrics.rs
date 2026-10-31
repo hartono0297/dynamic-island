@@ -722,11 +722,12 @@ impl<N: Net> Chain<'_, N> {
         self.net.now() >= self.deadline
     }
 
-    /// GET with retries: a 429 or 5xx waits `retry_delay` and asks again, at
-    /// most `HTTP_RETRIES` times; a network error is asked once more. Past
-    /// the budget nothing more is sent (or slept for).
+    /// GET with retries: a 429 or 5xx waits `retry_delay` and asks again; a
+    /// network error waits a second and asks again, but only once. All of
+    /// them share one cap of `HTTP_RETRIES` retries per URL. Past the budget
+    /// nothing more is sent (or slept for).
     fn fetch(&mut self, url: &str) -> Fetched {
-        let (mut busy, mut failed) = (0, 0);
+        let (mut retries, mut errored) = (0, false);
         loop {
             if self.expired() {
                 return Fetched::Transient;
@@ -735,21 +736,17 @@ impl<N: Net> Chain<'_, N> {
                 Ok((status, body, _)) if status != 429 && status < 500 => {
                     return Fetched::Done(status, body);
                 }
-                Ok((_, _, header)) => {
-                    busy += 1;
-                    if busy > HTTP_RETRIES {
-                        return Fetched::Transient;
-                    }
-                    retry_delay(header.as_deref())
-                }
+                Ok((_, _, header)) => retry_delay(header.as_deref()),
+                Err(()) if errored => return Fetched::Transient,
                 Err(()) => {
-                    failed += 1;
-                    if failed > 1 {
-                        return Fetched::Transient;
-                    }
+                    errored = true;
                     retry_delay(None)
                 }
             };
+            retries += 1;
+            if retries > HTTP_RETRIES {
+                return Fetched::Transient;
+            }
             if self.expired() {
                 return Fetched::Transient;
             }
@@ -2492,6 +2489,16 @@ mod lookup_tests {
         let mut net = Fake::new(Err(()));
         assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
         assert_eq!(net.times_asked(&url), 2, "not asked a third time");
+    }
+
+    #[test]
+    fn a_network_error_counts_toward_the_retry_cap() {
+        let q = query("Song", "Band", 200);
+        let url = lrclib_search_url("Song", "Band");
+        let mut net = Fake::new(status(404, None)).on(&url, vec![Err(()), status(503, Some("1"))]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+        assert_eq!(net.times_asked(&url), 3, "one try and two retries in all");
+        assert_eq!(net.sleeps.len(), 2);
     }
 
     #[test]
