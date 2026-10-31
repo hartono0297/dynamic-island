@@ -26,7 +26,9 @@ Lyrics ran behind or ahead of the song for four reasons, each handled:
   lrclib `/api/get`; on a miss `/api/search` (no length) picks the result
   whose length is closest within `SEARCH_DURATION_MS` (`pick_search`).
   The negative cache extension is now `.none2` so misses recorded by the old,
-  weaker lookup are retried once.
+  weaker lookup are retried once. (Superseded 2026-10-31: `pick_search`, the
+  single search fallback and `.none2` are replaced by the steps, retry and
+  consensus pick in [[lyrics-lookup]], marker `.none3`.)
 
 ## 3.2.1: still too fast
 
@@ -66,4 +68,8 @@ play a song with synced lyrics and check the line against the audio. There is
 no manual offset any more; a consistently early or late line means a badly
 synced LRC upload, not the clock.
 
-Related: [[lyric-notch-width]].
+Open: `assets/screenshots/music-lyrics.png` still shows the removed -/value/+
+buttons; re-shoot with `scripts/capture-screenshots.ps1 -Only music-lyrics`
+(see [[screenshot-capture-script]]).
+
+Related: [[lyric-notch-width]], [[lyrics-lookup]].
