@@ -695,9 +695,10 @@ impl Control {
                 .iter()
                 .map(|(v, r)| (Hit::CatColor(*v), inflate(*r, SWATCH_SLOP)))
                 .collect(),
-            Control::AccessoryTiles { items, .. } => {
-                items.iter().map(|(v, r)| (Hit::CatAccessory(*v), *r)).collect()
-            }
+            Control::AccessoryTiles { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::CatAccessory(*v), *r))
+                .collect(),
             Control::Slider {
                 id,
                 track,
@@ -2814,13 +2815,7 @@ fn cat_motion_card(b: &mut Builder, s: &State) {
     b.divider(card, rows[2]);
 
     // The eyes need stay-behind off, not the cat.
-    let x = b.toggle_if(
-        Hit::NotchPeek,
-        RIGHT,
-        cy(3),
-        s.notch_peek,
-        !s.stay_behind,
-    );
+    let x = b.toggle_if(Hit::NotchPeek, RIGHT, cy(3), s.notch_peek, !s.stay_behind);
     let desc = if s.stay_behind {
         b.t(Key::CatPeekBehind)
     } else {
@@ -2837,12 +2832,21 @@ fn cat_motion_card(b: &mut Builder, s: &State) {
     b.divider(card, rows[3]);
 }
 
+/// What Umum takes back from its gaps when its search-hotkey label wraps,
+/// so the page still fits the window: under the page title (16 to 8),
+/// under each group title (8 to 6) and between the groups (12 to 6).
+const UMUM_TRIM_TITLE: f32 = 8.0;
+const UMUM_TRIM_EYEBROW: f32 = 2.0;
+const UMUM_TRIM_GROUPS: f32 = 6.0;
+const _: () = assert!(UMUM_TRIM_TITLE + 2.0 * UMUM_TRIM_EYEBROW + UMUM_TRIM_GROUPS == LABEL_LINE_H);
+
 /// Umum: "Dasar" (language, autostart, the search hotkey) and "Peringatan"
 /// (battery, disk and RAM, and how to turn off Windows' pop-ups).
 fn general(b: &mut Builder, s: &State) {
-    titled(b, Key::GroupBasics);
     // "Tombol pintas pencarian" is long beside its three choices: when it
-    // does not fit on one line it wraps, and its row grows by a line.
+    // does not fit on one line it wraps, and its row grows by a line. Umum
+    // fits the window with nothing to spare, so it then takes that line back
+    // from its gaps (`UMUM_TRIM_*`) and never scrolls.
     let hotkeys = vec![
         (
             Hit::SearchHotkey(SearchHotkey::Off),
@@ -2869,6 +2873,15 @@ fn general(b: &mut Builder, s: &State) {
         row_text_w(probe, RIGHT - b.segmented_w(&hotkeys)),
     );
     let hotkey_h = ROW_H + (hotkey_label.len() - 1) as f32 * LABEL_LINE_H;
+    let tight = hotkey_label.len() > 1;
+    let trim = |b: &mut Builder, by: f32| {
+        if tight {
+            b.y -= by;
+        }
+    };
+    trim(b, UMUM_TRIM_TITLE);
+    titled(b, Key::GroupBasics);
+    trim(b, UMUM_TRIM_EYEBROW);
     let card = b.card(2.0 * ROW_H + hotkey_h);
     let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -2898,13 +2911,16 @@ fn general(b: &mut Builder, s: &State) {
     b.row_text_label_lines(card, rows[2], hotkey_label, desc, x);
     b.divider(card, rows[2]);
 
+    trim(b, UMUM_TRIM_GROUPS);
+    titled(b, Key::GroupAlerts);
+    trim(b, UMUM_TRIM_EYEBROW);
     warnings_card(b, s);
 }
 
-/// "Peringatan": the battery, disk and RAM steppers and the Windows pop-ups
-/// help. The battery stepper is off on a PC without one.
+/// "Peringatan" (its title is `general`'s): the battery, disk and RAM
+/// steppers and the Windows pop-ups help. The battery stepper is off on a PC
+/// without one.
 fn warnings_card(b: &mut Builder, s: &State) {
-    titled(b, Key::GroupAlerts);
     let card = b.card(4.0 * ROW_H);
     let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -3081,7 +3097,12 @@ fn features_page(b: &mut Builder, s: &State) {
 
     titled(b, Key::GroupCleaner);
     let card = b.card(ROW_H);
-    let x = b.toggle(Hit::MoleProtect, RIGHT, card.y + ROW_H / 2.0, s.mole_protect);
+    let x = b.toggle(
+        Hit::MoleProtect,
+        RIGHT,
+        card.y + ROW_H / 2.0,
+        s.mole_protect,
+    );
     let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
     b.row_text(card, card.y, b.t(Key::MoleProtectSetting), desc, false, x);
 }
@@ -4084,9 +4105,7 @@ mod tests {
 
     /// Every section fits the window's height. `SCROLLING` ones scroll by
     /// exactly what they lack and then the last card meets the bottom margin;
-    /// Integrasi and Tentang have no viewport. Umum fits exactly, and only
-    /// scrolls by the one line its search-hotkey label gains when it wraps
-    /// (Indonesian, with the generous estimate).
+    /// the rest (Umum in both languages, Integrasi, Tentang) never scroll.
     #[test]
     fn everything_fits_in_the_window_height() {
         for (section, lang, l) in all_layouts() {
@@ -4101,16 +4120,7 @@ mod tests {
                 unscrolled - l.scroll_max <= CLIENT_H - PAD + 0.01,
                 "{section:?} {lang:?}: {bottom}"
             );
-            let scrolls = SCROLLING.contains(&section)
-                || (section == Section::General && l.scroll_max > 0.0);
-            if section == Section::General {
-                assert!(
-                    l.scroll_max == 0.0 || (l.scroll_max - LABEL_LINE_H).abs() < 0.01,
-                    "{lang:?}: {}",
-                    l.scroll_max
-                );
-            }
-            if scrolls {
+            if SCROLLING.contains(&section) {
                 assert!(l.scroll_max > 0.0 && l.viewport.is_some(), "{section:?}");
                 // Scrolled to the end, the last card ends at the margin.
                 if l.scroll == l.scroll_max {
@@ -4137,13 +4147,7 @@ mod tests {
                 .into_iter()
                 .filter(|s| layout(*s, &state, &Estimate).viewport.is_some())
                 .collect();
-            let mut want = SCROLLING.to_vec();
-            // The wrapped label of Umum's search hotkey (see above).
-            if lang == Lang::Id {
-                want.push(Section::General);
-            }
-            want.sort_by_key(|s| s.index());
-            assert_eq!(scrolling, want, "{lang:?}");
+            assert_eq!(scrolling, SCROLLING, "{lang:?}");
             // Integrasi and Tentang never scroll, whatever Google says.
             for s in states() {
                 for section in [Section::Integrations, Section::About] {
@@ -4762,7 +4766,8 @@ mod tests {
                 robot: false,
                 ..on.clone()
             };
-            let hit_list = |l: &Layout| -> Vec<Hit> { l.hits().into_iter().map(|(h, _)| h).collect() };
+            let hit_list =
+                |l: &Layout| -> Vec<Hit> { l.hits().into_iter().map(|(h, _)| h).collect() };
             let l = layout(Section::Cat, &off, &Estimate);
             let hits = hit_list(&l);
             assert!(hits.contains(&Hit::Robot));
@@ -4786,7 +4791,14 @@ mod tests {
             )));
             assert!(hits.contains(&Hit::NotchPeek));
             // With it on they all take clicks.
-            let l = layout(Section::Cat, &State { scroll: 1e6, ..on.clone() }, &Estimate);
+            let l = layout(
+                Section::Cat,
+                &State {
+                    scroll: 1e6,
+                    ..on.clone()
+                },
+                &Estimate,
+            );
             let hits = hit_list(&l);
             for hit in [Hit::Motion(Motion::Full), Hit::Greeting, Hit::CatFollow] {
                 assert!(hits.contains(&hit), "{hit:?}");
@@ -5950,7 +5962,9 @@ mod tests {
                 let names: Vec<&str> = CatFace::ALL.iter().map(|f| text(lang, f.key())).collect();
                 assert_eq!(labels, names);
                 // Under the cat's tile and the notch, inside the preview card.
-                assert!(track.y >= preview.y + 12.0 + CAT_TILE && track.bottom() < preview.bottom());
+                assert!(
+                    track.y >= preview.y + 12.0 + CAT_TILE && track.bottom() < preview.bottom()
+                );
                 assert!(track.x >= preview.x && track.right() <= preview.right());
                 let r = items[1].rect;
                 assert_eq!(
@@ -6109,10 +6123,7 @@ mod tests {
                 let says = |key: Key| l.texts.iter().any(|t| t.text == text(lang, key));
                 assert_eq!(says(Key::CatPeekBehind), behind, "{lang:?}");
                 assert_eq!(says(Key::CatPeekDesc), !behind, "{lang:?}");
-                assert_eq!(
-                    l.hits().iter().any(|(h, _)| *h == Hit::NotchPeek),
-                    !behind
-                );
+                assert_eq!(l.hits().iter().any(|(h, _)| *h == Hit::NotchPeek), !behind);
                 // Sapaan: the toggle, then the five periods as one wrapped
                 // static line under it, inside the last card.
                 assert_eq!(toggle(Hit::Greeting), Some((true, true)));
@@ -6194,11 +6205,8 @@ mod tests {
                     ..states()[0].clone()
                 };
                 let l = layout(section, &s, &Estimate);
-                let eyebrows: Vec<&Text> = l
-                    .texts
-                    .iter()
-                    .filter(|t| t.font == Font::Eyebrow)
-                    .collect();
+                let eyebrows: Vec<&Text> =
+                    l.texts.iter().filter(|t| t.font == Font::Eyebrow).collect();
                 for card in &l.cards {
                     if l.preview == Some(*card) || l.cat_preview == Some(*card) {
                         continue;
@@ -6206,7 +6214,8 @@ mod tests {
                     // A card's title is the eyebrow just above it, or (a list
                     // card's own sub-heading) one inside it.
                     let titled = eyebrows.iter().any(|t| {
-                        t.rect.bottom() <= card.y + 0.01 && card.y - t.rect.bottom() <= EYEBROW_GAP + 0.01
+                        t.rect.bottom() <= card.y + 0.01
+                            && card.y - t.rect.bottom() <= EYEBROW_GAP + 0.01
                     });
                     assert!(titled, "{section:?} {lang:?}: bare card {card:?}");
                 }

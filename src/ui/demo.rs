@@ -106,6 +106,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
+use super::cat_style::CatLook;
 use super::dock::{self, DockFrame};
 use super::geometry::{
     ANIM_MS, NOTCH_OPACITY_DEFAULT, NotchSize, ShapeKind, ShapeRect, ease_out_back, lerp_shape,
@@ -115,11 +116,10 @@ use super::geometry::{
 use super::motion::{
     PAGE_FADE_MS, REVEAL_MS, RevealDir, Transit, content_alpha, page_fade_frame, reveal_frame,
 };
-use super::cat_style::CatLook;
 use super::notch_fill::{self, fill_alpha};
 use super::render::{
     CleanerView, CliView, ClipNoticeView, ClipView, DevicesView, FolderMenuView, Frame, MoleView,
-    Progress, Renderer, RobotFrame, SearchView, ShotView, SheetKind, SystemView,
+    Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::shelf_motion::{SHELF_ENTER_MS, SHELF_MOVE_MS, SHELF_STAGGER_MS, ShelfMotion};

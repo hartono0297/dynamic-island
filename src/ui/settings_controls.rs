@@ -16,8 +16,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
-    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS,
-    D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
+    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
     D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
     D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION,
     D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
@@ -35,26 +35,24 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::Result;
 use windows_numerics::{Matrix3x2, Vector2};
 
+use super::cat_style::CatLook;
 use super::fonts::{self, Face, Role};
 use super::geometry::{
     BAR_COUNT, BAR_GAP, BAR_W, NotchSize, SHOULDER, ShapeKind, compact_layout,
-    idle_layout,
-    compact_layout_robot, shape_with_robot_sized,
+    compact_layout_robot, idle_layout, shape_with_robot_sized,
 };
 use super::icons::{Icon, IconSet};
 use super::notch_fill::legibility;
-use super::cat_style::CatLook;
-use crate::theme;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, CAT_TILE, CONTROL_RADIUS, CatFace, Chip, Control,
-    EXTERNAL_GLYPH,
-    FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect, SEGMENT_RADIUS,
-    SLIDER_THUMB, SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone, accent_key,
-    slider_x,
+    EXTERNAL_GLYPH, FULL_RADIUS, Field, Font, Group, Hit, LINK_GLYPH_W, Layout, Measure, Rect,
+    SEGMENT_RADIUS, SLIDER_THUMB, SWATCH_RING_GAP, SWATCH_RING_W, Section, Segment, Text, Tone,
+    accent_key, slider_x,
 };
 use crate::config::Style;
 use crate::i18n::{Key, Lang, text};
+use crate::theme;
 use crate::theme::{Accent, CatAccessory, CatColor, Palette, Surface, WindowPalette};
 
 /// The Vale logo's fixed brand colours, whatever the accent: the terracotta
@@ -946,8 +944,17 @@ impl Painter<'_> {
         if color == CatColor::Calico {
             // The orange patch on the left, the dark one on the right, as a
             // half circle each.
-            for (dx, rgb) in [(-1.0, super::cat_style::PATCH_ORANGE), (1.0, super::cat_style::PATCH_DARK)] {
-                self.circle(cx + dx * radius * 0.42, cy - radius * 0.2, radius * 0.38, rgb, 1.0);
+            for (dx, rgb) in [
+                (-1.0, super::cat_style::PATCH_ORANGE),
+                (1.0, super::cat_style::PATCH_DARK),
+            ] {
+                self.circle(
+                    cx + dx * radius * 0.42,
+                    cy - radius * 0.2,
+                    radius * 0.38,
+                    rgb,
+                    1.0,
+                );
             }
         }
         self.ring(cx, cy, radius - 0.5, 1.0, self.p.secondary, 0.35);
@@ -1697,7 +1704,12 @@ mod tests {
                 CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
                     .expect("wic");
             let bitmap = wic
-                .CreateBitmap(SIZE, SIZE, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)
+                .CreateBitmap(
+                    SIZE,
+                    SIZE,
+                    &GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapCacheOnLoad,
+                )
                 .expect("bitmap");
             let props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
@@ -1713,7 +1725,9 @@ mod tests {
                 .d2d
                 .CreateWicBitmapRenderTarget(&bitmap, &props)
                 .expect("target");
-            let brush = rt.CreateSolidColorBrush(&color(0, 1.0), None).expect("brush");
+            let brush = rt
+                .CreateSolidColorBrush(&color(0, 1.0), None)
+                .expect("brush");
             let layer = rt.CreateLayer(None).expect("layer");
             rt.BeginDraw();
             rt.Clear(Some(&color(bg, 1.0)));

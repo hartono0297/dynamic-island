@@ -67,11 +67,10 @@ use super::frame_clock::{FrameClock, WM_APP_FRAME};
 use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
-    CLIENT_H, CLIENT_W, CatFace, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout,
-    List,
-    PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State, TileForm, Tone,
-    battery_step, clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by,
-    shot_secs_step, slider_value,
+    CLIENT_H, CLIENT_W, CatFace, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit,
+    Layout, List, PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State,
+    TileForm, Tone, battery_step, clip_items_step, disk_warn_step, drop_index, layout,
+    ram_warn_step, scroll_by, shot_secs_step, slider_value,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -2795,7 +2794,7 @@ pub fn run_demo(args: &[String]) {
         }
         theme::set_current(theme::Theme {
             accent: m.accent,
-            surface: m.surface,
+            surface: m.surface.resolve(m.cat_color, m.robot),
             window: m.window,
         });
     }
@@ -2898,7 +2897,7 @@ pub fn run_demo(args: &[String]) {
     theme::set_system_light(theme::read_system_light());
     theme::set_current(theme::Theme {
         accent,
-        surface: model.surface,
+        surface: model.surface.resolve(model.cat_color, model.robot),
         window,
     });
     DEMO.with_borrow_mut(|m| *m = Some(model.clone()));

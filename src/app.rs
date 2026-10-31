@@ -93,6 +93,7 @@ use crate::system::{
 use crate::theme::{self, Theme};
 use crate::tiles::ShortcutTiles;
 use crate::ui::app_icon;
+use crate::ui::cat_style::CatLook;
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
@@ -107,7 +108,6 @@ use crate::ui::motion::{
     FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
     content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, panel_fade, transition,
 };
-use crate::ui::cat_style::CatLook;
 use crate::ui::notch_fill;
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{

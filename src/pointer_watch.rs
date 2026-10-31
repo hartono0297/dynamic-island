@@ -354,9 +354,18 @@ mod tests {
             // Both on but the peek blocked by stay-behind and the cat off: none.
             assert_eq!(pace(false, true, true, true, near), 0);
             // The cat alone, the peek alone, both.
-            assert_eq!(pace(true, true, false, false, near), poll_ms(true, false, near));
-            assert_eq!(pace(false, true, true, false, near), poll_ms(false, true, near));
-            assert_eq!(pace(true, true, true, false, near), poll_ms(true, true, near));
+            assert_eq!(
+                pace(true, true, false, false, near),
+                poll_ms(true, false, near)
+            );
+            assert_eq!(
+                pace(false, true, true, false, near),
+                poll_ms(false, true, near)
+            );
+            assert_eq!(
+                pace(true, true, true, false, near),
+                poll_ms(true, true, near)
+            );
         }
     }
 

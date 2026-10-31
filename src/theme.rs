@@ -204,12 +204,23 @@ impl Surface {
 }
 
 /// The three theme settings together.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
     pub accent: Accent,
     /// Always concrete: `Theme::of` resolves `Auto`.
     pub surface: Surface,
     pub window: WindowTheme,
+}
+
+/// The default settings, with the default surface resolved (Espresso).
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            accent: Accent::default(),
+            surface: Surface::default().resolve(CatColor::default(), true),
+            window: WindowTheme::default(),
+        }
+    }
 }
 
 impl Theme {
@@ -534,6 +545,8 @@ mod tests {
         );
         assert_eq!(Accent::default(), Accent::Terracotta);
         assert_eq!(Surface::default(), Surface::Auto);
+        // `Theme.surface` is always concrete, the default's too.
+        assert_eq!(Theme::default().surface, Surface::Espresso);
         assert_eq!(Accent::Terracotta.light_rgb(), 0xC9542B);
     }
 
@@ -682,7 +695,10 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(Theme::of(&cfg).surface, Surface::Sea);
-        assert_eq!(island_palette(&cfg), island(Accent::Terracotta, Surface::Sea));
+        assert_eq!(
+            island_palette(&cfg),
+            island(Accent::Terracotta, Surface::Sea)
+        );
         let off = Config {
             robot: false,
             ..cfg

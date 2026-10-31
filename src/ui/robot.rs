@@ -174,7 +174,6 @@ pub enum Ink {
     Cream,
 }
 
-
 /// A stroked line of the face, with round caps and joins.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Line {
