@@ -5,6 +5,11 @@ date: 2026-10-27
 
 # Settings: Tampilan scrolls
 
+> Since v3.8 Settings has eight sections and Bata's rows (cat, animation,
+> sleep, greeting) live on the Kucing page, not in Tampilan; see
+> [[settings-structure]]. The scroll mechanics below still hold; which
+> sections scroll is now listed there.
+
 The Appearance page was full (preview + 5 rows end at y 452 of the 496
 margin in a 520 px client). Bata's four rows (Asisten di notch, Animasi,
 Tidur setelah, Sapaan pagi) go in a second card under it, so the section

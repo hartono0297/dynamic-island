@@ -5,6 +5,12 @@ date: 2026-10-30
 
 # Notch size and see-through background
 
+> Since v3.8 the card is titled "Notch" and its fill row is "Isi notch"
+> (Solid | Tembus, was "Latar notch" Hitam | Transparan); the island colour
+> is "Warna dasar" with five surfaces plus Auto. See [[settings-structure]]
+> and [[cat-colours-and-surfaces]]. Size, alpha and drag behaviour below are
+> unchanged.
+
 Vale v3.5 requests #1 and #4, together in one new card in Settings ->
 Tampilan ("Notch", between the first card and Bata's). Config (island-owned,
 in `merge_owned`), geometry in `src/ui/geometry.rs`, alpha math in

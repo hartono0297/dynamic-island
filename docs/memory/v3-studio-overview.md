@@ -51,10 +51,10 @@ the note it links to.
   [[bata-robot-expressions]]
 - **Power.** Only one-shot timers (a blink every 4–7 s while awake); asleep with nothing pending runs none.
   [[bata-idle-power-budget]]
-- **Morning greeting**, once a day before noon, never spent on a locked
-  screen. [[bata-morning-greeting]]
-- **Settings** Appearance page scrolls to fit Bata's rows.
-  [[settings-appearance-scroll]]
+- **Greeting**, once per time-of-day period (five) per day since v3.8, never
+  spent on a locked screen. [[greeting-periods]], [[bata-morning-greeting]]
+- **Settings** in eight sections since v3.8, the cat on its own Kucing page
+  ([[settings-structure]]; older: [[settings-appearance-scroll]]).
 
 ## Demo and screenshots
 

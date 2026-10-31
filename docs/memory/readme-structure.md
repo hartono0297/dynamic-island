@@ -41,3 +41,15 @@ setup, Mole, data and privacy, troubleshooting, limits) lives in
   third-party licences. The release zip carries `LICENSE`.
 
 Related: [[screenshot-capture-script]], [[v3-2-handoff]].
+
+## v3.8 additions
+
+The "Yours to shape" and cat bullets, "What it does" and the closing
+Settings paragraph name the v3.8 features: time-of-day greeting
+([[greeting-periods]]), four coats and seven accessories
+([[cat-colours-and-surfaces]], [[cat-accessories]]), the island background
+(Match cat plus five colours), the follow-pointer and shrink-to-eyes
+switches, and the eight Settings sections ([[settings-structure]]). Gotcha:
+`docs/guide.md` (greeting line 73, Settings table around line 124) still
+describes the old morning greeting and six sections; README leads, the guide
+is behind.

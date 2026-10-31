@@ -28,9 +28,9 @@ Music with synced lyrics, calendar, clipboard history, volume mixer, file shelf,
 
 - **Native and tiny.** One exe of about 2 MB, written in Rust (Win32 and Direct2D). No browser engine, no runtime to install.
 - **Made for Windows 11.** It reads Windows' own media sessions, notifications, audio and Explorer, so it works with Spotify, music in the browser, Teams and the apps you already use.
-- **Yours to shape.** Open it on hover, hover-and-stay or click; reorder or hide pages; pick the accent colour, the island fill, the size of the closed notch (width and height) and a solid or see-through background, your own shortcut tiles and hotkeys. Indonesian and English.
+- **Yours to shape.** Open it on hover, hover-and-stay or click; reorder or hide pages; pick the accent colour, the size of the closed notch (width and height), a solid or see-through fill and the island's background (it follows the cat, or one of five colours), your own shortcut tiles and hotkeys. Indonesian and English.
 - **Private.** Notes, reminders, clipboard and files stay on your PC. No account, no telemetry.
-- **A small cat lives in the notch.** Its face and ears tell you what is going on: listening to music, focused on a pomodoro, thinking while Claude Code works, asleep when you are away.
+- **A small cat lives in the notch.** Its face and ears tell you what is going on: listening to music, focused on a pomodoro, thinking while Claude Code works, asleep when you are away. It greets you by the time of day (morning, midday, afternoon, evening, late night), once per period. Pick its coat (Terracotta, Calico, White or Black) and an accessory (glasses, bow, nightcap, scarf, flower or crown).
 
 ## Install
 
@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\Vale\uninst
 
 ## What it does
 
-Hover the notch to open it, scroll to change pages. Hover the page dots under the panel and they turn into a row of icons that grow toward the pointer, like a dock; click one to jump to that page. With the cat on, it also turns its head and eyes toward the pointer (full animation only, off in Energy Saver). While the pointer nears the notch over another window, the notch shrinks to the cat's two eyes so the window under it (a browser's tabs, say) can be clicked; rest on the eyes for half a second to bring the notch back. The panel stays open for a few seconds after you click in it or close an editor, and every page and sub-view change glides (or is instant when Windows' animation effects are off).
+Hover the notch to open it, scroll to change pages. Hover the page dots under the panel and they turn into a row of icons that grow toward the pointer, like a dock; click one to jump to that page. With the cat on, it also turns its head and eyes toward the pointer (full animation only, off in Energy Saver; the *Follow the pointer* switch on the Cat page turns it off). While the pointer nears the notch over another window, the notch shrinks to the cat's two eyes so the window under it (a browser's tabs, say) can be clicked; rest on the eyes for half a second to bring the notch back (the *Shrink to eyes* switch turns this off). The panel stays open for a few seconds after you click in it or close an editor, and every page and sub-view change glides (or is instant when Windows' animation effects are off).
 
 | | |
 |---|---|
@@ -111,7 +111,7 @@ Hover the notch to open it, scroll to change pages. Hover the page dots under th
 
 <p align="center"><img src="assets/screenshots/notices.png" width="460" alt="Animated notices in the notch: a greeting, a copied item, a screenshot preview, a disk warning and a long lyric line"></p>
 
-Everything is set in **Settings**, from the tray icon: open mode, page order, accent colours, shortcuts, hotkeys, lyrics, the cat, language. It can also stay behind your windows (experimental). Every option is described in the [guide](docs/guide.md#settings).
+Everything is set in **Settings**, from the tray icon, in eight sections: General, Appearance, Cat, Panel, Clipboard, Features, Integrations and About. Appearance holds the island style, accent colour, island background (*Match cat*, Espresso, Graphite, Sea, Night or Plum), notch size and fill; Cat holds the coat, accessory, animation, sleep, the follow-pointer and shrink-to-eyes switches and the greeting. Open mode, page order, shortcuts, hotkeys, lyrics and language are there too. It can also stay behind your windows (experimental). Every option is described in the [guide](docs/guide.md#settings).
 
 ## Privacy
 
