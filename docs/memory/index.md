@@ -64,6 +64,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[cat-looks-at-pointer]]: the idle cat turns head, ears and eyes toward the pointer sideways, eased on the frame clock, clamp checked by a test; "Ikuti kursor" turns it off (v3.8)
 - [[cat-colours-and-surfaces]]: four coats (Terracotta, Calico, White, Black), five island surfaces plus "follow the cat", contrast numbers, lenient config (v3.8)
 - [[cat-accessories]]: seven accessories, the one-silhouette paint order (rim, ears and head, calico patches cut to the whole silhouette, marks, accessories), the rejected mockups, the clamp test (v3.8)
+- [[eq-follow-audio]]: the compact view's equalizer bars follow the real music (WASAPI loopback, five bands, per-band auto-gain, `eq-capture` thread only while `TIMER_EQ` runs and "Equalizer ikut irama" is on, sine fallback)
 - [[settings-structure]]: Settings in eight sections (Umum, Tampilan, Kucing, Panel, Clipboard, Fitur, Integrasi, Tentang), titled cards, renamed labels, which sections scroll (v3.8)
 
 ## Gotchas

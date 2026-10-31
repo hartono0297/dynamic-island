@@ -163,6 +163,10 @@ pub struct Config {
     /// pointer over a window (default on).
     #[serde(deserialize_with = "default_on")]
     pub notch_peek: bool,
+    /// "Equalizer ikut irama": the equalizer bars beside the song title
+    /// follow the real sound (default on).
+    #[serde(deserialize_with = "default_on")]
+    pub eq_follow_audio: bool,
     /// The Notifikasi page's history (Settings → Fitur → Notifikasi).
     #[serde(deserialize_with = "notif_settings")]
     pub notifications: NotifSettings,
@@ -562,6 +566,7 @@ impl Default for Config {
             cat_accessory: CatAccessory::None,
             cat_follow_pointer: true,
             notch_peek: true,
+            eq_follow_audio: true,
             notifications: NotifSettings::default(),
         }
     }
@@ -707,6 +712,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         cat_accessory: mem.cat_accessory,
         cat_follow_pointer: mem.cat_follow_pointer,
         notch_peek: mem.notch_peek,
+        eq_follow_audio: mem.eq_follow_audio,
         notifications: mem.notifications,
         ..disk
     }
@@ -1081,6 +1087,7 @@ mod tests {
             cat_accessory: CatAccessory::Bow,
             cat_follow_pointer: false,
             notch_peek: false,
+            eq_follow_audio: false,
             notifications: NotifSettings {
                 record: false,
                 max_items: 120,
@@ -2190,6 +2197,29 @@ mod tests {
             cat(&merged),
             (CatColor::Black, CatAccessory::Scarf, false, false)
         );
+    }
+
+    #[test]
+    fn eq_follow_audio_defaults_on_reads_leniently_and_round_trips() {
+        assert!(Config::default().eq_follow_audio);
+        // A file from before the setting has no key.
+        assert!(parse(r#"{"style":"Notch","robot":false}"#).eq_follow_audio);
+        // Junk keeps the default and does not drop the rest of the file.
+        for junk in [r#""yes""#, "null", "7", r#""false""#, "[]"] {
+            let c = parse(&format!(r#"{{"style":"Notch","eq_follow_audio":{junk}}}"#));
+            assert!(c.eq_follow_audio, "{junk}");
+            assert_eq!(c.style, Style::Notch);
+        }
+        let off = parse(r#"{"eq_follow_audio":false}"#);
+        assert!(!off.eq_follow_audio);
+        let mem = Config {
+            eq_follow_audio: false,
+            ..Config::default()
+        };
+        assert_eq!(parse(&serde_json::to_string_pretty(&mem).unwrap()), mem);
+        // The island keeps its own copy over the file's.
+        assert!(!merge_owned(Config::default(), &mem).eq_follow_audio);
+        assert!(merge_owned(mem.clone(), &Config::default()).eq_follow_audio);
     }
 
     #[test]

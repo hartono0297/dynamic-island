@@ -74,4 +74,6 @@ Bluetooth device switching while the page is open (the next scan picks the
 new default endpoint). Also unverified: a drag carried off the island and
 released outside it (capture, then the leave), and a touchpad over a row.
 
-Related: [[gestures]], [[shortcut-tiles]].
+Related: [[gestures]], [[shortcut-tiles]]. A second Core Audio worker,
+`eq-capture`, reads the default output in loopback for the equalizer bars
+([[eq-follow-audio]]); it is separate from this one.

@@ -66,6 +66,7 @@ use crate::cli_folders::{self, FolderList, ListKind};
 use crate::cli_panel::{self, Echoes, MAX_SUGGESTIONS, RunClock};
 use crate::config::{self, Config, OnDisk, Repair, Style};
 use crate::data_dir;
+use crate::eq_audio::EqCapture;
 use crate::gestures;
 use crate::google::client::{self, Client};
 use crate::greeting::{DayPeriod, GreetCounts, GreetMark};
@@ -396,6 +397,8 @@ pub fn run(media_log_flag: bool) {
             hwheel: gestures::HWheel::default(),
             media_click: None,
             eq_timer: false,
+            eq_capture: None,
+            eq_capture_on: false,
             outside_ms: 0,
             behind: behind::Behind::default(),
             behind_ms: 0,
@@ -649,6 +652,11 @@ struct App {
     media_click: Option<media_log::Click>,
     /// `TIMER_EQ` / `TIMER_POMO` are set.
     eq_timer: bool,
+    /// The loopback capture behind the equalizer bars (`eq_audio`), created
+    /// the first time it is wanted; `eq_capture_on` is the last
+    /// `set_running` sent to it.
+    eq_capture: Option<EqCapture>,
+    eq_capture_on: bool,
     /// `TIMER_OUTSIDE`'s interval now; 0 while it does not run.
     outside_ms: u32,
     /// "Di belakang jendela": the island's place in the window order, and
@@ -3370,20 +3378,7 @@ impl App {
     /// is on screen and moving.
     fn sync_timers(&mut self, now: Instant) {
         let view = self.state.view();
-        // The shrunk notch shows no equalizer: nothing to redraw 30 times a second.
-        let eq = !self.eyes
-            && view == View::MediaCompact
-            && self.state.media().is_some_and(|m| m.playing);
-        if eq != self.eq_timer {
-            self.eq_timer = eq;
-            unsafe {
-                if eq {
-                    SetTimer(Some(self.hwnd), TIMER_EQ, EQ_MS, None);
-                } else {
-                    let _ = KillTimer(Some(self.hwnd), TIMER_EQ);
-                }
-            }
-        }
+        self.sync_eq();
         let clock = clock_timer_wanted(&view, self.config.idle_clock);
         if clock != self.clock_timer {
             self.clock_timer = clock;
@@ -3432,6 +3427,57 @@ impl App {
         }
     }
 
+    /// `TIMER_EQ` runs only while the compact view shows playing media at a
+    /// screen somebody can see: not shrunk to the eyes, not fullscreen, not
+    /// locked or with the display off. The capture thread behind the bars
+    /// runs exactly while that timer does and the setting is on.
+    fn sync_eq(&mut self) {
+        let playing = self.state.media().is_some_and(|m| m.playing);
+        let eq = eq_timer_wanted(
+            self.state.view() == View::MediaCompact,
+            playing,
+            self.eyes,
+            self.fullscreen,
+            self.screen_away(),
+        );
+        if eq != self.eq_timer {
+            self.eq_timer = eq;
+            unsafe {
+                if eq {
+                    SetTimer(Some(self.hwnd), TIMER_EQ, EQ_MS, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_EQ);
+                }
+            }
+        }
+        let capture = eq_capture_wanted(self.eq_timer, self.config.eq_follow_audio);
+        if capture != self.eq_capture_on {
+            self.eq_capture_on = capture;
+            // Lazy: an island that never shows playing media never spawns it.
+            if capture && self.eq_capture.is_none() {
+                self.eq_capture = EqCapture::spawn();
+            }
+            if let Some(worker) = &self.eq_capture {
+                worker.set_running(capture);
+            }
+        }
+    }
+
+    /// The equalizer bar heights from the real sound, or `None` for the
+    /// sine: capture not wanted, or no device open (yet).
+    fn eq_heights(&self) -> Option<[f32; crate::ui::geometry::BAR_COUNT]> {
+        if !eq_capture_wanted(self.eq_timer, self.config.eq_follow_audio) {
+            return None;
+        }
+        let shared = self.eq_capture.as_ref()?.shared();
+        shared.live.load(Ordering::Relaxed).then(|| {
+            crate::ui::geometry::audio_bar_heights(
+                shared.levels(),
+                shared.muted.load(Ordering::Relaxed),
+            )
+        })
+    }
+
     /// "Di belakang jendela": the poll runs only while the setting is on and
     /// the screen is not fullscreen; off (or fullscreen) the island is back
     /// above every window and nothing is read. A view that must be seen
@@ -3471,6 +3517,7 @@ impl App {
         self.sync_outside_timer();
         self.sync_behind(Instant::now());
         self.sync_halo_timer();
+        self.sync_eq();
         self.follow_pointer_settings(Instant::now());
     }
 
@@ -4823,6 +4870,12 @@ impl App {
                 // A shrunk notch comes back at once; the poll follows.
                 self.refresh(now);
             }
+            SettingsAction::EqFollowAudio(on) => {
+                self.config.eq_follow_audio = on;
+                self.save_config();
+                // `sync_eq` (from `refresh`) starts or stops the capture now.
+                self.refresh(now);
+            }
             SettingsAction::Greeting(on) => {
                 self.config.morning_greeting = on;
                 self.save_config();
@@ -5143,6 +5196,7 @@ impl App {
             progress: track_progress(state, now),
             robot,
             eyes: self.eyes,
+            eq_heights: self.eq_heights(),
             robot_fades: self.eyes_morph,
             system: Some(&system),
             cleaner: cleaner.as_ref(),
@@ -5927,6 +5981,24 @@ fn rise_frame(
         }
         _ => (shape, opacity),
     }
+}
+
+/// `TIMER_EQ` (33 ms) runs only while the compact view shows playing media
+/// with the full notch, on a screen that is not fullscreen, locked or off.
+fn eq_timer_wanted(
+    view_compact: bool,
+    playing: bool,
+    eyes: bool,
+    fullscreen: bool,
+    screen_away: bool,
+) -> bool {
+    view_compact && playing && !eyes && !fullscreen && !screen_away
+}
+
+/// The capture thread runs exactly while `TIMER_EQ` does and "Equalizer ikut
+/// irama" is on.
+fn eq_capture_wanted(timer_on: bool, setting_on: bool) -> bool {
+    timer_on && setting_on
 }
 
 /// The idle clock's minute timer runs only while the idle island shows it.
@@ -7792,6 +7864,54 @@ mod tests {
         assert!(drain_refreshes(1, 1, true));
         assert!(drain_refreshes(3, 1, false));
         assert!(drain_refreshes(0, 0, false), "a plain wake still refreshes");
+    }
+
+    #[test]
+    fn eq_timer_runs_only_for_playing_compact_media_on_a_visible_screen() {
+        for bits in 0..32u32 {
+            let b = |n: u32| bits & (1 << n) != 0;
+            let (compact, playing, eyes, fullscreen, away) = (b(0), b(1), b(2), b(3), b(4));
+            let expect = compact && playing && !eyes && !fullscreen && !away;
+            assert_eq!(
+                eq_timer_wanted(compact, playing, eyes, fullscreen, away),
+                expect,
+                "compact {compact} playing {playing} eyes {eyes} fullscreen {fullscreen} away {away}"
+            );
+        }
+        assert!(eq_timer_wanted(true, true, false, false, false));
+        // Each condition alone stops it.
+        assert!(
+            !eq_timer_wanted(false, true, false, false, false),
+            "another view"
+        );
+        assert!(!eq_timer_wanted(true, false, false, false, false), "paused");
+        assert!(!eq_timer_wanted(true, true, true, false, false), "eyes");
+        assert!(
+            !eq_timer_wanted(true, true, false, true, false),
+            "fullscreen"
+        );
+        assert!(
+            !eq_timer_wanted(true, true, false, false, true),
+            "locked or display off"
+        );
+    }
+
+    #[test]
+    fn eq_capture_needs_the_timer_and_the_setting() {
+        assert!(eq_capture_wanted(true, true));
+        assert!(!eq_capture_wanted(true, false), "setting off: never");
+        assert!(!eq_capture_wanted(false, true), "no timer, no capture");
+        assert!(!eq_capture_wanted(false, false));
+        // End to end over every state: capture only with a running timer.
+        for bits in 0..64u32 {
+            let b = |n: u32| bits & (1 << n) != 0;
+            let timer = eq_timer_wanted(b(0), b(1), b(2), b(3), b(4));
+            let capture = eq_capture_wanted(timer, b(5));
+            assert_eq!(capture, timer && b(5), "{bits:06b}");
+            if !b(5) {
+                assert!(!capture, "setting off never captures");
+            }
+        }
     }
 
     #[test]

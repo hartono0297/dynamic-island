@@ -492,6 +492,9 @@ keys! {
         "Experimental: covered by windows, rises at the top edge";
     IdleClock => "Jam saat kosong", "Clock when idle";
     IdleClockDesc => "Tampilkan jam saat island kosong", "Show the time when the island is idle";
+    EqFollowAudio => "Equalizer ikut irama", "Equalizer follows the music";
+    EqFollowAudioDesc => "Bar bergerak mengikuti suara yang diputar",
+        "Bars move with the sound that is playing";
     PanelPages => "Halaman panel", "Panel pages";
     PageCalendar => "Kalender", "Calendar";
     PagePomodoro => "Pomodoro", "Pomodoro";

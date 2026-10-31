@@ -372,6 +372,8 @@ pub enum Hit {
     Lang(Lang),
     Autostart,
     IdleClock,
+    /// "Equalizer ikut irama".
+    EqFollowAudio,
     /// "Di belakang jendela".
     StayBehind,
     Lyrics,
@@ -1002,6 +1004,7 @@ pub struct State<'a> {
     pub notch_opacity: u8,
     /// The idle island shows the clock.
     pub idle_clock: bool,
+    pub eq_follow_audio: bool,
     /// "Di belakang jendela" (experimental).
     pub stay_behind: bool,
     /// The cat in the notch, how it moves, when it sleeps, the greeting.
@@ -1923,8 +1926,8 @@ fn appearance(b: &mut Builder, s: &State) {
     let preview = b.card(PREVIEW_H);
     b.l.preview = Some(preview);
     titled(b, Key::GroupIsland);
-    let card = b.card(4.0 * ROW_H);
-    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let card = b.card(5.0 * ROW_H);
+    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let styles = [
@@ -2009,6 +2012,11 @@ fn appearance(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
     b.row_text(card, rows[3], b.t(Key::IdleClock), desc, false, x);
     b.divider(card, rows[3]);
+
+    let x = b.toggle(Hit::EqFollowAudio, RIGHT, cy(rows[4]), s.eq_follow_audio);
+    let desc = Some((b.t(Key::EqFollowAudioDesc), Tone::Secondary));
+    b.row_text(card, rows[4], b.t(Key::EqFollowAudio), desc, false, x);
+    b.divider(card, rows[4]);
 
     notch_card(b, s);
 
@@ -3792,6 +3800,7 @@ mod tests {
                         },
                         notch_opacity: if locked { 0 } else { 100 },
                         idle_clock: locked,
+                        eq_follow_audio: !locked,
                         stay_behind: !locked,
                         robot: !locked,
                         robot_motion: if locked { Motion::Off } else { Motion::Saver },
@@ -4325,7 +4334,10 @@ mod tests {
             .map(|(h, _)| h)
             .filter(|h| matches!(h, Hit::Slider(_) | Hit::NotchReset | Hit::NotchFill(_)))
             .collect();
-        assert_eq!(peeking, [Hit::Slider(SliderId::NotchWidth)]);
+        // The Island card's fifth row (the equalizer toggle) now ends the
+        // visible part; the Notch card starts below the window.
+        assert_eq!(peeking, []);
+        assert!(top.hits().iter().any(|(h, _)| *h == Hit::EqFollowAudio));
         for (_, r) in top.hits() {
             assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
         }
@@ -5691,6 +5703,33 @@ mod tests {
             assert_eq!(shown, on);
             let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
             assert_eq!(l.hit(cx, cy), Some(Hit::IdleClock));
+        }
+    }
+
+    #[test]
+    fn eq_follow_audio_toggle_shows_the_setting() {
+        for on in [true, false] {
+            let s = State {
+                eq_follow_audio: on,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Appearance, &s, &Estimate);
+            let toggle = l.controls.iter().find_map(|c| match c {
+                Control::Toggle { hit, rect, on, .. } if *hit == Hit::EqFollowAudio => {
+                    Some((*rect, *on))
+                }
+                _ => None,
+            });
+            let (rect, shown) = toggle.expect("equalizer toggle in Appearance");
+            assert_eq!(shown, on);
+            let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+            assert_eq!(l.hit(cx, cy), Some(Hit::EqFollowAudio));
+            // It sits in the Island card, right under "Jam saat kosong".
+            let clock = l.controls.iter().find_map(|c| match c {
+                Control::Toggle { hit, rect, .. } if *hit == Hit::IdleClock => Some(*rect),
+                _ => None,
+            });
+            assert!((rect.y - clock.expect("idle clock toggle").y - ROW_H).abs() < 0.01);
         }
     }
 

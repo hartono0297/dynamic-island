@@ -58,6 +58,11 @@ section worked; the section list, "Bata's four rows" (now the Kucing page's
 Gerak card, Animasi / Tidur setelah / Ikuti kursor / Mengecil jadi mata) and
 the scroll test are in [[settings-structure]].
 
+The Island card has five rows since "Equalizer ikut irama" was added
+([[eq-follow-audio]]), so at scroll 0 the window ends inside that card and no
+Notch slider peeks in (the scroll test now asserts the new toggle is visible
+and nothing of the Notch card is).
+
 Related: [[bata-robot-expressions]], [[bata-idle-power-budget]],
 [[notch-size-and-fill]], [[settings-structure]]
 
