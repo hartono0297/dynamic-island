@@ -1,4 +1,3 @@
-use chrono::NaiveDate;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::clean::CleanMode;
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
+use crate::greeting::GreetMark;
 use crate::i18n::Lang;
 use crate::pages::PageEntry;
 use crate::pomodoro::PomoSettings;
@@ -95,11 +95,14 @@ pub struct Config {
     /// Bata falls asleep after this many minutes without activity (1–60).
     #[serde(deserialize_with = "sleep_minutes")]
     pub robot_sleep_minutes: u32,
-    /// Once a day, before noon, a greeting with today's events and reminders.
+    /// The cat's greeting by time of day: once per period per day, with a
+    /// summary of the events and reminders that fit the period.
     pub morning_greeting: bool,
-    /// The day the greeting last showed; an unreadable date reads as none.
-    #[serde(deserialize_with = "lenient_date")]
-    pub last_greeting: Option<NaiveDate>,
+    /// The day and period the greeting last showed, "2026-10-31 evening". A
+    /// plain old "2026-10-27" reads as that day's Morning; an unreadable
+    /// value reads as none.
+    #[serde(deserialize_with = "crate::greeting::lenient_mark")]
+    pub last_greeting: Option<GreetMark>,
     /// Hidden, set by hand: write the media diagnosis log (`media_log`),
     /// like `--media-log`. Not in the settings window, and not written to
     /// the file while off.
@@ -360,13 +363,6 @@ fn sleep_minutes<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
         .map_or(Config::default().robot_sleep_minutes, |n| {
             clamp_sleep(n.clamp(0.0, f64::from(u32::MAX)) as u32)
         }))
-}
-
-/// "2026-10-27", else `None`: a hand edit never invalidates the file.
-fn lenient_date<'de, D: Deserializer<'de>>(d: D) -> Result<Option<NaiveDate>, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(v.as_str()
-        .and_then(|s| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()))
 }
 
 impl Default for Config {
@@ -676,6 +672,15 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::greeting::DayPeriod;
+    use chrono::NaiveDate;
+
+    fn mark(y: i32, m: u32, d: u32, period: DayPeriod) -> Option<GreetMark> {
+        Some(GreetMark {
+            date: NaiveDate::from_ymd_opt(y, m, d)?,
+            period,
+        })
+    }
 
     #[test]
     fn empty_text_is_default() {
@@ -736,13 +741,13 @@ mod tests {
             robot_animation: Motion::Saver,
             robot_sleep_minutes: 25,
             morning_greeting: false,
-            last_greeting: NaiveDate::from_ymd_opt(2026, 10, 27),
+            last_greeting: mark(2026, 10, 27, DayPeriod::Evening),
             ..Config::default()
         };
         let json = serde_json::to_string(&c).unwrap();
         for field in [
             r#""robot_animation":"Saver""#,
-            r#""last_greeting":"2026-10-27""#,
+            r#""last_greeting":"2026-10-27 evening""#,
             r#""robot_sleep_minutes":25"#,
         ] {
             assert!(json.contains(field), "{json}");
@@ -768,6 +773,13 @@ mod tests {
         );
         let odd = parse(r#"{"robot_sleep_minutes":"ten","last_greeting":null}"#);
         assert_eq!((odd.robot_sleep_minutes, odd.last_greeting), (10, None));
+        // The old once-a-day value, a plain date, reads as that morning.
+        let old = parse(r#"{"robot_sleep_minutes":20,"last_greeting":"2026-10-27"}"#);
+        assert_eq!(old.last_greeting, mark(2026, 10, 27, DayPeriod::Morning));
+        assert_eq!(old.robot_sleep_minutes, 20);
+        // A bad period or date reads as none and the rest of the file stays.
+        let bad = parse(r#"{"robot_sleep_minutes":20,"last_greeting":"2026-10-27 lunch"}"#);
+        assert_eq!((bad.last_greeting, bad.robot_sleep_minutes), (None, 20));
     }
 
     #[test]
@@ -879,7 +891,7 @@ mod tests {
             robot_animation: Motion::Off,
             robot_sleep_minutes: 5,
             morning_greeting: false,
-            last_greeting: NaiveDate::from_ymd_opt(2026, 1, 2),
+            last_greeting: mark(2026, 1, 2, DayPeriod::Night),
             media_log: true,
             disk_warn_gb: 25,
             ram_warn_percent: 85,
@@ -1455,7 +1467,7 @@ mod tests {
         bool,
         bool,
         (Shell, CliStart),
-        (bool, Motion, u32, bool, Option<NaiveDate>),
+        (bool, Motion, u32, bool, Option<GreetMark>),
     );
 
     fn owned(c: &Config) -> Owned {
@@ -1521,7 +1533,7 @@ mod tests {
             robot_animation: Motion::Saver,
             robot_sleep_minutes: 30,
             morning_greeting: false,
-            last_greeting: NaiveDate::from_ymd_opt(2026, 10, 27),
+            last_greeting: mark(2026, 10, 27, DayPeriod::Midday),
             ..Config::default()
         };
         (disk, mem)

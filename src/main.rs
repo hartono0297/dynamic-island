@@ -18,6 +18,7 @@ mod devices_win;
 mod dpapi;
 mod gestures;
 mod google;
+mod greeting;
 mod halo;
 mod i18n;
 mod lyrics;

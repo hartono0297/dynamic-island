@@ -5,9 +5,13 @@ date: 2026-10-27
 
 # Morning greeting: once a day, before noon
 
-`robot::should_greet(last, today, now_time, settings)`: the robot and
-"Sapaan pagi" on, `last_greeting != today`, and **before 12:00** (the
-text says "pagi"; an afternoon start skips the day).
+> Since v3.8 the greeting follows the time of day (five periods, once per
+> period per day) and the noon limit below is gone; see [[greeting-periods]].
+> This note keeps the trigger and gotcha details, which still hold.
+
+`robot::should_greet` was `(last, today, now_time, settings)`: the robot and
+"Sapaan pagi" on, `last_greeting != today`, and before 12:00. It now takes the
+last `GreetMark` and `now` and returns the period to greet in.
 
 When it is tried: startup (after the first calendar snapshot arrives, the
 cache the sync thread sends at once, so today's events can be counted),
@@ -26,16 +30,18 @@ falling back to the last lock/unlock message. `PBT_APMRESUMEAUTOMATIC`
 alone never greets: it also comes on unattended wakes (maintenance,
 Modern Standby). The unlock message always may greet.
 
-It is `NoticeKind::Greeting`: robot Wave 40, "Selamat pagi" over
-"X acara dan Y pengingat hari ini" (`i18n::greeting_body`, EN pluralized;
-a free day says "Hari ini belum ada acara"). Y counts today's undone
-reminders, overdue ones included. It expires after 4 s through the normal
-notice deadline (`GREETING_DURATION`), no timer loop.
+It is `NoticeKind::Greeting { period }`: the cat's face by period (Wave 40 in
+the morning), "Selamat pagi" over "X acara dan Y pengingat hari ini"
+(`i18n::greeting_body`, EN pluralized; a free day says "Hari ini belum ada
+acara"). Y counts today's undone reminders, overdue ones included. It expires
+after 4 s through the normal notice deadline (`GREETING_DURATION`), no timer
+loop.
 
-Storage: `config.last_greeting` (`"2026-10-27"`, an unreadable value reads
-as none) is written when the greeting shows. It is one of the island's
-own fields in `merge_owned`, so a save never loses it.
+Storage: `config.last_greeting` (v3.8: `"2026-10-31 evening"`; the old
+`"2026-10-27"` reads as that date's Morning, an unreadable value as none) is
+written when the greeting shows. It is one of the island's own fields in
+`merge_owned`, so a save never loses it.
 
-Related: [[bata-robot-expressions]], [[demo-data-time-of-day]]
+Related: [[bata-robot-expressions]], [[demo-data-time-of-day]], [[greeting-periods]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

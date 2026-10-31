@@ -23,6 +23,7 @@ One note per decision, gotcha or convention. Link each new note here.
 - [[bata-robot-expressions]]
 - [[bata-idle-power-budget]]
 - [[bata-morning-greeting]]
+- [[greeting-periods]]: the cat greets once per period (5) per day by local time, not just mornings
 - [[lyric-notch-width]]
 - [[notch-size-and-fill]]: Tampilan -> Notch: width/height sliders (160-300 x 28-44), solid or see-through background, the panel stays solid
 - [[settings-appearance-scroll]]

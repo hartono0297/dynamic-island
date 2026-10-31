@@ -40,7 +40,7 @@ pub const SHOT_LEAVE_GRACE: Duration = Duration::from_secs(2);
 /// How long `notice` stays once it is current.
 fn duration_of(notice: &Notice) -> Duration {
     match notice.kind {
-        NoticeKind::Greeting => GREETING_DURATION,
+        NoticeKind::Greeting { .. } => GREETING_DURATION,
         NoticeKind::Copied => COPIED_DURATION,
         NoticeKind::ClipPreview { .. } => CLIP_NOTICE_DURATION,
         NoticeKind::Screenshot { secs, .. } => Duration::from_secs(u64::from(secs)),
@@ -429,7 +429,7 @@ impl IslandState {
                 }
                 // Never over a fullscreen app (`App` checks first and tries
                 // again later; this only guards a race).
-                NoticeKind::Greeting => {
+                NoticeKind::Greeting { .. } => {
                     if !self.fullscreen {
                         self.queue.push_back(notice);
                     }
@@ -2310,7 +2310,9 @@ mod tests {
             source: "Bata".into(),
             title: "Selamat pagi".into(),
             body: "3 acara dan 2 pengingat hari ini".into(),
-            kind: NoticeKind::Greeting,
+            kind: NoticeKind::Greeting {
+                period: crate::greeting::DayPeriod::Morning,
+            },
         }
     }
 

@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::NaiveDateTime;
 // `named_enum!` below names these unqualified.
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -29,6 +29,7 @@ use windows::core::Result as WinResult;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::geometry::Rect;
+use crate::greeting::{self, DayPeriod, GreetMark};
 use crate::i18n::Key;
 use crate::model::{NoticeKind, View};
 
@@ -883,7 +884,7 @@ pub enum NoticeSort {
     MoleDone,
     /// A Mole clean failed or stopped.
     MoleFailed,
-    Greeting,
+    Greeting(DayPeriod),
     /// "Disalin" after a copy.
     Copied,
     /// The preview of a copy made elsewhere (text or files): Bata happy.
@@ -915,7 +916,7 @@ impl NoticeSort {
             NoticeKind::CleanDone => NoticeSort::CleanDone,
             NoticeKind::MoleDone => NoticeSort::MoleDone,
             NoticeKind::MoleFailed => NoticeSort::MoleFailed,
-            NoticeKind::Greeting => NoticeSort::Greeting,
+            NoticeKind::Greeting { period } => NoticeSort::Greeting(*period),
             NoticeKind::Copied => NoticeSort::Copied,
             NoticeKind::ClipPreview { .. } => NoticeSort::ClipPreview,
             NoticeKind::Screenshot { .. } => NoticeSort::Screenshot,
@@ -1006,7 +1007,7 @@ pub struct RobotInputs {
 /// 2. A notice decides by its kind: reminder and Claude waiting → Alert,
 ///    pomodoro phase done, Claude done, a finished clean (own or Mole) and
 ///    "Disalin" → Happy, low battery, low disk or high RAM and a failed Mole
-///    clean → Sad, greeting → Wave. Other apps' notifications (`App`) → no
+///    clean → Sad, greeting → its period's face. Other apps' notifications (`App`) → no
 ///    robot: they keep their app badge.
 /// 3. The pointer over a compact island → Happy (it also wakes it).
 /// 4. Pomodoro → Focus, media → Music, lyric line → Sing.
@@ -1035,7 +1036,7 @@ pub fn choose_expr(i: &RobotInputs) -> Option<Expr> {
                 NoticeSort::BatteryLow | NoticeSort::SystemLow | NoticeSort::MoleFailed => {
                     Some(Expr::Sad)
                 }
-                NoticeSort::Greeting => Some(Expr::Wave),
+                NoticeSort::Greeting(period) => Some(greeting::face(period)),
             };
         }
         compact => compact,
@@ -1384,7 +1385,7 @@ pub fn plan_timers(face: Option<Expr>, motion: Motion, animating: bool) -> Timer
     }
 }
 
-// ---- Morning greeting ----
+// ---- Greeting ----
 
 /// The greeting's switches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1393,20 +1394,20 @@ pub struct GreetSettings {
     pub greeting: bool,
 }
 
-/// Mornings end at noon: "Selamat pagi" after that would be wrong.
-pub const GREET_UNTIL: NaiveTime = match NaiveTime::from_hms_opt(12, 0, 0) {
-    Some(t) => t,
-    None => NaiveTime::MIN,
-};
-
-/// Once per day, in the morning, with the robot and the greeting on.
+/// The period to greet in at `now`: once per period per calendar day, with
+/// the robot and the greeting on. `last` is the mark of the last greeting;
+/// a later period the same day greets again.
 pub fn should_greet(
-    last: Option<NaiveDate>,
-    today: NaiveDate,
-    now_time: NaiveTime,
+    last: Option<GreetMark>,
+    now: NaiveDateTime,
     settings: GreetSettings,
-) -> bool {
-    settings.robot && settings.greeting && last != Some(today) && now_time < GREET_UNTIL
+) -> Option<DayPeriod> {
+    let period = greeting::period_at(now.time());
+    let this = GreetMark {
+        date: now.date(),
+        period,
+    };
+    (settings.robot && settings.greeting && last != Some(this)).then_some(period)
 }
 
 #[cfg(test)]
@@ -1694,7 +1695,11 @@ mod tests {
             (NoticeSort::CleanDone, Expr::Happy),
             (NoticeSort::MoleDone, Expr::Happy),
             (NoticeSort::MoleFailed, Expr::Sad),
-            (NoticeSort::Greeting, Expr::Wave),
+            (NoticeSort::Greeting(DayPeriod::Morning), Expr::Wave),
+            (NoticeSort::Greeting(DayPeriod::Midday), Expr::Happy),
+            (NoticeSort::Greeting(DayPeriod::Afternoon), Expr::Wave),
+            (NoticeSort::Greeting(DayPeriod::Evening), Expr::Happy),
+            (NoticeSort::Greeting(DayPeriod::Night), Expr::Sleep),
             (NoticeSort::Copied, Expr::Happy),
             (NoticeSort::ClipPreview, Expr::Happy),
             (NoticeSort::Screenshot, Expr::Happy),
@@ -1799,8 +1804,10 @@ mod tests {
             Spot::Notice(NoticeSort::App)
         );
         assert_eq!(
-            Spot::of(&View::Notice(n(NoticeKind::Greeting))),
-            Spot::Notice(NoticeSort::Greeting)
+            Spot::of(&View::Notice(n(NoticeKind::Greeting {
+                period: DayPeriod::Evening
+            }))),
+            Spot::Notice(NoticeSort::Greeting(DayPeriod::Evening))
         );
         assert_eq!(Spot::of(&View::MediaLyric), Spot::Lyric);
         assert_eq!(Spot::of(&View::Panel(crate::model::Page::Cli)), Spot::Panel);
@@ -1995,7 +2002,7 @@ mod tests {
         // re-entering the island there starts no frame clock.
         for spot in [
             Spot::Notice(NoticeSort::Reminder),
-            Spot::Notice(NoticeSort::Greeting),
+            Spot::Notice(NoticeSort::Greeting(DayPeriod::Morning)),
             Spot::Notice(NoticeSort::BatteryLow),
             Spot::Notice(NoticeSort::SystemLow),
             Spot::Panel,
@@ -2056,37 +2063,85 @@ mod tests {
     }
 
     #[test]
-    fn greeting_once_per_morning() {
-        let day = |d| NaiveDate::from_ymd_opt(2026, 10, d).unwrap();
-        let at = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+    fn greeting_once_per_period_per_day() {
+        use DayPeriod::*;
+        use chrono::NaiveDate;
+        let now = |d, h, m| {
+            NaiveDate::from_ymd_opt(2026, 10, d)
+                .unwrap()
+                .and_hms_opt(h, m, 0)
+                .unwrap()
+        };
+        let mark = |d, period| {
+            Some(GreetMark {
+                date: NaiveDate::from_ymd_opt(2026, 10, d).unwrap(),
+                period,
+            })
+        };
         let on = GreetSettings {
             robot: true,
             greeting: true,
         };
-        assert!(should_greet(None, day(27), at(7, 30), on));
-        assert!(should_greet(Some(day(26)), day(27), at(11, 59), on));
-        assert!(
-            !should_greet(Some(day(27)), day(27), at(8, 0), on),
-            "already today"
+        // Nothing yet: the period of the moment, at any hour.
+        for (h, m, want) in [
+            (7, 30, Morning),
+            (11, 0, Midday),
+            (16, 0, Afternoon),
+            (19, 0, Evening),
+            (2, 0, Night),
+        ] {
+            assert_eq!(should_greet(None, now(27, h, m), on), Some(want), "{h}:{m}");
+        }
+        // The noon limit is gone: a day's first greeting may come at 14:00.
+        assert_eq!(
+            should_greet(mark(26, Evening), now(27, 14, 0), on),
+            Some(Midday)
         );
-        assert!(
-            !should_greet(Some(day(26)), day(27), at(12, 0), on),
-            "afternoon"
+        // Each period greets once.
+        for (h, p) in [
+            (8, Morning),
+            (12, Midday),
+            (16, Afternoon),
+            (20, Evening),
+            (1, Night),
+        ] {
+            assert_eq!(should_greet(mark(27, p), now(27, h, 5), on), None, "{p:?}");
+        }
+        // An old morning mark (a plain date) blocks the morning, not midday.
+        assert_eq!(should_greet(mark(27, Morning), now(27, 8, 0), on), None);
+        assert_eq!(
+            should_greet(mark(27, Morning), now(27, 11, 0), on),
+            Some(Midday)
         );
-        assert!(!should_greet(
-            None,
-            day(27),
-            at(8, 0),
-            GreetSettings {
-                greeting: false,
-                ..on
-            }
-        ));
-        assert!(!should_greet(
-            None,
-            day(27),
-            at(8, 0),
-            GreetSettings { robot: false, ..on }
-        ));
+        // A later period the same day greets again; so does the next day.
+        assert_eq!(
+            should_greet(mark(27, Midday), now(27, 18, 0), on),
+            Some(Evening)
+        );
+        assert_eq!(
+            should_greet(mark(27, Evening), now(28, 19, 0), on),
+            Some(Evening)
+        );
+        // Night is 00:00-03:59 of its own calendar date.
+        assert_eq!(
+            should_greet(mark(27, Evening), now(28, 0, 30), on),
+            Some(Night)
+        );
+        // The switches.
+        assert_eq!(
+            should_greet(
+                None,
+                now(27, 8, 0),
+                GreetSettings {
+                    greeting: false,
+                    ..on
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            should_greet(None, now(27, 8, 0), GreetSettings { robot: false, ..on }),
+            None
+        );
     }
 }
