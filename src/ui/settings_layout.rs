@@ -6451,7 +6451,7 @@ mod tests {
         ] {
             assert_ne!(text(Lang::Id, key), text(Lang::En, key), "{key:?}");
         }
-        // "Isi notch": Solid | Tembus (was "Latar notch": Hitam | Transparan).
+        // "Isi notch": Solid | Tembus.
         assert_eq!(text(Lang::Id, Key::NotchFill), "Isi notch");
         assert_eq!(text(Lang::Id, Key::NotchFillSolid), "Solid");
         assert_eq!(text(Lang::Id, Key::NotchFillTransparent), "Tembus");
