@@ -79,9 +79,8 @@ fn frames(path: &str) -> Vec<(u32, u32, u64)> {
 
 #[test]
 fn icon_frames_decode_to_the_same_pixels() {
-    let path = std::env::var("ICON_PATH").unwrap_or_else(|_| {
-        format!("{}/assets/icon.ico", env!("CARGO_MANIFEST_DIR"))
-    });
+    let path = std::env::var("ICON_PATH")
+        .unwrap_or_else(|_| format!("{}/assets/icon.ico", env!("CARGO_MANIFEST_DIR")));
     let got = frames(&path);
     if std::env::var("ICON_DUMP").is_ok() {
         for (w, h, hash) in &got {

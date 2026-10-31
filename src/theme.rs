@@ -103,9 +103,20 @@ named_enum! {
 }
 
 named_enum! {
-    /// The island's fill.
-    Surface { Espresso, Graphite }
+    /// The island's fill. `Auto` follows the cat's colour
+    /// (`Surface::resolve`) and never reaches the palette.
+    Surface { Auto, Espresso, Graphite, Sea, Night, Plum }
     aliases { "Black" => Espresso }
+}
+
+named_enum! {
+    /// The notch cat's coat.
+    CatColor { Terracotta, Calico, White, Black }
+}
+
+named_enum! {
+    /// What the notch cat wears.
+    CatAccessory { None, Glasses, Bow, Nightcap, Scarf, Flower, Crown }
 }
 
 named_enum! {
@@ -152,27 +163,71 @@ impl Accent {
 }
 
 impl Surface {
+    /// The island's fill. `Auto` is resolved first (`resolve`); it reads as
+    /// Espresso here so a stray one can never draw a wrong colour.
     pub fn rgb(self) -> u32 {
         match self {
-            Surface::Espresso => 0x17120F,
+            Surface::Auto | Surface::Espresso => 0x17120F,
             Surface::Graphite => 0x221B17,
+            Surface::Sea => 0x132321,
+            Surface::Night => 0x151C2E,
+            Surface::Plum => 0x2A2140,
+        }
+    }
+
+    /// The concrete surface: `Auto` follows the cat (Terracotta -> Espresso,
+    /// Calico -> Sea, White -> Night, Black -> Plum; the cat off -> Espresso),
+    /// every other value is itself.
+    pub fn resolve(self, cat: CatColor, robot_on: bool) -> Surface {
+        match self {
+            Surface::Auto if !robot_on => Surface::Espresso,
+            Surface::Auto => match cat {
+                CatColor::Terracotta => Surface::Espresso,
+                CatColor::Calico => Surface::Sea,
+                CatColor::White => Surface::Night,
+                CatColor::Black => Surface::Plum,
+            },
+            other => other,
+        }
+    }
+
+    /// The caption colour on this surface and on its raised step: tinted to
+    /// the surface, at least 4.5:1 on both (a test checks every surface).
+    fn secondary(self) -> u32 {
+        match self {
+            Surface::Auto | Surface::Espresso | Surface::Graphite => 0xA89A8B,
+            Surface::Sea => 0xA3B8B2,
+            Surface::Night => 0xA7B1C8,
+            Surface::Plum => 0xB9ACD0,
         }
     }
 }
 
 /// The three theme settings together.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
     pub accent: Accent,
+    /// Always concrete: `Theme::of` resolves `Auto`.
     pub surface: Surface,
     pub window: WindowTheme,
+}
+
+/// The default settings, with the default surface resolved (Espresso).
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            accent: Accent::default(),
+            surface: Surface::default().resolve(CatColor::default(), true),
+            window: WindowTheme::default(),
+        }
+    }
 }
 
 impl Theme {
     pub fn of(cfg: &Config) -> Self {
         Theme {
             accent: cfg.accent,
-            surface: cfg.surface,
+            surface: cfg.surface.resolve(cfg.cat_color, cfg.robot),
             window: cfg.window_theme,
         }
     }
@@ -261,11 +316,34 @@ pub mod radius {
     pub const ART: f32 = 6.0;
 }
 
+/// `surface` with every channel raised by `d`: how the coloured surfaces get
+/// their raised steps (Graphite lifts Espresso the same way).
+fn lift(surface: u32, d: u32) -> u32 {
+    let ch = |shift: u32| (((surface >> shift) & 0xFF) + d).min(0xFF) << shift;
+    ch(16) | ch(8) | ch(0)
+}
+
+/// The island's colours for a concrete surface (`Auto` reads as Espresso;
+/// resolve it with `Surface::resolve` first).
 pub fn island(accent: Accent, surface: Surface) -> Palette {
-    // Warm browns over espresso; graphite lifts each a step.
+    // Warm browns over espresso; graphite lifts each a step; the coloured
+    // surfaces lift their own colour the same way.
     let (raised, raised_hi, track, column, placeholder, dot_off) = match surface {
-        Surface::Espresso => (0x241D18, 0x3A2F27, 0x332A23, 0x1D1713, 0x332A23, 0x4A3E35),
+        Surface::Auto | Surface::Espresso => {
+            (0x241D18, 0x3A2F27, 0x332A23, 0x1D1713, 0x332A23, 0x4A3E35)
+        }
         Surface::Graphite => (0x2E2620, 0x463A31, 0x3D332B, 0x272019, 0x3D332B, 0x574A40),
+        Surface::Sea | Surface::Night | Surface::Plum => {
+            let s = surface.rgb();
+            (
+                lift(s, 12),
+                lift(s, 34),
+                lift(s, 26),
+                lift(s, 5),
+                lift(s, 26),
+                lift(s, 50),
+            )
+        }
     };
     Palette {
         surface: surface.rgb(),
@@ -278,15 +356,22 @@ pub fn island(accent: Accent, surface: Surface) -> Palette {
         text: 0xF4EDE4,
         accent: accent.rgb(),
         on_accent: accent.ink(),
-        secondary: 0xA89A8B,
+        secondary: surface.secondary(),
         sage: Accent::Sage.rgb(),
         ochre: Accent::Ochre.rgb(),
-        plum: Accent::Plum.rgb(),
+        // The third event colour is lifted on the Plum surface, where #B07A9A
+        // falls to 4.4:1.
+        plum: if surface == Surface::Plum {
+            0xC893B4
+        } else {
+            Accent::Plum.rgb()
+        },
     }
 }
 
+/// The island's palette for the config: `Auto` is resolved against the cat.
 pub fn island_palette(cfg: &Config) -> Palette {
-    island(cfg.accent, cfg.surface)
+    island(cfg.accent, cfg.surface.resolve(cfg.cat_color, cfg.robot))
 }
 
 /// The CLI page's terminal (`.term` in docs/design/pengingat-cli.html),
@@ -459,7 +544,9 @@ mod tests {
             ]
         );
         assert_eq!(Accent::default(), Accent::Terracotta);
-        assert_eq!(Surface::default(), Surface::Espresso);
+        assert_eq!(Surface::default(), Surface::Auto);
+        // `Theme.surface` is always concrete, the default's too.
+        assert_eq!(Theme::default().surface, Surface::Espresso);
         assert_eq!(Accent::Terracotta.light_rgb(), 0xC9542B);
     }
 
@@ -544,6 +631,89 @@ mod tests {
         let plum = island(Accent::Plum, Surface::Espresso);
         assert_eq!((plum.sage, plum.ochre), (0x9DB59A, 0xD9A441));
         assert_eq!((plum.focus(), plum.rest()), (0xB07A9A, 0x9DB59A));
+    }
+
+    /// Contrast numbers per concrete surface (also in the memory note
+    /// `cat-colours-and-surfaces`): text and secondary on the surface and
+    /// on `raised`, at least 4.5:1, and the ink on every accent.
+    #[test]
+    fn every_concrete_surface_keeps_text_and_secondary_readable() {
+        let concrete: Vec<Surface> = Surface::ALL
+            .iter()
+            .copied()
+            .filter(|s| *s != Surface::Auto)
+            .collect();
+        assert_eq!(concrete.len(), 5);
+        for surface in concrete {
+            let p = island(Accent::Terracotta, surface);
+            let nums = [
+                contrast(p.text, p.surface),
+                contrast(p.text, p.raised),
+                contrast(p.secondary, p.surface),
+                contrast(p.secondary, p.raised),
+            ];
+            println!(
+                "{surface:?} {:06X}: text {:.2}/{:.2} secondary {:06X} {:.2}/{:.2}",
+                p.surface, nums[0], nums[1], p.secondary, nums[2], nums[3]
+            );
+            assert_eq!(p.text, 0xF4EDE4);
+            for c in nums {
+                assert!(c >= 4.5, "{surface:?}: {c:.2}");
+            }
+            for a in Accent::ALL {
+                let c = contrast(a.rgb(), a.ink());
+                assert!(c >= 4.5, "{a:?} on {surface:?}: {c:.2}");
+                // The island's accent is never the island's own fill.
+                assert_ne!(a.rgb(), p.surface);
+            }
+            // Raised steps stay a visible step above the surface.
+            for step in [p.raised, p.raised_hi, p.track, p.dot_off] {
+                assert!(luminance(step) > luminance(p.surface), "{surface:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn auto_follows_the_cat_and_never_reaches_the_palette() {
+        for (cat, want) in [
+            (CatColor::Terracotta, Surface::Espresso),
+            (CatColor::Calico, Surface::Sea),
+            (CatColor::White, Surface::Night),
+            (CatColor::Black, Surface::Plum),
+        ] {
+            assert_eq!(Surface::Auto.resolve(cat, true), want);
+            // The cat off: always Espresso.
+            assert_eq!(Surface::Auto.resolve(cat, false), Surface::Espresso);
+            // A chosen surface is itself, whatever the cat.
+            for &s in Surface::ALL.iter().filter(|s| **s != Surface::Auto) {
+                assert_eq!(s.resolve(cat, true), s);
+                assert_eq!(s.resolve(cat, false), s);
+            }
+        }
+        let cfg = Config {
+            cat_color: CatColor::Calico,
+            ..Config::default()
+        };
+        assert_eq!(Theme::of(&cfg).surface, Surface::Sea);
+        assert_eq!(
+            island_palette(&cfg),
+            island(Accent::Terracotta, Surface::Sea)
+        );
+        let off = Config {
+            robot: false,
+            ..cfg
+        };
+        assert_eq!(Theme::of(&off).surface, Surface::Espresso);
+        // The coloured surfaces' fills.
+        assert_eq!(
+            [Surface::Sea, Surface::Night, Surface::Plum].map(|s| s.rgb()),
+            [0x132321, 0x151C2E, 0x2A2140]
+        );
+        assert_eq!(Surface::from_name("auto"), Some(Surface::Auto));
+        assert_eq!(Surface::from_name("Black"), Some(Surface::Espresso));
+        assert_eq!(CatColor::default(), CatColor::Terracotta);
+        assert_eq!(CatAccessory::default(), CatAccessory::None);
+        assert_eq!(CatAccessory::ALL.len(), 7);
     }
 
     #[test]

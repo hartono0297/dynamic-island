@@ -9,8 +9,14 @@ With "Di belakang jendela" **off**, the closed notch gets out of the way of what
 is under it. While the pointer is near it and an ordinary window lies under it
 (a browser's tab strip, a window's title bar), the notch shrinks to a small pill
 holding only the cat's two open eyes, so the tabs and the close button under it
-can be clicked. It comes back when the pointer rests on the eyes. There is no
-setting for it (assumption: the request names none). Related:
+can be clicked. It comes back when the pointer rests on the eyes. Since v3.8
+it has a setting, **"Mengecil jadi mata"** (`notch_peek`, Settings → Kucing →
+Gerak, on by default): off, `peek_eligible` is false (through
+`pointer_watch::peek_allowed(notch_peek, stay_behind)`), a shrunk notch comes
+back at once and the poll may stop ([[bata-idle-power-budget]]). The row does
+not depend on the cat (the eyes show with the cat off) and is faded, with a
+note, while "Di belakang jendela" is on. The eyes pill stays terracotta
+whatever the cat's coat ([[cat-colours-and-surfaces]]). Related:
 [[stay-behind]] (the other way out of the way, which turns this off),
 [[bata-idle-power-budget]] (the shared poll), [[bata-robot-expressions]] (the
 eyes), [[open-mode]] (the hover that comes back after a restore),

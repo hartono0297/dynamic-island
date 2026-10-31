@@ -67,10 +67,10 @@ use super::frame_clock::{FrameClock, WM_APP_FRAME};
 use super::robot::{Motion, sleep_step};
 use super::settings_controls::{Gfx, Scene, ease};
 use super::settings_layout::{
-    CLIENT_H, CLIENT_W, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit, Layout, List,
-    PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State, TileForm, Tone,
-    battery_step, clip_items_step, disk_warn_step, drop_index, layout, ram_warn_step, scroll_by,
-    shot_secs_step, slider_value,
+    CLIENT_H, CLIENT_W, CatFace, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit,
+    Layout, List, PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State,
+    TileForm, Tone, battery_step, clip_items_step, disk_warn_step, drop_index, layout,
+    ram_warn_step, scroll_by, shot_secs_step, slider_value,
 };
 use crate::calendar::CalStatus;
 use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
@@ -85,8 +85,8 @@ use crate::i18n::{Key, Lang, text};
 use crate::model::PomoField;
 use crate::pages::PanelPages;
 use crate::pomodoro::PomoSettings;
-use crate::sources::battery::read_battery;
-use crate::theme::{self, Accent, Surface, WindowPalette, WindowTheme};
+use crate::sources::battery::battery_present;
+use crate::theme::{self, Accent, CatAccessory, CatColor, Surface, WindowPalette, WindowTheme};
 use crate::tiles::{CustomKind, CustomProblem, CustomTile, LABEL_MAX, ShortcutTiles, TARGET_MAX};
 
 /// Posted to the owner for each change: `lparam` is a `Box<Action>` raw
@@ -133,15 +133,21 @@ pub enum Action {
     RobotMotion(Motion),
     RobotSleep(u32),
     Greeting(bool),
+    /// Settings → Kucing: the coat, the accessory, "Ikuti kursor" and
+    /// "Mengecil jadi mata".
+    CatColor(CatColor),
+    CatAccessory(CatAccessory),
+    CatFollow(bool),
+    NotchPeek(bool),
     /// Settings → Clipboard.
     ClipEnabled(bool),
     ClipItems(u32),
     ClipPersist(bool),
     ClipClearOnLock(bool),
     ClipHotkey(ClipHotkey),
-    /// Settings → Umum → Pencarian cepat.
+    /// Settings → Umum → Dasar → Tombol pintas pencarian.
     SearchHotkey(SearchHotkey),
-    /// Settings → Umum → Perangkat: the plug-in and safe-to-remove notices,
+    /// Settings → Fitur → Perangkat: the plug-in and safe-to-remove notices,
     /// and the Devices page's hotkey.
     DeviceNotices(bool),
     DevicesHotkey(DevicesHotkey),
@@ -295,6 +301,10 @@ pub struct Model {
     pub robot_motion: Motion,
     pub robot_sleep: u32,
     pub greeting: bool,
+    pub cat_color: CatColor,
+    pub cat_accessory: CatAccessory,
+    pub cat_follow: bool,
+    pub notch_peek: bool,
     pub battery_threshold: u8,
     pub disk_warn_gb: u32,
     pub ram_warn_percent: u8,
@@ -344,6 +354,10 @@ impl Model {
             robot_motion: cfg.robot_animation,
             robot_sleep: cfg.robot_sleep_minutes,
             greeting: cfg.morning_greeting,
+            cat_color: cfg.cat_color,
+            cat_accessory: cfg.cat_accessory,
+            cat_follow: cfg.cat_follow_pointer,
+            notch_peek: cfg.notch_peek,
             battery_threshold: cfg.battery_threshold,
             disk_warn_gb: cfg.disk_warn_gb,
             ram_warn_percent: cfg.ram_warn_percent,
@@ -528,7 +542,7 @@ struct Settings {
     dpi: u32,
     model: Model,
     section: Section,
-    /// How far Appearance (taller than the window) is scrolled.
+    /// How far the section (when it is taller than the window) is scrolled.
     scroll: f32,
     layout: Layout,
     gfx: Gfx,
@@ -546,6 +560,8 @@ struct Settings {
     field_text: [String; 4],
     focused: Option<Field>,
     has_battery: bool,
+    /// The face the Kucing preview shows (the chips; not saved).
+    cat_face: CatFace,
     hooks: Option<install::HookState>,
     google_note: Option<(String, Tone)>,
     hook_note: Option<(String, Tone)>,
@@ -759,7 +775,7 @@ fn outer_size(dpi: u32) -> (i32, i32) {
     (rc.right - rc.left, rc.bottom - rc.top)
 }
 
-/// Opens the window on `section` (Appearance by default), or brings the open
+/// Opens the window on `section` (Umum by default), or brings the open
 /// one forward (restored if minimized) with the model brought up to date.
 pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND> {
     let existing = SETTINGS.with(|cell| {
@@ -836,7 +852,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         owner,
         dpi,
         model,
-        section: section.unwrap_or(Section::Appearance),
+        section: section.unwrap_or(Section::General),
         scroll: 0.0,
         layout: Layout::default(),
         gfx,
@@ -849,7 +865,8 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         edits,
         field_text,
         focused: None,
-        has_battery: read_battery().is_some(),
+        has_battery: battery_present(),
+        cat_face: CatFace::default(),
         hooks: install::hook_state(),
         google_note: None,
         hook_note: None,
@@ -1150,6 +1167,11 @@ impl Settings {
             robot_motion: m.robot_motion,
             robot_sleep: m.robot_sleep,
             greeting: m.greeting,
+            cat_color: m.cat_color,
+            cat_accessory: m.cat_accessory,
+            cat_follow: m.cat_follow,
+            notch_peek: m.notch_peek,
+            cat_face: self.cat_face,
             scroll: self.scroll,
             lyrics: m.lyrics,
             shell: m.shell,
@@ -1279,7 +1301,8 @@ impl Settings {
         let index = |group: Group, m: &Model| -> f32 {
             match group {
                 Group::Style => usize::from(m.style == Style::Notch) as f32,
-                Group::Surface => usize::from(m.surface == Surface::Graphite) as f32,
+                // The chips are window state: the layout draws the choice.
+                Group::CatFace => 0.0,
                 Group::Window => WindowTheme::ALL
                     .iter()
                     .position(|w| *w == m.window)
@@ -1316,7 +1339,6 @@ impl Settings {
         };
         for group in [
             Group::Style,
-            Group::Surface,
             Group::NotchFill,
             Group::Window,
             Group::Lang,
@@ -1355,6 +1377,14 @@ impl Settings {
         if old.robot != new.robot {
             self.anims
                 .slide_toggle(Hit::Robot, old.robot, new.robot, now);
+        }
+        if old.cat_follow != new.cat_follow {
+            self.anims
+                .slide_toggle(Hit::CatFollow, old.cat_follow, new.cat_follow, now);
+        }
+        if old.notch_peek != new.notch_peek {
+            self.anims
+                .slide_toggle(Hit::NotchPeek, old.notch_peek, new.notch_peek, now);
         }
         if old.greeting != new.greeting {
             self.anims
@@ -1440,7 +1470,12 @@ impl Settings {
         let scene = Scene {
             layout: &self.layout,
             p,
-            island: theme::island(self.model.accent, self.model.surface),
+            island: theme::island(
+                self.model.accent,
+                self.model
+                    .surface
+                    .resolve(self.model.cat_color, self.model.robot),
+            ),
             style: self.model.style,
             notch: super::geometry::NotchSize::from_px(
                 self.model.notch_width,
@@ -1451,6 +1486,11 @@ impl Settings {
                 self.model.notch_opacity,
             ),
             robot: self.model.robot,
+            cat: super::cat_style::CatLook {
+                color: self.model.cat_color,
+                accessory: self.model.cat_accessory,
+            },
+            cat_face: self.cat_face,
             lang: self.model.lang,
             hover: self.hover,
             pressed: self.pressed,
@@ -1708,6 +1748,17 @@ impl Settings {
                 }
             }
             Hit::Greeting => post(Action::Greeting(!m.greeting)),
+            Hit::CatColor(v) if v != m.cat_color => post(Action::CatColor(v)),
+            Hit::CatAccessory(v) if v != m.cat_accessory => post(Action::CatAccessory(v)),
+            Hit::CatFollow => post(Action::CatFollow(!m.cat_follow)),
+            Hit::NotchPeek => post(Action::NotchPeek(!m.notch_peek)),
+            // The base color is picked in Tampilan; no second picker here.
+            Hit::CatBackdrop => vec![After::Section(Section::Appearance)],
+            // The preview's face: window state only, nothing is saved.
+            Hit::CatFace(face) => {
+                self.cat_face = face;
+                Vec::new()
+            }
             Hit::ClipEnabled => post(Action::ClipEnabled(!m.clip.enabled)),
             Hit::ClipItems(dir) => {
                 let n = clip_items_step(m.clip.max_items, dir);
@@ -1881,6 +1932,8 @@ impl Settings {
             Hit::Style(_)
             | Hit::Accent(_)
             | Hit::Surface(_)
+            | Hit::CatColor(_)
+            | Hit::CatAccessory(_)
             | Hit::NotchFill(_)
             | Hit::WindowMode(_)
             | Hit::Lang(_)
@@ -2227,7 +2280,7 @@ fn on_key(hwnd: HWND, key: u16) -> bool {
         // Tab from the window goes to the first field, when it shows.
         let first = with(|st| match st.section {
             Section::Integrations => st.edits.as_ref().map(|e| e.id),
-            Section::Appearance if st.tile_form.is_some() => st.edits.as_ref().map(|e| e.name),
+            Section::Panel if st.tile_form.is_some() => st.edits.as_ref().map(|e| e.name),
             _ => None,
         });
         if let Some(Some(edit)) = first {
@@ -2687,6 +2740,10 @@ pub fn run_demo(args: &[String]) {
             Action::RobotMotion(v) => m.robot_motion = v,
             Action::RobotSleep(v) => m.robot_sleep = v,
             Action::Greeting(v) => m.greeting = v,
+            Action::CatColor(v) => m.cat_color = v,
+            Action::CatAccessory(v) => m.cat_accessory = v,
+            Action::CatFollow(v) => m.cat_follow = v,
+            Action::NotchPeek(v) => m.notch_peek = v,
             Action::ClipEnabled(v) => m.clip.enabled = v,
             Action::ClipItems(v) => m.clip.max_items = v,
             Action::ClipPersist(v) => m.clip.persist = v,
@@ -2737,7 +2794,7 @@ pub fn run_demo(args: &[String]) {
         }
         theme::set_current(theme::Theme {
             accent: m.accent,
-            surface: m.surface,
+            surface: m.surface.resolve(m.cat_color, m.robot),
             window: m.window,
         });
     }
@@ -2840,7 +2897,7 @@ pub fn run_demo(args: &[String]) {
     theme::set_system_light(theme::read_system_light());
     theme::set_current(theme::Theme {
         accent,
-        surface: model.surface,
+        surface: model.surface.resolve(model.cat_color, model.robot),
         window,
     });
     DEMO.with_borrow_mut(|m| *m = Some(model.clone()));

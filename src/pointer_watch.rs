@@ -38,6 +38,20 @@ pub const LOOK_TAU_MS: f32 = 120.0;
 /// Within this of its target the look snaps there and stops moving.
 pub const LOOK_SNAP: f32 = 0.002;
 
+/// The config's part of "the cat follows the pointer": the cat is on and
+/// "Ikuti kursor" (`cat_follow_pointer`) is on. The rest (motion, the view)
+/// is `App::look_eligible`.
+pub fn look_allowed(robot: bool, follow_pointer: bool) -> bool {
+    robot && follow_pointer
+}
+
+/// The config's part of "the notch may shrink to the eyes": "Mengecil jadi
+/// mata" (`notch_peek`) is on and "Di belakang jendela" is off. The eyes show
+/// with the cat off, so the cat is not asked.
+pub fn peek_allowed(notch_peek: bool, stay_behind: bool) -> bool {
+    notch_peek && !stay_behind
+}
+
 /// The poll's pace in milliseconds; 0 when neither feature wants it. The cat
 /// follows at 33 ms near the top edge and 250 ms far from it; the peek alone
 /// reads as `behind` does (80 ms near, 350 ms far). `near_top`: the pointer is
@@ -315,6 +329,47 @@ mod tests {
     }
 
     #[test]
+    fn the_two_toggles_gate_the_poll() {
+        // "Ikuti kursor" needs the cat on; "Mengecil jadi mata" needs
+        // stay-behind off (and does not need the cat).
+        assert!(look_allowed(true, true));
+        assert!(!look_allowed(true, false));
+        assert!(!look_allowed(false, true));
+        assert!(peek_allowed(true, false));
+        assert!(!peek_allowed(false, false));
+        assert!(!peek_allowed(true, true));
+        // The poll the app arms is `poll_ms` of both (the rest of eligibility,
+        // the view, fullscreen and the lock, only ever turns them off).
+        let pace = |robot, follow, peek, behind, near| {
+            poll_ms(
+                look_allowed(robot, follow),
+                peek_allowed(peek, behind),
+                near,
+            )
+        };
+        for near in [false, true] {
+            // Both off: no TIMER_POINTER at all, whatever else is on.
+            assert_eq!(pace(true, false, false, false, near), 0);
+            assert_eq!(pace(false, true, false, false, near), 0);
+            // Both on but the peek blocked by stay-behind and the cat off: none.
+            assert_eq!(pace(false, true, true, true, near), 0);
+            // The cat alone, the peek alone, both.
+            assert_eq!(
+                pace(true, true, false, false, near),
+                poll_ms(true, false, near)
+            );
+            assert_eq!(
+                pace(false, true, true, false, near),
+                poll_ms(false, true, near)
+            );
+            assert_eq!(
+                pace(true, true, true, false, near),
+                poll_ms(true, true, near)
+            );
+        }
+    }
+
+    #[test]
     fn the_poll_pace_for_every_combination() {
         // Neither feature: no poll.
         assert_eq!(poll_ms(false, false, true), 0);
@@ -391,7 +446,12 @@ mod tests {
             let mut peek = Peek { state: from };
             assert_eq!(peek.step(off, now), PeekState::Normal, "{from:?}");
         }
-        assert!(Peek { state: PeekState::Restored }.reset());
+        assert!(
+            Peek {
+                state: PeekState::Restored
+            }
+            .reset()
+        );
         assert!(!Peek::default().reset());
     }
 
@@ -565,11 +625,20 @@ mod tests {
             })
         };
         assert!(!get(&mut cache, t0, false));
-        assert!(!get(&mut cache, t0 + ms(500), true), "the first answer holds");
-        assert!(get(&mut cache, t0 + ms(1000), true), "a second on, asked again");
+        assert!(
+            !get(&mut cache, t0 + ms(500), true),
+            "the first answer holds"
+        );
+        assert!(
+            get(&mut cache, t0 + ms(1000), true),
+            "a second on, asked again"
+        );
         assert!(get(&mut cache, t0 + ms(1500), false));
         cache.clear();
-        assert!(!get(&mut cache, t0 + ms(1600), false), "a new approach reads");
+        assert!(
+            !get(&mut cache, t0 + ms(1600), false),
+            "a new approach reads"
+        );
         assert_eq!(reads, 3);
     }
 
@@ -612,7 +681,11 @@ mod tests {
         let mut last = 0.0;
         for _ in 0..200 {
             look.advance(ms(16));
-            assert!(look.value() >= last && look.value() <= 1.0, "{}", look.value());
+            assert!(
+                look.value() >= last && look.value() <= 1.0,
+                "{}",
+                look.value()
+            );
             last = look.value();
             if !look.moving() {
                 break;
@@ -643,7 +716,10 @@ mod tests {
         };
         // 240 ms: 4 x 60 ms, 15 x 16 ms, one jump, all the same ease.
         let (a, b, c) = (at(4, 60), at(15, 16), at(1, 240));
-        assert!((a - c).abs() < 0.001 && (b - c).abs() < 0.001, "{a} {b} {c}");
+        assert!(
+            (a - c).abs() < 0.001 && (b - c).abs() < 0.001,
+            "{a} {b} {c}"
+        );
         // About 1 - e^-2 after two time constants.
         assert!((c - 0.865).abs() < 0.01, "{c}");
     }

@@ -3331,7 +3331,11 @@ mod tests {
         s.apply(Event::Wheel(-90), t0);
         s.apply(Event::Click(Hit::PanelPage(Page::Media)), t0);
         assert_eq!(s.view(), View::Panel(Page::Media));
-        assert_eq!(s.next_deadline(), Some(t0 + secs(4)), "armed as a page turn");
+        assert_eq!(
+            s.next_deadline(),
+            Some(t0 + secs(4)),
+            "armed as a page turn"
+        );
         s.apply(Event::Wheel(-60), t0);
         assert_eq!(s.view(), View::Panel(Page::Media), "the residue is gone");
         s.apply(Event::Hover(false), t0 + secs(1));

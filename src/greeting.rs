@@ -30,6 +30,27 @@ impl DayPeriod {
         }
     }
 
+    /// Every period, in the order Settings lists them.
+    pub const ALL: [DayPeriod; 5] = [
+        DayPeriod::Morning,
+        DayPeriod::Midday,
+        DayPeriod::Afternoon,
+        DayPeriod::Evening,
+        DayPeriod::Night,
+    ];
+
+    /// The first and last hour (0-23) that falls in this period; the same
+    /// ranges `period_at` matches on.
+    pub fn hours(self) -> (u32, u32) {
+        match self {
+            DayPeriod::Morning => (4, 10),
+            DayPeriod::Midday => (11, 14),
+            DayPeriod::Afternoon => (15, 17),
+            DayPeriod::Evening => (18, 23),
+            DayPeriod::Night => (0, 3),
+        }
+    }
+
     pub fn from_id(id: &str) -> Option<Self> {
         Some(match id {
             "morning" => DayPeriod::Morning,
@@ -122,6 +143,24 @@ mod tests {
 
     fn day(d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
+    }
+
+    #[test]
+    fn every_hour_falls_in_the_period_whose_range_holds_it() {
+        use DayPeriod::*;
+        assert_eq!(DayPeriod::ALL, [Morning, Midday, Afternoon, Evening, Night]);
+        for h in 0..=23u32 {
+            let owners: Vec<DayPeriod> = DayPeriod::ALL
+                .into_iter()
+                .filter(|p| {
+                    let (from, to) = p.hours();
+                    (from..=to).contains(&h)
+                })
+                .collect();
+            for m in [0, 59] {
+                assert_eq!(owners, [period_at(at(h, m))], "hour {h}");
+            }
+        }
     }
 
     #[test]

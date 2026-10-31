@@ -9,7 +9,7 @@ use crate::greeting::GreetMark;
 use crate::i18n::Lang;
 use crate::pages::PageEntry;
 use crate::pomodoro::PomoSettings;
-use crate::theme::{Accent, Surface, WindowTheme};
+use crate::theme::{Accent, CatAccessory, CatColor, Surface, WindowTheme};
 use crate::tiles::TileEntry;
 use crate::ui::geometry::{
     NOTCH_H_DEFAULT, NOTCH_H_MAX, NOTCH_H_MIN, NOTCH_OPACITY_DEFAULT, NOTCH_W_DEFAULT, NOTCH_W_MAX,
@@ -47,7 +47,7 @@ pub struct Config {
     /// The closed island's height, kept in `NOTCH_H_MIN..=NOTCH_H_MAX`.
     #[serde(deserialize_with = "notch_height")]
     pub notch_height: u32,
-    /// "Latar notch": a solid black closed island or a see-through one (a typo
+    /// "Isi notch": a solid black closed island or a see-through one (a typo
     /// reads as Solid). The open panel is always solid.
     pub notch_fill: NotchFill,
     /// How opaque the see-through fill is, in percent (0..=100, default 30).
@@ -120,7 +120,7 @@ pub struct Config {
     /// "Mole" (by name; a typo is Own).
     pub clean_mode: CleanMode,
     /// Before Mole's first preview, add the Cargo and Autodesk caches to
-    /// Mole's whitelist (Settings → Umum).
+    /// Mole's whitelist (Settings → Fitur → Pembersih).
     pub mole_protect_defaults: bool,
     /// That was done once: an entry the user removes later is never added
     /// back.
@@ -131,7 +131,7 @@ pub struct Config {
     /// second card).
     pub screenshot: ScreenshotSettings,
     /// "Halaman panel": the pages' order and which the wheel shows. Empty
-    /// means the default (all nine); `pages::PanelPages` fills in the rest.
+    /// means the default (every page in `Page::ALL`); `pages::PanelPages` fills in the rest.
     #[serde(deserialize_with = "panel_pages")]
     pub panel_pages: Vec<PageEntry>,
     /// "Pintasan": the tiles' order, which show, and the custom ones. Empty
@@ -139,16 +139,51 @@ pub struct Config {
     #[serde(deserialize_with = "shortcut_tiles")]
     pub shortcut_tiles: Vec<TileEntry>,
     /// A notice when a flash drive or disk is plugged in, and when Vale's
-    /// Eject says it is safe to remove (Settings → Umum → Perangkat). On
+    /// Eject says it is safe to remove (Settings → Fitur → Perangkat). On
     /// unless switched off here.
     pub device_notices: bool,
-    /// "Pintasan Perangkat": the hotkey that opens the Devices page. None by
+    /// "Tombol pintas" (Perangkat): the hotkey that opens the Devices page. None by
     /// default.
     pub devices_hotkey: DevicesHotkey,
+    /// "Warna" (Settings -> Kucing): the notch cat's coat. A bad value reads
+    /// as Terracotta.
+    #[serde(deserialize_with = "cat_color")]
+    pub cat_color: CatColor,
+    /// "Aksesori": what the cat wears. A bad value reads as None.
+    #[serde(deserialize_with = "cat_accessory")]
+    pub cat_accessory: CatAccessory,
+    /// "Ikuti kursor": the idle cat looks toward the pointer (default on).
+    #[serde(deserialize_with = "default_on")]
+    pub cat_follow_pointer: bool,
+    /// "Mengecil jadi mata": the notch shrinks to the cat's eyes near the
+    /// pointer over a window (default on).
+    #[serde(deserialize_with = "default_on")]
+    pub notch_peek: bool,
+}
+
+/// A bool; anything else (a string, a number, null) is on, so a bad value
+/// never makes the whole config invalid.
+fn default_on<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_bool().unwrap_or(true))
+}
+
+/// A cat colour name; anything else (a typo, a number) is Terracotta.
+fn cat_color<'de, D: Deserializer<'de>>(d: D) -> Result<CatColor, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str().and_then(CatColor::from_name).unwrap_or_default())
+}
+
+/// An accessory name; anything else is None.
+fn cat_accessory<'de, D: Deserializer<'de>>(d: D) -> Result<CatAccessory, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str()
+        .and_then(CatAccessory::from_name)
+        .unwrap_or_default())
 }
 
 crate::theme::named_enum! {
-    /// "Latar notch": what the closed island's background is. Solid is the
+    /// "Isi notch": what the closed island's background is. Solid is the
     /// island as always; Transparent lets the desktop show through at
     /// `notch_opacity`. Any other name reads as `Solid`.
     NotchFill { Solid, Transparent }
@@ -253,7 +288,7 @@ crate::theme::named_enum! {
 }
 
 crate::theme::named_enum! {
-    /// "Pintasan Perangkat": the hotkey that opens the Devices page, like the
+    /// "Tombol pintas" (Perangkat): the hotkey that opens the Devices page, like the
     /// Clipboard's. None by default; any other name reads as `Off`.
     DevicesHotkey { Off, CtrlAltD }
 }
@@ -378,7 +413,7 @@ impl Default for Config {
             google_client_secret: String::new(),
             language: Lang::Id,
             accent: Accent::Terracotta,
-            surface: Surface::Espresso,
+            surface: Surface::Auto,
             notch_width: NOTCH_W_DEFAULT,
             notch_height: NOTCH_H_DEFAULT,
             notch_fill: NotchFill::Solid,
@@ -411,6 +446,10 @@ impl Default for Config {
             shortcut_tiles: Vec::new(),
             device_notices: true,
             devices_hotkey: DevicesHotkey::Off,
+            cat_color: CatColor::Terracotta,
+            cat_accessory: CatAccessory::None,
+            cat_follow_pointer: true,
+            notch_peek: true,
         }
     }
 }
@@ -551,6 +590,10 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         shortcut_tiles: mem.shortcut_tiles.clone(),
         device_notices: mem.device_notices,
         devices_hotkey: mem.devices_hotkey,
+        cat_color: mem.cat_color,
+        cat_accessory: mem.cat_accessory,
+        cat_follow_pointer: mem.cat_follow_pointer,
+        notch_peek: mem.notch_peek,
         ..disk
     }
 }
@@ -722,7 +765,7 @@ mod tests {
         assert!(!c.onboarding_done);
         assert_eq!(c.language, Lang::Id);
         assert_eq!(c.accent, Accent::Terracotta);
-        assert_eq!(c.surface, Surface::Espresso);
+        assert_eq!(c.surface, Surface::Auto);
         assert_eq!(c.window_theme, WindowTheme::System);
         assert!(c.idle_clock);
         assert!(!c.lyrics);
@@ -920,6 +963,10 @@ mod tests {
             }],
             device_notices: false,
             devices_hotkey: DevicesHotkey::CtrlAltD,
+            cat_color: CatColor::Calico,
+            cat_accessory: CatAccessory::Bow,
+            cat_follow_pointer: false,
+            notch_peek: false,
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -1186,7 +1233,7 @@ mod tests {
         let typo = parse(r#"{"style":"Notch","accent":"teal","surface":"grey"}"#);
         assert_eq!(
             (typo.style, typo.accent, typo.surface),
-            (Style::Notch, Accent::Terracotta, Surface::Espresso)
+            (Style::Notch, Accent::Terracotta, Surface::Auto)
         );
     }
 
@@ -1244,7 +1291,7 @@ mod tests {
         assert_eq!(c.language, Lang::Id);
         assert_eq!(
             (c.accent, c.surface, c.window_theme),
-            (Accent::Terracotta, Surface::Espresso, WindowTheme::System)
+            (Accent::Terracotta, Surface::Auto, WindowTheme::System)
         );
         // The clipboard group came later still: defaults.
         assert_eq!(c.clipboard, ClipboardSettings::default());
@@ -1506,7 +1553,7 @@ mod tests {
             pomodoro: PomoSettings::default(),
             language: Lang::Id,
             accent: Accent::Terracotta,
-            surface: Surface::Espresso,
+            surface: Surface::Auto,
             window_theme: WindowTheme::System,
             idle_clock: true,
             lyrics: false,
@@ -1844,5 +1891,73 @@ mod tests {
         );
         let back = parse(&serde_json::to_string_pretty(&mem).unwrap());
         assert_eq!(back, mem);
+    }
+
+    #[test]
+    fn cat_fields_default_lenient_and_belong_to_the_island() {
+        use crate::theme::{CatAccessory, CatColor};
+        let cat = |c: &Config| {
+            (
+                c.cat_color,
+                c.cat_accessory,
+                c.cat_follow_pointer,
+                c.notch_peek,
+            )
+        };
+        let d = Config::default();
+        assert_eq!(
+            cat(&d),
+            (CatColor::Terracotta, CatAccessory::None, true, true)
+        );
+        // An old file has none of them.
+        let old = parse(r#"{"style":"Notch","robot":false}"#);
+        assert_eq!(
+            cat(&old),
+            (CatColor::Terracotta, CatAccessory::None, true, true)
+        );
+        // Names are case-insensitive; a typo falls back per field and keeps
+        // the rest of the file (a bad value never drops it).
+        let hand = parse(r#"{"cat_color":"calico","cat_accessory":"CROWN","notch_peek":false}"#);
+        assert_eq!(
+            cat(&hand),
+            (CatColor::Calico, CatAccessory::Crown, true, false)
+        );
+        let typo = parse(
+            r#"{"style":"Notch","cat_color":"purple","cat_accessory":7,"cat_follow_pointer":"yes","notch_peek":null}"#,
+        );
+        assert_eq!(typo.style, Style::Notch);
+        assert_eq!(
+            cat(&typo),
+            (CatColor::Terracotta, CatAccessory::None, true, true)
+        );
+        // Round trip, and the island keeps its own copies over the file's.
+        let mem = Config {
+            cat_color: CatColor::Black,
+            cat_accessory: CatAccessory::Scarf,
+            cat_follow_pointer: false,
+            notch_peek: false,
+            ..Config::default()
+        };
+        assert_eq!(parse(&serde_json::to_string_pretty(&mem).unwrap()), mem);
+        let merged = merge_owned(Config::default(), &mem);
+        assert_eq!(
+            cat(&merged),
+            (CatColor::Black, CatAccessory::Scarf, false, false)
+        );
+    }
+
+    #[test]
+    fn surface_reads_auto_unless_the_file_names_one() {
+        let old = parse(r#"{"accent":"Sage","surface":"Espresso"}"#);
+        assert_eq!(old.surface, Surface::Espresso, "a stored Espresso stays");
+        let graphite = parse(r#"{"surface":"Graphite"}"#);
+        assert_eq!(graphite.surface, Surface::Graphite);
+        assert_eq!(parse(r#"{"surface":"Black"}"#).surface, Surface::Espresso);
+        assert_eq!(parse(r#"{"accent":"Sage"}"#).surface, Surface::Auto);
+        assert_eq!(parse(r#"{"surface":"mauve"}"#).surface, Surface::Auto);
+        assert_eq!(parse(r#"{"surface":"sea"}"#).surface, Surface::Sea);
+        assert_eq!(parse(r#"{"surface":"Plum"}"#).surface, Surface::Plum);
+        let json = serde_json::to_string(&Config::default()).unwrap();
+        assert!(json.contains(r#""surface":"Auto""#), "{json}");
     }
 }

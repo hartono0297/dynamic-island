@@ -5,7 +5,7 @@ date: 2026-10-29
 
 # Panel pages: order and which ones the wheel shows
 
-Run 9 of the v3.1 plan. Settings → Tampilan → "Halaman panel" lists all 12
+Run 9 of the v3.1 plan. Settings → Panel (was Tampilan before v3.8) → "Halaman panel" lists all 12
 pages (every page in `Page::ALL`) in the owner's order, each with an order
 stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
 
@@ -24,7 +24,8 @@ stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is th
 - **Slides follow the owner's order**, and the page drawn beside the new one
   is the page it came from (`Frame::page_from`), not a neighbour in
   `Page::ALL`.
-- The card sits at the end of Tampilan, below Bata's card.
+- The card sits in Settings → **Panel** (since v3.8, under "Perilaku": Mode
+  buka and Di belakang jendela; it was the end of Tampilan, [[settings-structure]]).
 
 - A page that is off but opened by its button holds only for that visit:
   when the panel closes the page moves to the nearest one on, so the next
@@ -38,7 +39,7 @@ pages ([[devices]]); a saved list without it gets it back right after System
 
 ## The Settings card, remade (2026-10-29)
 
-The "− n +" order stepper was confusing and is gone. Settings → Tampilan →
+The "− n +" order stepper was confusing and is gone. Settings → Panel →
 Halaman panel now reads:
 
 - **Shown pages first**, in order: a drag handle at the left, up/down

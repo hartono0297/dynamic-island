@@ -412,7 +412,10 @@ mod tests {
             (HookAction::Swallow, true)
         );
         // Even if a modifier went down meanwhile: the press is still ours.
-        let shift = Mods { shift: true, ..NONE };
+        let shift = Mods {
+            shift: true,
+            ..NONE
+        };
         assert_eq!(
             prtsc_hook_action(SNAP, true, shift, true),
             (HookAction::Swallow, true)
@@ -448,7 +451,10 @@ mod tests {
             Mods { alt: true, ..NONE },
             Mods { win: true, ..NONE },
             Mods { ctrl: true, ..NONE },
-            Mods { shift: true, ..NONE },
+            Mods {
+                shift: true,
+                ..NONE
+            },
         ];
         for mods in cases {
             assert_eq!(

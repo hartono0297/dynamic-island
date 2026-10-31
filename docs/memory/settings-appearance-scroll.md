@@ -42,7 +42,18 @@ scrolls further. At scroll 0 only the width slider's row peeks into the window
 section's first drag control besides the list handles. Details in
 [[notch-size-and-fill]].
 
+**v3.8 update:** Tampilan no longer holds the cat's rows or the two lists. The
+cat moved to its own page (Kucing), the lists and Mode buka to Panel, and
+Tampilan is the preview plus three titled cards (Island, Notch, Jendela); it
+still scrolls (the preview, 4 + 5 + 1 rows, three eyebrows). The sections that
+scroll are now Tampilan, Kucing, Panel, Clipboard and Fitur; Umum fits to the
+pixel (one extra line when its search-hotkey label wraps) and Integrasi and
+Tentang never scroll. The rest of this note describes how the first scrolling
+section worked; the section list, "Bata's four rows" (now the Kucing page's
+Gerak card, Animasi / Tidur setelah / Ikuti kursor / Mengecil jadi mata) and
+the scroll test are in [[settings-structure]].
+
 Related: [[bata-robot-expressions]], [[bata-idle-power-budget]],
-[[notch-size-and-fill]]
+[[notch-size-and-fill]], [[settings-structure]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

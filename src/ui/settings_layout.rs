@@ -20,7 +20,7 @@ use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
 use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
-use crate::theme::{Accent, Surface, WindowTheme};
+use crate::theme::{Accent, CatAccessory, CatColor, Surface, WindowTheme};
 use crate::tiles::{CustomKind, MAX_CUSTOM, MAX_SHOWN, ShortcutTiles, Tile, TileGroup, group};
 use crate::ui::geometry::{
     NOTCH_H_DEFAULT, NOTCH_H_MAX, NOTCH_H_MIN, NOTCH_W_DEFAULT, NOTCH_W_MAX, NOTCH_W_MIN,
@@ -91,6 +91,8 @@ pub const LINK_GLYPH_W: f32 = 18.0;
 const GAP: f32 = 8.0;
 /// A description that wraps: each further line adds this to its row.
 const DESC_LINE_H: f32 = 14.0;
+/// A second line of a row's label (`Builder::row_text_label_lines`).
+const LABEL_LINE_H: f32 = 18.0;
 const LOGO: f32 = 28.0;
 const NAV_X: f32 = 10.0;
 const NAV_W: f32 = SIDEBAR_W - 2.0 * NAV_X;
@@ -125,30 +127,41 @@ pub const GUIDE_URL: &str = "https://github.com/hartono0297/dynamic-island#setup
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
-    Appearance,
+    /// Umum: language, autostart, the search hotkey, the warnings.
     General,
+    /// Tampilan: the island's look (style, colours, the notch, the window).
+    Appearance,
+    /// Kucing: the cat's colour, accessory, motion and greeting.
+    Cat,
+    /// Panel: how it opens, its pages, its shortcut tiles.
+    Panel,
     Clipboard,
-    Pomodoro,
+    /// Fitur: the pomodoro, music, the CLI, devices, the cleaner.
+    Features,
     Integrations,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
-        Section::Appearance,
+    pub const ALL: [Section; 8] = [
         Section::General,
+        Section::Appearance,
+        Section::Cat,
+        Section::Panel,
         Section::Clipboard,
-        Section::Pomodoro,
+        Section::Features,
         Section::Integrations,
         Section::About,
     ];
 
     pub fn key(self) -> Key {
         match self {
-            Section::Appearance => Key::SecAppearance,
             Section::General => Key::SecGeneral,
+            Section::Appearance => Key::SecAppearance,
+            Section::Cat => Key::SecCat,
+            Section::Panel => Key::SecPanel,
             Section::Clipboard => Key::SecClipboard,
-            Section::Pomodoro => Key::SecPomodoro,
+            Section::Features => Key::SecFeatures,
             Section::Integrations => Key::SecIntegrations,
             Section::About => Key::SecAbout,
         }
@@ -157,10 +170,12 @@ impl Section {
     /// The section's icon in the sidebar.
     pub fn icon(self) -> Icon {
         match self {
-            Section::Appearance => Icon::Palette,
             Section::General => Icon::Gear,
+            Section::Appearance => Icon::Palette,
+            Section::Cat => Icon::Cat,
+            Section::Panel => Icon::Grid,
             Section::Clipboard => Icon::Clipboard,
-            Section::Pomodoro => Icon::Timer,
+            Section::Features => Icon::Sparkle,
             Section::Integrations => Icon::Link,
             Section::About => Icon::Info,
         }
@@ -171,17 +186,64 @@ impl Section {
     }
 
     /// "appearance", "general", ... (also accepts the Indonesian names), for
-    /// the debug `--settings` mode.
+    /// the debug `--settings` mode. "pomodoro" (a section before v3.8) is
+    /// Features now.
     #[cfg(any(test, debug_assertions))]
     pub fn from_name(name: &str) -> Option<Section> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "appearance" | "tampilan" => Some(Section::Appearance),
             "general" | "umum" => Some(Section::General),
+            "appearance" | "tampilan" => Some(Section::Appearance),
+            "cat" | "kucing" => Some(Section::Cat),
+            "panel" => Some(Section::Panel),
             "clipboard" => Some(Section::Clipboard),
-            "pomodoro" => Some(Section::Pomodoro),
+            "features" | "fitur" | "pomodoro" => Some(Section::Features),
             "integrations" | "integrasi" => Some(Section::Integrations),
             "about" | "tentang" => Some(Section::About),
             _ => None,
+        }
+    }
+}
+
+/// The face the Kucing page's preview shows, chosen with its chips: window
+/// state only, never saved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CatFace {
+    #[default]
+    Idle,
+    Happy,
+    Blink,
+    Sleep,
+    Wave,
+}
+
+impl CatFace {
+    pub const ALL: [CatFace; 5] = [
+        CatFace::Idle,
+        CatFace::Happy,
+        CatFace::Blink,
+        CatFace::Sleep,
+        CatFace::Wave,
+    ];
+
+    pub fn key(self) -> Key {
+        match self {
+            CatFace::Idle => Key::ExprIdle,
+            CatFace::Happy => Key::ExprHappy,
+            CatFace::Blink => Key::ExprBlink,
+            CatFace::Sleep => Key::ExprSleep,
+            CatFace::Wave => Key::ExprWave,
+        }
+    }
+
+    /// The face, and whether its eyes are shut for a blink.
+    pub fn expr(self) -> (super::robot::Expr, bool) {
+        use super::robot::Expr;
+        match self {
+            CatFace::Idle => (Expr::Idle, false),
+            CatFace::Happy => (Expr::Happy, false),
+            CatFace::Blink => (Expr::Idle, true),
+            CatFace::Sleep => (Expr::Sleep, false),
+            CatFace::Wave => (Expr::Wave, false),
         }
     }
 }
@@ -287,12 +349,22 @@ pub enum Hit {
     Style(Style),
     Accent(Accent),
     Surface(Surface),
+    /// Settings → Kucing: "Warna" (a coat) and "Aksesori" (a tile).
+    CatColor(CatColor),
+    CatAccessory(CatAccessory),
+    /// "Ikuti kursor" and "Mengecil jadi mata".
+    CatFollow,
+    NotchPeek,
+    /// "Ubah" beside "Latar: ...": goes to Tampilan.
+    CatBackdrop,
+    /// A chip of the preview: which face it shows (window state).
+    CatFace(CatFace),
     /// A slider: the press and the drag are handled by the window (a press
     /// jumps there, a drag follows), not as a click.
     Slider(SliderId),
     /// "Ukuran bawaan": 190 x 34 again.
     NotchReset,
-    /// "Latar notch": Hitam or Transparan.
+    /// "Isi notch": Solid or Tembus.
     NotchFill(NotchFill),
     WindowMode(WindowTheme),
     Lang(Lang),
@@ -304,20 +376,20 @@ pub enum Hit {
     /// "Mode buka": Hover, Hover & tetap or Klik.
     OpenMode(OpenMode),
     SearchHotkey(SearchHotkey),
-    /// "Notice perangkat": the plug-in and safe-to-remove notices.
+    /// "Notifikasi perangkat": the plug-in and safe-to-remove notices.
     DeviceNotices,
-    /// "Pintasan Perangkat".
+    /// "Tombol pintas" of the Devices page.
     DevicesHotkey(DevicesHotkey),
     /// "Folder awal CLI": Ikuti Explorer or Folder terakhir.
     CliStart(CliStart),
     Shell(Shell),
-    /// "Asisten di notch".
+    /// "Kucing di notch".
     Robot,
     /// "Animasi": Penuh, Hemat, Mati.
     Motion(Motion),
     /// "Tidur setelah", one step down (−1) or up.
     RobotSleep(i32),
-    /// "Sapaan pagi".
+    /// "Sapaan".
     Greeting,
     /// Settings → Clipboard: "Riwayat clipboard", "Jumlah item" (−1 / +1),
     /// "Simpan setelah restart", "Hapus saat layar dikunci", "Pintasan",
@@ -455,7 +527,8 @@ pub struct Text {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     Style,
-    Surface,
+    /// The Kucing preview's expression chips.
+    CatFace,
     NotchFill,
     Window,
     Lang,
@@ -552,6 +625,25 @@ pub enum Control {
         items: Vec<(Accent, Rect)>,
         selected: Accent,
     },
+    /// "Warna dasar": Ikuti kucing first, then the five surfaces. Off
+    /// (`enabled` false): faded, no clicks.
+    SurfaceSwatches {
+        items: Vec<(Surface, Rect)>,
+        selected: Surface,
+        enabled: bool,
+    },
+    /// "Warna" of the cat: its four coats.
+    CatSwatches {
+        items: Vec<(CatColor, Rect)>,
+        selected: CatColor,
+        enabled: bool,
+    },
+    /// "Aksesori": a tile for each, the cat wearing it.
+    AccessoryTiles {
+        items: Vec<(CatAccessory, Rect)>,
+        selected: CatAccessory,
+        enabled: bool,
+    },
     /// A track with a round thumb; `track` is the hit area (the thumb's
     /// height), the line is drawn through its middle. Off (`enabled` false):
     /// faded, no clicks.
@@ -591,6 +683,21 @@ impl Control {
             Control::Swatches { items, .. } => items
                 .iter()
                 .map(|(a, r)| (Hit::Accent(*a), inflate(*r, SWATCH_SLOP)))
+                .collect(),
+            Control::SurfaceSwatches { enabled: false, .. }
+            | Control::CatSwatches { enabled: false, .. }
+            | Control::AccessoryTiles { enabled: false, .. } => Vec::new(),
+            Control::SurfaceSwatches { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::Surface(*v), inflate(*r, SWATCH_SLOP)))
+                .collect(),
+            Control::CatSwatches { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::CatColor(*v), inflate(*r, SWATCH_SLOP)))
+                .collect(),
+            Control::AccessoryTiles { items, .. } => items
+                .iter()
+                .map(|(v, r)| (Hit::CatAccessory(*v), *r))
                 .collect(),
             Control::Slider {
                 id,
@@ -634,6 +741,21 @@ impl Control {
                     down(r);
                 }
             }
+            Control::SurfaceSwatches { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
+            Control::CatSwatches { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
+            Control::AccessoryTiles { items, .. } => {
+                for (_, r) in items {
+                    down(r);
+                }
+            }
             Control::Slider { track, .. } => down(track),
             Control::Button(b) => down(&mut b.rect),
             Control::IconButton { rect, .. } => down(rect),
@@ -650,6 +772,21 @@ impl Control {
             Control::Swatches { items, .. } => items
                 .iter()
                 .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::SurfaceSwatches { items, .. } => items
+                .iter()
+                .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::CatSwatches { items, .. } => items
+                .iter()
+                .map(|(_, r)| inflate(*r, SWATCH_SLOP))
+                .reduce(union)
+                .unwrap_or_default(),
+            Control::AccessoryTiles { items, .. } => items
+                .iter()
+                .map(|(_, r)| *r)
                 .reduce(union)
                 .unwrap_or_default(),
             Control::Slider { track, .. } => *track,
@@ -691,6 +828,9 @@ pub struct Layout {
     pub chips: Vec<Chip>,
     /// The live island preview (Appearance).
     pub preview: Option<Rect>,
+    /// The cat's preview card (Kucing): the cat on its surface and the idle
+    /// notch at real size.
+    pub cat_preview: Option<Rect>,
     /// The large logo (About).
     pub about_logo: Option<Rect>,
     /// Info glyph before a note (Pomodoro while locked).
@@ -853,11 +993,18 @@ pub struct State<'a> {
     pub idle_clock: bool,
     /// "Di belakang jendela" (experimental).
     pub stay_behind: bool,
-    /// Bata in the notch, how it moves, when it sleeps, the greeting.
+    /// The cat in the notch, how it moves, when it sleeps, the greeting.
     pub robot: bool,
     pub robot_motion: Motion,
     pub robot_sleep: u32,
     pub greeting: bool,
+    /// The cat's coat and accessory, "Ikuti kursor" and "Mengecil jadi mata".
+    pub cat_color: CatColor,
+    pub cat_accessory: CatAccessory,
+    pub cat_follow: bool,
+    pub notch_peek: bool,
+    /// The face the Kucing preview shows (window state, not saved).
+    pub cat_face: CatFace,
     /// How far a section taller than the window is scrolled (clamped).
     pub scroll: f32,
     /// Synced lyrics in the notch.
@@ -1229,6 +1376,37 @@ impl Builder<'_> {
             };
             self.text(rect, line, Font::Desc, tone, Align::Left);
         }
+    }
+
+    /// A row whose label took `label` lines (`wrap`), then its description
+    /// one line under the last; the same top as `row_text`'s for one line.
+    fn row_text_label_lines(
+        &mut self,
+        card: Rect,
+        y: f32,
+        label: Vec<String>,
+        desc: (String, Tone),
+        control_x: f32,
+    ) {
+        let x = card.x + INSET;
+        let w = row_text_w(card, control_x);
+        let n = label.len();
+        for (i, line) in label.into_iter().enumerate() {
+            let rect = Rect {
+                x,
+                y: y + 7.0 + i as f32 * LABEL_LINE_H,
+                w,
+                h: 20.0,
+            };
+            self.text(rect, line, Font::Label, Tone::Primary, Align::Left);
+        }
+        let rect = Rect {
+            x,
+            y: y + 28.0 + (n - 1) as f32 * LABEL_LINE_H,
+            w,
+            h: 16.0,
+        };
+        self.text(rect, desc.0, Font::Desc, desc.1, Align::Left);
     }
 
     /// `s` broken at spaces into lines no wider than `w` in `font`; a word
@@ -1643,10 +1821,12 @@ pub fn layout(section: Section, s: &State, m: &dyn Measure) -> Layout {
         align: Align::Left,
     });
     match section {
-        Section::Appearance => appearance(&mut b, s),
         Section::General => general(&mut b, s),
+        Section::Appearance => appearance(&mut b, s),
+        Section::Cat => cat_page(&mut b, s),
+        Section::Panel => panel_page(&mut b, s),
         Section::Clipboard => clipboard_page(&mut b, s),
-        Section::Pomodoro => pomodoro_page(&mut b, s),
+        Section::Features => features_page(&mut b, s),
         Section::Integrations => integrations(&mut b, s),
         Section::About => about(&mut b, s),
     }
@@ -1701,6 +1881,7 @@ fn scroll(l: &mut Layout, scroll: f32) {
     }
     for r in [
         &mut l.preview,
+        &mut l.cat_preview,
         &mut l.about_logo,
         &mut l.note_glyph,
         &mut l.lifted,
@@ -1716,11 +1897,18 @@ fn index_of<T: PartialEq>(all: &[T], v: &T) -> usize {
     all.iter().position(|x| x == v).unwrap_or(0)
 }
 
+/// An uppercase title over the card that follows (the whole content width).
+fn titled(b: &mut Builder, key: Key) {
+    b.eyebrow(key, CONTENT_W - 4.0);
+}
+
+/// Tampilan: the preview, then the cards "Island", "Notch" and "Jendela".
 fn appearance(b: &mut Builder, s: &State) {
     let preview = b.card(PREVIEW_H);
     b.l.preview = Some(preview);
-    let card = b.card(5.0 * ROW_H);
-    let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    titled(b, Key::GroupIsland);
+    let card = b.card(4.0 * ROW_H);
+    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let styles = [
@@ -1766,25 +1954,50 @@ fn appearance(b: &mut Builder, s: &State) {
     );
     b.divider(card, rows[1]);
 
-    let surfaces = [
-        (Surface::Espresso, Key::SurfaceEspresso),
-        (Surface::Graphite, Key::SurfaceGraphite),
-    ];
-    let items = surfaces
+    // "Warna dasar": Ikuti kucing first, then the five fills, as swatches;
+    // the row's description is the chosen name (and what Auto gives now).
+    let n = Surface::ALL.len() as f32;
+    let total = n * SWATCH + (n - 1.0) * SWATCH_GAP;
+    let x0 = RIGHT - total;
+    let items = Surface::ALL
         .iter()
-        .map(|(v, k)| (Hit::Surface(*v), b.t(*k)))
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: x0 + i as f32 * (SWATCH + SWATCH_GAP),
+                y: cy(rows[2]) - SWATCH / 2.0,
+                w: SWATCH,
+                h: SWATCH,
+            };
+            (*v, r)
+        })
         .collect();
-    let x = b.segmented(
-        Group::Surface,
-        RIGHT,
-        cy(rows[2]),
+    b.l.controls.push(Control::SurfaceSwatches {
         items,
-        index_of(Surface::ALL, &s.surface),
+        selected: s.surface,
+        enabled: true,
+    });
+    let name = surface_label(b.lang, s.surface, s.cat_color, s.robot);
+    let desc = Some((name, Tone::Secondary));
+    b.row_text(
+        card,
+        rows[2],
+        b.t(Key::IslandSurface),
+        desc,
+        false,
+        x0 - SWATCH_SLOP,
     );
-    let desc = Some((b.t(Key::IslandSurfaceDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::IslandSurface), desc, false, x);
     b.divider(card, rows[2]);
 
+    let x = b.toggle(Hit::IdleClock, RIGHT, cy(rows[3]), s.idle_clock);
+    let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
+    b.row_text(card, rows[3], b.t(Key::IdleClock), desc, false, x);
+    b.divider(card, rows[3]);
+
+    notch_card(b, s);
+
+    titled(b, Key::GroupWindow);
+    let card = b.card(ROW_H);
     let modes = [
         (WindowTheme::System, Key::ModeSystem),
         (WindowTheme::Dark, Key::ModeDark),
@@ -1797,23 +2010,54 @@ fn appearance(b: &mut Builder, s: &State) {
     let x = b.segmented(
         Group::Window,
         RIGHT,
-        cy(rows[3]),
+        card.y + ROW_H / 2.0,
         items,
         index_of(WindowTheme::ALL, &s.window),
     );
     let desc = Some((b.t(Key::WindowModeDesc), Tone::Secondary));
-    b.row_text(card, rows[3], b.t(Key::WindowMode), desc, false, x);
-    b.divider(card, rows[3]);
+    b.row_text(card, card.y, b.t(Key::WindowMode), desc, false, x);
+}
 
-    let x = b.toggle(Hit::IdleClock, RIGHT, cy(rows[4]), s.idle_clock);
-    let desc = Some((b.t(Key::IdleClockDesc), Tone::Secondary));
-    b.row_text(card, rows[4], b.t(Key::IdleClock), desc, false, x);
-    b.divider(card, rows[4]);
+/// The name of a surface choice: "Espresso", ...; Ikuti kucing says what it
+/// gives for the cat now ("Ikuti kucing · Laut").
+pub fn surface_label(lang: Lang, surface: Surface, cat: CatColor, robot: bool) -> String {
+    let name = |v: Surface| text(lang, surface_key(v));
+    match surface {
+        Surface::Auto => format!("{} · {}", name(surface), name(surface.resolve(cat, robot))),
+        v => name(v).to_owned(),
+    }
+}
 
-    notch_card(b, s);
-    robot_card(b, s);
-    pages_card(b, s);
-    tiles_card(b, s);
+pub fn surface_key(v: Surface) -> Key {
+    match v {
+        Surface::Auto => Key::SurfaceAuto,
+        Surface::Espresso => Key::SurfaceEspresso,
+        Surface::Graphite => Key::SurfaceGraphite,
+        Surface::Sea => Key::SurfaceSea,
+        Surface::Night => Key::SurfaceNight,
+        Surface::Plum => Key::SurfacePlum,
+    }
+}
+
+pub fn cat_color_key(v: CatColor) -> Key {
+    match v {
+        CatColor::Terracotta => Key::CatColorTerracotta,
+        CatColor::Calico => Key::CatColorCalico,
+        CatColor::White => Key::CatColorWhite,
+        CatColor::Black => Key::CatColorBlack,
+    }
+}
+
+pub fn accessory_key(v: CatAccessory) -> Key {
+    match v {
+        CatAccessory::None => Key::AccNone,
+        CatAccessory::Glasses => Key::AccGlasses,
+        CatAccessory::Bow => Key::AccBow,
+        CatAccessory::Nightcap => Key::AccNightcap,
+        CatAccessory::Scarf => Key::AccScarf,
+        CatAccessory::Flower => Key::AccFlower,
+        CatAccessory::Crown => Key::AccCrown,
+    }
 }
 
 /// "190 px": a size slider's value.
@@ -1827,9 +2071,10 @@ pub fn percent_value(pct: u8) -> String {
 }
 
 /// The closed island's size and background: width and height sliders, a
-/// reset to 190 x 34, "Hitam" or "Transparan", and the opacity slider, which
-/// fades and takes no clicks while the background is solid.
+/// reset to 190 x 34, "Solid" or "Tembus", and the opacity slider, which
+/// fades and takes no clicks unless it is Tembus.
 fn notch_card(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupNotch);
     let card = b.card(5.0 * ROW_H);
     let rows: [f32; 5] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -2361,11 +2606,158 @@ fn wrapped_row_h(lines: usize) -> f32 {
     ROW_H + lines.saturating_sub(1) as f32 * DESC_LINE_H
 }
 
-/// Bata's four rows under Tampilan; with the robot off the other three
-/// stay visible but faded and take no clicks. The Animasi description wraps
-/// beside its three segments (the design's full sentence), and that row
-/// grows by a line.
-fn robot_card(b: &mut Builder, s: &State) {
+/// "10 mnt", "10 min": the sleep stepper's value.
+pub fn sleep_value(lang: Lang, minutes: u32) -> String {
+    format!("{minutes} {}", text(lang, Key::MinutesShort))
+}
+
+/// The height of the Kucing preview card: the cat's tile and the idle notch
+/// above, the expression chips under them.
+pub const CAT_PREVIEW_H: f32 = 158.0;
+/// The cat's tile in the preview (the cat about 64 px on it).
+pub const CAT_TILE: f32 = 96.0;
+/// The tiles of the "Aksesori" row, and the gap between them.
+const ACC_TILE: f32 = 54.0;
+const ACC_ROW_H: f32 = ROW_H + ACC_TILE + 12.0;
+
+/// Kucing: the preview, then the cards "Kucing", "Gerak" and "Sapaan". While
+/// the cat is off the rows that need it fade and take no clicks;
+/// "Mengecil jadi mata" does not need it (the eyes show without the cat).
+fn cat_page(b: &mut Builder, s: &State) {
+    let preview = b.card(CAT_PREVIEW_H);
+    b.l.cat_preview = Some(preview);
+    let items: Vec<(Hit, String)> = CatFace::ALL
+        .iter()
+        .map(|f| (Hit::CatFace(*f), b.t(f.key())))
+        .collect();
+    let selected = index_of(&CatFace::ALL, &s.cat_face);
+    b.segmented(
+        Group::CatFace,
+        RIGHT,
+        preview.bottom() - 12.0 - CONTROL_H / 2.0,
+        items,
+        selected,
+    );
+
+    let on = s.robot;
+    titled(b, Key::GroupCat);
+    let card = b.card(3.0 * ROW_H + ACC_ROW_H);
+    let rows = [
+        card.y,
+        card.y + ROW_H,
+        card.y + 2.0 * ROW_H,
+        card.y + 3.0 * ROW_H,
+    ];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let x = b.toggle(Hit::Robot, RIGHT, cy(rows[0]), on);
+    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
+
+    // "Warna": the four coats; the chosen one's name is the description.
+    let n = CatColor::ALL.len() as f32;
+    let x0 = RIGHT - (n * SWATCH + (n - 1.0) * SWATCH_GAP);
+    let items = CatColor::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: x0 + i as f32 * (SWATCH + SWATCH_GAP),
+                y: cy(rows[1]) - SWATCH / 2.0,
+                w: SWATCH,
+                h: SWATCH,
+            };
+            (*v, r)
+        })
+        .collect();
+    b.l.controls.push(Control::CatSwatches {
+        items,
+        selected: s.cat_color,
+        enabled: on,
+    });
+    let desc = Some((b.t(cat_color_key(s.cat_color)), Tone::Secondary));
+    b.row_text(
+        card,
+        rows[1],
+        b.t(Key::CatColorLabel),
+        desc,
+        false,
+        x0 - SWATCH_SLOP,
+    );
+    b.divider(card, rows[1]);
+
+    // "Latar: <name>" and "Ubah": the picker lives in Tampilan.
+    let change = b.t(Key::CatBackdropChange);
+    let w = b.button_w(&[&change], ButtonKind::Secondary);
+    let item = (Hit::CatBackdrop, change, ButtonKind::Secondary, on, w);
+    let x = b.buttons(RIGHT, cy(rows[2]), vec![item]);
+    let shown = s.surface.resolve(s.cat_color, s.robot);
+    let label = format!(
+        "{}: {}",
+        b.t(Key::CatBackdrop),
+        text(b.lang, surface_key(shown))
+    );
+    let desc = (s.surface == Surface::Auto).then(|| (b.t(Key::SurfaceAuto), Tone::Secondary));
+    b.row_text(card, rows[2], label, desc, false, x);
+    b.divider(card, rows[2]);
+
+    // "Aksesori": the chosen one's name, and a tile for each below it.
+    let name = b.t(accessory_key(s.cat_accessory));
+    b.row_text(
+        card,
+        rows[3],
+        b.t(Key::CatAccessoryLabel),
+        Some((name, Tone::Secondary)),
+        false,
+        RIGHT,
+    );
+    let n = CatAccessory::ALL.len() as f32;
+    let gap = (RIGHT - (card.x + INSET) - n * ACC_TILE) / (n - 1.0);
+    let items = CatAccessory::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let r = Rect {
+                x: card.x + INSET + i as f32 * (ACC_TILE + gap),
+                y: rows[3] + ROW_H,
+                w: ACC_TILE,
+                h: ACC_TILE,
+            };
+            (*v, r)
+        })
+        .collect();
+    b.l.controls.push(Control::AccessoryTiles {
+        items,
+        selected: s.cat_accessory,
+        enabled: on,
+    });
+    b.divider(card, rows[3]);
+
+    cat_motion_card(b, s);
+
+    titled(b, Key::GroupGreeting);
+    let line = crate::i18n::greeting_periods_line(b.lang);
+    let periods = b.wrap(&line, Font::Desc, CONTENT_W - 2.0 * INSET);
+    let card = b.card(ROW_H + periods.len() as f32 * DESC_LINE_H + 14.0);
+    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(card.y), s.greeting, on);
+    let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
+    b.row_text(card, card.y, b.t(Key::CatGreeting), desc, false, x);
+    b.divider(card, card.y + ROW_H);
+    for (i, line) in periods.into_iter().enumerate() {
+        let rect = Rect {
+            x: card.x + INSET,
+            y: card.y + ROW_H + 8.0 + i as f32 * DESC_LINE_H,
+            w: CONTENT_W - 2.0 * INSET,
+            h: 16.0,
+        };
+        b.text(rect, line, Font::Desc, Tone::Secondary, Align::Left);
+    }
+}
+
+/// "Gerak": Animasi, Tidur setelah, Ikuti kursor and Mengecil jadi mata. The
+/// Animasi description wraps beside its three segments (the design's full
+/// sentence) and that row grows by a line.
+fn cat_motion_card(b: &mut Builder, s: &State) {
     let modes = [
         (Motion::Full, Key::MotionFull),
         (Motion::Saver, Key::MotionSaver),
@@ -2385,8 +2777,9 @@ fn robot_card(b: &mut Builder, s: &State) {
     let motion_desc = b.wrap(&b.t(Key::RobotMotionDesc), Font::Desc, desc_w);
     let motion_h = wrapped_row_h(motion_desc.len());
 
+    titled(b, Key::GroupMotion);
     let card = b.card(3.0 * ROW_H + motion_h);
-    let heights = [ROW_H, motion_h, ROW_H, ROW_H];
+    let heights = [motion_h, ROW_H, ROW_H, ROW_H];
     let mut rows = [card.y; 4];
     for i in 1..4 {
         rows[i] = rows[i - 1] + heights[i - 1];
@@ -2394,20 +2787,15 @@ fn robot_card(b: &mut Builder, s: &State) {
     let cy = |i: usize| rows[i] + heights[i] / 2.0;
     let on = s.robot;
 
-    let x = b.toggle(Hit::Robot, RIGHT, cy(0), on);
-    let desc = Some((b.t(Key::RobotInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[0], b.t(Key::RobotInNotch), desc, false, x);
-
     let selected = index_of(Motion::ALL, &s.robot_motion);
-    let x = b.segmented_if(Group::Motion, RIGHT, cy(1), items, selected, on);
+    let x = b.segmented_if(Group::Motion, RIGHT, cy(0), items, selected, on);
     let label = b.t(Key::RobotMotion);
-    b.row_text_lines(card, rows[1], label, motion_desc, Tone::Secondary, x);
-    b.divider(card, rows[1]);
+    b.row_text_lines(card, rows[0], label, motion_desc, Tone::Secondary, x);
 
     let m = s.robot_sleep;
     let x = b.stepper(
         RIGHT,
-        cy(2),
+        cy(1),
         sleep_value(b.lang, m),
         Hit::RobotSleep(-1),
         Hit::RobotSleep(1),
@@ -2415,23 +2803,84 @@ fn robot_card(b: &mut Builder, s: &State) {
         on && s.robot_motion != Motion::Off,
     );
     let desc = Some((b.t(Key::RobotSleepDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::RobotSleep), desc, false, x);
+    b.row_text(card, rows[1], b.t(Key::RobotSleep), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let x = b.toggle_if(Hit::CatFollow, RIGHT, cy(2), s.cat_follow, on);
+    let desc = Some((b.t(Key::CatFollowDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::CatFollow), desc, false, x);
     b.divider(card, rows[2]);
 
-    let x = b.toggle_if(Hit::Greeting, RIGHT, cy(3), s.greeting, on);
-    let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
-    b.row_text(card, rows[3], b.t(Key::MorningGreeting), desc, false, x);
+    // The eyes need stay-behind off, not the cat.
+    let x = b.toggle_if(Hit::NotchPeek, RIGHT, cy(3), s.notch_peek, !s.stay_behind);
+    let desc = if s.stay_behind {
+        b.t(Key::CatPeekBehind)
+    } else {
+        b.t(Key::CatPeekDesc)
+    };
+    b.row_text(
+        card,
+        rows[3],
+        b.t(Key::CatPeek),
+        Some((desc, Tone::Secondary)),
+        false,
+        x,
+    );
     b.divider(card, rows[3]);
 }
 
-/// "10 mnt", "10 min": the sleep stepper's value.
-pub fn sleep_value(lang: Lang, minutes: u32) -> String {
-    format!("{minutes} {}", text(lang, Key::MinutesShort))
-}
+/// What Umum takes back from its gaps when its search-hotkey label wraps,
+/// so the page still fits the window: under the page title (16 to 8),
+/// under each group title (8 to 6) and between the groups (12 to 6).
+const UMUM_TRIM_TITLE: f32 = 8.0;
+const UMUM_TRIM_EYEBROW: f32 = 2.0;
+const UMUM_TRIM_GROUPS: f32 = 6.0;
+const _: () = assert!(UMUM_TRIM_TITLE + 2.0 * UMUM_TRIM_EYEBROW + UMUM_TRIM_GROUPS == LABEL_LINE_H);
 
+/// Umum: "Dasar" (language, autostart, the search hotkey) and "Peringatan"
+/// (battery, disk and RAM, and how to turn off Windows' pop-ups).
 fn general(b: &mut Builder, s: &State) {
-    let card = b.card(10.0 * ROW_H);
-    let rows: [f32; 10] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    // "Tombol pintas pencarian" is long beside its three choices: when it
+    // does not fit on one line it wraps, and its row grows by a line. Umum
+    // fits the window with nothing to spare, so it then takes that line back
+    // from its gaps (`UMUM_TRIM_*`) and never scrolls.
+    let hotkeys = vec![
+        (
+            Hit::SearchHotkey(SearchHotkey::Off),
+            b.t(Key::ClipHotkeyNone),
+        ),
+        (
+            Hit::SearchHotkey(SearchHotkey::CtrlAltSpace),
+            "Ctrl+Alt+Space".to_owned(),
+        ),
+        (
+            Hit::SearchHotkey(SearchHotkey::WinAltS),
+            "Win+Alt+S".to_owned(),
+        ),
+    ];
+    let probe = Rect {
+        x: CONTENT_X,
+        y: 0.0,
+        w: CONTENT_W,
+        h: 0.0,
+    };
+    let hotkey_label = b.wrap(
+        &b.t(Key::SearchHotkeySetting),
+        Font::Label,
+        row_text_w(probe, RIGHT - b.segmented_w(&hotkeys)),
+    );
+    let hotkey_h = ROW_H + (hotkey_label.len() - 1) as f32 * LABEL_LINE_H;
+    let tight = hotkey_label.len() > 1;
+    let trim = |b: &mut Builder, by: f32| {
+        if tight {
+            b.y -= by;
+        }
+    };
+    trim(b, UMUM_TRIM_TITLE);
+    titled(b, Key::GroupBasics);
+    trim(b, UMUM_TRIM_EYEBROW);
+    let card = b.card(2.0 * ROW_H + hotkey_h);
+    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
     let cy = |y: f32| y + ROW_H / 2.0;
 
     let items = vec![
@@ -2448,50 +2897,176 @@ fn general(b: &mut Builder, s: &State) {
     b.row_text(card, rows[1], b.t(Key::Autostart), desc, false, x);
     b.divider(card, rows[1]);
 
-    let items = vec![
-        (Hit::OpenMode(OpenMode::Hover), b.t(Key::OpenModeHover)),
-        (Hit::OpenMode(OpenMode::HoverStay), b.t(Key::OpenModeStay)),
-        (Hit::OpenMode(OpenMode::Click), b.t(Key::OpenModeClick)),
-    ];
-    let selected = index_of(OpenMode::ALL, &s.open_mode);
-    let x = b.segmented(Group::OpenMode, RIGHT, cy(rows[2]), items, selected);
-    let desc = Some((b.t(Key::OpenModeDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::OpenModeSetting), desc, false, x);
+    let selected = index_of(SearchHotkey::ALL, &s.search_hotkey);
+    let cy_hotkey = rows[2] + hotkey_h / 2.0;
+    let x = b.segmented(Group::SearchHotkey, RIGHT, cy_hotkey, hotkeys, selected);
+    let desc = if s.search_hotkey_failed && s.search_hotkey != SearchHotkey::Off {
+        (b.t(Key::SearchHotkeyTaken), Tone::Bad)
+    } else {
+        (b.t(Key::SearchHotkeyDesc), Tone::Secondary)
+    };
+    b.row_text_label_lines(card, rows[2], hotkey_label, desc, x);
     b.divider(card, rows[2]);
+
+    trim(b, UMUM_TRIM_GROUPS);
+    titled(b, Key::GroupAlerts);
+    trim(b, UMUM_TRIM_EYEBROW);
+    warnings_card(b, s);
+}
+
+/// "Peringatan" (its title is `general`'s): the battery, disk and RAM
+/// steppers and the Windows pop-ups help. The battery stepper is off on a PC
+/// without one.
+fn warnings_card(b: &mut Builder, s: &State) {
+    let card = b.card(4.0 * ROW_H);
+    let rows: [f32; 4] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
+    let cy = |y: f32| y + ROW_H / 2.0;
 
     let (min, max, _) = BATTERY_RANGE;
     let t = s.battery_threshold;
     let x = b.stepper(
         RIGHT,
-        cy(rows[3]),
+        cy(rows[0]),
         format!("{t}%"),
         Hit::Battery(-1),
         Hit::Battery(1),
         (t > min, t < max),
-        true,
+        s.has_battery,
     );
     let desc = if s.has_battery {
         (b.t(Key::BatteryAlertDesc), Tone::Secondary)
     } else {
         (b.t(Key::NoBattery), Tone::Secondary)
     };
-    b.row_text(card, rows[3], b.t(Key::BatteryAlert), Some(desc), false, x);
-    b.divider(card, rows[3]);
+    b.row_text(card, rows[0], b.t(Key::BatteryAlert), Some(desc), false, x);
+
+    let (min, max, _) = DISK_WARN_RANGE;
+    let gb = s.disk_warn_gb;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[1]),
+        disk_warn_value(gb),
+        Hit::DiskWarn(-1),
+        Hit::DiskWarn(1),
+        (gb > min, gb < max),
+        true,
+    );
+    let desc = Some((b.t(Key::DiskAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::DiskAlert), desc, false, x);
+    b.divider(card, rows[1]);
+
+    let (min, max, _) = RAM_WARN_RANGE;
+    let pct = s.ram_warn_percent;
+    let x = b.stepper(
+        RIGHT,
+        cy(rows[2]),
+        format!("{pct}%"),
+        Hit::RamWarn(-1),
+        Hit::RamWarn(1),
+        (pct > min, pct < max),
+        true,
+    );
+    let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
+    b.row_text(card, rows[2], b.t(Key::RamAlert), desc, false, x);
+    b.divider(card, rows[2]);
 
     let label = b.t(Key::ShowHow);
     let w = b.button_w(&[&label], ButtonKind::Secondary);
     let item = (Hit::DndHelp, label, ButtonKind::Secondary, true, w);
-    let x = b.buttons(RIGHT, cy(rows[4]), vec![item]);
+    let x = b.buttons(RIGHT, cy(rows[3]), vec![item]);
     let desc = Some((b.t(Key::PopupsHelpDesc), Tone::Secondary));
-    b.row_text(card, rows[4], b.t(Key::PopupsHelp), desc, false, x);
-    b.divider(card, rows[4]);
+    b.row_text(card, rows[3], b.t(Key::PopupsHelp), desc, false, x);
+    b.divider(card, rows[3]);
+}
 
+/// Panel: "Perilaku" (Mode buka, Di belakang jendela), then the lists "Halaman
+/// panel", "Pintasan" and "Tersedia".
+fn panel_page(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupBehavior);
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
+
+    let items = vec![
+        (Hit::OpenMode(OpenMode::Hover), b.t(Key::OpenModeHover)),
+        (Hit::OpenMode(OpenMode::HoverStay), b.t(Key::OpenModeStay)),
+        (Hit::OpenMode(OpenMode::Click), b.t(Key::OpenModeClick)),
+    ];
+    let selected = index_of(OpenMode::ALL, &s.open_mode);
+    let x = b.segmented(Group::OpenMode, RIGHT, cy(rows[0]), items, selected);
+    let desc = Some((b.t(Key::OpenModeDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::OpenModeSetting), desc, false, x);
+
+    let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[1]), s.stay_behind);
+    let desc = Some((b.t(Key::StayBehindDesc), Tone::Secondary));
+    b.row_text(card, rows[1], b.t(Key::StayBehind), desc, false, x);
+    b.divider(card, rows[1]);
+
+    pages_card(b, s);
+    tiles_card(b, s);
+}
+
+/// Fitur: "Pomodoro" (its four steppers and the running note), "Musik",
+/// "CLI", "Perangkat" and "Pembersih".
+fn features_page(b: &mut Builder, s: &State) {
+    titled(b, Key::GroupPomodoro);
+    let card = b.card(4.0 * ROW_H);
+    let fields = [
+        (PomoField::Focus, Key::Focus, Key::FocusDesc),
+        (PomoField::ShortBreak, Key::Break, Key::BreakDesc),
+        (PomoField::LongBreak, Key::LongBreak, Key::LongBreakDesc),
+        (PomoField::Sessions, Key::Sessions, Key::SessionsDesc),
+    ];
+    for (i, (field, label, desc)) in fields.into_iter().enumerate() {
+        let y = card.y + i as f32 * ROW_H;
+        let v = pomo_get(&s.pomodoro, field);
+        let (min, max, _) = pomodoro::range(field);
+        let x = b.stepper(
+            RIGHT,
+            y + ROW_H / 2.0,
+            pomo_value(b.lang, field, v),
+            Hit::Pomo(field, -1),
+            Hit::Pomo(field, 1),
+            (v > min, v < max),
+            !s.pomodoro_locked,
+        );
+        let desc = Some((b.t(desc), Tone::Secondary));
+        b.row_text(card, y, b.t(label), desc, false, x);
+        if i > 0 {
+            b.divider(card, y);
+        }
+    }
+    if s.pomodoro_locked {
+        let y = card.bottom() + 12.0;
+        b.l.note_glyph = Some(Rect {
+            x: CONTENT_X + 4.0,
+            y,
+            w: 16.0,
+            h: 18.0,
+        });
+        let rect = Rect {
+            x: CONTENT_X + 26.0,
+            y,
+            w: CONTENT_W - 26.0,
+            h: 18.0,
+        };
+        let note = b.t(Key::PomodoroLocked);
+        b.text(rect, note, Font::Desc, Tone::Secondary, Align::Left);
+        // The next title clears the note.
+        b.y = y + 18.0 + 10.0;
+    }
+
+    titled(b, Key::GroupMusic);
+    let card = b.card(ROW_H);
     // The description doubles as the privacy note.
-    let x = b.toggle(Hit::Lyrics, RIGHT, cy(rows[5]), s.lyrics);
+    let x = b.toggle(Hit::Lyrics, RIGHT, card.y + ROW_H / 2.0, s.lyrics);
     let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
-    b.row_text(card, rows[5], b.t(Key::LyricsInNotch), desc, false, x);
-    b.divider(card, rows[5]);
+    b.row_text(card, card.y, b.t(Key::LyricsInNotch), desc, false, x);
 
+    titled(b, Key::GroupCli);
+    let card = b.card(2.0 * ROW_H);
+    let rows = [card.y, card.y + ROW_H];
+    let cy = |y: f32| y + ROW_H / 2.0;
     // Just before the shell, as in keputusan-v3.1.html.
     let items = vec![
         (
@@ -2501,59 +3076,32 @@ fn general(b: &mut Builder, s: &State) {
         (Hit::CliStart(CliStart::Last), b.t(Key::CliStartLast)),
     ];
     let selected = index_of(&CliStart::ALL, &s.cli_start);
-    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[6]), items, selected);
+    let x = b.segmented(Group::CliStart, RIGHT, cy(rows[0]), items, selected);
     let desc = Some((b.t(Key::CliStartFolderDesc), Tone::Secondary));
-    b.row_text(card, rows[6], b.t(Key::CliStartFolder), desc, false, x);
-    b.divider(card, rows[6]);
+    b.row_text(card, rows[0], b.t(Key::CliStartFolder), desc, false, x);
 
     let items = vec![
         (Hit::Shell(Shell::PowerShell), b.t(Key::ShellPowerShell)),
         (Hit::Shell(Shell::Cmd), b.t(Key::ShellCmd)),
     ];
     let selected = index_of(&Shell::ALL, &s.shell);
-    let x = b.segmented(Group::Shell, RIGHT, cy(rows[7]), items, selected);
+    let x = b.segmented(Group::Shell, RIGHT, cy(rows[1]), items, selected);
     let desc = Some((b.t(Key::ShellCliDesc), Tone::Secondary));
-    b.row_text(card, rows[7], b.t(Key::ShellCli), desc, false, x);
-    b.divider(card, rows[7]);
+    b.row_text(card, rows[1], b.t(Key::ShellCli), desc, false, x);
+    b.divider(card, rows[1]);
 
-    let items = vec![
-        (
-            Hit::SearchHotkey(SearchHotkey::Off),
-            b.t(Key::ClipHotkeyNone),
-        ),
-        (
-            Hit::SearchHotkey(SearchHotkey::CtrlAltSpace),
-            "Ctrl+Alt+Space".to_owned(),
-        ),
-        (
-            Hit::SearchHotkey(SearchHotkey::WinAltS),
-            "Win+Alt+S".to_owned(),
-        ),
-    ];
-    let selected = index_of(SearchHotkey::ALL, &s.search_hotkey);
-    let x = b.segmented(Group::SearchHotkey, RIGHT, cy(rows[8]), items, selected);
-    let desc = if s.search_hotkey_failed && s.search_hotkey != SearchHotkey::Off {
-        (b.t(Key::SearchHotkeyTaken), Tone::Bad)
-    } else {
-        (b.t(Key::SearchHotkeyDesc), Tone::Secondary)
-    };
-    b.row_text(
-        card,
-        rows[8],
-        b.t(Key::SearchHotkeySetting),
-        Some(desc),
-        false,
-        x,
-    );
-    b.divider(card, rows[8]);
-
-    let x = b.toggle(Hit::StayBehind, RIGHT, cy(rows[9]), s.stay_behind);
-    let desc = Some((b.t(Key::StayBehindDesc), Tone::Secondary));
-    b.row_text(card, rows[9], b.t(Key::StayBehind), desc, false, x);
-    b.divider(card, rows[9]);
-
-    warnings_card(b, s);
     devices_card(b, s);
+
+    titled(b, Key::GroupCleaner);
+    let card = b.card(ROW_H);
+    let x = b.toggle(
+        Hit::MoleProtect,
+        RIGHT,
+        card.y + ROW_H / 2.0,
+        s.mole_protect,
+    );
+    let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
+    b.row_text(card, card.y, b.t(Key::MoleProtectSetting), desc, false, x);
 }
 
 /// "Perangkat" (the Devices page): the plug-in and safe-to-remove notices,
@@ -2568,7 +3116,6 @@ fn devices_card(b: &mut Builder, s: &State) {
     let x = b.toggle(Hit::DeviceNotices, RIGHT, cy(rows[0]), s.device_notices);
     let desc = Some((b.t(Key::DeviceNoticesDesc), Tone::Secondary));
     b.row_text(card, rows[0], b.t(Key::DeviceNotices), desc, false, x);
-    b.divider(card, rows[0]);
 
     let items = vec![
         (
@@ -2591,49 +3138,6 @@ fn devices_card(b: &mut Builder, s: &State) {
     b.divider(card, rows[1]);
 }
 
-/// The System page's warnings (keputusan-v3.1.html p4) and the cleaner's
-/// Mole protection, in a second card under Umum's seven rows; the section
-/// scrolls to reach it, like Tampilan.
-fn warnings_card(b: &mut Builder, s: &State) {
-    let card = b.card(3.0 * ROW_H);
-    let rows = [card.y, card.y + ROW_H, card.y + 2.0 * ROW_H];
-    let cy = |y: f32| y + ROW_H / 2.0;
-
-    let (min, max, _) = DISK_WARN_RANGE;
-    let gb = s.disk_warn_gb;
-    let x = b.stepper(
-        RIGHT,
-        cy(rows[0]),
-        disk_warn_value(gb),
-        Hit::DiskWarn(-1),
-        Hit::DiskWarn(1),
-        (gb > min, gb < max),
-        true,
-    );
-    let desc = Some((b.t(Key::DiskAlertDesc), Tone::Secondary));
-    b.row_text(card, rows[0], b.t(Key::DiskAlert), desc, false, x);
-
-    let (min, max, _) = RAM_WARN_RANGE;
-    let pct = s.ram_warn_percent;
-    let x = b.stepper(
-        RIGHT,
-        cy(rows[1]),
-        format!("{pct}%"),
-        Hit::RamWarn(-1),
-        Hit::RamWarn(1),
-        (pct > min, pct < max),
-        true,
-    );
-    let desc = Some((b.t(Key::RamAlertDesc), Tone::Secondary));
-    b.row_text(card, rows[1], b.t(Key::RamAlert), desc, false, x);
-    b.divider(card, rows[1]);
-
-    let x = b.toggle(Hit::MoleProtect, RIGHT, cy(rows[2]), s.mole_protect);
-    let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
-    b.row_text(card, rows[2], b.t(Key::MoleProtectSetting), desc, false, x);
-    b.divider(card, rows[2]);
-}
-
 /// "Jumlah item" one step (10) up or down, kept in 10–200; a hand-edited
 /// value off the grid snaps onto it.
 pub fn clip_items_step(n: u32, dir: i32) -> u32 {
@@ -2651,6 +3155,7 @@ pub fn clip_items_step(n: u32, dir: i32) -> u32 {
 /// fade and take no clicks.
 fn clipboard_page(b: &mut Builder, s: &State) {
     let c = s.clip;
+    titled(b, Key::GroupHistory);
     let card = b.card(8.0 * ROW_H);
     let rows: [f32; 8] = std::array::from_fn(|i| card.y + i as f32 * ROW_H);
     let cy = |y: f32| y + ROW_H / 2.0;
@@ -2792,15 +3297,17 @@ fn screenshot_card(b: &mut Builder, s: &State) {
     ];
     let selected = index_of(ShotTool::ALL, &c.tool);
     let x = b.segmented(Group::ShotTool, RIGHT, cy(rows[0]), items, selected);
-    b.row_text(card, rows[0], b.t(Key::ShotToolSetting), None, false, x);
+    let desc = Some((b.t(Key::ShotToolDesc), Tone::Secondary));
+    b.row_text(card, rows[0], b.t(Key::ShotToolSetting), desc, false, x);
 
     // The PrtSc key, right after the tool and never faded by the preview:
     // it starts Vale's capture whatever the tool is. When the keyboard hook
-    // could not be installed: a red note, nothing to click.
+    // could not be installed: a red note in place of its description, nothing
+    // to click.
     let x = b.toggle(Hit::ShotPrintScreen, RIGHT, cy(rows[1]), c.print_screen);
     let desc = match prtsc {
         PrtscRow::Failed => Some((b.t(Key::PrtscHookFailed), Tone::Bad)),
-        PrtscRow::Plain => None,
+        PrtscRow::Plain => Some((b.t(Key::ShotPrintScreenDesc), Tone::Secondary)),
     };
     b.row_text(card, rows[1], b.t(Key::ShotPrintScreen), desc, false, x);
     b.divider(card, rows[1]);
@@ -2842,52 +3349,6 @@ pub enum PrtscRow {
     Plain,
     /// On, but `SetWindowsHookExW` failed: a red note.
     Failed,
-}
-
-fn pomodoro_page(b: &mut Builder, s: &State) {
-    let card = b.card(4.0 * ROW_H);
-    let fields = [
-        (PomoField::Focus, Key::Focus, Key::FocusDesc),
-        (PomoField::ShortBreak, Key::Break, Key::BreakDesc),
-        (PomoField::LongBreak, Key::LongBreak, Key::LongBreakDesc),
-        (PomoField::Sessions, Key::Sessions, Key::SessionsDesc),
-    ];
-    for (i, (field, label, desc)) in fields.into_iter().enumerate() {
-        let y = card.y + i as f32 * ROW_H;
-        let v = pomo_get(&s.pomodoro, field);
-        let (min, max, _) = pomodoro::range(field);
-        let x = b.stepper(
-            RIGHT,
-            y + ROW_H / 2.0,
-            pomo_value(b.lang, field, v),
-            Hit::Pomo(field, -1),
-            Hit::Pomo(field, 1),
-            (v > min, v < max),
-            !s.pomodoro_locked,
-        );
-        let desc = Some((b.t(desc), Tone::Secondary));
-        b.row_text(card, y, b.t(label), desc, false, x);
-        if i > 0 {
-            b.divider(card, y);
-        }
-    }
-    if s.pomodoro_locked {
-        let y = card.bottom() + 12.0;
-        b.l.note_glyph = Some(Rect {
-            x: CONTENT_X + 4.0,
-            y,
-            w: 16.0,
-            h: 18.0,
-        });
-        let rect = Rect {
-            x: CONTENT_X + 26.0,
-            y,
-            w: CONTENT_W - 26.0,
-            h: 18.0,
-        };
-        let note = b.t(Key::PomodoroLocked);
-        b.text(rect, note, Font::Desc, Tone::Secondary, Align::Left);
-    }
 }
 
 fn integrations(b: &mut Builder, s: &State) {
@@ -3036,7 +3497,6 @@ fn integrations(b: &mut Builder, s: &State) {
     }
 
     // Claude Code hooks.
-    b.y += EYEBROW_GAP;
     b.eyebrow(Key::ClaudeCode, CONTENT_W - 2.0);
     let card = b.card(ROW_H);
     let (install, remove) = (b.t(Key::InstallHooks), b.t(Key::RemoveHooks));
@@ -3111,6 +3571,7 @@ fn about(b: &mut Builder, s: &State) {
         Align::Left,
     );
     b.y = top + ABOUT_LOGO + 18.0;
+    titled(b, Key::GroupLinks);
 
     let card = b.card(3.0 * ROW_H);
     // Web pages open from a bare "open" glyph; the data folder has a button.
@@ -3203,6 +3664,23 @@ mod tests {
                         robot_motion: if locked { Motion::Off } else { Motion::Saver },
                         robot_sleep: if locked { 60 } else { 1 },
                         greeting: locked,
+                        cat_color: if locked {
+                            CatColor::Black
+                        } else {
+                            CatColor::Calico
+                        },
+                        cat_accessory: if locked {
+                            CatAccessory::Crown
+                        } else {
+                            CatAccessory::Glasses
+                        },
+                        cat_follow: !locked,
+                        notch_peek: locked,
+                        cat_face: if locked {
+                            CatFace::Sleep
+                        } else {
+                            CatFace::Idle
+                        },
                         scroll: 0.0,
                         lyrics: !locked,
                         shell: if locked {
@@ -3404,7 +3882,7 @@ mod tests {
     /// A drag of the row at place `from` of `list`, with the pointer a little
     /// into the place `to` (the layout's own rows say where they are).
     fn held_row(s: &State, list: List, from: usize, to: usize) -> DragView {
-        let l = layout(Section::Appearance, s, &Estimate);
+        let l = layout(Section::Panel, s, &Estimate);
         let tops: Vec<f32> = l
             .rows
             .iter()
@@ -3610,9 +4088,20 @@ mod tests {
         }
     }
 
-    /// Every section fits the window's height; Appearance (with Bata's
-    /// rows), General (with the System warnings) and Clipboard (with the
-    /// screenshot preview) scroll by exactly what they lack and then fit.
+    /// The sections that overflow the window and so scroll, whatever the
+    /// state: Tampilan (three cards and the preview), Kucing, Panel (the two
+    /// lists), Clipboard (history and screenshot) and Fitur (five cards).
+    const SCROLLING: [Section; 5] = [
+        Section::Appearance,
+        Section::Cat,
+        Section::Panel,
+        Section::Clipboard,
+        Section::Features,
+    ];
+
+    /// Every section fits the window's height. `SCROLLING` ones scroll by
+    /// exactly what they lack and then the last card meets the bottom margin;
+    /// the rest (Umum in both languages, Integrasi, Tentang) never scroll.
     #[test]
     fn everything_fits_in_the_window_height() {
         for (section, lang, l) in all_layouts() {
@@ -3627,14 +4116,14 @@ mod tests {
                 unscrolled - l.scroll_max <= CLIENT_H - PAD + 0.01,
                 "{section:?} {lang:?}: {bottom}"
             );
-            if matches!(
-                section,
-                Section::Appearance | Section::General | Section::Clipboard
-            ) {
-                assert!(l.scroll_max > 0.0 && l.viewport.is_some());
+            if SCROLLING.contains(&section) {
+                assert!(l.scroll_max > 0.0 && l.viewport.is_some(), "{section:?}");
                 // Scrolled to the end, the last card ends at the margin.
                 if l.scroll == l.scroll_max {
-                    assert!((bottom - (CLIENT_H - PAD)).abs() < 0.01, "{bottom}");
+                    assert!(
+                        (bottom - (CLIENT_H - PAD)).abs() < 0.01,
+                        "{section:?} {lang:?}: {bottom}"
+                    );
                 }
             } else {
                 assert_eq!((l.scroll_max, l.viewport), (0.0, None), "{section:?}");
@@ -3643,32 +4132,44 @@ mod tests {
     }
 
     #[test]
+    fn exactly_the_overflowing_sections_get_a_viewport() {
+        let base = states()[0].clone();
+        for lang in [Lang::Id, Lang::En] {
+            let state = State {
+                lang,
+                ..base.clone()
+            };
+            let scrolling: Vec<Section> = Section::ALL
+                .into_iter()
+                .filter(|s| layout(*s, &state, &Estimate).viewport.is_some())
+                .collect();
+            assert_eq!(scrolling, SCROLLING, "{lang:?}");
+            // Integrasi and Tentang never scroll, whatever Google says.
+            for s in states() {
+                for section in [Section::Integrations, Section::About] {
+                    let l = layout(section, &s, &Estimate);
+                    assert!(l.viewport.is_none(), "{section:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn appearance_scrolls_and_clicks_follow() {
-        let base = State {
-            robot: true,
-            robot_motion: Motion::Full,
-            robot_sleep: 10,
-            greeting: true,
-            ..states()[0].clone()
-        };
-        let robot_hits = |l: &Layout| -> Vec<Hit> {
+        let base = states()[0].clone();
+        let window_hits = |l: &Layout| -> Vec<Hit> {
             l.hits()
                 .into_iter()
                 .map(|(h, _)| h)
-                .filter(|h| {
-                    matches!(
-                        h,
-                        Hit::Robot | Hit::Motion(_) | Hit::RobotSleep(_) | Hit::Greeting
-                    )
-                })
+                .filter(|h| matches!(h, Hit::WindowMode(_)))
                 .collect()
         };
         let top = layout(Section::Appearance, &base, &Estimate);
         let view = top.viewport.expect("viewport");
         assert_eq!(top.scroll, 0.0);
-        // At the top only the Notch card's width slider peeks in (Bata's card
-        // is below it); nothing below the window takes a click.
-        assert_eq!(robot_hits(&top), []);
+        // At the top the Island card is in view and Jendela is far below:
+        // nothing under the window takes a click.
+        assert_eq!(window_hits(&top), []);
         let peeking: Vec<Hit> = top
             .hits()
             .into_iter()
@@ -3679,32 +4180,15 @@ mod tests {
         for (_, r) in top.hits() {
             assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
         }
-        // Scrolled to the robot card: all four rows, where they are drawn.
+        // Scrolled to the end: Jendela's three modes, where they are drawn,
+        // and the Island card's rows went up under the title: clipped.
         let end = State {
-            scroll: robot_card_scroll(&base),
+            scroll: 1e6,
             ..base.clone()
         };
         let l = layout(Section::Appearance, &end, &Estimate);
-        assert!(l.scroll > 0.0 && l.scroll <= l.scroll_max);
-        assert_eq!(
-            robot_hits(&l).len(),
-            7,
-            "2 toggles, 3 segments, minus, plus"
-        );
-        let toggle = l
-            .controls
-            .iter()
-            .find_map(|c| match c {
-                Control::Toggle {
-                    hit: Hit::Greeting,
-                    rect,
-                    ..
-                } => Some(*rect),
-                _ => None,
-            })
-            .expect("greeting toggle");
-        assert_eq!(l.hit(toggle.x + 4.0, toggle.y + 4.0), Some(Hit::Greeting));
-        // The style row went up under the title: clipped, so no clicks.
+        assert_eq!(l.scroll, l.scroll_max);
+        assert_eq!(window_hits(&l).len(), 3);
         let style_hits: Vec<Rect> = l
             .hits()
             .into_iter()
@@ -3717,98 +4201,220 @@ mod tests {
         assert_eq!(scroll_by(0.0, 120, 100.0), 0.0);
         assert_eq!(scroll_by(90.0, -240, 100.0), 100.0);
         assert!(l.scrollbar().is_some() && top.scrollbar().is_some());
-        let pomodoro = layout(Section::Pomodoro, &base, &Estimate);
-        assert!(pomodoro.scrollbar().is_none());
+        // The sections that fit have no scrollbar.
+        for section in [Section::Integrations, Section::About] {
+            assert!(layout(section, &base, &Estimate).scrollbar().is_none());
+        }
     }
 
     #[test]
-    fn general_scrolls_to_the_system_warnings() {
-        let warn_hits = |l: &Layout| -> Vec<Hit> {
-            l.hits()
-                .into_iter()
-                .map(|(h, _)| h)
-                .filter(|h| matches!(h, Hit::DiskWarn(_) | Hit::RamWarn(_)))
-                .collect()
-        };
+    fn the_island_card_has_the_base_color_swatches_and_the_cards_are_titled() {
+        for lang in [Lang::Id, Lang::En] {
+            for surface in Surface::ALL.iter().copied() {
+                let s = State {
+                    lang,
+                    surface,
+                    cat_color: CatColor::Calico,
+                    robot: true,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Appearance, &s, &Estimate);
+                let (items, selected) = l
+                    .controls
+                    .iter()
+                    .find_map(|c| match c {
+                        Control::SurfaceSwatches {
+                            items, selected, ..
+                        } => Some((items.clone(), *selected)),
+                        _ => None,
+                    })
+                    .expect("the base color swatches");
+                // Ikuti kucing first, then the five fills.
+                let order: Vec<Surface> = items.iter().map(|(v, _)| *v).collect();
+                assert_eq!(
+                    order,
+                    [
+                        Surface::Auto,
+                        Surface::Espresso,
+                        Surface::Graphite,
+                        Surface::Sea,
+                        Surface::Night,
+                        Surface::Plum
+                    ]
+                );
+                assert_eq!(selected, surface);
+                // Each takes a click as its own choice; the chosen name is
+                // the row's description (Auto says what it gives).
+                for (v, r) in &items {
+                    assert_eq!(
+                        l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                        Some(Hit::Surface(*v)),
+                        "{v:?}"
+                    );
+                }
+                let name = surface_label(lang, surface, CatColor::Calico, true);
+                assert!(l.texts.iter().any(|t| t.text == name), "{name}");
+                if surface == Surface::Auto {
+                    assert_eq!(
+                        name,
+                        format!(
+                            "{} · {}",
+                            text(lang, Key::SurfaceAuto),
+                            text(lang, Key::SurfaceSea)
+                        )
+                    );
+                }
+                // The old segmented picker and the old label are gone.
+                assert!(
+                    l.texts
+                        .iter()
+                        .all(|t| t.text != text(lang, Key::IslandSurfaceDesc))
+                );
+                // Three titled cards under the preview: Island, Notch, Jendela.
+                for key in [Key::GroupIsland, Key::GroupNotch, Key::GroupWindow] {
+                    assert!(
+                        l.texts
+                            .iter()
+                            .any(|t| t.text == text(lang, key).to_uppercase()),
+                        "{lang:?} {key:?}"
+                    );
+                }
+                assert_eq!(l.cards.len(), 4, "preview + 3 cards");
+            }
+        }
+        // Names and the cat colours' keys differ by language.
+        assert_eq!(
+            surface_label(Lang::Id, Surface::Sea, CatColor::Terracotta, true),
+            "Laut"
+        );
+        assert_eq!(
+            surface_label(Lang::En, Surface::Auto, CatColor::Black, false),
+            "Match cat · Espresso"
+        );
+    }
+
+    #[test]
+    fn umum_has_basics_and_alerts() {
         for lang in [Lang::Id, Lang::En] {
             let base = State {
                 lang,
                 disk_warn_gb: 10,
                 ram_warn_percent: 90,
+                has_battery: true,
                 ..states()[0].clone()
             };
-            let top = layout(Section::General, &base, &Estimate);
-            assert!(top.viewport.is_some() && top.scrollbar().is_some());
-            assert_eq!(
-                top.cards.len(),
-                3,
-                "the warnings and Perangkat have their own cards"
-            );
-            // At the top the warning card runs past the window: what is
-            // below it takes no click.
-            assert!(top.cards[1].bottom() > CLIENT_H);
-            for (_, r) in top.hits() {
-                assert!(r.bottom() <= CLIENT_H + 0.01, "{r:?}");
-            }
-            // Scrolled to the end: both steppers, the last card on the margin.
-            let end = State {
-                scroll: 1e6,
-                ..base.clone()
-            };
-            let l = layout(Section::General, &end, &Estimate);
-            assert_eq!(l.scroll, l.scroll_max);
-            assert!((l.cards[2].bottom() - (CLIENT_H - PAD)).abs() < 0.01);
-            assert_eq!(
-                warn_hits(&l),
-                [
-                    Hit::DiskWarn(-1),
-                    Hit::DiskWarn(1),
-                    Hit::RamWarn(-1),
-                    Hit::RamWarn(1)
-                ]
-            );
-            let values: Vec<&str> = l
-                .controls
-                .iter()
-                .filter_map(|c| match c {
-                    Control::Stepper { minus, value, .. }
-                        if matches!(minus.1, Some(Hit::DiskWarn(_) | Hit::RamWarn(_))) =>
-                    {
-                        Some(value.text.as_str())
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(values, ["10 GB", "90%"]);
-            // The Mole protection's toggle is the card's last row.
-            let mole: Vec<Hit> = l
-                .hits()
-                .into_iter()
-                .map(|(h, _)| h)
-                .filter(|h| *h == Hit::MoleProtect)
-                .collect();
-            assert_eq!(mole, [Hit::MoleProtect]);
-            for key in [
-                Key::DiskAlert,
-                Key::DiskAlertDesc,
-                Key::RamAlert,
-                Key::RamAlertDesc,
-                Key::MoleProtectSetting,
-                Key::MoleProtectSettingDesc,
-            ] {
+            let l = layout(Section::General, &base, &Estimate);
+            // "Dasar" and "Peringatan", each under its title.
+            assert_eq!(l.cards.len(), 2);
+            // Three rows, the last a line taller when its label wraps.
+            let extra = l.cards[0].h - 3.0 * ROW_H;
+            assert!(extra == 0.0 || extra == LABEL_LINE_H, "{extra}");
+            assert_eq!(l.cards[1].h, 4.0 * ROW_H);
+            for key in [Key::GroupBasics, Key::GroupAlerts] {
                 assert!(
-                    l.texts.iter().any(|t| t.text == text(lang, key)),
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, key).to_uppercase()),
                     "{lang:?} {key:?}"
                 );
             }
-            // At the ends of their ranges a side goes.
-            let ends = State {
-                disk_warn_gb: 100,
-                ram_warn_percent: 70,
-                ..end
+            // Nothing else moved in: Mode buka, stay-behind, lyrics, CLI,
+            // devices and the Mole row live in Panel and Fitur now.
+            let hits: Vec<Hit> = l.hits().into_iter().map(|(h, _)| h).collect();
+            assert!(!hits.iter().any(|h| matches!(
+                h,
+                Hit::OpenMode(_)
+                    | Hit::StayBehind
+                    | Hit::Lyrics
+                    | Hit::CliStart(_)
+                    | Hit::Shell(_)
+                    | Hit::DeviceNotices
+                    | Hit::MoleProtect
+            )));
+            // Dasar: language, autostart, the search hotkey, in that order.
+            let order: Vec<Hit> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Segmented { items, .. } => items.first().map(|i| i.hit),
+                    Control::Toggle { hit, .. } => Some(*hit),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                order,
+                [
+                    Hit::Lang(Lang::Id),
+                    Hit::Autostart,
+                    Hit::SearchHotkey(SearchHotkey::Off)
+                ]
+            );
+            // Peringatan: the three steppers (battery, disk, RAM) and the help button.
+            let steppers: Vec<Hit> = l
+                .controls
+                .iter()
+                .filter_map(|c| match c {
+                    Control::Stepper { minus, plus, .. } => minus.1.or(plus.1),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                steppers,
+                [Hit::Battery(-1), Hit::DiskWarn(-1), Hit::RamWarn(-1)]
+            );
+            assert!(hits.contains(&Hit::DndHelp));
+            for key in [
+                Key::Language,
+                Key::Autostart,
+                Key::SearchHotkeySetting,
+                Key::BatteryAlert,
+                Key::DiskAlert,
+                Key::RamAlert,
+                Key::PopupsHelp,
+                Key::ShowHow,
+            ] {
+                let want = text(lang, key);
+                let shown = l.texts.iter().any(|t| t.text == want)
+                    || l.controls.iter().any(|c| matches!(c, Control::Button(b) if b.label == want))
+                    // The long search-hotkey label may wrap into lines.
+                    || l.texts
+                        .iter()
+                        .map(|t| t.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains(want);
+                assert!(shown, "{lang:?} {key:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_battery_stepper_is_off_on_a_pc_without_one() {
+        for lang in [Lang::Id, Lang::En] {
+            let battery_hits = |has_battery: bool, threshold: u8| -> Vec<Hit> {
+                let s = State {
+                    lang,
+                    has_battery,
+                    battery_threshold: threshold,
+                    ..states()[0].clone()
+                };
+                layout(Section::General, &s, &Estimate)
+                    .hits()
+                    .into_iter()
+                    .map(|(h, _)| h)
+                    .filter(|h| matches!(h, Hit::Battery(_)))
+                    .collect()
             };
-            let l = layout(Section::General, &ends, &Estimate);
-            assert_eq!(warn_hits(&l), [Hit::DiskWarn(-1), Hit::RamWarn(1)]);
+            assert_eq!(battery_hits(true, 20), [Hit::Battery(-1), Hit::Battery(1)]);
+            assert_eq!(battery_hits(true, 50), [Hit::Battery(-1)]);
+            assert_eq!(battery_hits(false, 20), [], "no battery: no clicks");
+            let s = State {
+                lang,
+                has_battery: false,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::General, &s, &Estimate);
+            assert!(l.texts.iter().any(|t| t.text == text(lang, Key::NoBattery)));
         }
     }
 
@@ -3951,12 +4557,16 @@ mod tests {
                 // The row has the brief's full label and a toggle that follows
                 // the setting, placed right after the tool row (the second row).
                 let label_text = text(lang, Key::ShotPrintScreen);
-                let brief = match lang {
-                    Lang::Id => "Tombol PrtSc membuka screenshot Vale",
-                    Lang::En => "PrtSc key opens Vale's screenshot",
+                let (brief, plain_desc) = match lang {
+                    Lang::Id => ("Tombol PrtSc", "Buka screenshot Vale"),
+                    Lang::En => ("PrtSc key", "Opens Vale's screenshot"),
                 };
                 assert_eq!(label_text, brief);
                 assert!(shown(&l, label_text), "{ctx}");
+                // What it does is the row's description; a failed hook's red
+                // note replaces it.
+                assert_eq!(text(lang, Key::ShotPrintScreenDesc), plain_desc);
+                assert_eq!(shown(&l, plain_desc), !failed, "{ctx}");
                 let (is_on, enabled, y) = clip_toggle(&l, Hit::ShotPrintScreen).expect(&ctx);
                 assert_eq!((is_on, enabled), (on, true), "{ctx}");
                 assert!(y >= row_top && y < row_bottom, "{ctx}");
@@ -3971,23 +4581,19 @@ mod tests {
                     assert!(w <= t.rect.w, "{ctx}: {:?} is {w} in {}", t.text, t.rect.w);
                 }
                 // The red note only when the hook failed.
-                assert_eq!(
-                    shown(&l, text(lang, Key::PrtscHookFailed)),
-                    failed,
-                    "{ctx}"
-                );
+                assert_eq!(shown(&l, text(lang, Key::PrtscHookFailed)), failed, "{ctx}");
                 let note = match lang {
                     Lang::Id => "Tombol PrtSc tidak bisa dipasang",
                     Lang::En => "Could not hook the PrtSc key",
                 };
                 assert_eq!(text(lang, Key::PrtscHookFailed), note);
                 // Nothing to click in the row but the toggle.
-                let clickable_in_row = l
+                let clickable_in_row: Vec<_> = l
                     .hits()
                     .into_iter()
-                    .filter(|(_, r)| r.y >= row_top && r.bottom() <= row_bottom)
-                    .count();
-                assert_eq!(clickable_in_row, 1, "{ctx}");
+                    .filter(|(_, r)| r.x >= CONTENT_X && r.y >= row_top && r.bottom() <= row_bottom)
+                    .collect();
+                assert_eq!(clickable_in_row.len(), 1, "{ctx}: {clickable_in_row:?}");
             }
         }
     }
@@ -4104,13 +4710,15 @@ mod tests {
                 robot_motion: Motion::Saver,
                 robot_sleep: 10,
                 greeting: false,
+                // The eyes need stay-behind off (see the Kucing test below).
+                stay_behind: false,
                 ..states()[0].clone()
             };
             let on = State {
                 scroll: robot_card_scroll(&on),
                 ..on
             };
-            let l = layout(Section::Appearance, &on, &Estimate);
+            let l = layout(Section::Cat, &on, &Estimate);
             let (_, items, selected) = l.segmented(Group::Motion).expect("Animasi");
             assert_eq!(items[selected].hit, Hit::Motion(Motion::Saver));
             let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4140,7 +4748,7 @@ mod tests {
                 Key::RobotMotionDesc,
                 Key::RobotSleep,
                 Key::RobotSleepDesc,
-                Key::MorningGreeting,
+                Key::CatGreeting,
                 Key::MorningGreetingDesc,
             ] {
                 assert!(shown.contains(text(lang, key)), "{key:?}");
@@ -4150,20 +4758,50 @@ mod tests {
                 robot: false,
                 ..on.clone()
             };
-            let l = layout(Section::Appearance, &off, &Estimate);
-            let hits: Vec<Hit> = l.hits().into_iter().map(|(h, _)| h).collect();
+            let hit_list =
+                |l: &Layout| -> Vec<Hit> { l.hits().into_iter().map(|(h, _)| h).collect() };
+            let l = layout(Section::Cat, &off, &Estimate);
+            let hits = hit_list(&l);
             assert!(hits.contains(&Hit::Robot));
-            assert!(
-                !hits
-                    .iter()
-                    .any(|h| matches!(h, Hit::Motion(_) | Hit::RobotSleep(_) | Hit::Greeting))
+            // The cat's own rows fade and take no clicks: the coat, the
+            // backdrop's "Ubah" and the accessories...
+            assert!(!hits.iter().any(|h| matches!(
+                h,
+                Hit::CatColor(_) | Hit::CatAccessory(_) | Hit::CatBackdrop
+            )));
+            // ...and Gerak's and Sapaan's, scrolled into view. "Mengecil jadi
+            // mata" does not need the cat (the eyes show without it).
+            let end = State {
+                scroll: 1e6,
+                ..off.clone()
+            };
+            let l = layout(Section::Cat, &end, &Estimate);
+            let hits = hit_list(&l);
+            assert!(!hits.iter().any(|h| matches!(
+                h,
+                Hit::Motion(_) | Hit::RobotSleep(_) | Hit::Greeting | Hit::CatFollow
+            )));
+            assert!(hits.contains(&Hit::NotchPeek));
+            // With it on they all take clicks.
+            let l = layout(
+                Section::Cat,
+                &State {
+                    scroll: 1e6,
+                    ..on.clone()
+                },
+                &Estimate,
             );
+            let hits = hit_list(&l);
+            for hit in [Hit::Motion(Motion::Full), Hit::Greeting, Hit::CatFollow] {
+                assert!(hits.contains(&hit), "{hit:?}");
+            }
             // Mati: no sleep timer, so no sleep setting.
             let still = State {
                 robot_motion: Motion::Off,
+                scroll: 1e6,
                 ..on.clone()
             };
-            let l = layout(Section::Appearance, &still, &Estimate);
+            let l = layout(Section::Cat, &still, &Estimate);
             assert!(
                 !l.hits()
                     .iter()
@@ -4190,7 +4828,7 @@ mod tests {
                 scroll: 1e6,
                 ..states()[0].clone()
             };
-            let l = layout(Section::Appearance, &s, &Estimate);
+            let l = layout(Section::Cat, &s, &Estimate);
             let label = l
                 .texts
                 .iter()
@@ -4248,7 +4886,7 @@ mod tests {
             Some(Hit::Style(Style::Pill))
         );
         // Nav rows switch sections.
-        let nav = &l.nav[4];
+        let nav = &l.nav[6];
         assert_eq!(
             l.hit(nav.pill.x + 4.0, nav.pill.y + 4.0),
             Some(Hit::Nav(Section::Integrations))
@@ -4258,14 +4896,14 @@ mod tests {
             pomodoro_locked: true,
             ..s.clone()
         };
-        let l = layout(Section::Pomodoro, &locked, &Estimate);
+        let l = layout(Section::Features, &locked, &Estimate);
         assert!(!l.hits().iter().any(|(h, _)| matches!(h, Hit::Pomo(..))));
         assert!(l.note_glyph.is_some());
         let free = State {
             pomodoro_locked: false,
             ..s.clone()
         };
-        let l = layout(Section::Pomodoro, &free, &Estimate);
+        let l = layout(Section::Features, &free, &Estimate);
         let pomo: Vec<Hit> = l
             .hits()
             .into_iter()
@@ -4467,14 +5105,14 @@ mod tests {
         );
     }
 
-    /// The scroll that brings Bata's card (no longer the last in Tampilan)
-    /// to the top of the viewport.
+    /// The scroll that brings the Kucing card (the cat's own rows) to the top
+    /// of the viewport.
     fn robot_card_scroll(s: &State) -> f32 {
         let top = State {
             scroll: 0.0,
             ..s.clone()
         };
-        let l = layout(Section::Appearance, &top, &Estimate);
+        let l = layout(Section::Cat, &top, &Estimate);
         let view = l.viewport.expect("viewport");
         let toggle = l
             .controls
@@ -4514,7 +5152,7 @@ mod tests {
     #[test]
     fn panel_pages_card_lists_the_shown_pages_first_with_a_handle_and_buttons() {
         for s in states().iter().take(8) {
-            let l = layout(Section::Appearance, s, &Estimate);
+            let l = layout(Section::Panel, s, &Estimate);
             let all = buttons_of(&l);
             let shown = s.pages.visible();
             let hidden: Vec<Page> = s
@@ -4600,7 +5238,7 @@ mod tests {
                 lang,
                 ..states()[0].clone()
             };
-            let l = layout(Section::Appearance, &s, &Estimate);
+            let l = layout(Section::Panel, &s, &Estimate);
             let all = buttons_of(&l);
             assert!(!button(&all, Hit::PageOn(Page::Calendar)).2, "locked on");
             for p in &Page::ALL[1..] {
@@ -4617,7 +5255,7 @@ mod tests {
     #[test]
     fn pintasan_card_lists_the_shown_tiles_then_the_rest_under_available() {
         for s in states().iter().take(8) {
-            let l = layout(Section::Appearance, s, &Estimate);
+            let l = layout(Section::Panel, s, &Estimate);
             let all = buttons_of(&l);
             let entries = s.tiles.entries();
             let on: Vec<usize> = (0..entries.len()).filter(|i| entries[*i].1).collect();
@@ -4699,7 +5337,7 @@ mod tests {
                     tile_form: Some(TileForm { kind, error: None }),
                     ..states()[0].clone()
                 };
-                let l = layout(Section::Appearance, &s, &Estimate);
+                let l = layout(Section::Panel, &s, &Estimate);
                 let all = buttons_of(&l);
                 let field = |f: Field| {
                     l.fields
@@ -4743,7 +5381,7 @@ mod tests {
                 lang,
                 ..states()[0].clone()
             };
-            let l = layout(Section::Appearance, &s, &Estimate);
+            let l = layout(Section::Panel, &s, &Estimate);
             assert!(l.fields.is_empty());
             assert!(buttons_of(&l).iter().any(|b| b.0 == Hit::TileFormOpen));
         }
@@ -4775,8 +5413,8 @@ mod tests {
                     ..ok.clone()
                 };
                 let (l0, l1) = (
-                    layout(Section::Appearance, &ok, &Estimate),
-                    layout(Section::Appearance, &bad, &Estimate),
+                    layout(Section::Panel, &ok, &Estimate),
+                    layout(Section::Panel, &bad, &Estimate),
                 );
                 let red: Vec<&Text> = l1.texts.iter().filter(|t| t.tone == Tone::Bad).collect();
                 assert!(!red.is_empty(), "{key:?}");
@@ -4794,12 +5432,12 @@ mod tests {
     #[test]
     fn a_tile_added_off_says_why_beside_its_button() {
         let base = states()[0].clone();
-        let l0 = layout(Section::Appearance, &base, &Estimate);
+        let l0 = layout(Section::Panel, &base, &Estimate);
         let s = State {
             tile_note: Some(Key::TileAddedOff),
             ..base
         };
-        let l = layout(Section::Appearance, &s, &Estimate);
+        let l = layout(Section::Panel, &s, &Estimate);
         let note = text(s.lang, Key::TileAddedOff);
         let lines: Vec<&str> = l
             .texts
@@ -4815,7 +5453,7 @@ mod tests {
     fn a_drag_follows_the_pointer_while_the_other_rows_make_room() {
         for list in [List::Pages, List::Tiles] {
             let base = states()[0].clone();
-            let l0 = layout(Section::Appearance, &base, &Estimate);
+            let l0 = layout(Section::Panel, &base, &Estimate);
             let rows0: Vec<&ReorderRow> = l0.rows.iter().filter(|r| r.list == list).collect();
             let tops: Vec<f32> = rows0.iter().map(|r| r.rect.y).collect();
             assert!(tops.windows(2).all(|w| w[1] - w[0] == ROW_H));
@@ -4823,7 +5461,7 @@ mod tests {
 
             let drag = held_row(&base, list, 1, 3);
             let l = layout(
-                Section::Appearance,
+                Section::Panel,
                 &State {
                     drag: Some(drag),
                     ..base.clone()
@@ -4916,14 +5554,14 @@ mod tests {
                     lyrics: on,
                     ..states()[0].clone()
                 };
-                let l = layout(Section::General, &s, &Estimate);
+                let l = layout(Section::Features, &s, &Estimate);
                 let toggle = l.controls.iter().find_map(|c| match c {
                     Control::Toggle { hit, rect, on, .. } if *hit == Hit::Lyrics => {
                         Some((*rect, *on))
                     }
                     _ => None,
                 });
-                let (rect, shown) = toggle.expect("lyrics toggle in General");
+                let (rect, shown) = toggle.expect("lyrics toggle in Fitur");
                 assert_eq!(shown, on);
                 let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
                 assert_eq!(l.hit(cx, cy), Some(Hit::Lyrics));
@@ -4935,21 +5573,25 @@ mod tests {
                 }
             }
         }
-        // Not in Appearance, which is full.
+        // Not in Umum or Tampilan.
         let l = layout(Section::Appearance, &states()[0], &Estimate);
         assert!(!l.hits().iter().any(|(h, _)| *h == Hit::Lyrics));
     }
 
     #[test]
-    fn cli_start_folder_sits_just_above_the_shell() {
+    fn the_cli_card_holds_the_start_folder_just_above_the_shell() {
         for lang in [Lang::Id, Lang::En] {
-            for start in CliStart::ALL {
+            for (start, shell) in [
+                (CliStart::Explorer, Shell::PowerShell),
+                (CliStart::Last, Shell::Cmd),
+            ] {
                 let s = State {
                     lang,
                     cli_start: start,
+                    shell,
                     ..states()[0].clone()
                 };
-                let l = layout(Section::General, &s, &Estimate);
+                let l = layout(Section::Features, &s, &Estimate);
                 let (track, items, selected) =
                     l.segmented(Group::CliStart).expect("Folder awal CLI");
                 assert_eq!(items[selected].hit, Hit::CliStart(start));
@@ -4974,76 +5616,51 @@ mod tests {
                     l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
                     Some(Hit::CliStart(CliStart::Last))
                 );
-                // One row above the shell, under everything else.
-                let (shell, _, _) = l.segmented(Group::Shell).expect("Shell CLI");
-                assert_eq!(shell.y - track.y, ROW_H);
-                for key in [Key::CliStartFolder, Key::CliStartFolderDesc] {
+                // One row above the shell, in a card of their own under "CLI".
+                let (shell_track, shell_items, shell_selected) =
+                    l.segmented(Group::Shell).expect("Shell CLI");
+                assert_eq!(shell_track.y - track.y, ROW_H);
+                assert_eq!(shell_items[shell_selected].hit, Hit::Shell(shell));
+                let hits: Vec<Hit> = shell_items.iter().map(|i| i.hit).collect();
+                assert_eq!(
+                    hits,
+                    [Hit::Shell(Shell::PowerShell), Hit::Shell(Shell::Cmd)]
+                );
+                let r = shell_items[1].rect;
+                assert_eq!(
+                    l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                    Some(Hit::Shell(Shell::Cmd))
+                );
+                let card = l
+                    .cards
+                    .iter()
+                    .find(|c| c.contains(track.x, track.y))
+                    .expect("their card");
+                assert_eq!(card.h, 2.0 * ROW_H);
+                for key in [
+                    Key::CliStartFolder,
+                    Key::CliStartFolderDesc,
+                    Key::ShellCli,
+                    Key::ShellCliDesc,
+                ] {
                     assert!(
                         l.texts.iter().any(|t| t.text == text(lang, key)),
                         "{lang:?} {key:?}"
                     );
                 }
-                // The card ends above the window's bottom margin once the
-                // section is scrolled to its end (it has nine rows).
-                assert!(l.cards[0].bottom() - l.scroll_max <= CLIENT_H - PAD);
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, Key::GroupCli).to_uppercase())
+                );
             }
         }
-    }
-
-    #[test]
-    fn shell_choice_is_the_row_above_the_search_hotkey() {
-        for lang in [Lang::Id, Lang::En] {
-            for shell in Shell::ALL {
-                let s = State {
-                    lang,
-                    shell,
-                    ..states()[0].clone()
-                };
-                let l = layout(Section::General, &s, &Estimate);
-                let (track, items, selected) = l.segmented(Group::Shell).expect("Shell CLI");
-                assert_eq!(items[selected].hit, Hit::Shell(shell));
-                let hits: Vec<Hit> = items.iter().map(|i| i.hit).collect();
-                assert_eq!(
-                    hits,
-                    [Hit::Shell(Shell::PowerShell), Hit::Shell(Shell::Cmd)]
-                );
-                let r = items[1].rect;
-                assert_eq!(
-                    l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
-                    Some(Hit::Shell(Shell::Cmd))
-                );
-                // Below every other control of the first card but the search
-                // hotkey and the stay-behind toggle under it (the warnings
-                // have a card of their own below).
-                let first = l.cards[0];
-                for c in &l.controls {
-                    let in_first = c.bounds().bottom() <= first.bottom();
-                    if in_first
-                        && !matches!(
-                            c,
-                            Control::Segmented {
-                                group: Group::Shell | Group::SearchHotkey,
-                                ..
-                            } | Control::Toggle {
-                                hit: Hit::StayBehind,
-                                ..
-                            }
-                        )
-                    {
-                        assert!(c.bounds().bottom() <= track.y, "{c:?}");
-                    }
-                }
-                let (hotkey, _, _) = l.segmented(Group::SearchHotkey).expect("Search hotkey");
-                assert_eq!(hotkey.y - track.y, ROW_H);
-                assert!(hotkey.bottom() <= first.bottom());
-                assert!(track.bottom() <= first.bottom());
-                for key in [Key::ShellCli, Key::ShellCliDesc] {
-                    assert!(l.texts.iter().any(|t| t.text == text(lang, key)));
-                }
-            }
+        // Not in the other sections.
+        for section in [Section::Appearance, Section::General, Section::Panel] {
+            let l = layout(section, &states()[0], &Estimate);
+            assert!(l.segmented(Group::Shell).is_none());
+            assert!(l.segmented(Group::CliStart).is_none());
         }
-        let l = layout(Section::Appearance, &states()[0], &Estimate);
-        assert!(l.segmented(Group::Shell).is_none());
     }
 
     #[test]
@@ -5062,9 +5679,9 @@ mod tests {
                     scroll: 1e6,
                     ..states()[0].clone()
                 };
-                let l = layout(Section::General, &s, &Estimate);
-                // The last card, two rows under its own label.
-                let card = *l.cards.last().expect("cards");
+                let l = layout(Section::Features, &s, &Estimate);
+                // Its own card, two rows under its label, before "Pembersih".
+                let card = l.cards[l.cards.len() - 2];
                 assert_eq!(card.h, 2.0 * ROW_H);
                 assert!(
                     l.texts
@@ -5120,8 +5737,49 @@ mod tests {
             }
         }
         // Not on the other tabs.
-        let l = layout(Section::Appearance, &states()[0], &Estimate);
-        assert!(l.segmented(Group::DevicesHotkey).is_none());
+        for section in [Section::Appearance, Section::General, Section::Panel] {
+            let l = layout(section, &states()[0], &Estimate);
+            assert!(l.segmented(Group::DevicesHotkey).is_none());
+        }
+    }
+
+    #[test]
+    fn no_divider_sits_on_a_cards_top_edge() {
+        for lang in [Lang::Id, Lang::En] {
+            for section in Section::ALL {
+                let s = State {
+                    lang,
+                    ..states()[0].clone()
+                };
+                let l = layout(section, &s, &Estimate);
+                for card in &l.cards {
+                    for d in &l.dividers {
+                        assert!(
+                            (d.y + 0.5 - card.y).abs() > 0.01,
+                            "{section:?}: a divider on the top edge of the card at y={}",
+                            card.y
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_devices_card_has_one_divider_between_its_two_rows() {
+        let s = State {
+            scroll: 1e6,
+            ..states()[0].clone()
+        };
+        let l = layout(Section::Features, &s, &Estimate);
+        let card = l.cards[l.cards.len() - 2];
+        let inside_card: Vec<&Rect> = l
+            .dividers
+            .iter()
+            .filter(|d| d.y >= card.y - 1.0 && d.y <= card.bottom() + 1.0)
+            .collect();
+        assert_eq!(inside_card.len(), 1);
+        assert!((inside_card[0].y + 0.5 - (card.y + ROW_H)).abs() < 0.01);
     }
 
     #[test]
@@ -5228,6 +5886,375 @@ mod tests {
         for s in Section::ALL {
             assert_eq!(Section::ALL[s.index()], s);
         }
+        // The eight sections, in the sidebar's order.
+        assert_eq!(
+            Section::ALL,
+            [
+                Section::General,
+                Section::Appearance,
+                Section::Cat,
+                Section::Panel,
+                Section::Clipboard,
+                Section::Features,
+                Section::Integrations,
+                Section::About,
+            ]
+        );
+        for (name, want) in [
+            ("umum", Section::General),
+            ("general", Section::General),
+            ("tampilan", Section::Appearance),
+            ("appearance", Section::Appearance),
+            ("kucing", Section::Cat),
+            ("cat", Section::Cat),
+            ("panel", Section::Panel),
+            ("clipboard", Section::Clipboard),
+            ("fitur", Section::Features),
+            ("features", Section::Features),
+            // A section before v3.8: Pomodoro lives in Fitur now.
+            ("pomodoro", Section::Features),
+            ("integrasi", Section::Integrations),
+            ("tentang", Section::About),
+        ] {
+            assert_eq!(Section::from_name(name), Some(want), "{name}");
+        }
+        // The sidebar names, in both languages.
+        for (lang, names) in [
+            (
+                Lang::Id,
+                [
+                    "Umum",
+                    "Tampilan",
+                    "Kucing",
+                    "Panel",
+                    "Clipboard",
+                    "Fitur",
+                    "Integrasi",
+                    "Tentang",
+                ],
+            ),
+            (
+                Lang::En,
+                [
+                    "General",
+                    "Appearance",
+                    "Cat",
+                    "Panel",
+                    "Clipboard",
+                    "Features",
+                    "Integrations",
+                    "About",
+                ],
+            ),
+        ] {
+            let got: Vec<&str> = Section::ALL.iter().map(|s| text(lang, s.key())).collect();
+            assert_eq!(got, names, "{lang:?}");
+        }
+        // Each has its own icon; the Kucing one is the new cat outline.
+        assert_eq!(Section::Cat.icon(), Icon::Cat);
+        let mut icons: Vec<Icon> = Section::ALL.iter().map(|s| s.icon()).collect();
+        icons.dedup();
+        assert_eq!(icons.len(), 8);
+    }
+
+    #[test]
+    fn kucing_has_the_preview_and_three_titled_cards() {
+        for lang in [Lang::Id, Lang::En] {
+            for cat_face in CatFace::ALL {
+                let s = State {
+                    lang,
+                    robot: true,
+                    cat_face,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Cat, &s, &Estimate);
+                // The preview, then Kucing, Gerak and Sapaan.
+                assert_eq!(l.cards.len(), 4);
+                let preview = l.cat_preview.expect("the preview card");
+                assert_eq!((preview, l.cards[0]), (l.cards[0], preview));
+                assert_eq!(preview.h, CAT_PREVIEW_H);
+                assert!(l.preview.is_none(), "Tampilan's own preview is not here");
+                for key in [Key::GroupCat, Key::GroupMotion, Key::GroupGreeting] {
+                    assert!(
+                        l.texts
+                            .iter()
+                            .any(|t| t.text == text(lang, key).to_uppercase()),
+                        "{lang:?} {key:?}"
+                    );
+                }
+                // The chips: Diam, Senang, Kedip, Tidur, Menyapa; the face shown
+                // is the selected one, and a click on one is a `CatFace` hit.
+                let (track, items, selected) = l.segmented(Group::CatFace).expect("the chips");
+                let faces: Vec<Hit> = items.iter().map(|i| i.hit).collect();
+                let want: Vec<Hit> = CatFace::ALL.iter().map(|f| Hit::CatFace(*f)).collect();
+                assert_eq!(faces, want);
+                assert_eq!(items[selected].hit, Hit::CatFace(cat_face));
+                let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+                let names: Vec<&str> = CatFace::ALL.iter().map(|f| text(lang, f.key())).collect();
+                assert_eq!(labels, names);
+                // Under the cat's tile and the notch, inside the preview card.
+                assert!(
+                    track.y >= preview.y + 12.0 + CAT_TILE && track.bottom() < preview.bottom()
+                );
+                assert!(track.x >= preview.x && track.right() <= preview.right());
+                let r = items[1].rect;
+                assert_eq!(
+                    l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                    Some(Hit::CatFace(CatFace::Happy))
+                );
+            }
+        }
+        // The faces the chips show: Blink is the idle face with its eyes shut.
+        assert_eq!(CatFace::Blink.expr(), (crate::ui::robot::Expr::Idle, true));
+        assert_eq!(CatFace::Sleep.expr().0, crate::ui::robot::Expr::Sleep);
+        assert_eq!(CatFace::Wave.expr().0, crate::ui::robot::Expr::Wave);
+    }
+
+    #[test]
+    fn the_kucing_card_has_color_backdrop_and_accessory_rows() {
+        for lang in [Lang::Id, Lang::En] {
+            for (color, accessory) in [
+                (CatColor::Terracotta, CatAccessory::None),
+                (CatColor::Calico, CatAccessory::Glasses),
+                (CatColor::Black, CatAccessory::Crown),
+            ] {
+                let s = State {
+                    lang,
+                    robot: true,
+                    cat_color: color,
+                    cat_accessory: accessory,
+                    surface: Surface::Auto,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Cat, &s, &Estimate);
+                // "Warna": four swatches, the coat's name as the description.
+                let (items, selected) = l
+                    .controls
+                    .iter()
+                    .find_map(|c| match c {
+                        Control::CatSwatches {
+                            items, selected, ..
+                        } => Some((items.clone(), *selected)),
+                        _ => None,
+                    })
+                    .expect("coat swatches");
+                let order: Vec<CatColor> = items.iter().map(|(v, _)| *v).collect();
+                assert_eq!(order, CatColor::ALL);
+                assert_eq!(selected, color);
+                for (v, r) in &items {
+                    assert_eq!(
+                        l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                        Some(Hit::CatColor(*v))
+                    );
+                }
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, cat_color_key(color)))
+                );
+                // "Latar: <name>" with "Ubah", which goes to Tampilan: there is
+                // no second surface picker on this page.
+                let shown = Surface::Auto.resolve(color, true);
+                let line = format!(
+                    "{}: {}",
+                    text(lang, Key::CatBackdrop),
+                    text(lang, surface_key(shown))
+                );
+                assert!(l.texts.iter().any(|t| t.text == line), "{lang:?} {line}");
+                let all = buttons_of(&l);
+                let change = button(&all, Hit::CatBackdrop);
+                assert_eq!(change.1, text(lang, Key::CatBackdropChange));
+                assert!(change.2, "Ubah takes clicks while the cat is on");
+                assert!(
+                    !l.controls
+                        .iter()
+                        .any(|c| matches!(c, Control::SurfaceSwatches { .. })),
+                    "the base color is picked in Tampilan only"
+                );
+                // "Aksesori": a tile for each of the seven, Tanpa first, the
+                // chosen one marked, in one row inside the card.
+                let (tiles, chosen) = l
+                    .controls
+                    .iter()
+                    .find_map(|c| match c {
+                        Control::AccessoryTiles {
+                            items, selected, ..
+                        } => Some((items.clone(), *selected)),
+                        _ => None,
+                    })
+                    .expect("accessory tiles");
+                let order: Vec<CatAccessory> = tiles.iter().map(|(v, _)| *v).collect();
+                assert_eq!(order, CatAccessory::ALL);
+                assert_eq!(order[0], CatAccessory::None);
+                assert_eq!(chosen, accessory);
+                let card = l.cards[1];
+                for (v, r) in &tiles {
+                    assert!(inside(*r, card), "{v:?} {r:?}");
+                    assert_eq!(r.y, tiles[0].1.y, "one row");
+                    assert_eq!(
+                        l.hit(r.x + r.w / 2.0, r.y + r.h / 2.0),
+                        Some(Hit::CatAccessory(*v))
+                    );
+                }
+                for pair in tiles.windows(2) {
+                    assert!(pair[0].1.right() < pair[1].1.x, "apart");
+                }
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, accessory_key(accessory)))
+                );
+                // Off: the cat's rows fade and take no clicks.
+                let off = State { robot: false, ..s };
+                let l = layout(Section::Cat, &off, &Estimate);
+                let hits: Vec<Hit> = l.hits().into_iter().map(|(h, _)| h).collect();
+                assert!(!hits.iter().any(|h| matches!(
+                    h,
+                    Hit::CatColor(_) | Hit::CatAccessory(_) | Hit::CatBackdrop
+                )));
+                assert!(hits.contains(&Hit::Robot));
+            }
+        }
+    }
+
+    #[test]
+    fn gerak_and_sapaan_rows_follow_their_settings() {
+        for lang in [Lang::Id, Lang::En] {
+            for (follow, peek, behind) in [
+                (true, true, false),
+                (false, false, false),
+                (true, false, true),
+            ] {
+                let s = State {
+                    lang,
+                    robot: true,
+                    cat_follow: follow,
+                    notch_peek: peek,
+                    stay_behind: behind,
+                    greeting: true,
+                    scroll: 1e6,
+                    ..states()[0].clone()
+                };
+                let l = layout(Section::Cat, &s, &Estimate);
+                let toggle = |hit: Hit| {
+                    l.controls.iter().find_map(|c| match c {
+                        Control::Toggle {
+                            hit: h,
+                            on,
+                            enabled,
+                            ..
+                        } if *h == hit => Some((*on, *enabled)),
+                        _ => None,
+                    })
+                };
+                assert_eq!(toggle(Hit::CatFollow), Some((follow, true)));
+                // "Mengecil jadi mata" is off while "Di belakang jendela" is
+                // on, and says so; it keeps its value.
+                assert_eq!(toggle(Hit::NotchPeek), Some((peek, !behind)));
+                let says = |key: Key| l.texts.iter().any(|t| t.text == text(lang, key));
+                assert_eq!(says(Key::CatPeekBehind), behind, "{lang:?}");
+                assert_eq!(says(Key::CatPeekDesc), !behind, "{lang:?}");
+                assert_eq!(l.hits().iter().any(|(h, _)| *h == Hit::NotchPeek), !behind);
+                // Sapaan: the toggle, then the five periods as one wrapped
+                // static line under it, inside the last card.
+                assert_eq!(toggle(Hit::Greeting), Some((true, true)));
+                let card = *l.cards.last().unwrap();
+                let periods = crate::i18n::greeting_periods_line(lang);
+                let lines: Vec<&Text> = l
+                    .texts
+                    .iter()
+                    .filter(|t| inside(t.rect, card) && t.rect.y >= card.y + ROW_H)
+                    .collect();
+                assert!(!lines.is_empty());
+                assert_eq!(
+                    lines
+                        .iter()
+                        .map(|t| t.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    periods
+                );
+                for t in &lines {
+                    assert!(Estimate.width(&t.text, t.font) <= t.rect.w, "{:?}", t.text);
+                }
+            }
+        }
+        // The five periods and their titles, built from the greeting code.
+        assert_eq!(
+            crate::i18n::greeting_periods_line(Lang::Id),
+            "Pagi 04-10 Selamat pagi · Siang 11-14 Selamat siang · Sore 15-17 Selamat sore · Malam 18-23 Selamat malam · Dini hari 00-03 Masih begadang?"
+        );
+        assert_eq!(
+            crate::i18n::greeting_periods_line(Lang::En),
+            "Morning 04-10 Good morning · Noon 11-14 Good afternoon · Afternoon 15-17 Good afternoon · Evening 18-23 Good evening · Late night 00-03 Up late?"
+        );
+    }
+
+    #[test]
+    fn panel_holds_the_open_mode_stay_behind_and_the_lists() {
+        for lang in [Lang::Id, Lang::En] {
+            let s = State {
+                lang,
+                ..states()[0].clone()
+            };
+            let l = layout(Section::Panel, &s, &Estimate);
+            for key in [
+                Key::GroupBehavior,
+                Key::PanelPages,
+                Key::Shortcuts,
+                Key::TilesAvailable,
+            ] {
+                assert!(
+                    l.texts
+                        .iter()
+                        .any(|t| t.text == text(lang, key).to_uppercase()),
+                    "{lang:?} {key:?}"
+                );
+            }
+            let (_, items, selected) = l.segmented(Group::OpenMode).expect("Mode buka");
+            assert_eq!(items[selected].hit, Hit::OpenMode(s.open_mode));
+            assert!(l.controls.iter().any(|c| matches!(
+                c,
+                Control::Toggle {
+                    hit: Hit::StayBehind,
+                    on,
+                    ..
+                } if *on == s.stay_behind
+            )));
+            // The two lists' handles live here, not in Tampilan.
+            assert!(!l.rows.is_empty());
+            let l = layout(Section::Appearance, &s, &Estimate);
+            assert!(l.rows.is_empty());
+        }
+    }
+
+    #[test]
+    fn every_card_of_every_section_has_a_title_but_the_previews() {
+        // Each card sits under an uppercase eyebrow, so no card is bare; the
+        // two previews (Tampilan, Kucing) and Tentang's logo are pictures.
+        for lang in [Lang::Id, Lang::En] {
+            for section in Section::ALL {
+                let s = State {
+                    lang,
+                    ..states()[0].clone()
+                };
+                let l = layout(section, &s, &Estimate);
+                let eyebrows: Vec<&Text> =
+                    l.texts.iter().filter(|t| t.font == Font::Eyebrow).collect();
+                for card in &l.cards {
+                    if l.preview == Some(*card) || l.cat_preview == Some(*card) {
+                        continue;
+                    }
+                    // A card's title is the eyebrow just above it, or (a list
+                    // card's own sub-heading) one inside it.
+                    let titled = eyebrows.iter().any(|t| {
+                        t.rect.bottom() <= card.y + 0.01
+                            && card.y - t.rect.bottom() <= EYEBROW_GAP + 0.01
+                    });
+                    assert!(titled, "{section:?} {lang:?}: bare card {card:?}");
+                }
+            }
+        }
     }
 
     fn track() -> Rect {
@@ -5286,21 +6313,11 @@ mod tests {
                 ..states()[0].clone()
             };
             let l = layout(Section::Appearance, &base, &Estimate);
-            // Preview, the first card, then Notch, then Bata's.
+            // Preview, the Island card, then Notch, then Jendela.
             let notch = l.cards[2];
-            let toggle = l
-                .controls
-                .iter()
-                .find_map(|c| match c {
-                    Control::Toggle {
-                        hit: Hit::Robot,
-                        rect,
-                        ..
-                    } => Some(*rect),
-                    _ => None,
-                })
-                .expect("robot toggle");
-            assert!(notch.bottom() < toggle.y && l.cards[1].bottom() < notch.y);
+            let (window, _, _) = l.segmented(Group::Window).expect("Mode jendela");
+            assert!(notch.bottom() < window.y && l.cards[1].bottom() < notch.y);
+            assert_eq!(l.cards.len(), 4);
             assert_eq!(notch.h, 5.0 * ROW_H);
             // Both sliders and the opacity one, in the card, with their labels.
             let sliders: Vec<(SliderId, Rect, i32, bool)> = l
@@ -5369,9 +6386,10 @@ mod tests {
                 ..base.clone()
             };
             // The opacity row is below the first screenful: scroll to it
-            // (the robot card's scroll puts the Notch card just above).
+            // (the Notch card's top goes just under the title).
+            let flat = layout(Section::Appearance, &on, &Estimate);
             let at = State {
-                scroll: robot_card_scroll(&on) - 2.0 * ROW_H,
+                scroll: flat.cards[2].y - VIEW_TOP - 8.0,
                 ..on.clone()
             };
             let l = layout(Section::Appearance, &at, &Estimate);
@@ -5427,13 +6445,18 @@ mod tests {
         for key in [
             Key::NotchWidth,
             Key::NotchHeight,
-            Key::NotchFillSolid,
+            Key::NotchFill,
             Key::NotchFillTransparent,
             Key::NotchOpacity,
         ] {
             assert_ne!(text(Lang::Id, key), text(Lang::En, key), "{key:?}");
         }
-        assert_eq!(text(Lang::Id, Key::NotchFillSolid), "Hitam");
-        assert_eq!(text(Lang::En, Key::NotchFillTransparent), "Transparent");
+        // "Isi notch": Solid | Tembus.
+        assert_eq!(text(Lang::Id, Key::NotchFill), "Isi notch");
+        assert_eq!(text(Lang::Id, Key::NotchFillSolid), "Solid");
+        assert_eq!(text(Lang::Id, Key::NotchFillTransparent), "Tembus");
+        assert_eq!(text(Lang::En, Key::NotchFill), "Notch fill");
+        assert_eq!(text(Lang::En, Key::NotchFillTransparent), "See-through");
+        assert_eq!(text(Lang::Id, Key::NotchOpacity), "Opasitas");
     }
 }

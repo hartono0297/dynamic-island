@@ -10,7 +10,7 @@ shows the tiles in `config.shortcut_tiles`, in that order, up to twelve (four
 per row, up to three rows, `panel_layout::shortcuts_layout` wraps). Empty =
 the default tiles (the nine built-ins, Search being the ninth since 3.2.1,
 plus Vale Settings and the Shelf since 3.4), so old configs read as before.
-Settings → Tampilan → **Pintasan** (laid out as in the 2026-10-29 section
+Settings → Panel (v3.8; it was Tampilan) → **Pintasan** (laid out as in the 2026-10-29 section
 below): the last tile shown cannot be hidden, and none can be switched on
 while twelve show (`toggle` and `set_on` refuse; the off rows say "Halaman
 penuh (maks. 12)" with a disabled "+ Tambah"). A list edited by hand can

@@ -164,7 +164,9 @@ pub enum Event {
     /// order and with the skips of the vertical wheel. `App` makes the flick
     /// (one per scroll) and decides where it counts; the reducer applies the
     /// wheel's own rules (the sticky reminder's peek, never the search).
-    PageFlick { next: bool },
+    PageFlick {
+        next: bool,
+    },
     /// A note, event or reminder editor window opened (true) or closed (false).
     EditorOpen(bool),
     /// The local date rolled over.

@@ -94,15 +94,15 @@ use crate::system::{
 use crate::theme::{self, Theme};
 use crate::tiles::ShortcutTiles;
 use crate::ui::app_icon;
+use crate::ui::cat_style::CatLook;
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
     AA_MARGIN, ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, NOTCH_H_DEFAULT,
-    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, WINDOW_W, island_contains,
-    lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
-    lyric_shape_sized, lyric_target_w, lyric_width_min, panel_kind, shape_for, shape_sized,
-    shape_with_robot_sized,
+    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, WINDOW_W, island_contains, lerp_shape,
+    lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape_sized,
+    lyric_target_w, lyric_width_min, panel_kind, shape_for, shape_sized, shape_with_robot_sized,
 };
 use crate::ui::motion::{
     FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
@@ -3674,7 +3674,7 @@ impl App {
     /// mode has its own way of getting out of the way), nothing is fullscreen,
     /// the screen is on, and the view is a quiet compact one.
     fn peek_eligible(&self) -> bool {
-        !self.config.stay_behind
+        pointer_watch::peek_allowed(self.config.notch_peek, self.config.stay_behind)
             && !self.fullscreen
             && !self.screen_away()
             && self.win.is_some()
@@ -3697,7 +3697,7 @@ impl App {
     /// music, lyric and timer views its slot is tight, so it stays still there.
     fn look_eligible(&self, now: Instant) -> bool {
         let view = self.state.view();
-        self.config.robot
+        pointer_watch::look_allowed(self.config.robot, self.config.cat_follow_pointer)
             && self.motion().moves()
             && view == View::Idle
             && !self.peek.is_shrunk()
@@ -3827,10 +3827,7 @@ impl App {
         else {
             return;
         };
-        let (x, y) = (
-            (pt.x - origin.0) as f32 / k,
-            (pt.y - origin.1) as f32 / k,
-        );
+        let (x, y) = ((pt.x - origin.0) as f32 / k, (pt.y - origin.1) as f32 / k);
         let style = self.config.style;
         let pill = shape_sized(style, self.notch_size(), ShapeKind::Eyes);
         let in_zone = pointer_watch::peek_zone(normal).contains(x, y);
@@ -3843,8 +3840,10 @@ impl App {
         // The walk over the windows only when a shrink is possible, once on
         // the approach and at most once a second while the pointer stays.
         let candidate = before == PeekState::Normal && in_zone && !over_normal;
-        let window_under =
-            candidate && self.under_cache.get(now, || window_under_notch(origin, k, normal));
+        let window_under = candidate
+            && self
+                .under_cache
+                .get(now, || window_under_notch(origin, k, normal));
         let inputs = PeekInputs {
             eligible: true,
             in_zone,
@@ -4759,6 +4758,30 @@ impl App {
                 self.save_config();
                 self.refresh(now);
             }
+            SettingsAction::CatColor(color) => {
+                self.config.cat_color = color;
+                self.save_config();
+                // The cat and (on Auto) the island's surface change now.
+                self.draw(now);
+            }
+            SettingsAction::CatAccessory(accessory) => {
+                self.config.cat_accessory = accessory;
+                self.save_config();
+                self.draw(now);
+            }
+            SettingsAction::CatFollow(on) => {
+                self.config.cat_follow_pointer = on;
+                self.save_config();
+                // `follow_pointer_settings` (from the save) starts or stops
+                // the pointer poll and puts the look back at the centre.
+                self.refresh(now);
+            }
+            SettingsAction::NotchPeek(on) => {
+                self.config.notch_peek = on;
+                self.save_config();
+                // A shrunk notch comes back at once; the poll follows.
+                self.refresh(now);
+            }
             SettingsAction::Greeting(on) => {
                 self.config.morning_greeting = on;
                 self.save_config();
@@ -5020,6 +5043,7 @@ impl App {
             dock: self.dock.frame(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
+            cat: CatLook::of(&self.config),
             fill_alpha,
             legibility: notch_fill::legibility(fill_alpha),
             clock: (self.config.idle_clock && self.drawn == View::Idle)

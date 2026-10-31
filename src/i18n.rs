@@ -345,7 +345,7 @@ keys! {
 
     // Shortcut page.
     Shortcuts => "Pintasan", "Shortcuts";
-    // Settings → Tampilan → Pintasan.
+    // Settings → Panel → Pintasan.
     TileKindApp => "Aplikasi", "App";
     TileKindFolder => "Folder", "Folder";
     TileKindUrl => "Alamat web", "Web address";
@@ -362,7 +362,7 @@ keys! {
     ShortcutLock => "Kunci layar", "Lock screen";
     ShortcutValeSettings => "Setelan Vale", "Vale Settings";
     ShortcutGoShelf => "Rak", "Shelf";
-    // Settings → Tampilan → Halaman panel and Pintasan: the lists.
+    // Settings → Panel → Halaman panel and Pintasan: the lists.
     PagesShown => "Tampil di panel", "Shown on the panel";
     PagesHidden => "Tersembunyi", "Hidden";
     PagesLastShown => "Minimal satu halaman tampil", "At least one page must show";
@@ -469,17 +469,17 @@ keys! {
     AccentClay => "Lempung", "Clay";
     AccentOlive => "Zaitun", "Olive";
     AccentPlum => "Plum", "Plum";
-    IslandSurface => "Latar island", "Island fill";
+    IslandSurface => "Warna dasar", "Base color";
     IslandSurfaceDesc => "Warna dasar island", "The island's base color";
     NotchWidth => "Lebar notch", "Notch width";
     NotchHeight => "Tinggi notch", "Notch height";
     NotchDefaultSize => "Ukuran bawaan", "Default size";
     NotchReset => "Atur ulang", "Reset";
-    NotchFill => "Latar notch", "Notch background";
+    NotchFill => "Isi notch", "Notch fill";
     NotchFillDesc => "Panel tetap solid", "The open panel stays solid";
-    NotchFillSolid => "Hitam", "Solid";
-    NotchFillTransparent => "Transparan", "Transparent";
-    NotchOpacity => "Opasitas latar", "Background opacity";
+    NotchFillSolid => "Solid", "Solid";
+    NotchFillTransparent => "Tembus", "See-through";
+    NotchOpacity => "Opasitas", "Opacity";
     SurfaceEspresso => "Espresso", "Espresso";
     SurfaceGraphite => "Grafit", "Graphite";
     WindowMode => "Mode jendela", "Window mode";
@@ -536,10 +536,10 @@ keys! {
     VetoRights => "Butuh izin administrator.", "Needs administrator rights.";
     VetoPower => "Dayanya tidak cukup.", "Not enough power.";
     VetoRefused => "Windows menolak melepasnya.", "Windows refused to remove it.";
-    DeviceNotices => "Notice perangkat", "Device notices";
+    DeviceNotices => "Notifikasi perangkat", "Device notifications";
     DeviceNoticesDesc => "Saat flashdisk dicolok dan saat aman dicabut",
         "When a drive is plugged in and when it is safe to remove";
-    DevicesHotkey => "Pintasan Perangkat", "Devices hotkey";
+    DevicesHotkey => "Tombol pintas", "Hotkey";
     DevicesHotkeyDesc => "Buka halaman Perangkat", "Open the Devices page";
     PageCli => "CLI", "CLI";
     PageShortcuts => "Pintasan", "Shortcuts";
@@ -616,8 +616,8 @@ keys! {
     DataFolder => "Folder data", "Data folder";
     OpenDataFolder => "Buka folder data", "Open data folder";
 
-    // Vale's cat, the notch assistant (Settings → Tampilan).
-    RobotInNotch => "Asisten di notch", "Assistant in notch";
+    // Vale's cat, the notch assistant (Settings → Kucing).
+    RobotInNotch => "Kucing di notch", "Cat in the notch";
     RobotInNotchDesc => "Tampilkan kucing Vale di samping jam dan notice",
         "Show Vale's cat beside the clock and notices";
     RobotMotion => "Animasi", "Animation";
@@ -629,7 +629,6 @@ keys! {
     MotionOff => "Mati", "Off";
     RobotSleep => "Tidur setelah", "Sleep after";
     RobotSleepDesc => "Tanpa aktivitas", "Without activity";
-    MorningGreeting => "Sapaan pagi", "Morning greeting";
     MorningGreetingDesc => "Ringkasan acara dan pengingat hari ini",
         "Today's events and reminders";
     GoodMorning => "Selamat pagi", "Good morning";
@@ -676,7 +675,7 @@ keys! {
     ClipPersistDesc => "Terenkripsi DPAPI, hanya akun ini", "Encrypted with DPAPI, this account only";
     ClipClearOnLock => "Hapus saat layar dikunci", "Clear when the screen locks";
     ClipClearOnLockDesc => "Item tersemat tetap", "Pinned items stay";
-    ClipHotkey => "Pintasan", "Shortcut";
+    ClipHotkey => "Tombol pintas", "Hotkey";
     ClipHotkeyDesc => "Buka halaman Clipboard", "Open the Clipboard page";
     ClipHotkeyTaken => "Dipakai aplikasi lain", "Taken by another app";
     ClipHotkeyNone => "Tidak ada", "None";
@@ -704,13 +703,13 @@ keys! {
     SearchKindSetting => "Pengaturan Windows", "Windows Settings";
     SearchCopy => "Enter untuk menyalin", "Enter to copy";
     SearchKindWeb => "Cari di web", "Search the web";
-    // Settings → Umum → Pencarian cepat.
-    SearchHotkeySetting => "Pencarian", "Search";
+    // Settings → Umum → Dasar → Tombol pintas pencarian.
+    SearchHotkeySetting => "Tombol pintas pencarian", "Search hotkey";
     SearchHotkeyDesc => "Cari dan hitung", "Find and calculate";
     SearchHotkeyTaken => "Sudah dipakai", "In use";
     ClipFeedbackAll => "\u{201C}Disalin\u{201D} untuk semua salinan", "\u{201C}Copied\u{201D} for every copy";
-    ClipFeedbackAllDesc => "Bukan hanya dari island", "Not only copies from the island";
-    ClipCopyNotice => "Notifikasi salinan", "Copy notification";
+    ClipFeedbackAllDesc => "Hanya saat pratinjau mati", "Only while the preview is off";
+    ClipCopyNotice => "Pratinjau salinan", "Copy preview";
     ClipCopyNoticeDesc => "Pratinjau di notch setiap kali menyalin", "A preview in the notch on every copy";
     ClipFeedbackAllReplaced => "Diganti pratinjau salinan di atas", "Replaced by the copy preview above";
     ClipClear => "Hapus riwayat", "Clear history";
@@ -737,7 +736,7 @@ keys! {
     ShotNoFile => "tidak ada file", "no file found";
     ShotFileStays => "file masih ada", "the file is still there";
     SecScreenshot => "Screenshot", "Screenshot";
-    ShotPreviewSetting => "Preview di notch", "Preview in the notch";
+    ShotPreviewSetting => "Pratinjau di notch", "Preview in the notch";
     ShotIgnoreSetting => "Jika diabaikan", "If ignored";
     ShotIgnoreDesc => "Setelah waktu tampil habis", "Once its time on screen runs out";
     ShotShowFor => "Lama tampil", "Show for";
@@ -747,7 +746,9 @@ keys! {
     ShotToolVale => "Vale", "Vale";
     ShotToolWindows => "Snipping Tool", "Snipping Tool";
     // The bare PrtSc key opens Vale's own capture (Settings → Clipboard).
-    ShotPrintScreen => "Tombol PrtSc membuka screenshot Vale", "PrtSc key opens Vale's screenshot";
+    ShotPrintScreen => "Tombol PrtSc", "PrtSc key";
+    ShotPrintScreenDesc => "Buka screenshot Vale", "Opens Vale's screenshot";
+    ShotToolDesc => "Dipakai tile Screenshot", "Used by the Screenshot tile";
     PrtscHookFailed => "Tombol PrtSc tidak bisa dipasang", "Could not hook the PrtSc key";
     SnapHint => "Klik atau seret · Enter ambil · Esc batal",
         "Click or drag · Enter to capture · Esc to cancel";
@@ -783,6 +784,53 @@ keys! {
     DemoClaudeWorking => "Claude sedang bekerja", "Claude is working";
     DemoClaudeAsks => "izin menjalankan perintah", "permission to run a command";
     DemoFilesChanged => "3 file diubah", "3 files changed";
+
+    // Settings, v3.8: the Kucing page, the new sections and the cards' titles.
+    SecCat => "Kucing", "Cat";
+    SecPanel => "Panel", "Panel";
+    SecFeatures => "Fitur", "Features";
+    GroupBasics => "Dasar", "Basics";
+    GroupAlerts => "Peringatan", "Alerts";
+    GroupIsland => "Island", "Island";
+    GroupNotch => "Notch", "Notch";
+    GroupWindow => "Jendela", "Window";
+    GroupCat => "Kucing", "Cat";
+    GroupMotion => "Gerak", "Motion";
+    GroupGreeting => "Sapaan", "Greeting";
+    GroupBehavior => "Perilaku", "Behavior";
+    GroupHistory => "Riwayat", "History";
+    GroupPomodoro => "Pomodoro", "Pomodoro";
+    GroupMusic => "Musik", "Music";
+    GroupCli => "CLI", "CLI";
+    GroupCleaner => "Pembersih", "Cleaner";
+    GroupLinks => "Tautan", "Links";
+    SurfaceAuto => "Ikuti kucing", "Match cat";
+    SurfaceSea => "Laut", "Sea";
+    SurfaceNight => "Malam", "Night";
+    SurfacePlum => "Ungu", "Plum";
+    CatColorTerracotta => "Terakota", "Terracotta";
+    CatColorCalico => "Calico", "Calico";
+    CatColorWhite => "Putih", "White";
+    CatColorBlack => "Hitam", "Black";
+    CatColorLabel => "Warna", "Color";
+    CatBackdrop => "Latar", "Backdrop";
+    CatBackdropChange => "Ubah", "Change";
+    CatAccessoryLabel => "Aksesori", "Accessory";
+    AccNone => "Tanpa", "None";
+    AccGlasses => "Kacamata", "Glasses";
+    AccBow => "Pita", "Bow";
+    AccNightcap => "Topi tidur", "Nightcap";
+    AccScarf => "Syal", "Scarf";
+    AccFlower => "Bunga", "Flower";
+    AccCrown => "Mahkota", "Crown";
+    CatFollow => "Ikuti kursor", "Follow the pointer";
+    CatFollowDesc => "Kepala menoleh ke arah kursor", "The head turns toward the pointer";
+    CatPeek => "Mengecil jadi mata", "Shrink to eyes";
+    CatPeekDesc => "Jadi dua mata saat kursor mendekat di atas jendela",
+        "Two eyes when the pointer nears it over a window";
+    CatPeekBehind => "Mati selama \u{201C}Di belakang jendela\u{201D} menyala",
+        "Off while \u{201C}Stay behind windows\u{201D} is on";
+    CatGreeting => "Sapaan", "Greeting";
 }
 
 /// `key` in `lang`.
@@ -857,6 +905,41 @@ pub fn greeting_title(lang: Lang, period: DayPeriod) -> &'static str {
         (DayPeriod::Night, Lang::Id) => "Masih begadang?",
         (DayPeriod::Night, Lang::En) => "Up late?",
     }
+}
+
+/// The short name of `period` in the Settings period line: "Pagi", "Siang",
+/// "Sore", "Malam", "Dini hari".
+pub fn greeting_period_name(lang: Lang, period: DayPeriod) -> &'static str {
+    match (period, lang) {
+        (DayPeriod::Morning, Lang::Id) => "Pagi",
+        (DayPeriod::Morning, Lang::En) => "Morning",
+        (DayPeriod::Midday, Lang::Id) => "Siang",
+        (DayPeriod::Midday, Lang::En) => "Noon",
+        (DayPeriod::Afternoon, Lang::Id) => "Sore",
+        (DayPeriod::Afternoon, Lang::En) => "Afternoon",
+        (DayPeriod::Evening, Lang::Id) => "Malam",
+        (DayPeriod::Evening, Lang::En) => "Evening",
+        (DayPeriod::Night, Lang::Id) => "Dini hari",
+        (DayPeriod::Night, Lang::En) => "Late night",
+    }
+}
+
+/// The five periods as one line for Settings → Kucing → Sapaan: name, first
+/// and last hour (two digits) and the greeting's title, joined by " · ".
+/// Built from `greeting.rs` so the hours cannot drift from `period_at`.
+pub fn greeting_periods_line(lang: Lang) -> String {
+    DayPeriod::ALL
+        .iter()
+        .map(|&p| {
+            let (from, to) = p.hours();
+            format!(
+                "{} {from:02}-{to:02} {}",
+                greeting_period_name(lang, p),
+                greeting_title(lang, p)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The greeting's line for `period`, from `counts` (never a "0 acara": a zero
@@ -2976,8 +3059,10 @@ mod tests {
                 day_date_short(lang, today),
                 time_label(lang, hm(9, 30)),
             ];
+            all.push(greeting_periods_line(lang));
             for period in ALL_PERIODS {
                 all.push(greeting_title(lang, period).into());
+                all.push(greeting_period_name(lang, period).into());
                 for (events, reminders) in [(0, 0), (1, 1), (3, 2), (2, 0), (0, 2)] {
                     all.push(greeting_body(
                         lang,
@@ -3264,6 +3349,18 @@ mod tests {
     }
 
     #[test]
+    fn greeting_periods_line_is_built_from_the_greeting_code() {
+        assert_eq!(
+            greeting_periods_line(Lang::Id),
+            "Pagi 04-10 Selamat pagi · Siang 11-14 Selamat siang · Sore 15-17 Selamat sore · Malam 18-23 Selamat malam · Dini hari 00-03 Masih begadang?"
+        );
+        assert_eq!(
+            greeting_periods_line(Lang::En),
+            "Morning 04-10 Good morning · Noon 11-14 Good afternoon · Afternoon 15-17 Good afternoon · Evening 18-23 Good evening · Late night 00-03 Up late?"
+        );
+    }
+
+    #[test]
     fn greeting_in_both_languages() {
         assert_eq!(text(Lang::Id, Key::GoodMorning), "Selamat pagi");
         assert_eq!(text(Lang::En, Key::GoodMorning), "Good morning");
@@ -3524,7 +3621,7 @@ mod copy_preview_tests {
             assert_eq!(text(lang, Key::ClipPreviewFiles), files);
             assert_eq!(text(lang, Key::ClipPreviewChip), chip);
         }
-        assert_eq!(text(Lang::Id, Key::ClipCopyNotice), "Notifikasi salinan");
-        assert_eq!(text(Lang::En, Key::ClipCopyNotice), "Copy notification");
+        assert_eq!(text(Lang::Id, Key::ClipCopyNotice), "Pratinjau salinan");
+        assert_eq!(text(Lang::En, Key::ClipCopyNotice), "Copy preview");
     }
 }
