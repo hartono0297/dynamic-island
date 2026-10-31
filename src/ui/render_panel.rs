@@ -23,8 +23,8 @@ use windows::core::{Interface, Result};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::{
-    CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, GroupShown, Progress,
-    Renderer, RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
+    CleanerView, CliView, ClipView, DevicesView, FolderMenuView, Frame, GroupShown, NotifView,
+    Progress, Renderer, RobotFrame, RowSize, SearchView, SystemView, color, d2d_rect, mix,
 };
 use crate::audio::{self, MixerRow, Target};
 use crate::calendar::{CalEvent, CalStatus, EventTime, events_on, range_for};
@@ -41,6 +41,9 @@ use crate::i18n::{self, Key, Lang, text};
 use crate::model::{CalView, Hit, MediaInfo, Notice, NoticeKind, Page};
 use crate::mole::{MoleGroup, MoleOpt};
 use crate::notes::Note;
+use crate::notif::NotifEntry;
+use crate::notif::tile::{tile_color, tile_letter};
+use crate::notif::time::relative_time;
 use crate::pomodoro::{Phase, PomoStatus, Pomodoro};
 use crate::reminders::{Reminder, Repeat, local_time};
 use crate::search::Kind as SearchKind;
@@ -60,14 +63,15 @@ use crate::ui::panel_layout::{
     CLIP_THUMB_W, CalendarLayout, CleanFoot, CleanHead, CleanerLayout, CliHead, CliLayout,
     ClipButton, ClipLayout, DEV_BAR_H, DevicesHead, DevicesLayout, HOUR_GUTTER, ListLayout,
     MENU_RADIUS, MENU_ROW_RADIUS, MIXER_TRACK_H, MOLE_LOG_LINE_H, MOLE_LOG_PAD, MenuLayout,
-    MeterLayout, MixerLayout, MoleFoot, MoleLayout, PageLayout, PomodoroLayout, RING_STROKE,
-    SEG_PAD, SYS_RING_STROKE, SearchLayout, ShelfLayout, ShortcutsLayout, SystemHead, SystemLayout,
-    VOLUME_HUD_H, WEEK_HEAD_H, calendar_layout, cleaner_layout, cli_folder_menu, cli_layout,
-    cli_suggestions, clipboard_layout, device_shapes, devices_layout, media_panel_layout,
-    media_progress_layout, mixer_layout, mole_layout, notes_layout, page_dots,
-    pomodoro_compact_layout, pomodoro_compact_layout_robot, pomodoro_layout, regions,
-    reminders_layout, search_layout, shelf_card_layout, shelf_layout, shortcuts_layout,
-    system_layout, tile_parts, volume_hud_layout, waiting_strip,
+    MeterLayout, MixerLayout, MoleFoot, MoleLayout, NOTIF_DOT, NOTIF_RADIUS, NotifHead,
+    NotifLayout, PageLayout, PomodoroLayout, RING_STROKE, SEG_PAD, SYS_RING_STROKE, SearchLayout,
+    ShelfLayout, ShortcutsLayout, SystemHead, SystemLayout, VOLUME_HUD_H, WEEK_HEAD_H,
+    calendar_layout, cleaner_layout, cli_folder_menu, cli_layout, cli_suggestions,
+    clipboard_layout, device_shapes, devices_layout, media_panel_layout, media_progress_layout,
+    mixer_layout, mole_layout, notes_layout, notif_layout, page_dots, pomodoro_compact_layout,
+    pomodoro_compact_layout_robot, pomodoro_layout, regions, reminders_layout, search_layout,
+    shelf_card_layout, shelf_layout, shortcuts_layout, system_layout, tile_parts,
+    volume_hud_layout, waiting_strip,
 };
 use crate::ui::robot::{Expr, Pose};
 use crate::ui::shelf_motion::Drawn;
@@ -544,6 +548,10 @@ impl Renderer {
             if let PageLayout::Clipboard(l) = &layout {
                 self.regions.clip_list = Some(l.list);
             }
+            self.regions.notif_list = match &layout {
+                PageLayout::Notifications(l) => Some(l.list),
+                _ => None,
+            };
             self.regions.media_art = match &layout {
                 PageLayout::Media(l) => Some(l.art),
                 _ => None,
@@ -703,6 +711,21 @@ impl Renderer {
                     image,
                 ))
             }
+            Page::Notifications => {
+                let n = &frame.notif;
+                let ids: Vec<u64> = n.items.iter().map(|e| e.id).collect();
+                let head = self.notif_head(n);
+                PageLayout::Notifications(notif_layout(
+                    s,
+                    strip,
+                    &head,
+                    &ids,
+                    n.selected,
+                    n.scroll,
+                    !n.record,
+                    n.no_access,
+                ))
+            }
             Page::Shortcuts => PageLayout::Shortcuts(shortcuts_layout(s, strip, &frame.tiles)),
             // Room for the master row and, under it, a line saying no app
             // plays (or that there is no device).
@@ -759,6 +782,7 @@ impl Renderer {
             }
             PageLayout::Cli(l) => self.paint_cli(l, frame),
             PageLayout::Clipboard(l) => self.paint_clipboard(l, &frame.clip),
+            PageLayout::Notifications(l) => self.paint_notifications(l, &frame.notif),
             PageLayout::Shortcuts(l) => {
                 self.paint_shortcuts(l, &frame.tiles);
                 Ok(())
@@ -999,6 +1023,257 @@ impl Renderer {
             let line = devices::partition_line(lang, part);
             self.text_colored(&line, &self.fonts.mono_small, *value, p.text, 1.0);
         }
+    }
+
+    /// The Notifikasi header's widths: the title, "n / max", the "Jeda"
+    /// label and the clear button (wide enough for "Yakin?" too, so arming
+    /// it moves nothing).
+    fn notif_head(&self, view: &NotifView) -> NotifHead {
+        let lang = i18n::lang();
+        let title_w = self
+            .text_width(text(lang, Key::PageNotifications), &self.fonts.heading)
+            .ceil()
+            + 1.0;
+        let count = format!("{} / {}", view.items.len(), view.cap);
+        let count_w = self.text_width(&count, &self.fonts.small).ceil() + 2.0 * CHIP_PAD_X;
+        let pause_label_w = self
+            .text_width(text(lang, Key::NotifPause), &self.fonts.small)
+            .ceil()
+            + 1.0;
+        let label = |key: Key| self.text_width(text(lang, key), &self.fonts.button).ceil();
+        let clear_w = label(Key::NotifClearAll).max(label(Key::NotifSure))
+            + 2.0 * DEV_BTN_PAD_X
+            + DEV_BTN_ICON
+            + DEV_BTN_ICON_GAP;
+        NotifHead {
+            title_w,
+            count_w,
+            pause_label_w,
+            clear_w,
+        }
+    }
+
+    /// An app's logo in `area` (24 px): the picture, contained and rounded,
+    /// else a tile in a colour made from the app's name with its first letter.
+    fn paint_notif_logo(&self, area: Rect, entry: &NotifEntry, view: &NotifView) -> Result<()> {
+        let key = entry.logo_key();
+        if let Some(thumb) = view.logos.get(&key)
+            && let Some(bitmap) = self.notif_logo(&key, thumb)?
+        {
+            let target = self.target.as_ref().expect("target ensured by paint");
+            unsafe {
+                let D2D_SIZE_F { width, height } = bitmap.GetSize();
+                let k = (area.w / width.max(1.0)).min(area.h / height.max(1.0));
+                let (w, h) = (width * k, height * k);
+                let placed = Rect {
+                    x: area.x + (area.w - w) / 2.0,
+                    y: area.y + (area.h - h) / 2.0,
+                    w,
+                    h,
+                };
+                let transform = Matrix3x2 {
+                    M11: k,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: k,
+                    M31: placed.x,
+                    M32: placed.y,
+                };
+                let brush = target.rt.CreateBitmapBrush(&bitmap, None, None)?;
+                brush.SetTransform(&transform);
+                let brush: ID2D1Brush = brush.cast()?;
+                target.rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(placed),
+                        radiusX: 5.0,
+                        radiusY: 5.0,
+                    },
+                    &brush,
+                );
+            }
+            return Ok(());
+        }
+        self.set_color(tile_color(&entry.source), 1.0);
+        self.fill_round(area, 6.0);
+        let letter = tile_letter(&entry.source);
+        self.text_colored(
+            &letter,
+            &self.fonts.small_center_bold,
+            area,
+            self.palette.text,
+            1.0,
+        );
+        Ok(())
+    }
+
+    /// The Notifikasi page: the header (title, "n / max", the "Jeda" switch,
+    /// "Hapus semua"), the note while saving is off, then a row per toast
+    /// (logo, app, time, unread dot; "title — body" under it), the selected
+    /// one lit with its three buttons.
+    fn paint_notifications(&self, l: &NotifLayout, view: &NotifView) -> Result<()> {
+        let lang = i18n::lang();
+        let p = self.palette;
+        self.heading(text(lang, Key::PageNotifications), l.header);
+        if let Some(chip) = l.count {
+            self.set_color(p.raised, 1.0);
+            self.fill_round(chip, chip.h / 2.0);
+            let count = format!("{} / {}", view.items.len(), view.cap);
+            self.text_colored(&count, &self.fonts.small_center, chip, p.secondary, 1.0);
+        }
+        if let (Some(label), Some(switch)) = (l.pause_label, l.pause_switch) {
+            let ink = if view.paused { p.text } else { p.secondary };
+            self.text_colored(
+                text(lang, Key::NotifPause),
+                &self.fonts.small,
+                label,
+                ink,
+                1.0,
+            );
+            self.set_color(if view.paused { p.accent } else { p.track }, 1.0);
+            self.fill_round(switch, switch.h / 2.0);
+            let d = switch.h - 4.0;
+            let knob = Rect {
+                x: if view.paused {
+                    switch.right() - 2.0 - d
+                } else {
+                    switch.x + 2.0
+                },
+                y: switch.y + 2.0,
+                w: d,
+                h: d,
+            };
+            self.set_color(
+                if view.paused {
+                    p.on_accent
+                } else {
+                    p.secondary
+                },
+                1.0,
+            );
+            self.fill_round(knob, d / 2.0);
+        }
+        if let Some(r) = l.clear {
+            if view.armed {
+                self.set_color(theme::SOFT_RED, 0.22);
+                self.fill_round(r, r.h / 2.0);
+                let label = text(lang, Key::NotifSure);
+                self.text_colored(label, &self.fonts.button_center, r, theme::SOFT_RED, 1.0);
+            } else {
+                let label = text(lang, Key::NotifClearAll);
+                self.paint_labelled_button(r, Some(Icon::Trash), label, (p.raised, p.text), 1.0);
+            }
+        }
+        if let Some(note) = l.note {
+            self.text_colored(
+                text(lang, Key::NotifOff),
+                &self.fonts.small,
+                note,
+                p.secondary,
+                1.0,
+            );
+        }
+        if let Some(area) = l.empty {
+            let mid = area.y + area.h / 2.0;
+            let line = |y: f32| Rect { y, h: 18.0, ..area };
+            let icon_area = Rect {
+                y: mid - 46.0,
+                h: 30.0,
+                ..area
+            };
+            self.icon_colored(Icon::Inbox, icon_area, 26.0, p.secondary, 1.0, None);
+            let (title, hint) = if view.no_access {
+                (Key::NotifNoAccess, None)
+            } else if view.paused {
+                (Key::NotifEmpty, Some(Key::NotifPaused))
+            } else {
+                (Key::NotifEmpty, Some(Key::NotifEmptyHint))
+            };
+            self.text_colored(
+                text(lang, title),
+                &self.fonts.body_center,
+                line(mid - 14.0),
+                p.text,
+                1.0,
+            );
+            if let Some(hint) = hint {
+                let hint = text(lang, hint);
+                self.text_colored(
+                    hint,
+                    &self.fonts.small_center,
+                    line(mid + 6.0),
+                    p.secondary,
+                    1.0,
+                );
+            }
+        }
+        if let Some(r) = l.settings_button {
+            let label = text(lang, Key::NotifOpenSettings);
+            self.paint_labelled_button(r, None, label, (p.accent, p.on_accent), 1.0);
+        }
+        if let Some(bar) = l.scrollbar {
+            self.set_color(p.secondary, 0.55);
+            self.fill_round(bar, CLIP_SCROLLBAR_W / 2.0);
+        }
+
+        let mut drawn = Vec::new();
+        for row in &l.rows {
+            let Some(entry) = view.items.iter().find(|e| e.id == row.id) else {
+                continue;
+            };
+            let selected = view.selected == Some(entry.id);
+            self.set_color(if selected { p.raised_hi } else { p.raised }, 1.0);
+            self.fill_round(row.row, NOTIF_RADIUS);
+            if selected {
+                self.stroke_round_width(
+                    inset(row.row, 0.75, 0.75),
+                    NOTIF_RADIUS - 0.75,
+                    p.accent,
+                    1.5,
+                );
+            }
+            drawn.push(entry.logo_key());
+            self.paint_notif_logo(row.logo, entry, view)?;
+            let name_ink = if entry.read { p.secondary } else { p.text };
+            self.text_colored(
+                &entry.source,
+                &self.fonts.body_medium,
+                row.name,
+                name_ink,
+                1.0,
+            );
+            let when = relative_time(entry.at, view.now, lang);
+            self.text_colored(&when, &self.fonts.small_right, row.time, p.secondary, 1.0);
+            if !entry.read {
+                self.set_color(p.accent, 1.0);
+                self.fill_round(row.dot, NOTIF_DOT / 2.0);
+            }
+            let line = if entry.body.is_empty() {
+                entry.title.clone()
+            } else {
+                format!("{} \u{2014} {}", entry.title, entry.body)
+            };
+            let ink = if entry.read { p.secondary } else { p.text };
+            self.text_colored(
+                &line,
+                &self.fonts.small,
+                row.text,
+                ink,
+                if entry.read { 1.0 } else { 0.9 },
+            );
+            if let Some(b) = row.buttons {
+                let open = text(lang, Key::NotifOpen);
+                self.paint_labelled_button(b.open, None, open, (p.accent, p.on_accent), 1.0);
+                let mute = text(lang, Key::NotifMute);
+                self.paint_labelled_button(b.mute, None, mute, (p.track, p.text), 1.0);
+                self.set_color(p.track, 1.0);
+                self.fill_round(b.remove, b.remove.h / 2.0);
+                self.icon_colored(Icon::X, b.remove, 11.0, p.text, 1.0, None);
+            }
+        }
+        self.notif_logos
+            .borrow_mut()
+            .retain(|(key, _)| drawn.contains(key));
+        Ok(())
     }
 
     /// The System page's header widths: the uptime chip and "Bersihkan"
@@ -2659,6 +2934,21 @@ impl Renderer {
             return Ok(None);
         };
         self.clip_thumbs.borrow_mut().push((id, bitmap.clone()));
+        Ok(Some(bitmap))
+    }
+
+    /// The logo `thumb` of logo key `key` as a bitmap of this target, made
+    /// once.
+    fn notif_logo(&self, key: &str, thumb: &Thumb) -> Result<Option<ID2D1Bitmap>> {
+        if let Some((_, b)) = self.notif_logos.borrow().iter().find(|(k, _)| k == key) {
+            return Ok(Some(b.clone()));
+        }
+        let Some(bitmap) = self.thumb_bitmap(thumb)? else {
+            return Ok(None);
+        };
+        self.notif_logos
+            .borrow_mut()
+            .push((key.to_owned(), bitmap.clone()));
         Ok(Some(bitmap))
     }
 

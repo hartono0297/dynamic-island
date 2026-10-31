@@ -3,16 +3,33 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use windows::Foundation::TypedEventHandler;
+use windows::Foundation::{Size, TypedEventHandler};
+use windows::Storage::Streams::DataReader;
 use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoInitializeEx};
-use windows::core::Result;
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
+    WICDecodeMetadataCacheOnDemand,
+};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance,
+    CoInitializeEx,
+};
+use windows::Win32::UI::Shell::SHCreateMemStream;
+use windows::core::{Interface, Result};
 
+use crate::clipboard::image::Thumb;
 use crate::i18n::{Key, tr};
-use crate::model::{Event, Notice, NoticeKind};
+use crate::model::{Event, Notice, NoticeKind, Toast};
+use crate::notif::logo_key;
+
+/// A logo is read at this size and kept at most this many pixels on a side.
+pub const LOGO_SIDE: u32 = 48;
+/// A logo stream bigger than this is not read.
+const LOGO_MAX_BYTES: u64 = 1024 * 1024;
 
 const PROBE_SECONDS: u32 = 60;
 /// Re-read interval when change events are unavailable.
@@ -167,10 +184,12 @@ fn wait_for_signal(signals: &Receiver<()>, timeout: Duration) -> bool {
 }
 
 /// Watches the Action Center on a background thread and sends an
-/// `Event::Notice` for every new toast from an app not in `muted`. Re-reads
-/// on `NotificationChanged` events when the listener supports them, else polls
-/// once a second. Exits quietly when listener access has not been granted.
-pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static, muted: Vec<String>) {
+/// `Event::Toast` for every new toast, whatever app it is from: `App` decides
+/// (muted apps, the history). The first time a logo key is seen this run its
+/// app logo rides along. Re-reads on `NotificationChanged` events when the
+/// listener supports them, else polls once a second. Exits quietly when
+/// listener access has not been granted.
+pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
     std::thread::spawn(move || {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -185,14 +204,27 @@ pub fn spawn_poller(tx: Sender<Event>, wake: impl Fn() + Send + 'static, muted: 
         let mut trigger = Trigger::new(&listener);
         let mut tracker = NotificationTracker::new();
         let mut signalled = false;
+        // Logo keys looked at this run; a key that failed is not retried.
+        let mut tried: HashSet<String> = HashSet::new();
         loop {
             if let Ok(fresh) = new_notifications(&listener, &mut tracker) {
                 trigger.after_fetch(signalled, !fresh.is_empty());
-                for notice in fresh.iter().filter_map(to_notice) {
-                    if is_muted(&notice.source, &muted) {
+                for toast in &fresh {
+                    let Some(notice) = to_notice(toast) else {
                         continue;
-                    }
-                    if tx.send(Event::Notice(notice)).is_err() {
+                    };
+                    let app_id = match &notice.kind {
+                        NoticeKind::App { app_id } => app_id.as_deref(),
+                        _ => None,
+                    };
+                    let key = logo_key(app_id, &notice.source);
+                    let logo = if tried.insert(key.clone()) {
+                        read_logo(toast).map(|thumb| (key, thumb))
+                    } else {
+                        None
+                    };
+                    let at = chrono::Local::now().timestamp();
+                    if tx.send(Event::Toast(Toast { notice, at, logo })).is_err() {
                         return;
                     }
                     wake();
@@ -223,6 +255,14 @@ pub fn open_app(app_id: &str) {
     let _ = Command::new("explorer.exe")
         .arg(format!("shell:AppsFolder\\{app_id}"))
         .spawn();
+}
+
+/// Where the user grants (or takes back) notification access.
+pub const PRIVACY_PAGE: &str = "ms-settings:privacy-notifications";
+
+/// Opens Windows' notification access page. Never asks for access itself.
+pub fn open_privacy_settings() {
+    let _ = Command::new("explorer.exe").arg(PRIVACY_PAGE).spawn();
 }
 
 /// Diagnostic mode for `--probe-notifications`: requests listener access, then
@@ -288,6 +328,88 @@ fn new_notifications(
         .filter(|(id, _)| fresh.contains(id))
         .map(|(_, n)| n)
         .collect())
+}
+
+/// The size a logo of `w` x `h` is kept at: fitted inside `LOGO_SIDE`
+/// square keeping its proportions, never enlarged, at least 1 x 1.
+pub fn fit_logo(w: u32, h: u32) -> (u32, u32) {
+    let (w, h) = (w.max(1), h.max(1));
+    if w <= LOGO_SIDE && h <= LOGO_SIDE {
+        return (w, h);
+    }
+    let k = f64::from(LOGO_SIDE) / f64::from(w.max(h));
+    let scale = |n: u32| ((f64::from(n) * k).round() as u32).clamp(1, LOGO_SIDE);
+    (scale(w), scale(h))
+}
+
+/// The app's logo as a premultiplied BGRA picture of at most
+/// `LOGO_SIDE` square. Runs on the poller thread (never the UI thread);
+/// `None` on any failure (the page draws a letter tile instead).
+fn read_logo(notification: &UserNotification) -> Option<Thumb> {
+    let reference = notification
+        .AppInfo()
+        .ok()?
+        .DisplayInfo()
+        .ok()?
+        .GetLogo(Size {
+            Width: LOGO_SIDE as f32,
+            Height: LOGO_SIDE as f32,
+        })
+        .ok()?;
+    let stream = reference.OpenReadAsync().ok()?.join().ok()?;
+    let size = stream.Size().ok()?;
+    if size == 0 || size > LOGO_MAX_BYTES {
+        return None;
+    }
+    let reader = DataReader::CreateDataReader(&stream).ok()?;
+    let loaded = reader.LoadAsync(size as u32).ok()?.join().ok()?;
+    let mut bytes = vec![0u8; loaded as usize];
+    reader.ReadBytes(&mut bytes).ok()?;
+    decode_logo(&bytes)
+}
+
+/// Decodes encoded image bytes (PNG, ICO, ...) with WIC, scaled to fit.
+fn decode_logo(bytes: &[u8]) -> Option<Thumb> {
+    unsafe {
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let stream = SHCreateMemStream(Some(bytes))?;
+        let decoder = wic
+            .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+            .ok()?;
+        let frame = decoder.GetFrame(0).ok()?;
+        let (mut w, mut h) = (0u32, 0u32);
+        frame.GetSize(&mut w, &mut h).ok()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let (tw, th) = fit_logo(w, h);
+        let source: IWICBitmapSource = if (tw, th) != (w, h) {
+            let scaler = wic.CreateBitmapScaler().ok()?;
+            scaler
+                .Initialize(&frame, tw, th, WICBitmapInterpolationModeFant)
+                .ok()?;
+            scaler.cast().ok()?
+        } else {
+            frame.cast().ok()?
+        };
+        let converter = wic.CreateFormatConverter().ok()?;
+        converter
+            .Initialize(
+                &source,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeMedianCut,
+            )
+            .ok()?;
+        let mut bgra = vec![0u8; (tw * th * 4) as usize];
+        converter
+            .CopyPixels(std::ptr::null(), tw * 4, &mut bgra)
+            .ok()?;
+        Some(Thumb { w: tw, h: th, bgra })
+    }
 }
 
 /// Maps a toast to a notice; `None` when it has no readable id.
@@ -476,6 +598,31 @@ mod tests {
         assert_eq!(source_name(Some(String::new()), Some("Id".into())), "Id");
         assert_eq!(source_name(None, None), "Notifikasi");
         assert_eq!(source_name(None, Some(String::new())), "Notifikasi");
+    }
+
+    #[test]
+    fn logos_fit_48_keeping_proportions_and_are_never_enlarged() {
+        assert_eq!(fit_logo(48, 48), (48, 48));
+        assert_eq!(fit_logo(16, 16), (16, 16));
+        assert_eq!(fit_logo(96, 96), (48, 48));
+        assert_eq!(fit_logo(256, 128), (48, 24));
+        assert_eq!(fit_logo(100, 400), (12, 48));
+        assert_eq!(fit_logo(1, 1000), (1, 48), "never below one pixel");
+        assert_eq!(fit_logo(0, 0), (1, 1));
+        for (w, h) in [(49, 7), (300, 299), (4096, 2)] {
+            let (tw, th) = fit_logo(w, h);
+            assert!((1..=48).contains(&tw) && (1..=48).contains(&th), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn bytes_that_are_no_image_give_no_logo() {
+        // WIC is not asked to decode anything real here: garbage and nothing.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        assert_eq!(decode_logo(&[]), None);
+        assert_eq!(decode_logo(b"definitely not an image"), None);
     }
 
     #[test]

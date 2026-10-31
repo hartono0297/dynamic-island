@@ -166,6 +166,7 @@ pub fn page_name(page: Page) -> &'static str {
         Page::Media => "Media",
         Page::Mixer => "Mixer",
         Page::Clipboard => "Clipboard",
+        Page::Notifications => "Notifications",
         Page::Shelf => "Shelf",
         Page::System => "System",
         Page::Devices => "Devices",
@@ -196,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn default_shows_all_twelve_pages_in_the_design_order() {
+    fn default_shows_all_thirteen_pages_in_the_design_order() {
         let p = PanelPages::default();
         assert_eq!(p.visible(), Page::ALL.to_vec());
         assert_eq!(
@@ -209,6 +210,7 @@ mod tests {
                 Page::Media,
                 Page::Mixer,
                 Page::Clipboard,
+                Page::Notifications,
                 Page::Shelf,
                 Page::System,
                 Page::Devices,
@@ -216,8 +218,50 @@ mod tests {
                 Page::Shortcuts,
             ]
         );
+        assert_eq!(Page::ALL.len(), 13);
         assert_eq!(page_name(Page::Devices), "Devices");
         assert_eq!(page_from_name(" devices "), Some(Page::Devices));
+        assert_eq!(page_name(Page::Notifications), "Notifications");
+        assert_eq!(page_from_name(" notifications "), Some(Page::Notifications));
+    }
+
+    #[test]
+    fn a_saved_order_without_notifications_gets_it_back_after_clipboard() {
+        // A config written before the Notifikasi page: every other page, the
+        // owner's order (Shortcuts moved first) and one of them off.
+        let mut saved: Vec<PageEntry> = Page::ALL
+            .iter()
+            .filter(|p| **p != Page::Notifications)
+            .map(|p| entry(page_name(*p), true))
+            .collect();
+        saved.rotate_right(1);
+        saved[1].on = false; // Calendar off
+        let p = PanelPages::from_saved(&saved);
+        assert_eq!(p.entries().len(), Page::ALL.len());
+        assert_eq!(
+            p.position(Page::Notifications),
+            p.position(Page::Clipboard) + 1,
+            "right after Clipboard"
+        );
+        assert!(p.is_on(Page::Notifications), "and shown");
+        assert!(!p.is_on(Page::Calendar), "the rest is untouched");
+        assert_eq!(p.entries()[0].0, Page::Shortcuts);
+        // The default order puts it between Clipboard and the Shelf.
+        let plain: Vec<PageEntry> = Page::ALL
+            .iter()
+            .filter(|p| **p != Page::Notifications)
+            .map(|p| entry(page_name(*p), true))
+            .collect();
+        assert_eq!(PanelPages::from_saved(&plain).visible(), Page::ALL.to_vec());
+        // With Clipboard moved to the end, it follows it there.
+        let mut moved: Vec<PageEntry> = Page::ALL
+            .iter()
+            .filter(|p| !matches!(p, Page::Notifications | Page::Clipboard))
+            .map(|p| entry(page_name(*p), true))
+            .collect();
+        moved.push(entry("Clipboard", true));
+        let p = PanelPages::from_saved(&moved);
+        assert_eq!(p.entries().last().unwrap().0, Page::Notifications);
     }
 
     #[test]
@@ -412,7 +456,7 @@ mod tests {
         p.toggle(Page::Clipboard);
         p.toggle(Page::System);
         // Opened by its tile while it is off.
-        assert_eq!(p.step(Page::Clipboard, 1), Page::Shelf);
+        assert_eq!(p.step(Page::Clipboard, 1), Page::Notifications);
         assert_eq!(p.step(Page::Clipboard, -1), Page::Mixer);
         assert_eq!(p.step(Page::System, 2), Page::Cli);
         // Nothing shown past it: it stays.

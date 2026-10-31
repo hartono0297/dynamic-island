@@ -19,7 +19,7 @@ integrations / integrasi, about / tentang. The window opens on Umum.
 | Kucing | the preview (cat about 64 px on the resolved surface, the idle notch at real size with the clock, chips Diam / Senang / Kedip / Tidur / Menyapa); **Kucing**: Kucing di notch, Warna, "Latar: <name>" with "Ubah", Aksesori tiles; **Gerak**: Animasi, Tidur setelah, Ikuti kursor, Mengecil jadi mata; **Sapaan**: the toggle (one key, `CatGreeting`, with `MorningGreetingDesc` under it) and one read-only line of the five periods, built from `greeting.rs` (`DayPeriod::ALL`, `hours()`) and `i18n::greeting_title` by `i18n::greeting_periods_line`, so the hours cannot drift from `period_at` ([[greeting-periods]]) |
 | Panel | **Perilaku**: Mode buka, Di belakang jendela. **Halaman panel**, **Pintasan**, **Tersedia** (the lists and the own-tile form, [[panel-pages]], [[shortcut-tiles]]) |
 | Clipboard | **Riwayat**; **Screenshot** ([[screenshot-preview]]) |
-| Fitur | **Pomodoro** (4 steppers and the running note), **Musik** (Lirik di notch), **CLI** (Folder awal, Shell), **Perangkat** (Notifikasi perangkat, Tombol pintas), **Pembersih** (Lindungi cache Cargo & Autodesk di Mole) |
+| Fitur | **Pomodoro** (4 steppers and the running note), **Musik** (Lirik di notch), **Notifikasi** (Simpan notifikasi, Jumlah maksimal, Simpan setelah restart, Aplikasi dikecualikan with a remove button each and a field with *Tambah*, Hapus riwayat notifikasi with two clicks; [[notification-history]]), **CLI** (Folder awal, Shell), **Perangkat** (Notifikasi perangkat, Tombol pintas), **Pembersih** (Lindungi cache Cargo & Autodesk di Mole) |
 | Integrasi, Tentang | the same content, each card under a title (Tentang's is "Tautan") |
 
 Every card has an eyebrow (`titled` / `Builder::eyebrow`) except the two
@@ -70,5 +70,24 @@ estimate that is the Indonesian label, in the real window usually nothing.
 `exactly_the_overflowing_sections_get_a_viewport` and
 `everything_fits_in_the_window_height` assert it, and that the last card meets
 the bottom margin when scrolled to the end.
+
+## Fitur: Notifikasi card (v3.9)
+
+A titled card right after Musik ([[notification-history]]): *Simpan notifikasi*
+(toggle), *Jumlah maksimal* (stepper 10-200 by 10), *Simpan setelah restart*
+(toggle), *Aplikasi dikecualikan* (the `muted_apps` list: a row each with
+*Hapus*, "Belum ada yang dikecualikan" when empty, then a field with
+*Tambah*) and *Hapus riwayat notifikasi* (two clicks, the clipboard's
+`TIMER_CONFIRM` pattern, sent to the island as `SettingsAction::NotifClear`).
+The add field **reuses the own-shortcut form's Nama EDIT** (`Field::TileName`):
+only one section shows at a time, so Fitur lays that field out in its add row
+(Enter adds, Esc empties it, its hint reads "Nama aplikasi") and entering or
+leaving Fitur empties it, so what was typed for a tile never lands in the
+exclusions. Adding trims, cuts to 64 characters and skips a repeat in any
+case (`config::with_muted`); every edit goes through
+`save_config_with(|c| c.muted_apps = list)`, so hand edits of other fields
+survive, and the island pushes the model back (`sync_settings`) so an open
+Settings window follows an exclusion made from the page's row. Fitur already
+scrolled; the extra rows only lengthen it.
 
 Related: [[cat-colours-and-surfaces]], [[bata-idle-power-budget]]

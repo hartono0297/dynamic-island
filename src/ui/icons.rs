@@ -127,11 +127,14 @@ pub enum Icon {
     /// The Kucing section and the base-colour swatch that follows the cat: the
     /// cat head as an outline (the notch cat's dome, two ears, two eyes).
     Cat,
+    /// The Notifikasi page: an inbox tray, an open-top box whose front edge
+    /// dips in the middle. Duotone like the Bell, which it must not be mistaken for.
+    Inbox,
 }
 
 impl Icon {
     /// Every icon, in declaration order (`ALL[i] as usize == i`).
-    pub const ALL: [Icon; 68] = [
+    pub const ALL: [Icon; 69] = [
         Icon::Camera,
         Icon::Clipboard,
         Icon::Emoji,
@@ -200,6 +203,7 @@ impl Icon {
         Icon::Eject,
         Icon::Back,
         Icon::Cat,
+        Icon::Inbox,
     ];
 
     /// The icon's primitives on the 24-unit grid, in drawing order.
@@ -461,6 +465,17 @@ impl Icon {
                 Part::Path("M4.5 19.5v-8.2L5.8 4.5l4.3 3.2a9 9 0 0 1 3.8 0l4.3-3.2 1.3 6.8v8.2z"),
                 Part::Dot(9.0, 13.5),
                 Part::Dot(15.0, 13.5),
+            ],
+            // The tray: two raised sides, a body, and a front edge that dips
+            // in the middle.
+            Icon::Inbox => &[
+                Part::Fill(
+                    "M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z",
+                ),
+                Part::Path(
+                    "M3 13l3.2-7.5h11.6L21 13v5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18z",
+                ),
+                Part::Path("M3 13h4.5l1.2 2.5h6.6l1.2-2.5H21"),
             ],
         }
     }
@@ -1275,6 +1290,44 @@ mod tests {
                 .all(|p| p.layer() == Layer::Stroke)
         );
         assert_eq!(count(Icon::Copy, 1), "MLALALAL");
+    }
+
+    #[test]
+    fn the_inbox_is_a_tray_with_a_notch_and_not_the_bell() {
+        // M l h L v a h A z, then M h l h l h.
+        let count = |icon: Icon, i: usize| match icon.parts()[i] {
+            Part::Path(d) | Part::Fill(d) => kinds(&parse_path(d).unwrap()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(count(Icon::Inbox, 0), "MLLLLALAZ");
+        assert_eq!(count(Icon::Inbox, 1), count(Icon::Inbox, 0));
+        assert_eq!(count(Icon::Inbox, 2), "MLLLLL");
+        // The same duotone layers as the Bell, but another picture.
+        let layers: Vec<Layer> = Icon::Inbox.parts().iter().map(|p| p.layer()).collect();
+        assert_eq!(layers, [Layer::Duo, Layer::Stroke, Layer::Stroke]);
+        assert_ne!(Icon::Inbox.parts(), Icon::Bell.parts());
+        // The front edge dips: its middle is lower (larger y) than its ends.
+        let segs = Icon::Inbox.parts()[2].outline().unwrap();
+        let ys: Vec<f32> = segs
+            .iter()
+            .map(|s| match s {
+                Seg::Move(p) | Seg::Line(p) => p.y,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(ys.first(), ys.last());
+        assert!(ys[2] > ys[0] && ys[3] > ys[0]);
+        // And it fills the grid like the other page icons do.
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for part in Icon::Inbox.parts() {
+            for seg in part.outline().unwrap() {
+                if let Seg::Move(p) | Seg::Line(p) | Seg::Arc { to: p, .. } = seg {
+                    lo = lo.min(p.x);
+                    hi = hi.max(p.x);
+                }
+            }
+        }
+        assert!(lo <= 3.5 && hi >= 20.5, "{lo} {hi}");
     }
 
     #[test]

@@ -380,7 +380,11 @@ impl App {
                     self.apply_now(Event::SearchClose);
                 }
             }
-            InputKey::Tab | InputKey::Stop | InputKey::PageUp | InputKey::PageDown => {}
+            InputKey::Tab
+            | InputKey::Stop
+            | InputKey::PageUp
+            | InputKey::PageDown
+            | InputKey::Delete => {}
         }
     }
 

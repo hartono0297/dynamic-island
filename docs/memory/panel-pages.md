@@ -5,7 +5,7 @@ date: 2026-10-29
 
 # Panel pages: order and which ones the wheel shows
 
-Run 9 of the v3.1 plan. Settings → Panel (was Tampilan before v3.8) → "Halaman panel" lists all 12
+Run 9 of the v3.1 plan. Settings → Panel (was Tampilan before v3.8) → "Halaman panel" lists all 13
 pages (every page in `Page::ALL`) in the owner's order, each with an order
 stepper (− earlier, + later) and a toggle. `src/pages.rs` (`PanelPages`) is the pure model.
 
@@ -37,6 +37,15 @@ Related: [[settings-appearance-scroll]], [[v3-studio-overview]]
 pages ([[devices]]); a saved list without it gets it back right after System
 (`from_saved`, tested).
 
+**v3.9:** `Page::Notifications` ("Notifikasi", [[notification-history]]) is the
+13th page, directly after Clipboard and on by default (`Page::ALL: [Page; 13]`,
+name `"Notifications"` in `config.json`). A saved list without it (an older
+config) gets it right after Clipboard wherever the owner moved Clipboard to
+(`from_saved`, tested), shown. Its jump tile `Shortcut::Go(Page::Notifications)`
+sits after Mixer's in `Shortcut::ALL` (21 built-ins) and is **off by default**
+(an old config joins it off, the twelve-tile page keeps its twelve). Icon:
+`Icon::Inbox`, an inbox tray with a notch, not the Bell of Reminders.
+
 ## The Settings card, remade (2026-10-29)
 
 The "− n +" order stepper was confusing and is gone. Settings → Panel →
@@ -46,7 +55,7 @@ Halaman panel now reads:
   buttons (`PanelPages::move_shown`: among the pages shown, stepping over
   hidden ones) and *Sembunyikan*. Under a small "Tersembunyi" title come the
   hidden pages, each with *Tampilkan*. The header says "Tampil di panel:
-  n/12" and holds *Kembalikan bawaan* (`PanelPages::default()`; off while
+  n/13" and holds *Kembalikan bawaan* (`PanelPages::default()`; off while
   the list already is the default).
 - **The last page shown cannot be hidden:** its button is disabled and the
   row says "Minimal satu halaman tampil".

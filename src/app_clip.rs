@@ -770,7 +770,7 @@ impl App {
                     self.apply_now(Event::ClipFocus(false));
                 }
             }
-            InputKey::Tab | InputKey::Stop => {}
+            InputKey::Tab | InputKey::Stop | InputKey::Delete => {}
         }
     }
 

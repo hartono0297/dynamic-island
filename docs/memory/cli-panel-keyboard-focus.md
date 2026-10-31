@@ -68,6 +68,13 @@ page, which it never did before. Same family of gotchas as
   foreground back; Esc clears the text first and lets go on the next. The
   global hotkey opens the page without activating. See [[clipboard-history]].
 
+- **A fourth input: the Notifikasi page** (id 204, 8 characters, typed text is
+  dropped at once): only a click on the list's background or the title
+  (`Hit::NotifFocus` -> `Effect::FocusNotifInput`) activates the island;
+  `NotifFocus` holds the panel; a page change, a collapse, Blur or Alt+Tab let
+  go (`Effect::ReleaseNotifFocus`). It is the one input that sends
+  `Key::Delete` (the others keep it for editing). See [[notification-history]].
+
 Related: [[studio-font-loading]], [[studio-icons]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

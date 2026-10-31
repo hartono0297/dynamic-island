@@ -629,6 +629,7 @@ pub enum PageLayout {
     Notes(ListLayout),
     Media(ExpandedLayout),
     Clipboard(ClipLayout),
+    Notifications(NotifLayout),
     System(SystemLayout),
     /// The cleaner over the System page.
     Cleaner(CleanerLayout),
@@ -2279,6 +2280,316 @@ pub fn clipboard_layout(
     }
 }
 
+/// The Notifikasi page's header as the renderer measured it: the title, the
+/// "n / max" count, the "Jeda" label and "Hapus semua" (or "Yakin?") with
+/// their padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NotifHead {
+    pub title_w: f32,
+    pub count_w: f32,
+    pub pause_label_w: f32,
+    pub clear_w: f32,
+}
+
+/// The selected row's three buttons: "Buka", "Kecualikan app ini" and the X.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NotifButtons {
+    pub open: Rect,
+    pub mute: Rect,
+    pub remove: Rect,
+}
+
+/// One notification row, 44 dip tall: the logo, the app name and the time on
+/// the first line, "title — body" on the second.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotifRowLayout {
+    pub id: u64,
+    /// Its place in the list given (not the place on screen).
+    pub index: usize,
+    pub row: Rect,
+    pub logo: Rect,
+    pub name: Rect,
+    /// Right-aligned, on the first line.
+    pub time: Rect,
+    /// The unread dot, left of the time.
+    pub dot: Rect,
+    /// The second line; it stops before the buttons of a selected row.
+    pub text: Rect,
+    pub buttons: Option<NotifButtons>,
+}
+
+/// The Notifikasi page: a header, an optional one-line note, then one column
+/// of rows, a row per wheel notch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NotifLayout {
+    /// "Notifikasi".
+    pub header: Rect,
+    /// "n / max", right after the title.
+    pub count: Option<Rect>,
+    /// "Jeda": the whole control, its label and its switch.
+    pub pause: Option<Rect>,
+    pub pause_label: Option<Rect>,
+    pub pause_switch: Option<Rect>,
+    /// "Hapus semua", at the right; only with entries.
+    pub clear: Option<Rect>,
+    /// "Simpan notifikasi mati" under the header while recording is off.
+    pub note: Option<Rect>,
+    /// Where the rows are; the wheel over it scrolls them.
+    pub list: Rect,
+    /// Rows that fit, and the scroll applied (rows), kept in range.
+    pub rows_fit: usize,
+    pub scroll: usize,
+    pub rows: Vec<NotifRowLayout>,
+    /// Nothing to show (empty, no access): the message's area.
+    pub empty: Option<Rect>,
+    /// "Buka pengaturan", under the no-access message.
+    pub settings_button: Option<Rect>,
+    /// Everything under the header's top edge down to the dots: a click on
+    /// it that no button or row took gives the page the keyboard.
+    pub background: Option<Rect>,
+    pub scrollbar: Option<Rect>,
+}
+
+pub const NOTIF_ROW_H: f32 = 44.0;
+pub const NOTIF_ROW_GAP: f32 = 4.0;
+pub const NOTIF_RADIUS: f32 = 12.0;
+pub const NOTIF_LOGO: f32 = 24.0;
+pub const NOTIF_DOT: f32 = 6.0;
+pub const NOTIF_SWITCH_W: f32 = 26.0;
+pub const NOTIF_SWITCH_H: f32 = 14.0;
+const NOTIF_HEAD_GAP: f32 = 6.0;
+const NOTIF_NOTE_H: f32 = 16.0;
+const NOTIF_PAD_X: f32 = 10.0;
+const NOTIF_TIME_W: f32 = 64.0;
+const NOTIF_BTN_H: f32 = 20.0;
+const NOTIF_OPEN_W: f32 = 48.0;
+const NOTIF_MUTE_W: f32 = 124.0;
+const NOTIF_X_W: f32 = 22.0;
+const NOTIF_BTN_GAP: f32 = 4.0;
+const NOTIF_SETTINGS_W: f32 = 150.0;
+const NOTIF_SETTINGS_H: f32 = 26.0;
+const NOTIF_COUNT_GAP: f32 = 8.0;
+const NOTIF_CONTROL_GAP: f32 = 10.0;
+
+/// The header's height (title row) and what sits under it: the optional
+/// note, then the list.
+fn notif_list_rect(s: ShapeRect, strip: bool, note: bool) -> Rect {
+    let mut top = content_top(s, strip) + DEV_HEAD_H + NOTIF_HEAD_GAP;
+    if note {
+        top += NOTIF_NOTE_H + NOTIF_HEAD_GAP / 2.0;
+    }
+    let (l, r) = (left(s), right(s));
+    rect(l, top, r - l, content_bottom(s) - top)
+}
+
+/// Rows of notifications the page shows at once (whole rows only).
+pub fn notif_rows(s: ShapeRect, strip: bool, note: bool) -> usize {
+    let list = notif_list_rect(s, strip, note);
+    (((list.h + NOTIF_ROW_GAP) / (NOTIF_ROW_H + NOTIF_ROW_GAP)).floor() as usize).max(1)
+}
+
+/// The furthest the rows scroll (rows) with `n` of them.
+pub fn notif_max_scroll(n: usize, rows: usize) -> usize {
+    n.saturating_sub(rows)
+}
+
+/// One wheel notch over the rows: `clip_wheel_step`'s rules. `None` when
+/// everything fits (the notch turns the page), else the row it scrolls to, an
+/// end spending the notch.
+pub fn notif_wheel_step(delta: i32, scroll: usize, max: usize) -> Option<usize> {
+    clip_wheel_step(delta, scroll, max)
+}
+
+/// The scroll that keeps row `selected` in view: unchanged when it shows,
+/// else just enough rows to bring it in.
+pub fn notif_scroll_to(selected: usize, scroll: usize, rows: usize) -> usize {
+    let rows = rows.max(1);
+    if selected < scroll {
+        selected
+    } else if selected >= scroll + rows {
+        selected + 1 - rows
+    } else {
+        scroll
+    }
+}
+
+/// The row to keep selected once the list scrolled to `scroll` with `rows`
+/// shown: row `at` (of `n`) when it still shows, else the nearest that does.
+pub fn notif_visible_row(at: usize, scroll: usize, rows: usize, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    at.clamp(scroll, scroll + rows.max(1) - 1).min(n - 1)
+}
+
+/// The 3 px thumb of the scrollbar for `n` rows, `rows` shown from `scroll`;
+/// `None` when everything fits. In the page's right margin, at least 24 px.
+pub fn notif_scrollbar(list: Rect, n: usize, rows: usize, scroll: usize) -> Option<Rect> {
+    let max = notif_max_scroll(n, rows);
+    if max == 0 {
+        return None;
+    }
+    let h = (list.h * rows as f32 / n as f32).clamp(24.0, list.h);
+    let y = list.y + (list.h - h) * scroll.min(max) as f32 / max as f32;
+    Some(rect(list.right() + 6.0, y, CLIP_SCROLLBAR_W, h))
+}
+
+/// The Notifikasi page for `ids` (the entries listed, newest first), scrolled
+/// `scroll` rows; `selected` (an id) gets its buttons. `note` is the "saving
+/// is off" line, `no_access` replaces the list with the access message.
+#[allow(clippy::too_many_arguments)]
+pub fn notif_layout(
+    s: ShapeRect,
+    strip: bool,
+    head: &NotifHead,
+    ids: &[u64],
+    selected: Option<u64>,
+    scroll: usize,
+    note: bool,
+    no_access: bool,
+) -> NotifLayout {
+    let top = content_top(s, strip);
+    let (l, r) = (left(s), right(s));
+    let note = note && !no_access;
+    let header = rect(l, top, head.title_w, HEADER_H);
+    let list = notif_list_rect(s, strip, note);
+    let n = if no_access { 0 } else { ids.len() };
+    let rows_fit = notif_rows(s, strip, note);
+    let scroll = scroll.min(notif_max_scroll(n, rows_fit));
+
+    // Header controls: none without access; "Hapus semua" only with entries.
+    let clear = (n > 0).then(|| rect(r - head.clear_w, top, head.clear_w, DEV_HEAD_H));
+    let pause = (!no_access).then(|| {
+        let w = head.pause_label_w + 6.0 + NOTIF_SWITCH_W;
+        let right_edge = clear.map_or(r, |c| c.x - NOTIF_CONTROL_GAP);
+        rect(right_edge - w, top, w, DEV_HEAD_H)
+    });
+    let pause_label = pause.map(|p| rect(p.x, p.y, head.pause_label_w, p.h));
+    let pause_switch = pause.map(|p| {
+        rect(
+            p.right() - NOTIF_SWITCH_W,
+            p.y + (p.h - NOTIF_SWITCH_H) / 2.0,
+            NOTIF_SWITCH_W,
+            NOTIF_SWITCH_H,
+        )
+    });
+    let count = (!no_access).then(|| {
+        rect(
+            header.right() + NOTIF_COUNT_GAP,
+            top + (HEADER_H - DEV_CHIP_H) / 2.0,
+            head.count_w,
+            DEV_CHIP_H,
+        )
+    });
+    let note_rect = note.then(|| {
+        rect(
+            l,
+            top + DEV_HEAD_H + NOTIF_HEAD_GAP / 2.0,
+            r - l,
+            NOTIF_NOTE_H,
+        )
+    });
+
+    let pitch = NOTIF_ROW_H + NOTIF_ROW_GAP;
+    let rows: Vec<NotifRowLayout> = ids
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(if no_access { 0 } else { rows_fit })
+        .map(|(i, &id)| {
+            let row = rect(
+                list.x,
+                list.y + (i - scroll) as f32 * pitch,
+                list.w,
+                NOTIF_ROW_H,
+            );
+            let logo = rect(
+                row.x + NOTIF_PAD_X,
+                row.y + (NOTIF_ROW_H - NOTIF_LOGO) / 2.0,
+                NOTIF_LOGO,
+                NOTIF_LOGO,
+            );
+            let text_x = logo.right() + 8.0;
+            let time = rect(
+                row.right() - NOTIF_PAD_X - NOTIF_TIME_W,
+                row.y + 5.0,
+                NOTIF_TIME_W,
+                16.0,
+            );
+            let dot = rect(
+                time.x - 8.0 - NOTIF_DOT,
+                row.y + 5.0 + (16.0 - NOTIF_DOT) / 2.0,
+                NOTIF_DOT,
+                NOTIF_DOT,
+            );
+            let name = rect(text_x, row.y + 5.0, dot.x - 6.0 - text_x, 16.0);
+            let buttons = (Some(id) == selected).then(|| {
+                let y = row.y + 21.0;
+                let remove = rect(
+                    row.right() - NOTIF_PAD_X - NOTIF_X_W,
+                    y,
+                    NOTIF_X_W,
+                    NOTIF_BTN_H,
+                );
+                let mute = rect(
+                    remove.x - NOTIF_BTN_GAP - NOTIF_MUTE_W,
+                    y,
+                    NOTIF_MUTE_W,
+                    NOTIF_BTN_H,
+                );
+                let open = rect(
+                    mute.x - NOTIF_BTN_GAP - NOTIF_OPEN_W,
+                    y,
+                    NOTIF_OPEN_W,
+                    NOTIF_BTN_H,
+                );
+                NotifButtons { open, mute, remove }
+            });
+            // The text ends before the buttons when they show.
+            let text_end = buttons.map_or(row.right() - NOTIF_PAD_X, |b| b.open.x - 6.0);
+            let text = rect(text_x, row.y + 23.0, text_end - text_x, 16.0);
+            NotifRowLayout {
+                id,
+                index: i,
+                row,
+                logo,
+                name,
+                time,
+                dot,
+                text,
+                buttons,
+            }
+        })
+        .collect();
+
+    let empty = (n == 0).then_some(list);
+    let settings_button = no_access.then(|| {
+        rect(
+            list.x + (list.w - NOTIF_SETTINGS_W) / 2.0,
+            list.y + list.h / 2.0 + 20.0,
+            NOTIF_SETTINGS_W,
+            NOTIF_SETTINGS_H,
+        )
+    });
+    NotifLayout {
+        header,
+        count,
+        pause,
+        pause_label,
+        pause_switch,
+        clear,
+        note: note_rect,
+        list,
+        rows_fit,
+        scroll,
+        rows,
+        empty,
+        settings_button,
+        background: (!no_access).then(|| rect(l, top, r - l, content_bottom(s) - top)),
+        scrollbar: notif_scrollbar(list, n, rows_fit, scroll),
+    }
+}
+
 /// The quick search with `n` results (at most `search::MAX_RESULTS` rows
 /// fit under the field, strip or not).
 pub fn search_layout(s: ShapeRect, strip: bool, n: usize) -> SearchLayout {
@@ -2955,6 +3266,33 @@ pub fn regions(s: ShapeRect, layout: &PageLayout, strip: bool) -> Vec<Region> {
                 add(r, Hit::ClipCard(id));
             }
         }
+        PageLayout::Notifications(l) => {
+            if let Some(r) = l.clear {
+                add(r, Hit::NotifClear);
+            }
+            if let Some(r) = l.pause {
+                add(r, Hit::NotifPause);
+            }
+            if let Some(r) = l.settings_button {
+                add(r, Hit::NotifSettings);
+            }
+            // The buttons sit on their row: they come first.
+            for row in &l.rows {
+                if let Some(b) = row.buttons {
+                    add(b.remove, Hit::NotifRemove(row.id));
+                    add(b.mute, Hit::NotifMute(row.id));
+                    add(b.open, Hit::NotifOpen(row.id));
+                }
+            }
+            for row in &l.rows {
+                add(row.row, Hit::NotifRow(row.id));
+            }
+            // Last: the rest of the page (the list's background, the title)
+            // gives it the keyboard.
+            if let Some(r) = l.background {
+                add(r, Hit::NotifFocus);
+            }
+        }
         PageLayout::Shortcuts(l) => {
             for (i, (builtin, r)) in l.tiles.iter().enumerate() {
                 add(*r, builtin.map_or(Hit::CustomTile(i), Hit::Shortcut));
@@ -3289,6 +3627,26 @@ mod tests {
         for (name, shapes, scroll) in devices_cases() {
             let l = devices_layout(s, strip, &DEV_HEAD, &shapes, scroll);
             out.push((format!("devices {name}"), PageLayout::Devices(l)));
+        }
+        let head = NotifHead {
+            title_w: 96.0,
+            count_w: 56.0,
+            pause_label_w: 30.0,
+            clear_w: 100.0,
+        };
+        for (name, n, selected, scroll, note, no_access) in [
+            ("none", 0u64, None, 0, false, false),
+            ("three", 3, Some(2), 0, false, false),
+            ("many, one lit, scrolled", 40, Some(30), 7, true, false),
+            ("many, scrolled past the end", 40, None, 999, false, false),
+            ("no access", 3, Some(1), 0, true, true),
+        ] {
+            let ids: Vec<u64> = (1..=n).rev().collect();
+            let l = notif_layout(s, strip, &head, &ids, selected, scroll, note, no_access);
+            out.push((
+                format!("notifications {name}"),
+                PageLayout::Notifications(l),
+            ));
         }
         out
     }
@@ -5317,6 +5675,38 @@ mod tests {
                             r.drain(i..i + buttons);
                         }
                     }
+                    // A Notifikasi row's buttons sit on it, and the page's
+                    // background lies under everything (a click nothing else
+                    // took gives the page the keyboard): both overlap by design.
+                    if let PageLayout::Notifications(l) = &layout {
+                        for row in &l.rows {
+                            if let Some(b) = row.buttons {
+                                for part in [b.open, b.mute, b.remove] {
+                                    assert!(
+                                        part.x >= row.row.x && part.right() <= row.row.right(),
+                                        "{name}"
+                                    );
+                                    assert!(
+                                        part.y >= row.row.y && part.bottom() <= row.row.bottom(),
+                                        "{name}"
+                                    );
+                                }
+                            }
+                        }
+                        let first = |pred: fn(&Hit) -> bool| r.iter().position(|x| pred(&x.hit));
+                        let rows = first(|h| matches!(h, Hit::NotifRow(_)));
+                        let buttons = first(|h| matches!(h, Hit::NotifOpen(_)));
+                        assert!(buttons.is_none_or(|b| rows.is_none_or(|w| b < w)), "{name}");
+                        r.retain(|x| {
+                            !matches!(
+                                x.hit,
+                                Hit::NotifOpen(_)
+                                    | Hit::NotifMute(_)
+                                    | Hit::NotifRemove(_)
+                                    | Hit::NotifFocus
+                            )
+                        });
+                    }
                     for (i, a) in r.iter().enumerate() {
                         for b in &r[i + 1..] {
                             assert!(
@@ -5452,6 +5842,16 @@ mod tests {
                             drawn.extend([l.header, l.list]);
                             drawn.extend(l.chip);
                             drawn.extend(l.eject_all);
+                        }
+                        PageLayout::Notifications(l) => {
+                            drawn.extend([l.header, l.list]);
+                            drawn.extend(l.count);
+                            drawn.extend(l.pause);
+                            drawn.extend(l.clear);
+                            drawn.extend(l.note);
+                            drawn.extend(l.settings_button);
+                            drawn.extend(l.scrollbar);
+                            drawn.extend(l.rows.iter().map(|r| r.row));
                         }
                         // On its own, taller shape: `cleaner_fits_its_panel`.
                         PageLayout::Cleaner(_) => {}
@@ -5756,5 +6156,242 @@ mod media_tests {
         assert!(first(Hit::ClipPin(5)) < first(Hit::ClipCard(5)));
         let empty = clipboard_layout(s, false, &[], None, 0, |_| false);
         assert!(empty.empty.is_some() && empty.cards.is_empty());
+    }
+
+    fn panel(style: Style) -> ShapeRect {
+        shape_for(style, ShapeKind::Panel)
+    }
+
+    const NOTIF_HEAD: NotifHead = NotifHead {
+        title_w: 90.0,
+        count_w: 52.0,
+        pause_label_w: 30.0,
+        clear_w: 92.0,
+    };
+
+    fn inside_rect(outer: Rect, r: Rect) -> bool {
+        r.x >= outer.x - 0.01
+            && r.y >= outer.y - 0.01
+            && r.right() <= outer.right() + 0.01
+            && r.bottom() <= outer.bottom() + 0.01
+    }
+
+    fn notif(s: ShapeRect, strip: bool, n: u64, sel: Option<u64>, scroll: usize) -> NotifLayout {
+        let ids: Vec<u64> = (1..=n).rev().collect();
+        notif_layout(s, strip, &NOTIF_HEAD, &ids, sel, scroll, false, false)
+    }
+
+    #[test]
+    fn notification_rows_are_44_tall_on_a_48_pitch_and_whole_rows_only() {
+        for style in [Style::Pill, Style::Notch] {
+            let s = panel(style);
+            for (strip, note) in [(false, false), (true, false), (false, true), (true, true)] {
+                let fit = notif_rows(s, strip, note);
+                assert!(fit >= 3, "{style:?} strip={strip} note={note}: {fit}");
+                let ids: Vec<u64> = (1..=20).collect();
+                let l = notif_layout(s, strip, &NOTIF_HEAD, &ids, None, 0, note, false);
+                assert_eq!(l.rows.len(), fit);
+                for (i, row) in l.rows.iter().enumerate() {
+                    assert_eq!(row.row.h, NOTIF_ROW_H);
+                    assert_eq!(row.row.y, l.list.y + i as f32 * 48.0);
+                    assert!(inside_rect(l.list, row.row), "whole rows stay in the list");
+                    assert!(inside_rect(row.row, row.logo) && row.logo.w == 24.0);
+                    for part in [row.name, row.time, row.dot, row.text] {
+                        assert!(inside_rect(row.row, part), "{part:?} in {:?}", row.row);
+                    }
+                    // Line one above line two; the name stops before the dot.
+                    assert!(row.name.bottom() <= row.text.y + 1.0);
+                    assert!(row.name.right() <= row.dot.x);
+                    assert!(row.dot.right() <= row.time.x);
+                }
+                // The list ends above the page dots.
+                let (dots, _) = page_dots(s, &Page::ALL, Page::Notifications);
+                assert!(l.list.bottom() <= dots[0].y);
+            }
+        }
+    }
+
+    #[test]
+    fn the_selected_row_gets_three_buttons_and_its_text_stops_before_them() {
+        let s = panel(Style::Pill);
+        let l = notif(s, false, 6, Some(5), 0);
+        let with: Vec<&NotifRowLayout> = l.rows.iter().filter(|r| r.buttons.is_some()).collect();
+        assert_eq!(with.len(), 1);
+        let row = with[0];
+        assert_eq!(row.id, 5);
+        let b = row.buttons.unwrap();
+        // Right to left on line two: X, Kecualikan, Buka; clear of one another.
+        assert!(b.remove.x > b.mute.right() && b.mute.x > b.open.right());
+        for r in [b.open, b.mute, b.remove] {
+            assert!(inside_rect(row.row, r));
+            assert!(r.y >= row.name.bottom() - 1.0, "on the second line");
+        }
+        assert!(row.text.right() <= b.open.x);
+        // Another row's text runs to the edge instead.
+        let other = l.rows.iter().find(|r| r.id == 6).unwrap();
+        assert!(other.text.right() > row.text.right());
+        assert!(other.buttons.is_none());
+        // A selection that is scrolled out of the list shows no buttons.
+        let l = notif(s, false, 10, Some(10), 4);
+        assert!(l.rows.iter().all(|r| r.buttons.is_none()));
+    }
+
+    #[test]
+    fn scroll_is_in_whole_rows_and_stays_in_range() {
+        let s = panel(Style::Pill);
+        let fit = notif_rows(s, false, false);
+        let n = 40u64;
+        let max = notif_max_scroll(n as usize, fit);
+        assert_eq!(max, n as usize - fit);
+        let l = notif(s, false, n, None, 999);
+        assert_eq!(l.scroll, max, "clamped");
+        assert_eq!(l.rows.last().unwrap().index, n as usize - 1);
+        let l = notif(s, false, n, None, 3);
+        assert_eq!(l.rows[0].index, 3);
+        // Nothing to scroll with few rows: no thumb.
+        assert_eq!(notif_max_scroll(fit, fit), 0);
+        assert!(notif(s, false, fit as u64, None, 5).scrollbar.is_none());
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_row_a_notch_and_an_end_spends_it() {
+        // Nothing to scroll: the notch turns the page.
+        assert_eq!(notif_wheel_step(-120, 0, 0), None);
+        assert_eq!(notif_wheel_step(120, 0, 0), None);
+        // Toward the user scrolls down a row; away scrolls up.
+        assert_eq!(notif_wheel_step(-120, 2, 10), Some(3));
+        assert_eq!(notif_wheel_step(120, 2, 10), Some(1));
+        assert_eq!(notif_wheel_step(-360, 2, 10), Some(5));
+        // The ends keep the row: the notch is spent.
+        assert_eq!(notif_wheel_step(120, 0, 10), Some(0));
+        assert_eq!(notif_wheel_step(-120, 10, 10), Some(10));
+        assert_eq!(notif_wheel_step(-1200, 8, 10), Some(10));
+        // A touchpad's small delta still moves one row.
+        assert_eq!(notif_wheel_step(-30, 0, 10), Some(1));
+        assert_eq!(notif_wheel_step(30, 5, 10), Some(4));
+    }
+
+    #[test]
+    fn keyboard_moves_keep_the_selection_in_view() {
+        assert_eq!(notif_scroll_to(2, 0, 4), 0, "already shows");
+        assert_eq!(notif_scroll_to(4, 0, 4), 1, "one row past the bottom");
+        assert_eq!(notif_scroll_to(1, 3, 4), 1, "above the top");
+        assert_eq!(notif_scroll_to(9, 0, 4), 6);
+        // A wheel scroll keeps the selection on a row that shows.
+        assert_eq!(notif_visible_row(0, 3, 4, 20), 3);
+        assert_eq!(notif_visible_row(12, 3, 4, 20), 6);
+        assert_eq!(notif_visible_row(5, 3, 4, 20), 5);
+        assert_eq!(notif_visible_row(5, 0, 4, 0), 0);
+        assert_eq!(notif_visible_row(9, 8, 4, 10), 9, "never past the last row");
+    }
+
+    #[test]
+    fn the_scrollbar_thumb_sits_in_the_margin_and_follows_the_scroll() {
+        let s = panel(Style::Pill);
+        let fit = notif_rows(s, false, false);
+        let top = notif(s, false, 40, None, 0);
+        let end = notif(s, false, 40, None, 40 - fit);
+        let (t, e) = (top.scrollbar.unwrap(), end.scrollbar.unwrap());
+        assert_eq!(t.w, 3.0);
+        assert!(t.x >= top.list.right(), "in the right margin");
+        assert!(right(s) < s.x + s.w && t.right() <= s.x + s.w);
+        assert_eq!(t.y, top.list.y);
+        assert!((e.bottom() - end.list.bottom()).abs() < 0.01);
+        assert!(t.h >= 24.0 && t.h < top.list.h);
+        // More rows, a shorter thumb.
+        let more = notif(s, false, 120, None, 0).scrollbar.unwrap();
+        assert!(more.h <= t.h);
+    }
+
+    #[test]
+    fn the_header_holds_the_title_the_count_the_switch_and_clear() {
+        let s = panel(Style::Pill);
+        let l = notif(s, false, 3, None, 0);
+        let (count, pause, clear) = (l.count.unwrap(), l.pause.unwrap(), l.clear.unwrap());
+        assert!(count.x >= l.header.right());
+        assert!(count.right() <= pause.x, "count, then the switch");
+        assert!(pause.right() <= clear.x, "then Hapus semua at the right");
+        assert_eq!(clear.right(), right(s));
+        let (label, switch) = (l.pause_label.unwrap(), l.pause_switch.unwrap());
+        assert!(label.right() <= switch.x);
+        assert!(inside_rect(pause, label) && inside_rect(pause, switch));
+        assert_eq!((switch.w, switch.h), (26.0, 14.0));
+        // No entries: nothing to clear, the switch moves to the edge.
+        let none = notif(s, false, 0, None, 0);
+        assert!(none.clear.is_none());
+        assert_eq!(none.pause.unwrap().right(), right(s));
+        assert!(none.empty.is_some() && none.rows.is_empty());
+    }
+
+    #[test]
+    fn the_off_note_sits_under_the_header_and_pushes_the_list_down() {
+        let s = panel(Style::Pill);
+        let ids = [3, 2, 1];
+        let plain = notif_layout(s, false, &NOTIF_HEAD, &ids, None, 0, false, false);
+        let noted = notif_layout(s, false, &NOTIF_HEAD, &ids, None, 0, true, false);
+        assert!(plain.note.is_none());
+        let note = noted.note.unwrap();
+        assert!(note.y >= noted.header.bottom() && note.bottom() <= noted.list.y);
+        assert!(noted.list.y > plain.list.y);
+        assert_eq!(noted.rows.len(), 3, "the entries stay while it is off");
+    }
+
+    #[test]
+    fn without_access_there_is_a_message_and_one_button_and_no_rows() {
+        let s = panel(Style::Pill);
+        let ids = [3, 2, 1];
+        let l = notif_layout(s, false, &NOTIF_HEAD, &ids, Some(2), 0, true, true);
+        assert!(l.rows.is_empty() && l.empty.is_some());
+        let b = l.settings_button.unwrap();
+        assert!(inside_rect(l.list, b));
+        assert!(l.pause.is_none() && l.clear.is_none() && l.count.is_none());
+        assert!(l.note.is_none() && l.scrollbar.is_none());
+        // The keyboard is not offered a page it cannot show.
+        assert!(l.background.is_none());
+        let r = regions(s, &PageLayout::Notifications(l), false);
+        assert!(r.iter().any(|x| x.hit == Hit::NotifSettings));
+        assert!(!r.iter().any(|x| x.hit == Hit::NotifFocus));
+    }
+
+    #[test]
+    fn notification_regions_put_buttons_over_rows_over_the_background() {
+        let s = panel(Style::Pill);
+        let l = notif(s, true, 4, Some(3), 0);
+        let r = regions(s, &PageLayout::Notifications(l.clone()), true);
+        let at = |hit: Hit| r.iter().position(|x| x.hit == hit);
+        for hit in [
+            Hit::Strip,
+            Hit::NotifClear,
+            Hit::NotifPause,
+            Hit::NotifOpen(3),
+            Hit::NotifMute(3),
+            Hit::NotifRemove(3),
+            Hit::NotifRow(1),
+            Hit::NotifRow(4),
+            Hit::NotifFocus,
+        ] {
+            assert!(at(hit.clone()).is_some(), "{hit:?}");
+        }
+        assert!(at(Hit::NotifOpen(3)) < at(Hit::NotifRow(3)));
+        assert!(at(Hit::NotifRemove(3)) < at(Hit::NotifRow(3)));
+        assert!(at(Hit::NotifRow(4)) < at(Hit::NotifFocus));
+        assert!(at(Hit::NotifClear) < at(Hit::NotifFocus));
+        // Only the selected row has buttons.
+        assert!(at(Hit::NotifOpen(4)).is_none());
+        // The first region under a point on a row's background is the row;
+        // under a point past the last row it is the page's keyboard.
+        let first = |x: f32, y: f32| r.iter().find(|g| g.rect.contains(x, y)).map(|g| &g.hit);
+        let row4 = l.rows.iter().find(|w| w.id == 4).unwrap();
+        assert_eq!(
+            first(row4.name.x + 4.0, row4.row.y + 3.0),
+            Some(&Hit::NotifRow(4))
+        );
+        let below = l.rows.last().unwrap().row.bottom() + 2.0;
+        assert_eq!(first(l.list.x + 20.0, below), Some(&Hit::NotifFocus));
+        assert_eq!(
+            first(l.header.x + 4.0, l.header.y + 4.0),
+            Some(&Hit::NotifFocus),
+            "the title"
+        );
     }
 }

@@ -13,11 +13,13 @@ use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::clipboard::store::{ITEMS_STEP, MAX_ITEMS, MIN_ITEMS};
 use crate::config::{
-    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, NotchFill, OpenMode,
-    RAM_WARN_RANGE, SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore, ShotTool, Style,
+    ClipHotkey, ClipboardSettings, DISK_WARN_RANGE, DevicesHotkey, NotchFill, NotifSettings,
+    OpenMode, RAM_WARN_RANGE, SHOT_SECS_RANGE, ScreenshotSettings, SearchHotkey, ShotIgnore,
+    ShotTool, Style,
 };
 use crate::i18n::{Key, Lang, text, version_label};
 use crate::model::{Page, PomoField};
+use crate::notif::store::{CAP_STEP, MAX_CAP as NOTIF_MAX, MIN_CAP as NOTIF_MIN};
 use crate::pages::PanelPages;
 use crate::pomodoro::{self, PomoSettings};
 use crate::theme::{Accent, CatAccessory, CatColor, Surface, WindowTheme};
@@ -404,6 +406,15 @@ pub enum Hit {
     ClipNotice,
     ClipFeedbackAll,
     ClipClear,
+    /// Settings → Fitur → Notifikasi: "Simpan notifikasi", "Jumlah maksimal"
+    /// (−1 / +1), "Simpan setelah restart", the remove button of an excluded
+    /// app (its place in the list), "Tambah" and "Hapus riwayat notifikasi".
+    NotifRecord,
+    NotifItems(i32),
+    NotifPersist,
+    NotifMutedRemove(usize),
+    NotifMutedAdd,
+    NotifClear,
     /// Settings → Clipboard → Screenshot: "Preview di notch", "Jika
     /// diabaikan" (Simpan / Hapus) and "Lama tampil" (−1 / +1).
     ShotPreview,
@@ -1043,6 +1054,11 @@ pub struct State<'a> {
     pub google: GoogleState,
     /// A short message beside the Google buttons.
     pub google_note: Option<(&'a str, Tone)>,
+    /// Settings → Fitur → Notifikasi, the excluded apps (`muted_apps`) and
+    /// whether "Hapus riwayat notifikasi" waits for its second click.
+    pub notif: NotifSettings,
+    pub muted: Vec<String>,
+    pub notif_confirm: bool,
     /// "Hapus riwayat" was clicked once and waits for the second click.
     pub clip_confirm: bool,
     /// `None` when Claude Code's settings could not be read.
@@ -2160,6 +2176,7 @@ fn page_key(p: Page) -> Key {
         Page::Shelf => Key::PageShelf,
         Page::Search => Key::SearchTitle,
         Page::Clipboard => Key::PageClipboard,
+        Page::Notifications => Key::PageNotifications,
         Page::System => Key::PageSystem,
         Page::Cli => Key::PageCli,
         Page::Shortcuts => Key::PageShortcuts,
@@ -3015,6 +3032,7 @@ fn panel_page(b: &mut Builder, s: &State) {
 }
 
 /// Fitur: "Pomodoro" (its four steppers and the running note), "Musik",
+/// "Notifikasi",
 /// "CLI", "Perangkat" and "Pembersih".
 fn features_page(b: &mut Builder, s: &State) {
     titled(b, Key::GroupPomodoro);
@@ -3071,6 +3089,8 @@ fn features_page(b: &mut Builder, s: &State) {
     let desc = Some((b.t(Key::LyricsInNotchDesc), Tone::Secondary));
     b.row_text(card, card.y, b.t(Key::LyricsInNotch), desc, false, x);
 
+    notifications_card(b, s);
+
     titled(b, Key::GroupCli);
     let card = b.card(2.0 * ROW_H);
     let rows = [card.y, card.y + ROW_H];
@@ -3110,6 +3130,119 @@ fn features_page(b: &mut Builder, s: &State) {
     );
     let desc = Some((b.t(Key::MoleProtectSettingDesc), Tone::Secondary));
     b.row_text(card, card.y, b.t(Key::MoleProtectSetting), desc, false, x);
+}
+
+/// "Jumlah maksimal" of the notification history one step (10) up or down,
+/// kept in 10–200; a hand-edited value off the grid snaps onto it.
+pub fn notif_items_step(n: u32, dir: i32) -> u32 {
+    let step = CAP_STEP;
+    let stepped = if dir > 0 {
+        n.saturating_add(step)
+    } else {
+        n.saturating_sub(step)
+    };
+    (stepped / step * step).clamp(NOTIF_MIN, NOTIF_MAX)
+}
+
+/// "Notifikasi" (the Notifikasi page): "Simpan notifikasi", "Jumlah
+/// maksimal", "Simpan setelah restart", the excluded apps (a row each with
+/// its remove button, then a field and "Tambah"), and "Hapus riwayat
+/// notifikasi" with two clicks.
+fn notifications_card(b: &mut Builder, s: &State) {
+    b.eyebrow(Key::SecNotifications, CONTENT_W - 4.0);
+    let c = s.notif;
+    let shown = s.muted.len().max(1);
+    let card = b.card((6 + shown) as f32 * ROW_H);
+    let row = |i: usize| card.y + i as f32 * ROW_H;
+    let cy = |y: f32| y + ROW_H / 2.0;
+    let on = c.record;
+
+    let x = b.toggle(Hit::NotifRecord, RIGHT, cy(row(0)), on);
+    let desc = Some((b.t(Key::NotifRecordDesc), Tone::Secondary));
+    b.row_text(card, row(0), b.t(Key::NotifRecord), desc, false, x);
+
+    let n = c.max_items;
+    let x = b.stepper(
+        RIGHT,
+        cy(row(1)),
+        n.to_string(),
+        Hit::NotifItems(-1),
+        Hit::NotifItems(1),
+        (n > NOTIF_MIN, n < NOTIF_MAX),
+        true,
+    );
+    let desc = Some((b.t(Key::NotifMaxDesc), Tone::Secondary));
+    b.row_text(card, row(1), b.t(Key::NotifMax), desc, false, x);
+    b.divider(card, row(1));
+
+    let x = b.toggle(Hit::NotifPersist, RIGHT, cy(row(2)), c.persist);
+    let desc = Some((b.t(Key::NotifPersistDesc), Tone::Secondary));
+    b.row_text(card, row(2), b.t(Key::NotifPersist), desc, false, x);
+    b.divider(card, row(2));
+
+    // The excluded apps: the title row, a row each, then the add row.
+    let desc = Some((b.t(Key::NotifMutedDesc), Tone::Secondary));
+    b.row_text(card, row(3), b.t(Key::NotifMuted), desc, false, RIGHT);
+    b.divider(card, row(3));
+    let delete = b.t(Key::Delete);
+    let delete_w = b.compact_w(&delete);
+    if s.muted.is_empty() {
+        let rect = Rect {
+            x: card.x + INSET,
+            y: row(4) + 16.0,
+            w: RIGHT - card.x - INSET,
+            h: 20.0,
+        };
+        b.text(
+            rect,
+            b.t(Key::NotifMutedNone),
+            Font::Desc,
+            Tone::Secondary,
+            Align::Left,
+        );
+    }
+    for (i, name) in s.muted.iter().enumerate() {
+        let y = row(4 + i);
+        let item = (
+            Hit::NotifMutedRemove(i),
+            delete.clone(),
+            ButtonKind::Secondary,
+            true,
+            delete_w,
+        );
+        let x = b.buttons(RIGHT, cy(y), vec![item]);
+        b.row_text(card, y, name.clone(), None, false, x);
+    }
+    let add_y = row(4 + shown);
+    b.divider(card, add_y);
+    let add = b.t(Key::NotifMutedAdd);
+    let w = b.button_w(&[&add], ButtonKind::Secondary);
+    let item = (Hit::NotifMutedAdd, add, ButtonKind::Secondary, true, w);
+    let x = b.buttons(RIGHT, cy(add_y), vec![item]);
+    let field_x = card.x + INSET;
+    b.l.fields.push((
+        Field::TileName,
+        Rect {
+            x: field_x,
+            y: cy(add_y) - FIELD_H / 2.0,
+            w: x - GAP - field_x,
+            h: FIELD_H,
+        },
+    ));
+
+    // Two clicks, as "Hapus riwayat" of the clipboard.
+    let clear_y = row(5 + shown);
+    b.divider(card, clear_y);
+    let (label, sure) = (b.t(Key::ClipClearButton), b.t(Key::ConfirmShort));
+    let w = b.button_w(&[&label, &sure], ButtonKind::Secondary);
+    let item = if s.notif_confirm {
+        (Hit::NotifClear, sure, ButtonKind::Confirm, true, w)
+    } else {
+        (Hit::NotifClear, label, ButtonKind::Secondary, true, w)
+    };
+    let x = b.buttons(RIGHT, cy(clear_y), vec![item]);
+    let desc = Some((b.t(Key::NotifClearHistoryDesc), Tone::Secondary));
+    b.row_text(card, clear_y, b.t(Key::NotifClearHistory), desc, false, x);
 }
 
 /// "Perangkat" (the Devices page): the plug-in and safe-to-remove notices,
@@ -3747,6 +3880,22 @@ mod tests {
                             advanced,
                         },
                         google_note: None,
+                        notif: NotifSettings {
+                            record: !locked,
+                            max_items: if locked { NOTIF_MAX } else { NOTIF_MIN },
+                            persist: locked,
+                            paused: false,
+                        },
+                        muted: if locked {
+                            vec![
+                                "Claude".to_owned(),
+                                "Orca".to_owned(),
+                                "Microsoft Teams (work or school)".to_owned(),
+                            ]
+                        } else {
+                            Vec::new()
+                        },
+                        notif_confirm: !locked,
                         clip_confirm: !locked,
                         hooks,
                         hook_note: None,
@@ -5628,6 +5777,8 @@ mod tests {
                     lang,
                     cli_start: start,
                     shell,
+                    // Notifikasi sits above it now: scrolled to the end.
+                    scroll: f32::MAX,
                     ..states()[0].clone()
                 };
                 let l = layout(Section::Features, &s, &Estimate);

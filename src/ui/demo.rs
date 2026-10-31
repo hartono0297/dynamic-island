@@ -120,7 +120,7 @@ use super::motion::{
 use super::notch_fill::{self, fill_alpha};
 use super::render::{
     CleanerView, CliView, ClipNoticeView, ClipView, DevicesView, FolderMenuView, Frame, MoleView,
-    Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
+    NotifView, Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::shelf_motion::{SHELF_ENTER_MS, SHELF_MOVE_MS, SHELF_STAGGER_MS, ShelfMotion};
@@ -140,6 +140,7 @@ use crate::lyrics::{self, FADE, LyricsFound, LyricsState, Query};
 use crate::model::{CalView, MediaInfo, Notice, NoticeKind, Page, View};
 use crate::mole::{CleanRun, GroupSize, MoleOpts, MoleReport, PreviewSummary};
 use crate::notes::Note;
+use crate::notif::NotifEntry;
 use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
 use crate::state::MolePhase;
@@ -215,6 +216,8 @@ struct Scene {
     clean: Option<CleanDemo>,
     /// What the Clipboard page shows.
     clip: ClipDemo,
+    /// What the Notifikasi page shows.
+    notif: NotifDemo,
     /// The page content is a sub-view `Reveal` in this direction.
     reveal: Option<RevealDir>,
     /// The page cross-fades in over this one (`PageFade`), as the search
@@ -268,6 +271,26 @@ enum ClipDemo {
     Off,
     /// A long history scrolled down a row: the scrollbar's thumb shows.
     Long,
+}
+
+/// The Notifikasi page's states. Fixed fake toasts and a fixed "now": never
+/// the Action Center, never the listener, never the clock.
+#[derive(Clone, Copy, PartialEq)]
+enum NotifDemo {
+    /// Eight rows, mixed read and unread, the times of every kind.
+    Design,
+    /// A row hovered: it is lit and shows its three buttons.
+    Selected,
+    /// Forty rows scrolled down five: the scrollbar's thumb shows.
+    Long,
+    /// Nothing caught yet.
+    Empty,
+    /// The listener has no access: the message and "Buka pengaturan".
+    NoAccess,
+    /// "Jeda" is on.
+    Paused,
+    /// "Hapus semua" waits for its second click ("Yakin?").
+    Armed,
 }
 
 /// The CLI page's states, after pengingat-cli.html p3, p4 and p5.
@@ -421,6 +444,7 @@ const BASE: Scene = Scene {
     system_low: false,
     clean: None,
     clip: ClipDemo::Design,
+    notif: NotifDemo::Design,
     reveal: None,
     fade_from: None,
     devices: DevicesDemo::Design,
@@ -603,6 +627,15 @@ fn demo_devices(which: DevicesDemo) -> DevicesState {
     (list, ejecting, vetoes, expanded)
 }
 
+const fn notifications(name: &'static str, which: NotifDemo) -> Scene {
+    Scene {
+        name,
+        view: View0::Panel(Page::Notifications),
+        notif: which,
+        ..BASE
+    }
+}
+
 const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     Scene {
         name,
@@ -612,7 +645,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 120] = [
+const SCENES: [Scene; 127] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -831,6 +864,14 @@ const SCENES: [Scene; 120] = [
     clipboard("clipboard-empty", ClipDemo::Empty),
     clipboard("clipboard-off", ClipDemo::Off),
     clipboard("clipboard-long", ClipDemo::Long),
+    // The Notifikasi page: fixed fake toasts, one with a drawn logo.
+    notifications("notifications", NotifDemo::Design),
+    notifications("notifications-selected", NotifDemo::Selected),
+    notifications("notifications-long", NotifDemo::Long),
+    notifications("notifications-empty", NotifDemo::Empty),
+    notifications("notifications-no-access", NotifDemo::NoAccess),
+    notifications("notifications-paused", NotifDemo::Paused),
+    notifications("notifications-armed", NotifDemo::Armed),
     // keputusan-v3.1 §5 "Saat menyalin": Bata happy over the preview.
     bata(
         "clipboard-copied",
@@ -1475,6 +1516,9 @@ fn run_scenes(scenes: &[Scene]) {
             } else {
                 std::collections::HashMap::new()
             };
+            let notif_items = demo_notif_items(scene.notif);
+            let notif_logos: std::collections::HashMap<String, Thumb> =
+                [(DEMO_LOGO_KEY.to_owned(), demo_logo())].into();
             let frame = Frame {
                 view: &view,
                 media: Some(if scene.long_media {
@@ -1555,6 +1599,7 @@ fn run_scenes(scenes: &[Scene]) {
                 volume: scene.volume,
                 cli: cli.view(),
                 clip: clip_view(&clips, scene.clip),
+                notif: notif_view(&notif_items, &notif_logos, scene.notif),
                 search: SearchView {
                     query: search_query,
                     selection: (search_query.len(), search_query.len()),
@@ -1695,6 +1740,178 @@ fn demo_clips() -> Vec<Clip> {
             }
         })
         .collect()
+}
+
+/// The fixed "now" of the Notifikasi scenes (never the clock).
+fn demo_notif_now() -> chrono::DateTime<Local> {
+    Local
+        .with_ymd_and_hms(2026, 10, 31, 14, 32, 0)
+        .earliest()
+        .expect("a time that exists")
+}
+
+/// The logo key of the one demo app that has a logo.
+const DEMO_LOGO_KEY: &str = "5319.WhatsApp!App";
+
+/// A made-up 48 x 48 logo: a green rounded square with a pale ring, drawn
+/// here, premultiplied (it is opaque inside, clear at the corners).
+fn demo_logo() -> Thumb {
+    let side = 48u32;
+    let mut bgra = Vec::with_capacity((side * side * 4) as usize);
+    let (r, k) = (11.0f32, side as f32);
+    for y in 0..side {
+        for x in 0..side {
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            // Distance outside the rounded square.
+            let dx = (fx - k / 2.0).abs() - (k / 2.0 - r);
+            let dy = (fy - k / 2.0).abs() - (k / 2.0 - r);
+            let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() - r;
+            let alpha = (0.5 - outside).clamp(0.0, 1.0);
+            let ring = ((fx - k / 2.0).hypot(fy - k / 2.0) - 13.0).abs() < 2.0;
+            let rgb: [f32; 3] = if ring {
+                [0xF2 as f32, 0xF7 as f32, 0xF3 as f32]
+            } else {
+                [0x25 as f32, 0xA2 as f32, 0x5A as f32]
+            };
+            bgra.extend([
+                (rgb[2] * alpha) as u8,
+                (rgb[1] * alpha) as u8,
+                (rgb[0] * alpha) as u8,
+                (alpha * 255.0) as u8,
+            ]);
+        }
+    }
+    Thumb {
+        w: side,
+        h: side,
+        bgra,
+    }
+}
+
+/// The made-up toasts of the Notifikasi scenes, newest first: `(source,
+/// AUMID, title, body, seconds ago, read)`.
+const DEMO_NOTIFS: [(&str, Option<&str>, &str, &str, i64, bool); 8] = [
+    (
+        "WhatsApp",
+        Some(DEMO_LOGO_KEY),
+        "Ibu",
+        "Jangan lupa makan siang ya",
+        20,
+        false,
+    ),
+    (
+        "Teams",
+        None,
+        "Rapat desain 15.00",
+        "Dimulai 30 menit lagi, ruang Kemang",
+        5 * 60,
+        false,
+    ),
+    (
+        "Chrome",
+        None,
+        "Unduhan selesai",
+        "denah-lantai-2-rev3.pdf",
+        42 * 60,
+        true,
+    ),
+    (
+        "Outlook",
+        None,
+        "Pak Hendra",
+        "Revisi RAB sudah saya kirim, mohon dicek bagian pondasi dan tangga",
+        3 * 3600,
+        false,
+    ),
+    (
+        "WhatsApp",
+        Some(DEMO_LOGO_KEY),
+        "Tim Studio",
+        "",
+        6 * 3600,
+        true,
+    ),
+    (
+        "Teams",
+        None,
+        "Dina mengirim berkas",
+        "gambar-kerja-struktur.dwg",
+        26 * 3600,
+        true,
+    ),
+    (
+        "Chrome",
+        None,
+        "Pembaruan tersedia",
+        "Mulai ulang Chrome untuk menyelesaikan pembaruan",
+        3 * 86_400,
+        true,
+    ),
+    (
+        "Outlook",
+        None,
+        "Undangan: Tinjauan proyek",
+        "Jumat, 14.00 · Ruang rapat besar",
+        40 * 86_400,
+        true,
+    ),
+];
+
+/// The entries of a Notifikasi scene (`DEMO_NOTIFS`, ids counting down so the
+/// newest has the highest); forty of them for `Long`, none for the empty
+/// and no-access scenes.
+fn demo_notif_items(which: NotifDemo) -> Vec<NotifEntry> {
+    let now = demo_notif_now().timestamp();
+    let count = match which {
+        NotifDemo::Empty | NotifDemo::NoAccess => 0,
+        NotifDemo::Long => 40,
+        _ => DEMO_NOTIFS.len(),
+    };
+    (0..count)
+        .map(|i| {
+            let (source, app_id, title, body, ago, read) = DEMO_NOTIFS[i % DEMO_NOTIFS.len()];
+            // The long list spreads its times out, newest first.
+            let ago = if count > DEMO_NOTIFS.len() {
+                ago + (i / DEMO_NOTIFS.len()) as i64 * 90_000
+            } else {
+                ago
+            };
+            NotifEntry {
+                id: (count - i) as u64,
+                at: now - ago,
+                read,
+                source: source.into(),
+                app_id: app_id.map(str::to_owned),
+                title: title.into(),
+                body: body.into(),
+            }
+        })
+        .collect()
+}
+
+/// The Notifikasi page for `which` over `items` and `logos`.
+fn notif_view<'a>(
+    items: &'a [NotifEntry],
+    logos: &'a std::collections::HashMap<String, Thumb>,
+    which: NotifDemo,
+) -> NotifView<'a> {
+    NotifView {
+        items,
+        logos,
+        selected: match which {
+            // The third row from the top.
+            NotifDemo::Selected => items.get(2).map(|e| e.id),
+            NotifDemo::Long => items.get(7).map(|e| e.id),
+            _ => None,
+        },
+        scroll: if which == NotifDemo::Long { 5 } else { 0 },
+        cap: 50,
+        record: true,
+        paused: which == NotifDemo::Paused,
+        no_access: which == NotifDemo::NoAccess,
+        armed: which == NotifDemo::Armed,
+        now: demo_notif_now(),
+    }
 }
 
 /// `.clip.img .th`: a 160° gradient #E2683C → #5A2A1C, a pale inner frame.

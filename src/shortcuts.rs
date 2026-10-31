@@ -103,6 +103,7 @@ pub fn label(s: Shortcut) -> Key {
             Page::Devices => Key::PageDevices,
             Page::Cli => Key::PageCli,
             Page::Clipboard => Key::PageClipboard,
+            Page::Notifications => Key::PageNotifications,
             Page::Shortcuts => Key::PageShortcuts,
             Page::Search => Key::ShortcutSearch,
         },
@@ -119,6 +120,7 @@ pub(crate) fn page_icon(page: Page) -> Icon {
         Page::Media => Icon::Music,
         Page::Mixer => Icon::Volume,
         Page::Clipboard => Icon::Clipboard,
+        Page::Notifications => Icon::Inbox,
         Page::Shelf => Icon::TempFile,
         Page::System => Icon::Chip,
         Page::Devices => Icon::Usb,
@@ -312,6 +314,7 @@ mod tests {
                 (Shortcut::Go(Page::Notes), None),
                 (Shortcut::Go(Page::Media), None),
                 (Shortcut::Go(Page::Mixer), None),
+                (Shortcut::Go(Page::Notifications), None),
                 (Shortcut::Go(Page::Shelf), None),
                 (Shortcut::Go(Page::System), None),
                 (Shortcut::Go(Page::Devices), None),
@@ -334,6 +337,16 @@ mod tests {
         assert_eq!(label(Shortcut::Go(Page::Shelf)), Key::ShortcutGoShelf);
         assert_eq!(icon(Shortcut::Go(Page::Devices)), Icon::Usb);
         assert_eq!(label(Shortcut::Go(Page::Devices)), Key::PageDevices);
+        // The Notifikasi tile: the inbox tray, not the Reminders' bell.
+        assert_eq!(icon(Shortcut::Go(Page::Notifications)), Icon::Inbox);
+        assert_eq!(
+            label(Shortcut::Go(Page::Notifications)),
+            Key::PageNotifications
+        );
+        assert_ne!(
+            icon(Shortcut::Go(Page::Notifications)),
+            icon(Shortcut::Go(Page::Reminders))
+        );
     }
 
     #[test]
