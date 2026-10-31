@@ -50,10 +50,34 @@ yourself in the main session.
   Finish step wrote to memory and README, whether `main` was pushed,
   `manualChecks`, `incomplete`, and any open findings or failed checks.
 
+## Every new task starts in a new session
+
+The main session only takes tasks in; the thinking happens elsewhere. When I give
+a new task that would run `build` (new feature, bug fix, refactor), do not
+brainstorm or plan it here. Start a new session for it right away, without
+asking me first, and tell me in one line which session it is.
+
+- Start it with `start_session`, context `fresh`. The brief holds my request in
+  my own words plus whatever from this conversation it needs, and says: "You
+  were started by the main session to brainstorm and plan this task with the
+  user, then run `build`. Follow 'Always brainstorm before `build`' in
+  AGENTS.md. Skip 'Session start'. Do not start another session."
+- A session started that way brainstorms and plans in itself and runs `build`
+  itself. This rule does not apply inside it, so it never spawns another one:
+  anything I add or change there, even a new request, stays in that session.
+- One session per task. If I give several tasks at once, start one session each.
+- Follow-ups, corrections or answers about a task that already has a session go
+  to that session (`SendMessage`), not to a new one.
+- What is not a new task stays here: questions, explanations, reading code, and
+  anything under "When NOT to run it".
+- If this environment has no way to start a session, brainstorm in the current
+  session instead.
+
 ## Always brainstorm before `build`
 
 Agents inside the workflow cannot ask me anything, so every open question gets
-settled first, in the main session, with me. Before every `build` run:
+settled first, in the session that owns the task, with me. Before every `build`
+run:
 
 - Restate what you understood in a few lines, then ask about whatever is
   unclear: the goal, who uses it, the exact behaviour and edge cases, what must
@@ -65,52 +89,16 @@ settled first, in the main session, with me. Before every `build` run:
 - Only when I confirm, run `build` with the agreed request written out
   concretely, including the acceptance criteria.
 
-## Superpowers must be off (check every session)
+## Session start (main session only)
 
-At the start of every session in this project, before the first task, check
-whether the Superpowers plugin is enabled: skills named `superpowers:*` are
-available in the session, or `enabledPlugins` in `~/.claude/settings.json`,
-`.claude/settings.json` or `.claude/settings.local.json` has
-`"superpowers@superpowers-marketplace": true` (on this machine the id is `superpowers@claude-plugins-official`).
+Runs only in the session I first talk to in this project, never in a session
+started from it (those skip it; the main session already did it). No commands
+unless a check says so:
 
-If it is on, do not turn it off yourself. Tell me, explain why, and ask me to
-confirm turning it off:
-
-- Its skills overlap with `build` (orchestration, worktrees, finishing
-  branches, code review), so two systems steer the same work: duplicate
-  branches and worktrees, slower runs.
-- Its "MUST" rules (such as brainstorming before any creative work) make
-  workflow agents stop to ask questions nobody inside the workflow can answer.
-- `using-superpowers` makes every agent check for skills before each reply,
-  which costs tokens in every workflow agent.
-- What is useful from it already lives here: brainstorming in the main session
-  (section above), and test-first, root-cause fixing and proof-before-claims in
-  the `build` prompts.
-
-If I agree, ask whether to turn it off for all projects (`~/.claude/settings.json`)
-or only this one (`.claude/settings.json`), set
-`"superpowers@superpowers-marketplace": false` there, and tell me to restart
-Claude Code. If I say keep it, don't ask again in this session.
-
-## Preflight: once per project
-
-Runs only the very first time Claude works in this project. If
-`.claude/preflight.done` exists, skip this section entirely.
-
-Otherwise, before the first task, check that the three tools below are in
-place and install whatever is missing. Then create `.claude/preflight.done`
-(today's date + what was installed), commit it, and report what you installed.
-
-| Tool | Check | If missing, install |
-|---|---|---|
-| RTK | `rtk --version`, and `~/.claude/settings.json` has a Bash `PreToolUse` hook running `rtk hook claude` | Windows: `winget install --id rtk-ai.rtk -e`. Then `rtk init -g --auto-patch` |
-| Context7 | `claude mcp list` shows `context7` | `claude mcp add --scope user --transport http context7 https://mcp.context7.com/mcp` |
-| Obsidian vault | `docs/memory/index.md` exists in this project | Create it with the Decisions / Gotchas / Conventions sections and commit it. If the Obsidian app is missing (Windows: `winget list --id Obsidian.Obsidian`), install it with `winget install --id Obsidian.Obsidian -e` |
-
-- A newly added MCP server only loads in a new session. If Context7 was just
-  installed, tell me to restart Claude Code before running `build`.
-- Opening `docs/` as a vault in the Obsidian app is my step; remind me if it's new.
-- To run it again (e.g. on a new machine), I delete `.claude/preflight.done`.
+- If `.claude/preflight.done` does not exist, read `.claude/setup/session-start.md`
+  and follow its "Preflight" section.
+- If a `superpowers:*` skill is in your skill list, read the same file and follow
+  its "Superpowers" section. With none in the list, do nothing.
 
 ## Tools (main session and every workflow agent)
 
@@ -122,7 +110,9 @@ place and install whatever is missing. Then create `.claude/preflight.done`
   answering or writing code. Match the version the project uses.
 - **Obsidian memory**: project memory lives in the Obsidian vault at `docs/`.
   Notes go in `docs/memory/`, and the index is `docs/memory/index.md`.
-  - At the start of a task, read the index and the notes relevant to it.
+  - The session that owns a task reads the index and the notes relevant to it
+    before starting. A session that only hands the task off does not, and nobody
+    lists the notes folder.
   - After work that taught something worth keeping (a decision, gotcha,
     convention), add or update one note per fact. Give it frontmatter with
     `tags` and `date`, `[[wikilinks]]` to related notes, and a link from the
