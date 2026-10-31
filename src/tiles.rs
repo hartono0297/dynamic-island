@@ -683,6 +683,7 @@ mod tests {
                 "(GoNotes)",
                 "(GoMedia)",
                 "(GoMixer)",
+                "(GoNotifications)",
                 "GoShelf",
                 "(GoSystem)",
                 "GoDevices",
@@ -961,19 +962,19 @@ mod tests {
     #[test]
     fn tiles_on_past_the_twelfth_are_marked() {
         // Hand-added: 12 + 3 on, all three past the limit (the own tiles sit
-        // after the 20 built-ins, at 20, 21 and 22).
+        // after the 21 built-ins, at 21, 22 and 23).
         let t = with_own(3);
         assert_eq!(t.shown(), 15);
         let beyond: Vec<usize> = (0..t.entries().len())
             .filter(|i| t.beyond_limit(*i))
             .collect();
-        assert_eq!(beyond, [20, 21, 22]);
+        assert_eq!(beyond, [21, 22, 23]);
         assert_eq!(t.visible().len(), MAX_SHOWN);
         // An entry that is off is never "beyond"; neither is one that shows.
         let mut t = with_own(3);
-        assert!(t.toggle(20));
-        assert!(!t.beyond_limit(20));
-        assert!(t.beyond_limit(21));
+        assert!(t.toggle(21));
+        assert!(!t.beyond_limit(21));
+        assert!(t.beyond_limit(22));
         assert!(!t.beyond_limit(0));
         assert!(!t.beyond_limit(99));
     }
@@ -1004,10 +1005,10 @@ mod tests {
     #[test]
     fn move_shown_steps_over_tiles_that_are_off() {
         let mut t = ShortcutTiles::default();
-        // Index 9 is ValeSettings (on), 10..16 are off Go tiles, 16 is GoShelf,
-        // 17 GoSystem (off), 18 GoDevices (on, the last shown).
+        // Index 9 is ValeSettings (on), 10..17 are off Go tiles, 17 is GoShelf,
+        // 18 GoSystem (off), 19 GoDevices (on, the last shown).
         assert!(
-            t.move_shown(16, -1),
+            t.move_shown(17, -1),
             "past the off Go tiles, onto Vale's place"
         );
         assert_eq!(names(&t)[9], "GoShelf");
@@ -1016,10 +1017,10 @@ mod tests {
         assert!(!t.move_shown(10, 1) || names(&t)[10] != "ValeSettings");
         let mut t = ShortcutTiles::default();
         assert!(!t.move_shown(12, 1), "an off tile does not move");
-        let last_on = 18;
+        let last_on = 19;
         assert!(!t.move_shown(last_on, 1), "last shown");
         assert!(t.move_shown(0, 50), "clamped to the last shown tile");
-        assert_eq!(names(&t)[18], "Screenshot");
+        assert_eq!(names(&t)[19], "Screenshot");
     }
 
     #[test]

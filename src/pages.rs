@@ -459,7 +459,7 @@ mod tests {
         p.toggle(Page::Clipboard);
         p.toggle(Page::System);
         // Opened by its tile while it is off.
-        assert_eq!(p.step(Page::Clipboard, 1), Page::Shelf);
+        assert_eq!(p.step(Page::Clipboard, 1), Page::Notifications);
         assert_eq!(p.step(Page::Clipboard, -1), Page::Mixer);
         assert_eq!(p.step(Page::System, 2), Page::Cli);
         // Nothing shown past it: it stays.

@@ -4181,6 +4181,8 @@ mod tests {
         s.apply(Event::Wheel(120), t0);
         assert_eq!(s.view(), View::Panel(Page::Mixer));
         s.apply(Event::Wheel(-240), t0);
+        assert_eq!(s.view(), View::Panel(Page::Notifications));
+        s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::Shelf));
         s.apply(Event::Wheel(-120), t0);
         assert_eq!(s.view(), View::Panel(Page::System));
@@ -4239,7 +4241,7 @@ mod tests {
             s.apply(Event::Wheel(-120), t0),
             vec![Effect::ReleaseClipFocus]
         );
-        assert_eq!(s.view(), View::Panel(Page::Shelf));
+        assert_eq!(s.view(), View::Panel(Page::Notifications));
     }
 
     #[test]

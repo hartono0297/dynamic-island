@@ -3880,7 +3880,7 @@ mod tests {
                             vec![
                                 "Claude".to_owned(),
                                 "Orca".to_owned(),
-                                "Microsoft Teams (work or school) with a very long name".to_owned(),
+                                "Microsoft Teams (work or school)".to_owned(),
                             ]
                         } else {
                             Vec::new()
@@ -5737,6 +5737,8 @@ mod tests {
                     lang,
                     cli_start: start,
                     shell,
+                    // Notifikasi sits above it now: scrolled to the end.
+                    scroll: f32::MAX,
                     ..states()[0].clone()
                 };
                 let l = layout(Section::Features, &s, &Estimate);

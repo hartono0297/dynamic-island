@@ -5689,6 +5689,38 @@ mod tests {
                             r.drain(i..i + buttons);
                         }
                     }
+                    // A Notifikasi row's buttons sit on it, and the page's
+                    // background lies under everything (a click nothing else
+                    // took gives the page the keyboard): both overlap by design.
+                    if let PageLayout::Notifications(l) = &layout {
+                        for row in &l.rows {
+                            if let Some(b) = row.buttons {
+                                for part in [b.open, b.mute, b.remove] {
+                                    assert!(
+                                        part.x >= row.row.x && part.right() <= row.row.right(),
+                                        "{name}"
+                                    );
+                                    assert!(
+                                        part.y >= row.row.y && part.bottom() <= row.row.bottom(),
+                                        "{name}"
+                                    );
+                                }
+                            }
+                        }
+                        let first = |pred: fn(&Hit) -> bool| r.iter().position(|x| pred(&x.hit));
+                        let rows = first(|h| matches!(h, Hit::NotifRow(_)));
+                        let buttons = first(|h| matches!(h, Hit::NotifOpen(_)));
+                        assert!(buttons.is_none_or(|b| rows.is_none_or(|w| b < w)), "{name}");
+                        r.retain(|x| {
+                            !matches!(
+                                x.hit,
+                                Hit::NotifOpen(_)
+                                    | Hit::NotifMute(_)
+                                    | Hit::NotifRemove(_)
+                                    | Hit::NotifFocus
+                            )
+                        });
+                    }
                     for (i, a) in r.iter().enumerate() {
                         for b in &r[i + 1..] {
                             assert!(

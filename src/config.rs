@@ -266,6 +266,10 @@ fn notif_items<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
 /// field is that field's default (each field's own reader).
 fn notif_settings<'de, D: Deserializer<'de>>(d: D) -> Result<NotifSettings, D::Error> {
     let v = serde_json::Value::deserialize(d)?;
+    // Only an object: serde would also read a list as the fields in order.
+    if !v.is_object() {
+        return Ok(NotifSettings::default());
+    }
     Ok(NotifSettings::deserialize(v).unwrap_or_default())
 }
 
