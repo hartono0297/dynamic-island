@@ -32,7 +32,13 @@ Settings card in `settings_layout::notifications_card`.
 *Kecualikan app ini* adds the entry's source to `config.muted_apps` (cut to
 64 characters, any-case duplicates skipped) with `save_merged_with`, editing
 only that field: `muted_apps` stays a file-owned field, it is **not** in
-`merge_owned`. Every way `muted_apps` changes (the row button, Settings,
+`merge_owned`. The add or remove is worked out **inside** the save's closure from the
+file's list (`config::add_muted` / `remove_muted`), never from
+`self.config.muted_apps`, which misses hand edits made while Vale runs.
+Settings removes by name (`NotifMutedRemove(String)`), not by index. The
+Nama EDIT Fitur borrows from the tile form gets `EM_SETLIMITTEXT`
+`MUTED_NAME_MAX` (64) while Fitur shows it and `LABEL_MAX` (14) otherwise
+(`set_name_cue`). Every way `muted_apps` changes (the row button, Settings,
 a hand edit picked up by `adopt_config`) ends in `notif_follow_config`, which
 removes the entries now muted (`NotifHistory::remove_muted`, the same
 case-insensitive substring rule as `is_muted`). Settings-added exclusions

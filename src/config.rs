@@ -214,13 +214,30 @@ pub fn with_muted(list: &[String], name: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// `list` without entry `index`; `None` when there is no such entry.
-pub fn without_muted(list: &[String], index: usize) -> Option<Vec<String>> {
-    (index < list.len()).then(|| {
-        let mut out = list.to_vec();
-        out.remove(index);
-        out
-    })
+/// `list` without `name` (any case, trimmed); `None` when it is not there.
+pub fn without_muted(list: &[String], name: &str) -> Option<Vec<String>> {
+    let name = name.trim().to_lowercase();
+    let at = list.iter().position(|m| m.to_lowercase() == name)?;
+    let mut out = list.to_vec();
+    out.remove(at);
+    Some(out)
+}
+
+/// `name` added to `c.muted_apps` (see `with_muted`). Meant as the edit of a
+/// `save_merged_with`: there `c.muted_apps` is the file's list, so a name
+/// added by hand while Vale runs is kept, not replaced by the list in memory.
+pub fn add_muted(c: &mut Config, name: &str) {
+    if let Some(list) = with_muted(&c.muted_apps, name) {
+        c.muted_apps = list;
+    }
+}
+
+/// `name` taken out of `c.muted_apps` (see `without_muted`); the
+/// `save_merged_with` edit, as for `add_muted`.
+pub fn remove_muted(c: &mut Config, name: &str) {
+    if let Some(list) = without_muted(&c.muted_apps, name) {
+        c.muted_apps = list;
+    }
 }
 
 /// Settings → Fitur → Notifikasi.
@@ -1583,10 +1600,11 @@ mod tests {
         assert_eq!(added[1].chars().count(), MUTED_NAME_MAX);
         assert_eq!(with_muted(&added, &long), None, "the cut name is a repeat");
         assert_eq!(
-            without_muted(&added, 0),
-            Some(vec!["x".repeat(MUTED_NAME_MAX)])
+            without_muted(&added, "CLAUDE "),
+            Some(vec!["x".repeat(MUTED_NAME_MAX)]),
+            "by name, any case"
         );
-        assert_eq!(without_muted(&added, 5), None);
+        assert_eq!(without_muted(&added, "Slack"), None);
     }
 
     #[test]
@@ -2034,6 +2052,34 @@ mod tests {
         assert_eq!(saved.battery_threshold, 35);
         // ...and the island's own settings come from memory, as in any save.
         assert_eq!(owned(&saved), owned(&mem));
+    }
+
+    #[test]
+    fn muted_app_edits_keep_names_added_by_hand() {
+        let tmp = TempDir::new("muted-edits");
+        let path = tmp.file("config.json");
+        // Vale started with [Claude, Orca]; Slack was then added by hand.
+        let mem = Config {
+            muted_apps: vec!["Claude".into(), "Orca".into()],
+            ..Config::default()
+        };
+        let disk = Config {
+            muted_apps: vec!["Claude".into(), "Orca".into(), "Slack".into()],
+            ..mem.clone()
+        };
+        disk.save_to(&path).unwrap();
+        let out = save_merged_with_at(&path, &mem, |c| add_muted(c, "Microsoft Outlook"));
+        let want = ["Claude", "Orca", "Slack", "Microsoft Outlook"];
+        assert_eq!(out.config.muted_apps, want);
+        assert_eq!(on_disk(&path).muted_apps, want);
+        // Orca removed by hand meanwhile: removing Slack (by name) leaves
+        // Claude and Outlook, never a name picked by a stale index.
+        let mut hand = on_disk(&path);
+        hand.muted_apps.retain(|m| m != "Orca");
+        hand.save_to(&path).unwrap();
+        let out = save_merged_with_at(&path, &out.config, |c| remove_muted(c, "slack"));
+        assert_eq!(out.config.muted_apps, ["Claude", "Microsoft Outlook"]);
+        assert_eq!(on_disk(&path).muted_apps, ["Claude", "Microsoft Outlook"]);
     }
 
     #[test]

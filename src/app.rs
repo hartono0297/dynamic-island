@@ -4974,8 +4974,8 @@ impl App {
             SettingsAction::NotifMutedAdd(name) => {
                 self.on_notif_setting(NotifSetting::MutedAdd(name))
             }
-            SettingsAction::NotifMutedRemove(i) => {
-                self.on_notif_setting(NotifSetting::MutedRemove(i))
+            SettingsAction::NotifMutedRemove(name) => {
+                self.on_notif_setting(NotifSetting::MutedRemove(name))
             }
             SettingsAction::NotifClear => self.on_notif_setting(NotifSetting::Clear),
             SettingsAction::ShotTool(v) => self.on_shot_setting(ShotSetting::Tool(v)),

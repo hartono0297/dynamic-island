@@ -460,20 +460,20 @@ impl App {
     }
 
     /// "Kecualikan app ini": the entry's app joins `muted_apps` (unless it is
-    /// muted already), saved over the file's hand edits with only that field
-    /// replaced. `adopt_config` then removes every entry now muted, and an
-    /// open Settings window is brought up to date.
+    /// muted already). The edit is made to the file's list inside the save,
+    /// so names edited by hand meanwhile stay. `adopt_config` then removes
+    /// every entry now muted, and an open Settings window is brought up to
+    /// date.
     fn mute_notif_app(&mut self, id: u64) {
         let Some(source) = self.notif.history.get(id).map(|e| e.source.clone()) else {
             return;
         };
-        if is_muted(&source, &self.config.muted_apps) {
-            return;
-        }
-        if let Some(list) = config::with_muted(&self.config.muted_apps, &source) {
-            self.save_config_with(|c| c.muted_apps = list);
-            self.sync_settings();
-        }
+        self.save_config_with(|c| {
+            if !is_muted(&source, &c.muted_apps) {
+                config::add_muted(c, &source);
+            }
+        });
+        self.sync_settings();
     }
 
     /// Everything out of Vale's list (never Windows' own): memory and file.
@@ -598,16 +598,14 @@ impl App {
             NotifSetting::Record(on) => self.config.notifications.record = on,
             NotifSetting::Items(n) => self.config.notifications.max_items = clamp_cap(n),
             NotifSetting::Persist(on) => self.config.notifications.persist = on,
+            // Both edit the file's list inside the save (`add_muted`), so
+            // names edited by hand meanwhile stay.
             NotifSetting::MutedAdd(name) => {
-                if let Some(list) = config::with_muted(&self.config.muted_apps, &name) {
-                    self.save_config_with(|c| c.muted_apps = list);
-                }
+                self.save_config_with(|c| config::add_muted(c, &name));
                 return;
             }
-            NotifSetting::MutedRemove(index) => {
-                if let Some(list) = config::without_muted(&self.config.muted_apps, index) {
-                    self.save_config_with(|c| c.muted_apps = list);
-                }
+            NotifSetting::MutedRemove(name) => {
+                self.save_config_with(|c| config::remove_muted(c, &name));
                 return;
             }
             NotifSetting::Clear => {
@@ -631,8 +629,8 @@ pub enum NotifSetting {
     Persist(bool),
     /// A name to add to the excluded apps.
     MutedAdd(String),
-    /// The excluded app at this place in the list.
-    MutedRemove(usize),
+    /// An excluded app's name to take out of the list.
+    MutedRemove(String),
     /// "Hapus riwayat notifikasi".
     Clear,
 }

@@ -160,9 +160,10 @@ pub enum Action {
     NotifRecord(bool),
     NotifItems(u32),
     NotifPersist(bool),
-    /// A name for the excluded apps, and the one at this place removed.
+    /// A name for the excluded apps, and one taken out of them (by name: the
+    /// island's list may have changed by hand since the window drew it).
     NotifMutedAdd(String),
-    NotifMutedRemove(usize),
+    NotifMutedRemove(String),
     /// "Hapus riwayat notifikasi".
     NotifClear,
     /// Settings → Clipboard → Screenshot.
@@ -1840,7 +1841,10 @@ impl Settings {
                 }
             }
             Hit::NotifPersist => post(Action::NotifPersist(!m.notif.persist)),
-            Hit::NotifMutedRemove(i) => post(Action::NotifMutedRemove(i)),
+            Hit::NotifMutedRemove(i) => match m.muted.get(i) {
+                Some(name) => post(Action::NotifMutedRemove(name.clone())),
+                None => Vec::new(),
+            },
             // The typed name goes to the island (which trims, cuts, skips a
             // repeat) and the field empties for the next one.
             Hit::NotifMutedAdd => {
@@ -2116,16 +2120,28 @@ fn reset_form() {
     set_cue(CustomKind::App);
 }
 
-/// The Nama field's hint: "Nama aplikasi" while Fitur uses it for the
-/// excluded apps, the form's "Gmail" otherwise.
+/// How many characters the Nama field takes: an excluded app's name while
+/// Fitur uses it (`MUTED_NAME_MAX`), a tile label otherwise (`LABEL_MAX`).
+fn name_limit(section: Section) -> usize {
+    if section == Section::Features {
+        crate::config::MUTED_NAME_MAX
+    } else {
+        LABEL_MAX
+    }
+}
+
+/// The Nama field's hint and length: "Nama aplikasi" and an app name's
+/// length while Fitur uses it for the excluded apps, the form's "Gmail" and a
+/// tile label's length otherwise.
 fn set_name_cue() {
     let Some((name, _)) = tile_edits() else {
         return;
     };
-    let Some((lang, features)) = with(|st| (st.model.lang, st.section == Section::Features)) else {
+    let Some((lang, section)) = with(|st| (st.model.lang, st.section)) else {
         return;
     };
-    let cue = if features {
+    send(name, EM_SETLIMITTEXT, name_limit(section), 0);
+    let cue = if section == Section::Features {
         HSTRING::from(text(lang, Key::NotifMutedHint))
     } else {
         HSTRING::from("Gmail")
@@ -2873,8 +2889,8 @@ pub fn run_demo(args: &[String]) {
                     m.muted = list;
                 }
             }
-            Action::NotifMutedRemove(i) => {
-                if let Some(list) = crate::config::without_muted(&m.muted, i) {
+            Action::NotifMutedRemove(name) => {
+                if let Some(list) = crate::config::without_muted(&m.muted, &name) {
                     m.muted = list;
                 }
             }
@@ -3075,6 +3091,19 @@ pub fn run_demo(args: &[String]) {
 mod tests {
     use super::*;
     use crate::model::Page;
+
+    #[test]
+    fn the_name_field_takes_an_app_name_in_fitur_and_a_label_elsewhere() {
+        for section in Section::ALL {
+            let want = if section == Section::Features {
+                crate::config::MUTED_NAME_MAX
+            } else {
+                LABEL_MAX
+            };
+            assert_eq!(name_limit(section), want, "{section:?}");
+        }
+        assert!(name_limit(Section::Features) >= "Microsoft Teams (work or school)".len());
+    }
 
     #[test]
     fn page_clicks_give_the_changed_pages_or_nothing() {
