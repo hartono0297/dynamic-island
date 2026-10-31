@@ -748,7 +748,7 @@ keys! {
     // The bare PrtSc key opens Vale's own capture (Settings → Clipboard).
     ShotPrintScreen => "Tombol PrtSc", "PrtSc key";
     ShotPrintScreenDesc => "Buka screenshot Vale", "Opens Vale's screenshot";
-    ShotToolDesc => "Yang dibuka tile Screenshot", "What the Screenshot tile opens";
+    ShotToolDesc => "Dipakai tile Screenshot", "Used by the Screenshot tile";
     PrtscHookFailed => "Tombol PrtSc tidak bisa dipasang", "Could not hook the PrtSc key";
     SnapHint => "Klik atau seret · Enter ambil · Esc batal",
         "Click or drag · Enter to capture · Esc to cancel";
@@ -826,8 +826,8 @@ keys! {
     CatFollow => "Ikuti kursor", "Follow the pointer";
     CatFollowDesc => "Kepala menoleh ke arah kursor", "The head turns toward the pointer";
     CatPeek => "Mengecil jadi mata", "Shrink to eyes";
-    CatPeekDesc => "Notch jadi dua mata saat kursor dekat di atas jendela",
-        "The notch shrinks to two eyes when the pointer nears it over a window";
+    CatPeekDesc => "Jadi dua mata saat kursor mendekat di atas jendela",
+        "Two eyes when the pointer nears it over a window";
     CatPeekBehind => "Mati selama \u{201C}Di belakang jendela\u{201D} menyala",
         "Off while \u{201C}Stay behind windows\u{201D} is on";
     CatGreeting => "Sapaan", "Greeting";
