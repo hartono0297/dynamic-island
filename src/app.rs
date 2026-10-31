@@ -94,6 +94,7 @@ use crate::system::{
 use crate::theme::{self, Theme};
 use crate::tiles::ShortcutTiles;
 use crate::ui::app_icon;
+use crate::ui::cat_style::CatLook;
 use crate::ui::cli_input::{self, CliInput, Key as InputKey, WM_APP_CLI_REDRAW};
 use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
@@ -3674,7 +3675,7 @@ impl App {
     /// mode has its own way of getting out of the way), nothing is fullscreen,
     /// the screen is on, and the view is a quiet compact one.
     fn peek_eligible(&self) -> bool {
-        !self.config.stay_behind
+        pointer_watch::peek_allowed(self.config.notch_peek, self.config.stay_behind)
             && !self.fullscreen
             && !self.screen_away()
             && self.win.is_some()
@@ -3697,7 +3698,7 @@ impl App {
     /// music, lyric and timer views its slot is tight, so it stays still there.
     fn look_eligible(&self, now: Instant) -> bool {
         let view = self.state.view();
-        self.config.robot
+        pointer_watch::look_allowed(self.config.robot, self.config.cat_follow_pointer)
             && self.motion().moves()
             && view == View::Idle
             && !self.peek.is_shrunk()
@@ -4759,6 +4760,30 @@ impl App {
                 self.save_config();
                 self.refresh(now);
             }
+            SettingsAction::CatColor(color) => {
+                self.config.cat_color = color;
+                self.save_config();
+                // The cat and (on Auto) the island's surface change now.
+                self.draw(now);
+            }
+            SettingsAction::CatAccessory(accessory) => {
+                self.config.cat_accessory = accessory;
+                self.save_config();
+                self.draw(now);
+            }
+            SettingsAction::CatFollow(on) => {
+                self.config.cat_follow_pointer = on;
+                self.save_config();
+                // `follow_pointer_settings` (from the save) starts or stops
+                // the pointer poll and puts the look back at the centre.
+                self.refresh(now);
+            }
+            SettingsAction::NotchPeek(on) => {
+                self.config.notch_peek = on;
+                self.save_config();
+                // A shrunk notch comes back at once; the poll follows.
+                self.refresh(now);
+            }
             SettingsAction::Greeting(on) => {
                 self.config.morning_greeting = on;
                 self.save_config();
@@ -5020,6 +5045,7 @@ impl App {
             dock: self.dock.frame(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
+            cat: CatLook::of(&self.config),
             fill_alpha,
             legibility: notch_fill::legibility(fill_alpha),
             clock: (self.config.idle_clock && self.drawn == View::Idle)

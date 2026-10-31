@@ -69,6 +69,12 @@ in `merge_owned`), geometry in `src/ui/geometry.rs`, alpha math in
 - Preview card in Settings draws the island at the set size, with a checker
   strip behind it when see-through.
 
+**Labels since v3.8** ([[settings-structure]]): the card is titled "Notch" in
+Tampilan (the preview, then Island, Notch, Jendela); "Latar notch" Hitam |
+Transparan is now **"Isi notch"** Solid | Tembus (EN "Notch fill", Solid |
+See-through) and "Opasitas latar" is "Opasitas", still faded unless Tembus.
+Config values (`notch_fill`: Solid or Transparent) did not change.
+
 ## Settings UI
 
 `Control::Slider` + `Hit::Slider(SliderId)` (`NotchWidth`, `NotchHeight`,

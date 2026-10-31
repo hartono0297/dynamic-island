@@ -53,7 +53,16 @@ asleep and 24 degrees when low. The ear tips stay
 inside every compact island shape (`robot_and_content_share_every_compact_shape`).
 The painter builds each path once, on first use.
 
+**v3.8: coats and accessories.** The cat is no longer always terracotta: four
+coats (Terracotta, Calico, White, Black) and seven accessories, chosen in
+Settings → Kucing, drawn by the same painter with a `CatLook`. The paint
+order, calico patches and rejected mockups are in [[cat-accessories]], the
+colours and the island surface that follows them in
+[[cat-colours-and-surfaces]]. The faces, the ear moods and the pointer rules
+above are unchanged; the logo, tray and the notch-peek eyes stay terracotta.
+The label "Asisten di notch" is now "Kucing di notch".
+
 Related: [[bata-idle-power-budget]], [[bata-morning-greeting]],
-[[studio-bata-logo-sources]]
+[[studio-bata-logo-sources]], [[cat-accessories]], [[cat-colours-and-surfaces]]
 
 Part of [[v3-studio-overview]]. Listed in [[index]].

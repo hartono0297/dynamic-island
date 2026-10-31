@@ -128,6 +128,20 @@ arrived. A small pointer movement costs no frame. The shrink to the eyes is a
 normal morph on the same clock (or settles at once with Motion not Full); while
 the notch is shrunk the blink timer and the equalizer timer are off.
 
+**v3.8: the two toggles, and nothing else.** Settings → Kucing → Gerak has
+"Ikuti kursor" (`cat_follow_pointer`) and "Mengecil jadi mata" (`notch_peek`),
+both on by default. They are the only change to this poll: `look_eligible`
+needs `pointer_watch::look_allowed(robot, cat_follow_pointer)` and
+`peek_eligible` needs `peek_allowed(notch_peek, stay_behind)`, so with both
+off, or neither eligible, `poll_ms` is 0 and **no `TIMER_POINTER` runs**
+(`the_two_toggles_gate_the_poll` tests every combination). A change in
+Settings re-syncs through `adopt_config` -> `follow_pointer_settings`, so the
+poll starts, re-paces or stops at once and the look snaps back to the centre.
+The cat colours and accessories ([[cat-accessories]]) add **no repeating
+timer and no idle frame clock**: the painter builds its paths once per ear
+state and the Kucing preview in Settings is a still picture (the chips only
+repaint the window when clicked).
+
 Gotcha: the System page and the clipboard were built in parallel runs and
 both took ids 17 and 18; the merge moved the clipboard's to 20–22.
 `app::tests::timer_ids_never_collide` now checks every id.

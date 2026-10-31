@@ -1,4 +1,5 @@
 pub mod app_icon;
+pub mod cat_style;
 pub mod cli_input;
 #[cfg(debug_assertions)]
 pub mod demo;

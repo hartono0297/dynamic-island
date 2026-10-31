@@ -31,7 +31,16 @@
 //!   `shelf-move` takes the third of nine off (three rows become two, so
 //!   every card changes place). Made-up names only.
 //! - `DI_LANG=en` draws the UI in English (also for `--demo-editor`).
-//! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme.
+//! - `DI_ACCENT=orange` and `DI_SURFACE=graphite` pick the island theme
+//!   (`espresso`, `graphite`, `sea`, `night`, `plum`; without it, or `auto`,
+//!   the surface follows the cat's colour as in the app).
+//! - `DI_CAT_COLOR=calico` (`terracotta`, `calico`, `white`, `black`) and
+//!   `DI_CAT_ACCESSORY=crown` (`none`, `glasses`, `bow`, `nightcap`, `scarf`,
+//!   `flower`, `crown`) dress the cat in every scene, like `DI_NOTCH`; the
+//!   scenes `bata-colors` (the four coats, each on the surface `auto` gives
+//!   it) and `bata-accessories` (all seven accessories, five faces and the
+//!   notch's 26 px, in the chosen coat) show them side by side
+//!   (`--demo-robot`, or `DI_DEMO_STEP=bata-colors` in `--demo`).
 //! - `DI_CLOCK=0` draws the idle island without its clock.
 //! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
 //!   LRC (`DEMO_LRC`); `DI_DEMO_FADE=0.5` freezes the crossfade from the
@@ -97,6 +106,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_MOUSEACTIVATE, WM_QUIT,
 };
 
+use super::cat_style::CatLook;
 use super::dock::{self, DockFrame};
 use super::geometry::{
     ANIM_MS, NOTCH_OPACITY_DEFAULT, NotchSize, ShapeKind, ShapeRect, ease_out_back, lerp_shape,
@@ -109,7 +119,7 @@ use super::motion::{
 use super::notch_fill::{self, fill_alpha};
 use super::render::{
     CleanerView, CliView, ClipNoticeView, ClipView, DevicesView, FolderMenuView, Frame, MoleView,
-    Progress, Renderer, RobotFrame, SearchView, ShotView, SystemView,
+    Progress, Renderer, RobotFrame, SearchView, SheetKind, ShotView, SystemView,
 };
 use super::robot::{Expr, Pose};
 use super::shelf_motion::{SHELF_ENTER_MS, SHELF_MOVE_MS, SHELF_STAGGER_MS, ShelfMotion};
@@ -133,7 +143,7 @@ use crate::pomodoro::{PomoSettings, Pomodoro};
 use crate::reminders::{Reminder, Repeat};
 use crate::state::MolePhase;
 use crate::system::{Alert, Drive, GIB, ProcUsage, SampleKind, SystemSample, alert_notice};
-use crate::theme::{self, Accent, Palette, Surface};
+use crate::theme::{self, Accent, CatAccessory, CatColor, Palette, Surface};
 use crate::tiles::{CustomKind, CustomTile, ShortcutTiles};
 
 const PHASE: Duration = Duration::from_millis(2000);
@@ -151,6 +161,15 @@ enum Pomo {
     Ready,
     /// A short break, running.
     Break,
+}
+
+/// The cat sheets a scene can draw instead of the island.
+#[derive(Clone, Copy, PartialEq)]
+enum Sheet {
+    No,
+    Faces,
+    Colors,
+    Accessories,
 }
 
 #[derive(Clone, Copy)]
@@ -187,8 +206,8 @@ struct Scene {
     robot: Option<Expr>,
     /// A fixed idle clock instead of the time now.
     clock: Option<&'static str>,
-    /// Bata's sheet of faces instead of the island.
-    sheet: bool,
+    /// One of the cat sheets instead of the island.
+    sheet: Sheet,
     /// The System page with drive C: under the 10 GB warning (ochre).
     system_low: bool,
     /// The cleaner over the System page, and how its button stands.
@@ -397,7 +416,7 @@ const BASE: Scene = Scene {
     long_media: false,
     robot: None,
     clock: None,
-    sheet: false,
+    sheet: Sheet::No,
     system_low: false,
     clean: None,
     clip: ClipDemo::Design,
@@ -592,7 +611,7 @@ const fn devices_page(name: &'static str, which: DevicesDemo) -> Scene {
     }
 }
 
-const SCENES: [Scene; 118] = [
+const SCENES: [Scene; 120] = [
     Scene {
         name: "idle",
         kind: ShapeKind::Idle,
@@ -871,7 +890,17 @@ const SCENES: [Scene; 118] = [
     ),
     Scene {
         name: "bata-sheet",
-        sheet: true,
+        sheet: Sheet::Faces,
+        ..BASE
+    },
+    Scene {
+        name: "bata-colors",
+        sheet: Sheet::Colors,
+        ..BASE
+    },
+    Scene {
+        name: "bata-accessories",
+        sheet: Sheet::Accessories,
         ..BASE
     },
     bata("bata-kosong", ShapeKind::Idle, View0::Idle, Expr::Idle),
@@ -1215,9 +1244,17 @@ fn run_scenes(scenes: &[Scene]) {
     let clip_thumb = demo_thumb();
     let today = Local::now().date_naive();
     let name = |var| std::env::var(var).unwrap_or_default();
+    // `DI_CAT_COLOR`, `DI_CAT_ACCESSORY` and `DI_SURFACE` apply to every
+    // scene; a surface left out (or `auto`) follows the cat, as in the app.
+    let cat = CatLook {
+        color: CatColor::from_name(&name("DI_CAT_COLOR")).unwrap_or_default(),
+        accessory: CatAccessory::from_name(&name("DI_CAT_ACCESSORY")).unwrap_or_default(),
+    };
     let palette = theme::island(
         Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
-        Surface::from_name(&name("DI_SURFACE")).unwrap_or_default(),
+        Surface::from_name(&name("DI_SURFACE"))
+            .unwrap_or_default()
+            .resolve(cat.color, true),
     );
     let calendar = demo_calendar(today, &palette);
     let notes = demo_notes(today);
@@ -1271,11 +1308,16 @@ fn run_scenes(scenes: &[Scene]) {
         };
         let t = frozen_t.unwrap_or((into as f32 / ANIM_MS as f32).min(1.0));
         let (style, scene) = scene(scenes, step);
-        if scene.sheet {
+        if scene.sheet != Sheet::No {
             if step != settled {
                 println!("demo: step {step} {:?} {}", style, scene.name);
                 settled = step;
-                if let Err(error) = renderer.draw_robot_sheet(&win, palette) {
+                let kind = match scene.sheet {
+                    Sheet::Colors => SheetKind::Colors,
+                    Sheet::Accessories => SheetKind::Accessories,
+                    _ => SheetKind::Faces,
+                };
+                if let Err(error) = renderer.draw_robot_sheet(&win, palette, kind, cat) {
                     eprintln!("demo: draw failed: {error}");
                 }
             }
@@ -1499,6 +1541,7 @@ fn run_scenes(scenes: &[Scene]) {
                 }),
                 tiles: scene_tiles(&scene),
                 palette,
+                cat,
                 fill_alpha,
                 legibility: notch_fill::legibility(fill_alpha),
                 clock: match scene.clock {

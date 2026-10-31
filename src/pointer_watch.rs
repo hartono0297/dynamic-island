@@ -38,6 +38,20 @@ pub const LOOK_TAU_MS: f32 = 120.0;
 /// Within this of its target the look snaps there and stops moving.
 pub const LOOK_SNAP: f32 = 0.002;
 
+/// The config's part of "the cat follows the pointer": the cat is on and
+/// "Ikuti kursor" (`cat_follow_pointer`) is on. The rest (motion, the view)
+/// is `App::look_eligible`.
+pub fn look_allowed(robot: bool, follow_pointer: bool) -> bool {
+    robot && follow_pointer
+}
+
+/// The config's part of "the notch may shrink to the eyes": "Mengecil jadi
+/// mata" (`notch_peek`) is on and "Di belakang jendela" is off. The eyes show
+/// with the cat off, so the cat is not asked.
+pub fn peek_allowed(notch_peek: bool, stay_behind: bool) -> bool {
+    notch_peek && !stay_behind
+}
+
 /// The poll's pace in milliseconds; 0 when neither feature wants it. The cat
 /// follows at 33 ms near the top edge and 250 ms far from it; the peek alone
 /// reads as `behind` does (80 ms near, 350 ms far). `near_top`: the pointer is
@@ -312,6 +326,47 @@ mod tests {
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    #[test]
+    fn the_two_toggles_gate_the_poll() {
+        // "Ikuti kursor" needs the cat on; "Mengecil jadi mata" needs
+        // stay-behind off (and does not need the cat).
+        assert!(look_allowed(true, true));
+        assert!(!look_allowed(true, false));
+        assert!(!look_allowed(false, true));
+        assert!(peek_allowed(true, false));
+        assert!(!peek_allowed(false, false));
+        assert!(!peek_allowed(true, true));
+        // The poll the app arms is `poll_ms` of both (the rest of eligibility,
+        // the view, fullscreen and the lock, only ever turns them off).
+        let pace = |robot, follow, peek, behind, near| {
+            poll_ms(
+                look_allowed(robot, follow),
+                peek_allowed(peek, behind),
+                near,
+            )
+        };
+        for near in [false, true] {
+            // Both off: no TIMER_POINTER at all, whatever else is on.
+            assert_eq!(pace(true, false, false, false, near), 0);
+            assert_eq!(pace(false, true, false, false, near), 0);
+            // Both on but the peek blocked by stay-behind and the cat off: none.
+            assert_eq!(pace(false, true, true, true, near), 0);
+            // The cat alone, the peek alone, both.
+            assert_eq!(
+                pace(true, true, false, false, near),
+                poll_ms(true, false, near)
+            );
+            assert_eq!(
+                pace(false, true, true, false, near),
+                poll_ms(false, true, near)
+            );
+            assert_eq!(
+                pace(true, true, true, false, near),
+                poll_ms(true, true, near)
+            );
+        }
     }
 
     #[test]
