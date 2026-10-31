@@ -38,8 +38,9 @@
 //!   `DI_CAT_ACCESSORY=crown` (`none`, `glasses`, `bow`, `nightcap`, `scarf`,
 //!   `flower`, `crown`) dress the cat in every scene, like `DI_NOTCH`; the
 //!   scenes `bata-colors` (the four coats, each on the surface `auto` gives
-//!   it) and `bata-accessories` (all seven accessories, five faces and the
-//!   notch's 26 px, in the chosen coat) show them side by side
+//!   it, or on the one `DI_SURFACE` names) and `bata-accessories` (all seven
+//!   accessories, five faces and the notch's 26 px, in the chosen coat, on
+//!   the palette `DI_SURFACE` and `DI_ACCENT` pick) show them side by side
 //!   (`--demo-robot`, or `DI_DEMO_STEP=bata-colors` in `--demo`).
 //! - `DI_CLOCK=0` draws the idle island without its clock.
 //! - `DI_LYRIC_AT=ms` puts the lyric scenes at that position in the fake
@@ -1250,11 +1251,10 @@ fn run_scenes(scenes: &[Scene]) {
         color: CatColor::from_name(&name("DI_CAT_COLOR")).unwrap_or_default(),
         accessory: CatAccessory::from_name(&name("DI_CAT_ACCESSORY")).unwrap_or_default(),
     };
+    let chosen_surface = Surface::from_name(&name("DI_SURFACE")).unwrap_or_default();
     let palette = theme::island(
         Accent::from_name(&name("DI_ACCENT")).unwrap_or_default(),
-        Surface::from_name(&name("DI_SURFACE"))
-            .unwrap_or_default()
-            .resolve(cat.color, true),
+        chosen_surface.resolve(cat.color, true),
     );
     let calendar = demo_calendar(today, &palette);
     let notes = demo_notes(today);
@@ -1313,7 +1313,7 @@ fn run_scenes(scenes: &[Scene]) {
                 println!("demo: step {step} {:?} {}", style, scene.name);
                 settled = step;
                 let kind = match scene.sheet {
-                    Sheet::Colors => SheetKind::Colors,
+                    Sheet::Colors => SheetKind::Colors(chosen_surface),
                     Sheet::Accessories => SheetKind::Accessories,
                     _ => SheetKind::Faces,
                 };

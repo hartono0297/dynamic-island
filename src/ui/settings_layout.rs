@@ -2737,11 +2737,7 @@ fn cat_page(b: &mut Builder, s: &State) {
 
     titled(b, Key::GroupGreeting);
     let line = crate::i18n::greeting_periods_line(b.lang);
-    let periods = b.wrap(
-        &line,
-        Font::Desc,
-        CONTENT_W - 2.0 * INSET,
-    );
+    let periods = b.wrap(&line, Font::Desc, CONTENT_W - 2.0 * INSET);
     let card = b.card(ROW_H + periods.len() as f32 * DESC_LINE_H + 14.0);
     let x = b.toggle_if(Hit::Greeting, RIGHT, cy(card.y), s.greeting, on);
     let desc = Some((b.t(Key::MorningGreetingDesc), Tone::Secondary));
@@ -4585,11 +4581,7 @@ mod tests {
                     assert!(w <= t.rect.w, "{ctx}: {:?} is {w} in {}", t.text, t.rect.w);
                 }
                 // The red note only when the hook failed.
-                assert_eq!(
-                    shown(&l, text(lang, Key::PrtscHookFailed)),
-                    failed,
-                    "{ctx}"
-                );
+                assert_eq!(shown(&l, text(lang, Key::PrtscHookFailed)), failed, "{ctx}");
                 let note = match lang {
                     Lang::Id => "Tombol PrtSc tidak bisa dipasang",
                     Lang::En => "Could not hook the PrtSc key",

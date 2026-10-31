@@ -54,4 +54,6 @@ starts while the island runs greets at the next wake or unlock, not by itself.
 
 Related: [[bata-morning-greeting]], [[bata-robot-expressions]]
 
+Where the periods are shown in Settings: [[settings-structure]] (Kucing, Sapaan).
+
 Listed in [[index]].

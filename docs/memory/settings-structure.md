@@ -16,7 +16,7 @@ integrations / integrasi, about / tentang. The window opens on Umum.
 |---|---|
 | Umum | **Dasar**: Bahasa, Jalan saat Windows mulai, Tombol pintas pencarian. **Peringatan**: Baterai (off on a PC without one), Disk, RAM, Popup Windows with "Buka petunjuk" |
 | Tampilan | the preview; **Island**: Gaya island, Warna aksen, Warna dasar (swatches), Jam saat kosong. **Notch**: Lebar, Tinggi, Ukuran bawaan, Isi notch (Solid / Tembus), Opasitas. **Jendela**: Mode jendela |
-| Kucing | the preview (cat about 64 px on the resolved surface, the idle notch at real size with the clock, chips Diam / Senang / Kedip / Tidur / Menyapa); **Kucing**: Kucing di notch, Warna, "Latar: <name>" with "Ubah", Aksesori tiles; **Gerak**: Animasi, Tidur setelah, Ikuti kursor, Mengecil jadi mata; **Sapaan**: the toggle and the five periods |
+| Kucing | the preview (cat about 64 px on the resolved surface, the idle notch at real size with the clock, chips Diam / Senang / Kedip / Tidur / Menyapa); **Kucing**: Kucing di notch, Warna, "Latar: <name>" with "Ubah", Aksesori tiles; **Gerak**: Animasi, Tidur setelah, Ikuti kursor, Mengecil jadi mata; **Sapaan**: the toggle (one key, `CatGreeting`, with `MorningGreetingDesc` under it) and one read-only line of the five periods, built from `greeting.rs` (`DayPeriod::ALL`, `hours()`) and `i18n::greeting_title` by `i18n::greeting_periods_line`, so the hours cannot drift from `period_at` ([[greeting-periods]]) |
 | Panel | **Perilaku**: Mode buka, Di belakang jendela. **Halaman panel**, **Pintasan**, **Tersedia** (the lists and the own-tile form, [[panel-pages]], [[shortcut-tiles]]) |
 | Clipboard | **Riwayat**; **Screenshot** ([[screenshot-preview]]) |
 | Fitur | **Pomodoro** (4 steppers and the running note), **Musik** (Lirik di notch), **CLI** (Folder awal, Shell), **Perangkat** (Notifikasi perangkat, Tombol pintas), **Pembersih** (Lindungi cache Cargo & Autodesk di Mole) |
@@ -32,7 +32,7 @@ checks it. Every row keeps its exact behaviour: the same `Hit`, `Action` and
 - Labels: "Latar island" is "Warna dasar", "Latar notch" Hitam | Transparan is
   "Isi notch" Solid | Tembus ("Notch fill", "See-through"), "Opasitas latar"
   is "Opasitas", "Asisten di notch" is "Kucing di notch", "Sapaan pagi" is
-  "Sapaan" (a new key; the greeting's own text is untouched), "Notice
+  "Sapaan" (`CatGreeting`; the old `MorningGreeting` key is gone, the description is unchanged), "Notice
   perangkat" is "Notifikasi perangkat", "Pintasan Perangkat" and the
   clipboard's "Pintasan" are "Tombol pintas", the search row is "Tombol pintas
   pencarian", "Notifikasi salinan" is "Pratinjau salinan", "Disalin untuk

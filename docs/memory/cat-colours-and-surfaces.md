@@ -75,7 +75,14 @@ a real `false`. Old files load unchanged.
 
 `DI_CAT_COLOR`, `DI_CAT_ACCESSORY` and `DI_SURFACE` apply to every `--demo`
 scene (an unset or `auto` surface follows the cat, as in the app); the scenes
-`bata-colors` (the four coats on the surface Auto gives each) and
-`bata-accessories` are in `--demo-robot`.
+`bata-colors` and `bata-accessories` are in `--demo-robot`.
+
+- `bata-colors`: with `DI_SURFACE` unset or `auto`, each coat sits on the
+  surface Auto gives it; with a concrete surface (say `graphite`) every coat's
+  swatch uses that one (the unresolved choice travels in `SheetKind::Colors`
+  and is resolved per coat, which gives the same surface each time).
+- `bata-accessories`: draws on the demo's own palette (`self.palette`, so
+  `DI_SURFACE` and `DI_ACCENT` count). With no env vars that is Auto resolved
+  from `DI_CAT_COLOR`, as before.
 
 Related: [[bata-robot-expressions]], [[settings-structure]]

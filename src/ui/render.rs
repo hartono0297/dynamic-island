@@ -49,8 +49,8 @@ use super::cat_style::CatLook;
 use super::dock::{DockFrame, DockZone};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
-    EYES_H, ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
+    BAR_GAP, BAR_W, EYES_H, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
+    ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
     corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
     lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
     shot_regions, shoulder_depth,
@@ -394,7 +394,9 @@ pub struct RobotFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SheetKind {
     Faces,
-    Colors,
+    /// The four coats; the `Surface` is the one chosen (`DI_SURFACE`),
+    /// unresolved: `Auto` gives each coat its own, any other is every coat's.
+    Colors(crate::theme::Surface),
     Accessories,
 }
 
@@ -956,7 +958,7 @@ impl Renderer {
         self.cat.set(look);
         match kind {
             SheetKind::Faces => self.paint_robot_sheet(),
-            SheetKind::Colors => self.paint_colors_sheet(),
+            SheetKind::Colors(surface) => self.paint_colors_sheet(surface),
             SheetKind::Accessories => self.paint_accessories_sheet(look),
         }
         let target = self.target.as_ref().expect("target ensured above");
@@ -964,13 +966,14 @@ impl Renderer {
         self.present(win, 1.0)
     }
 
-    /// `bata-colors`: the four coats, each on the surface `Auto` gives it,
-    /// as the faces of the idle island and at the notch's 26 px.
+    /// `bata-colors`: the four coats, each on the surface `chosen` gives it
+    /// (`Auto`: the one the coat asks for; any other surface: that one for
+    /// every coat), as the faces of the idle island and at the notch's 26 px.
     #[cfg(debug_assertions)]
-    fn paint_colors_sheet(&self) {
+    fn paint_colors_sheet(&self, chosen: crate::theme::Surface) {
         use super::geometry::ROBOT_COMPACT;
         use super::robot::Expr;
-        use crate::theme::{CatColor, Surface};
+        use crate::theme::CatColor;
         let card = Rect {
             x: 20.0,
             y: 8.0,
@@ -982,7 +985,7 @@ impl Renderer {
         let col = (card.w - 40.0) / 4.0;
         let faces = [Expr::Idle, Expr::Happy, Expr::Sleep, Expr::Alert];
         for (c, color) in CatColor::ALL.iter().copied().enumerate() {
-            let surface = Surface::Auto.resolve(color, true);
+            let surface = chosen.resolve(color, true);
             let pal = theme::island(Accent::default(), surface);
             let look = CatLook {
                 color,
@@ -1044,20 +1047,21 @@ impl Renderer {
     }
 
     /// `bata-accessories`: every accessory on the cat in the chosen colour
-    /// (`DI_CAT_COLOR`), the idle, sad (ears turned), alert (ears up) and
-    /// sleeping faces, and at the notch's 26 px.
+    /// (`DI_CAT_COLOR`), on the demo's palette (`self.palette`: `DI_SURFACE`,
+    /// `DI_ACCENT`, `Auto` following the coat), the idle, sad (ears turned),
+    /// alert (ears up) and sleeping faces, and at the notch's 26 px.
     #[cfg(debug_assertions)]
     fn paint_accessories_sheet(&self, base: CatLook) {
         use super::geometry::ROBOT_COMPACT;
         use super::robot::Expr;
-        use crate::theme::{CatAccessory, Surface};
+        use crate::theme::CatAccessory;
         let card = Rect {
             x: 20.0,
             y: 8.0,
             w: 580.0,
             h: 440.0,
         };
-        let pal = theme::island(Accent::default(), Surface::Auto.resolve(base.color, true));
+        let pal = self.palette;
         self.set_color(pal.surface, 1.0);
         self.fill_round(card, radius::PANEL);
         let n = CatAccessory::ALL.len() as f32;

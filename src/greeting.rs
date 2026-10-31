@@ -148,10 +148,7 @@ mod tests {
     #[test]
     fn every_hour_falls_in_the_period_whose_range_holds_it() {
         use DayPeriod::*;
-        assert_eq!(
-            DayPeriod::ALL,
-            [Morning, Midday, Afternoon, Evening, Night]
-        );
+        assert_eq!(DayPeriod::ALL, [Morning, Midday, Afternoon, Evening, Night]);
         for h in 0..=23u32 {
             let owners: Vec<DayPeriod> = DayPeriod::ALL
                 .into_iter()
