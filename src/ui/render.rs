@@ -49,7 +49,7 @@ use super::cat_style::CatLook;
 use super::dock::{DockFrame, DockZone};
 use super::fonts::{self, Face, Role};
 use super::geometry::{
-    BAR_GAP, BAR_W, EYES_H, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
+    BAR_COUNT, BAR_GAP, BAR_W, EYES_H, HitRegions, LYRIC_FADE_W, Rect, SHOT_BUTTON_PAD, SHOT_THUMB_RADIUS,
     ShapeRect, Under, badge_letter, badge_style, compact_layout, compact_layout_robot,
     corner_radius, equalizer_heights, idle_layout, lyric_layout, lyric_layout_robot,
     lyric_overflow, notice_action, notice_action_w, notice_layout, shot_fit, shot_layout,
@@ -192,6 +192,10 @@ pub struct Frame<'a> {
     /// The closed island is shrunk to the eyes (`ShapeKind::Eyes`): the pill
     /// holds only the cat's two open eyes, whatever the view or `robot`.
     pub eyes: bool,
+    /// The compact view's equalizer bar heights from the real sound
+    /// (`geometry::audio_bar_heights`); `None` draws the sine of
+    /// `equalizer_heights`, as paused media and the demos do.
+    pub eq_heights: Option<[f32; BAR_COUNT]>,
     /// The morph between the eyes and the notch is running: the cat fades in
     /// with the rest of the content instead of staying at full strength as
     /// it does when one compact view replaces another.
@@ -1497,7 +1501,8 @@ impl Renderer {
         let robot = frame.robot;
         let content = match view {
             View::MediaCompact => frame.media.map_or(Ok(()), |m| {
-                self.paint_compact(style, shape, m, frame.now, frame.progress, robot)
+                let eq = frame.eq_heights.filter(|_| m.playing);
+                self.paint_compact(style, shape, m, frame.now, frame.progress, robot, eq)
             }),
             View::MediaLyric => {
                 let scroll = (frame.lyric_scroll, frame.lyric_prev_scroll);
@@ -1640,6 +1645,7 @@ impl Renderer {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_compact(
         &mut self,
         style: Style,
@@ -1648,6 +1654,7 @@ impl Renderer {
         now: Instant,
         progress: Option<Progress>,
         robot: Option<RobotFrame>,
+        eq: Option<[f32; BAR_COUNT]>,
     ) -> Result<()> {
         let layout = match robot {
             Some(_) => compact_layout_robot(shape),
@@ -1678,7 +1685,7 @@ impl Renderer {
         // Every bar's frequency × 10 s is a whole number of cycles, so the
         // clock can wrap at 10 s without a jump and stays precise for f32.
         let t = (now.saturating_duration_since(self.epoch).as_secs_f64() % 10.0) as f32;
-        let heights = equalizer_heights(t, media.playing);
+        let heights = eq.unwrap_or_else(|| equalizer_heights(t, media.playing));
         unsafe { target.brush.SetColor(&color(self.palette.accent, 1.0)) };
         for (i, h) in heights.into_iter().enumerate() {
             let bar = Rect {

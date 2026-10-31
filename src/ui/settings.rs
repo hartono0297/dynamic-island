@@ -124,6 +124,7 @@ pub enum Action {
     Lang(Lang),
     Autostart(bool),
     IdleClock(bool),
+    EqFollowAudio(bool),
     StayBehind(bool),
     Lyrics(bool),
     Shell(Shell),
@@ -283,6 +284,7 @@ pub struct Model {
     pub lang: Lang,
     pub autostart: bool,
     pub idle_clock: bool,
+    pub eq_follow_audio: bool,
     pub stay_behind: bool,
     pub lyrics: bool,
     pub shell: Shell,
@@ -339,6 +341,7 @@ impl Model {
             lang: cfg.language,
             autostart: cfg.start_with_windows,
             idle_clock: cfg.idle_clock,
+            eq_follow_audio: cfg.eq_follow_audio,
             stay_behind: cfg.stay_behind,
             lyrics: cfg.lyrics,
             shell: cfg.cli_shell,
@@ -1162,6 +1165,7 @@ impl Settings {
             window: m.window,
             autostart: m.autostart,
             idle_clock: m.idle_clock,
+            eq_follow_audio: m.eq_follow_audio,
             stay_behind: m.stay_behind,
             robot: m.robot,
             robot_motion: m.robot_motion,
@@ -1365,6 +1369,14 @@ impl Settings {
         if old.idle_clock != new.idle_clock {
             self.anims
                 .slide_toggle(Hit::IdleClock, old.idle_clock, new.idle_clock, now);
+        }
+        if old.eq_follow_audio != new.eq_follow_audio {
+            self.anims.slide_toggle(
+                Hit::EqFollowAudio,
+                old.eq_follow_audio,
+                new.eq_follow_audio,
+                now,
+            );
         }
         if old.stay_behind != new.stay_behind {
             self.anims
@@ -1732,6 +1744,7 @@ impl Settings {
             Hit::Lang(v) if v != m.lang => post(Action::Lang(v)),
             Hit::Autostart => post(Action::Autostart(!m.autostart)),
             Hit::IdleClock => post(Action::IdleClock(!m.idle_clock)),
+            Hit::EqFollowAudio => post(Action::EqFollowAudio(!m.eq_follow_audio)),
             Hit::StayBehind => post(Action::StayBehind(!m.stay_behind)),
             Hit::Lyrics => post(Action::Lyrics(!m.lyrics)),
             Hit::Shell(v) if v != m.shell => post(Action::Shell(v)),
@@ -2731,6 +2744,7 @@ pub fn run_demo(args: &[String]) {
             }
             Action::Autostart(v) => m.autostart = v,
             Action::IdleClock(v) => m.idle_clock = v,
+            Action::EqFollowAudio(v) => m.eq_follow_audio = v,
             Action::StayBehind(v) => m.stay_behind = v,
             Action::Lyrics(v) => m.lyrics = v,
             Action::Shell(v) => m.shell = v,

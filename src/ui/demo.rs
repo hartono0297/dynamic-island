@@ -1571,6 +1571,7 @@ fn run_scenes(scenes: &[Scene]) {
                     pose: Pose::default().looking(scene.look),
                 }),
                 eyes: scene.kind == ShapeKind::Eyes,
+                eq_heights: None,
                 robot_fades: false,
                 system: Some(&system),
                 cleaner: cleaner.as_ref(),
