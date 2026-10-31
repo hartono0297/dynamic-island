@@ -9,7 +9,8 @@ use crate::config::OpenMode;
 use crate::i18n::{self, Key, text};
 use crate::lyrics;
 use crate::model::{
-    CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, Notice, NoticeKind, Page,
+    CalView, ClipAction, Effect, Event, Hit, MediaCommand, MediaInfo, NotifAction, Notice,
+    NoticeKind, Page,
     Shortcut, ShotAction, Timeline, View,
 };
 use crate::mole::MoleOpts;
@@ -233,6 +234,12 @@ pub struct IslandState {
     /// The Clipboard search field has the keyboard; it keeps the panel open
     /// like the CLI input.
     clip_focused: bool,
+    /// The Notifikasi page's hidden input has the keyboard; it keeps the
+    /// panel open like the CLI input.
+    notif_focused: bool,
+    /// "Hapus semua" was clicked once: armed ("Yakin?") until then, a second
+    /// click before it clears the history. Anything else disarms it.
+    notif_armed: Option<Instant>,
     /// A hotkey opened the panel on this page (the Clipboard's or the
     /// Devices'): it stays open (no hover, no keyboard) until the pointer
     /// comes (then hover holds it), the hotkey again, a copy, or
@@ -321,6 +328,8 @@ impl IslandState {
             cli_scroll: 0,
             cli_menu: false,
             clip_focused: false,
+            notif_focused: false,
+            notif_armed: None,
             hotkey_held: None,
             shelf_held: false,
             shelf_drop: DropVisit::No,
@@ -546,6 +555,7 @@ impl IslandState {
             Event::EditorOpen(on) => self.editor_open = on,
             Event::CliFocus(on) => self.cli_focused = on,
             Event::ClipFocus(on) => self.clip_focused = on,
+            Event::NotifFocus(on) => self.notif_focused = on,
             Event::ClipHotkey => self.clip_hotkey(),
             Event::ClipHoldEnd => self.hotkey_held = None,
             Event::DevicesHotkey => self.devices_hotkey(),
@@ -608,6 +618,7 @@ impl IslandState {
             Event::ReminderCleared(id) => self.clear_sticky(Sticky::Reminder(&id)),
             Event::Click(hit) => self.click(hit, now, &mut effects),
             Event::Calendar(_)
+            | Event::Toast(_)
             | Event::Lyrics(_)
             | Event::Cli(_)
             | Event::ExplorerFolders { .. }
@@ -724,6 +735,16 @@ impl IslandState {
         if self.clip_focused && (self.page != Page::Clipboard || self.collapsed != Collapse::No) {
             self.clip_focused = false;
             effects.push(Effect::ReleaseClipFocus);
+        }
+        if self.notif_focused
+            && (self.page != Page::Notifications || self.collapsed != Collapse::No)
+        {
+            self.notif_focused = false;
+            effects.push(Effect::ReleaseNotifFocus);
+        }
+        // "Hapus semua" disarms with its page or the panel.
+        if self.notif_armed.is_some() && (self.page != Page::Notifications || !self.panel_open()) {
+            self.notif_armed = None;
         }
         if self
             .hotkey_held
@@ -918,6 +939,7 @@ impl IslandState {
             notice,
             self.pomodoro.next_deadline(),
             armed,
+            self.notif_armed,
             self.linger_until,
         ]
         .into_iter()
@@ -943,8 +965,12 @@ impl IslandState {
             && !self.fullscreen
     }
 
-    /// The armed cleaner button turns back once `CLEAN_CONFIRM` has passed.
+    /// The armed cleaner button (and "Hapus semua" of the Notifikasi page)
+    /// turns back once `CLEAN_CONFIRM` has passed.
     fn expire_confirm(&mut self, now: Instant) {
+        if self.notif_armed.is_some_and(|until| until <= now) {
+            self.notif_armed = None;
+        }
         if let Some(c) = &mut self.cleaner
             && c.armed_until.is_some_and(|until| until <= now)
         {
@@ -1133,6 +1159,7 @@ impl IslandState {
                 || self.editor_open
                 || self.cli_focused
                 || self.clip_focused
+                || self.notif_focused
                 || self.hotkey_held.is_some()
                 || self.shelf_held
                 || self.search_open)
@@ -1153,7 +1180,9 @@ impl IslandState {
             // A page turned by the wheel (a notch that did not turn one
             // arms nothing).
             Event::Wheel(_) | Event::PageFlick { .. } => LingerTrigger::PageTurn,
-            Event::CliFocus(false) | Event::ClipFocus(false) => LingerTrigger::StillOpen,
+            Event::CliFocus(false) | Event::ClipFocus(false) | Event::NotifFocus(false) => {
+                LingerTrigger::StillOpen
+            }
             _ => LingerTrigger::No,
         }
     }
@@ -1202,6 +1231,7 @@ impl IslandState {
                 || self.editor_open
                 || self.cli_focused
                 || self.clip_focused
+                || self.notif_focused
                 || self.lingering
             {
                 self.collapse();
@@ -1233,6 +1263,7 @@ impl IslandState {
         }
         self.cli_focused = false;
         self.clip_focused = false;
+        self.notif_focused = false;
         if self.page != Page::Search {
             self.search_prev = self.page;
         }
@@ -1286,6 +1317,16 @@ impl IslandState {
         self.clip_focused
     }
 
+    /// The Notifikasi page's hidden input has the keyboard.
+    pub fn notif_focused(&self) -> bool {
+        self.notif_focused
+    }
+
+    /// "Hapus semua" waits for its second click.
+    pub fn notif_armed(&self) -> bool {
+        self.notif_armed.is_some()
+    }
+
     /// The quick search is open.
     pub fn search_open(&self) -> bool {
         self.search_open
@@ -1332,6 +1373,10 @@ impl IslandState {
             && let Some(c) = &mut self.cleaner
         {
             c.armed_until = None;
+        }
+        // Any click but its own disarms "Hapus semua".
+        if !matches!(hit, Hit::NotifClear) {
+            self.notif_armed = None;
         }
         match hit {
             // Click mode: the compact island opens the panel (a ready
@@ -1640,6 +1685,34 @@ impl IslandState {
                 }
             }
             Hit::CleanGo => self.clean_go(now, effects),
+            // The Notifikasi page's controls count only while it shows.
+            Hit::NotifRow(_)
+            | Hit::NotifOpen(_)
+            | Hit::NotifMute(_)
+            | Hit::NotifRemove(_)
+            | Hit::NotifPause
+            | Hit::NotifClear
+            | Hit::NotifFocus
+            | Hit::NotifSettings
+                if self.view() != View::Panel(Page::Notifications) => {}
+            // A row and its "Buka" both open the app and mark it read.
+            Hit::NotifRow(id) | Hit::NotifOpen(id) => {
+                effects.push(Effect::Notif(NotifAction::Open(id)))
+            }
+            Hit::NotifMute(id) => effects.push(Effect::Notif(NotifAction::Mute(id))),
+            Hit::NotifRemove(id) => effects.push(Effect::Notif(NotifAction::Remove(id))),
+            Hit::NotifPause => effects.push(Effect::Notif(NotifAction::TogglePause)),
+            Hit::NotifSettings => effects.push(Effect::Notif(NotifAction::OpenSettings)),
+            // The first click arms; a second within `CLEAN_CONFIRM` clears.
+            Hit::NotifClear => match self.notif_armed.take() {
+                Some(until) if now < until => {
+                    effects.push(Effect::Notif(NotifAction::ClearAll));
+                }
+                _ => self.notif_armed = Some(now + CLEAN_CONFIRM),
+            },
+            // The list's background or the title: the page takes the
+            // keyboard (the island activates, as for the CLI input).
+            Hit::NotifFocus => effects.push(Effect::FocusNotifInput),
             Hit::ClipSearch
             | Hit::ClipCard(_)
             | Hit::ClipPin(_)
@@ -3438,6 +3511,7 @@ mod tests {
                 Page::Media,
                 Page::Mixer,
                 Page::Clipboard,
+                Page::Notifications,
                 Page::Shelf,
                 Page::System,
                 Page::Devices,

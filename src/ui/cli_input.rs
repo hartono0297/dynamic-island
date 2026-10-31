@@ -21,12 +21,13 @@ use windows::Win32::UI::Input::Ime::{
     CFS_POINT, COMPOSITIONFORM, ImmGetContext, ImmReleaseContext, ImmSetCompositionWindow,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, SetFocus, VK_A, VK_C, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_NEXT, VK_PRIOR,
+    GetFocus, GetKeyState, SetFocus, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_NEXT,
+    VK_PRIOR,
     VK_RETURN, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetParent, GetWindowTextLengthW,
+    CreateWindowExW, DLGC_WANTALLKEYS, ES_AUTOHSCROLL, GetDlgCtrlID, GetParent, GetWindowTextLengthW,
     GetWindowTextW, HMENU, PostMessageW, SendMessageW, SetWindowTextW, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLEAR, WM_CUT, WM_GETDLGCODE, WM_IME_COMPOSITION,
     WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PASTE,
@@ -52,6 +53,8 @@ pub enum Key {
     Escape,
     PageUp,
     PageDown,
+    /// Delete, only for the Notifikasi page's input (the other inputs edit).
+    Delete,
     /// The EDIT lost the keyboard.
     Blur,
 }
@@ -62,6 +65,8 @@ const ID_INPUT: isize = 201;
 pub const ID_CLIP_SEARCH: isize = 202;
 /// The quick search field's control id.
 pub const ID_SEARCH: isize = 203;
+/// The Notifikasi page's control id.
+pub const ID_NOTIF: isize = 204;
 
 thread_local! {
     /// The island (where redraws are posted) and whether one is pending.
@@ -261,6 +266,12 @@ unsafe extern "system" fn input_proc(
             };
             if let Some(k) = ours {
                 notify(data, k);
+                return LRESULT(0);
+            }
+            // Delete is the Notifikasi page's (remove the selected row); the
+            // other inputs keep it for editing their text.
+            if key == VK_DELETE.0 && unsafe { GetDlgCtrlID(hwnd) } == ID_NOTIF as i32 {
+                notify(data, Key::Delete);
                 return LRESULT(0);
             }
             if key == VK_A.0 && ctrl_down() {

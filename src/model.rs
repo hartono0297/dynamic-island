@@ -7,6 +7,7 @@ use crate::audio::MixerRow;
 use crate::calendar::CalendarSnapshot;
 use crate::clean::{CleanCat, CleanEvent, CleanMode};
 use crate::cli::CliEvent;
+use crate::clipboard::image::Thumb;
 use crate::config::OpenMode;
 use crate::devices::DevicesEvent;
 use crate::greeting::DayPeriod;
@@ -29,6 +30,18 @@ pub struct Notice {
     pub title: String,
     pub body: String,
     pub kind: NoticeKind,
+}
+
+/// A Windows toast as the poller caught it, before anything decides where it
+/// goes (`notif::route_toast`): the notch notice it makes, when it was
+/// caught, and the app's logo the first time this run it was seen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toast {
+    pub notice: Notice,
+    /// Unix seconds.
+    pub at: i64,
+    /// The logo key (`notif::logo_key`) and the picture, at most 48 x 48.
+    pub logo: Option<(String, Thumb)>,
 }
 
 /// `Notice::key` of a copy preview of an image: its badge spot is the
@@ -151,6 +164,10 @@ pub enum Event {
     /// ignores it.
     Lyrics(LyricsFound),
     Notice(Notice),
+    /// A fresh Windows toast from the poller (never muted or filtered
+    /// there). `App` routes it: the notch (`Notice`) and the Notifikasi
+    /// history; the reducer ignores it.
+    Toast(Toast),
     ClaudeActivity {
         session_id: String,
     },
@@ -180,6 +197,9 @@ pub enum Event {
     /// The Clipboard page's search field has the keyboard (true) or lost it;
     /// it keeps the panel open like the CLI input.
     ClipFocus(bool),
+    /// The Notifikasi page's hidden input has the keyboard (true) or lost
+    /// it; it keeps the panel open like the CLI input.
+    NotifFocus(bool),
     /// The optional global hotkey: opens the panel on the Clipboard page
     /// (without taking the foreground), or closes it when it shows that.
     ClipHotkey,
@@ -443,6 +463,18 @@ pub enum Hit {
     MoleShowLog,
     /// The Clipboard page's search field: it takes the keyboard.
     ClipSearch,
+    /// The Notifikasi page: a row (entry id: opens its app), the selected
+    /// row's "Buka", "Kecualikan app ini" and X, the header's "Jeda" and
+    /// "Hapus semua", the list's background or the title (the page takes the
+    /// keyboard) and the no-access "Buka pengaturan".
+    NotifRow(u64),
+    NotifOpen(u64),
+    NotifMute(u64),
+    NotifRemove(u64),
+    NotifPause,
+    NotifClear,
+    NotifFocus,
+    NotifSettings,
     /// A Clipboard card (entry id): copied again.
     ClipCard(u64),
     /// The selected card's buttons: pin or unpin, copy as plain text, delete.
@@ -557,6 +589,13 @@ pub enum Effect {
     /// The search field lets go; the window that had the keyboard gets it
     /// back.
     ReleaseClipFocus,
+    /// Give the Notifikasi page's hidden input the keyboard (the island
+    /// activates).
+    FocusNotifInput,
+    /// The page lets go; the window that had the keyboard gets it back.
+    ReleaseNotifFocus,
+    /// Something to do with a notification entry or the page's header.
+    Notif(NotifAction),
     /// Give the quick search's field the keyboard (the island activates).
     FocusSearch,
     /// The quick search is gone: the keyboard goes back.
@@ -587,6 +626,23 @@ pub enum ShotAction {
     DeleteIgnored(u64),
     /// The thumbnail: the file in its default app.
     Open(u64),
+}
+
+/// What a Notifikasi row, its buttons or the header ask for (entry id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotifAction {
+    /// Mark read and, when the entry knows its app, bring that app forward.
+    Open(u64),
+    /// "Kecualikan app ini": the entry's app joins `muted_apps`.
+    Mute(u64),
+    /// The X: out of Vale's list only (never the Windows Action Center).
+    Remove(u64),
+    /// "Jeda".
+    TogglePause,
+    /// The confirmed "Hapus semua".
+    ClearAll,
+    /// The no-access button: Windows' notification privacy page.
+    OpenSettings,
 }
 
 /// What a Clipboard card's click or button asks for.
@@ -623,6 +679,8 @@ pub enum Page {
     Mixer,
     /// The clipboard history.
     Clipboard,
+    /// Notifikasi: the Windows toasts the island caught.
+    Notifications,
     /// The file shelf: files left on the island to take out later.
     Shelf,
     /// Sistem: CPU, RAM, disks and the busiest processes.
@@ -639,7 +697,7 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 12] = [
+    pub const ALL: [Page; 13] = [
         Page::Calendar,
         Page::Pomodoro,
         Page::Reminders,
@@ -647,6 +705,7 @@ impl Page {
         Page::Media,
         Page::Mixer,
         Page::Clipboard,
+        Page::Notifications,
         Page::Shelf,
         Page::System,
         Page::Devices,
@@ -674,7 +733,7 @@ pub enum Shortcut {
 }
 
 impl Shortcut {
-    pub const ALL: [Shortcut; 20] = [
+    pub const ALL: [Shortcut; 21] = [
         Shortcut::Screenshot,
         Shortcut::Clipboard,
         Shortcut::Search,
@@ -691,6 +750,7 @@ impl Shortcut {
         Shortcut::Go(Page::Notes),
         Shortcut::Go(Page::Media),
         Shortcut::Go(Page::Mixer),
+        Shortcut::Go(Page::Notifications),
         Shortcut::Go(Page::Shelf),
         Shortcut::Go(Page::System),
         Shortcut::Go(Page::Devices),

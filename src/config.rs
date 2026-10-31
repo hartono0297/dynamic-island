@@ -29,6 +29,10 @@ pub struct Config {
     pub style: Style,
     pub battery_threshold: u8,
     pub start_with_windows: bool,
+    /// Apps whose toasts never reach the notch or the history (a case-
+    /// insensitive part of the app's name). Owned by the file; the settings
+    /// window and the Notifikasi page edit it through `save_merged_with`.
+    #[serde(deserialize_with = "muted_apps")]
     pub muted_apps: Vec<String>,
     pub onboarding_done: bool,
     pub pomodoro: PomoSettings,
@@ -159,6 +163,110 @@ pub struct Config {
     /// pointer over a window (default on).
     #[serde(deserialize_with = "default_on")]
     pub notch_peek: bool,
+    /// The Notifikasi page's history (Settings → Fitur → Notifikasi).
+    #[serde(deserialize_with = "notif_settings")]
+    pub notifications: NotifSettings,
+}
+
+/// The apps muted until the owner says otherwise.
+pub fn default_muted_apps() -> Vec<String> {
+    vec!["Claude".into(), "Orca".into()]
+}
+
+/// The longest name Settings or the Notifikasi page adds to `muted_apps`.
+pub const MUTED_NAME_MAX: usize = 64;
+
+/// `muted_apps` read leniently: anything that is not a list is the default
+/// (Claude, Orca); items that are not strings go; each name is trimmed;
+/// empty names and repeats (any case) go.
+fn muted_apps<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    let Some(items) = v.as_array() else {
+        return Ok(default_muted_apps());
+    };
+    let mut out: Vec<String> = Vec::new();
+    for name in items.iter().filter_map(serde_json::Value::as_str) {
+        let name = name.trim();
+        if !name.is_empty() && !out.iter().any(|m| m.eq_ignore_ascii_case(name)) {
+            out.push(name.to_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// `list` with `name` added: trimmed, at most `MUTED_NAME_MAX` characters,
+/// not empty, and not there already (any case). `None` when nothing is added.
+pub fn with_muted(list: &[String], name: &str) -> Option<Vec<String>> {
+    let name = name.trim();
+    let name = match name.char_indices().nth(MUTED_NAME_MAX) {
+        Some((i, _)) => name[..i].trim_end(),
+        None => name,
+    };
+    if name.is_empty() || list.iter().any(|m| m.to_lowercase() == name.to_lowercase()) {
+        return None;
+    }
+    let mut out = list.to_vec();
+    out.push(name.to_owned());
+    Some(out)
+}
+
+/// `list` without entry `index`; `None` when there is no such entry.
+pub fn without_muted(list: &[String], index: usize) -> Option<Vec<String>> {
+    (index < list.len()).then(|| {
+        let mut out = list.to_vec();
+        out.remove(index);
+        out
+    })
+}
+
+/// Settings → Fitur → Notifikasi.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct NotifSettings {
+    /// "Simpan notifikasi": the page keeps the toasts it catches.
+    #[serde(deserialize_with = "default_on")]
+    pub record: bool,
+    /// "Jumlah maksimal", kept in 10–200 by 10.
+    #[serde(deserialize_with = "notif_items")]
+    pub max_items: u32,
+    /// "Simpan setelah restart": an encrypted file, else memory only.
+    #[serde(deserialize_with = "default_on")]
+    pub persist: bool,
+    /// "Jeda": nothing new is kept while on (the notch still shows toasts).
+    #[serde(deserialize_with = "default_off")]
+    pub paused: bool,
+}
+
+impl Default for NotifSettings {
+    fn default() -> Self {
+        NotifSettings {
+            record: true,
+            max_items: crate::notif::store::DEFAULT_CAP,
+            persist: true,
+            paused: false,
+        }
+    }
+}
+
+/// A bool; anything else is off.
+fn default_off<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_bool().unwrap_or(false))
+}
+
+/// Any number, kept in range and stepped; a non-number is the default.
+fn notif_items<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_f64().map_or(crate::notif::store::DEFAULT_CAP, |n| {
+        crate::notif::store::clamp_cap(n.clamp(0.0, f64::from(u32::MAX)).round() as u32)
+    }))
+}
+
+/// `notifications` read leniently: not an object is the default, and a bad
+/// field is that field's default (each field's own reader).
+fn notif_settings<'de, D: Deserializer<'de>>(d: D) -> Result<NotifSettings, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(NotifSettings::deserialize(v).unwrap_or_default())
 }
 
 /// A bool; anything else (a string, a number, null) is on, so a bad value
@@ -406,7 +514,7 @@ impl Default for Config {
             style: Style::Pill,
             battery_threshold: 20,
             start_with_windows: true,
-            muted_apps: vec!["Claude".into(), "Orca".into()],
+            muted_apps: default_muted_apps(),
             onboarding_done: false,
             pomodoro: PomoSettings::default(),
             google_client_id: String::new(),
@@ -450,6 +558,7 @@ impl Default for Config {
             cat_accessory: CatAccessory::None,
             cat_follow_pointer: true,
             notch_peek: true,
+            notifications: NotifSettings::default(),
         }
     }
 }
@@ -594,6 +703,7 @@ pub fn merge_owned(disk: Config, mem: &Config) -> Config {
         cat_accessory: mem.cat_accessory,
         cat_follow_pointer: mem.cat_follow_pointer,
         notch_peek: mem.notch_peek,
+        notifications: mem.notifications,
         ..disk
     }
 }
@@ -967,6 +1077,12 @@ mod tests {
             cat_accessory: CatAccessory::Bow,
             cat_follow_pointer: false,
             notch_peek: false,
+            notifications: NotifSettings {
+                record: false,
+                max_items: 120,
+                persist: false,
+                paused: true,
+            },
         };
         assert_eq!(parse(&serde_json::to_string(&c).unwrap()), c);
     }
@@ -1334,6 +1450,132 @@ mod tests {
         assert!(!merged.device_notices);
         assert_eq!(merged.devices_hotkey, DevicesHotkey::CtrlAltD);
         assert_eq!(parse(&serde_json::to_string_pretty(&mem).unwrap()), mem);
+    }
+
+    #[test]
+    fn an_old_config_without_notifications_gets_the_defaults() {
+        let old = parse(r#"{"style":"Notch","disk_warn_gb":20}"#);
+        assert_eq!(old.style, Style::Notch);
+        assert_eq!(old.notifications, NotifSettings::default());
+        assert_eq!(
+            old.notifications,
+            NotifSettings {
+                record: true,
+                max_items: 50,
+                persist: true,
+                paused: false,
+            }
+        );
+        // A partial object keeps what it names.
+        let part = parse(r#"{"notifications":{"paused":true,"max_items":120}}"#);
+        assert_eq!(
+            part.notifications,
+            NotifSettings {
+                record: true,
+                max_items: 120,
+                persist: true,
+                paused: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_bad_notification_field_reads_as_its_default_and_keeps_the_file() {
+        let c = parse(
+            r#"{"style":"Notch","notifications":{"record":"yes","max_items":"many","persist":null,"paused":5}}"#,
+        );
+        assert_eq!(c.style, Style::Notch, "the rest of the file survives");
+        assert_eq!(c.notifications, NotifSettings::default());
+        // A whole bad value too.
+        for bad in ["\"on\"", "7", "null", "[1,2]", "true"] {
+            let c = parse(&format!(r#"{{"style":"Notch","notifications":{bad}}}"#));
+            assert_eq!(c.style, Style::Notch, "{bad}");
+            assert_eq!(c.notifications, NotifSettings::default(), "{bad}");
+        }
+        // Numbers are kept in range and stepped.
+        let max = |n: &str| {
+            parse(&format!(r#"{{"notifications":{{"max_items":{n}}}}}"#))
+                .notifications
+                .max_items
+        };
+        assert_eq!(max("3"), 10);
+        assert_eq!(max("-40"), 10);
+        assert_eq!(max("77"), 80);
+        assert_eq!(max("5000"), 200);
+        assert_eq!(max("12.4"), 10);
+        // A good file round-trips.
+        let mem = Config {
+            notifications: NotifSettings {
+                record: false,
+                max_items: 30,
+                persist: false,
+                paused: true,
+            },
+            ..Config::default()
+        };
+        assert_eq!(parse(&serde_json::to_string_pretty(&mem).unwrap()), mem);
+    }
+
+    #[test]
+    fn notification_settings_belong_to_the_island() {
+        let mem = Config {
+            notifications: NotifSettings {
+                paused: true,
+                max_items: 100,
+                ..NotifSettings::default()
+            },
+            ..Config::default()
+        };
+        let merged = merge_owned(Config::default(), &mem);
+        assert!(merged.notifications.paused);
+        assert_eq!(merged.notifications.max_items, 100);
+    }
+
+    #[test]
+    fn muted_apps_read_leniently() {
+        let muted = |json: &str| parse(&format!(r#"{{"style":"Notch","muted_apps":{json}}}"#));
+        let default = vec!["Claude".to_string(), "Orca".to_string()];
+        // Missing: the default; not a list: the default.
+        assert_eq!(parse(r#"{"style":"Notch"}"#).muted_apps, default);
+        for bad in ["\"Claude\"", "7", "null", "{}", "true"] {
+            let c = muted(bad);
+            assert_eq!(c.muted_apps, default, "{bad}");
+            assert_eq!(c.style, Style::Notch, "{bad}");
+        }
+        // Items that are not strings go; names are trimmed; empty ones go.
+        assert_eq!(
+            muted(r#"["  Slack ", 5, null, "", "   ", ["x"], "Teams"]"#).muted_apps,
+            vec!["Slack".to_string(), "Teams".to_string()]
+        );
+        // Repeats in any case go; the first spelling stays.
+        assert_eq!(
+            muted(r#"["Slack","SLACK","slack ","Teams","teams"]"#).muted_apps,
+            vec!["Slack".to_string(), "Teams".to_string()]
+        );
+        // An explicit empty list means nothing is muted.
+        assert!(muted("[]").muted_apps.is_empty());
+        assert!(muted(r#"[5, ""]"#).muted_apps.is_empty());
+    }
+
+    #[test]
+    fn adding_a_muted_app_trims_cuts_and_skips_repeats() {
+        let list = vec!["Claude".to_string()];
+        assert_eq!(
+            with_muted(&list, "  Slack  "),
+            Some(vec!["Claude".to_string(), "Slack".to_string()])
+        );
+        assert_eq!(with_muted(&list, "claude"), None, "any case");
+        assert_eq!(with_muted(&list, "   "), None);
+        assert_eq!(with_muted(&list, ""), None);
+        let long = "x".repeat(100);
+        let added = with_muted(&list, &long).expect("added");
+        assert_eq!(added[1].chars().count(), MUTED_NAME_MAX);
+        assert_eq!(with_muted(&added, &long), None, "the cut name is a repeat");
+        assert_eq!(
+            without_muted(&added, 0),
+            Some(vec!["x".repeat(MUTED_NAME_MAX)])
+        );
+        assert_eq!(without_muted(&added, 5), None);
     }
 
     #[test]

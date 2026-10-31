@@ -188,6 +188,7 @@ impl NotifHistory {
         self.items.len()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn unread_count(&self) -> usize {
         self.items.iter().filter(|e| !e.read).count()
     }

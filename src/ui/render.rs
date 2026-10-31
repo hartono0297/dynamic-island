@@ -43,7 +43,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use std::mem::ManuallyDrop;
 use std::time::Instant;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 
 use super::cat_style::CatLook;
 use super::dock::{DockFrame, DockZone};
@@ -66,6 +66,7 @@ use crate::clean::{CleanCat, CleanMode, ScanResult};
 use crate::cli::{Output, Shell};
 use crate::cli_panel::{Echoes, RunState};
 use crate::clipboard::Clip;
+use crate::notif::NotifEntry;
 use crate::clipboard::image::Thumb;
 use crate::config::Style;
 use crate::devices::{Device, Veto};
@@ -181,6 +182,8 @@ pub struct Frame<'a> {
     pub cli: CliView<'a>,
     /// The Clipboard page.
     pub clip: ClipView<'a>,
+    /// The Notifikasi page.
+    pub notif: NotifView<'a>,
     /// The quick search (only drawn on `Page::Search`).
     pub search: SearchView<'a>,
     /// Where the playing track is: the notch's progress line and the Music
@@ -567,6 +570,30 @@ impl ClipView<'_> {
     }
 }
 
+/// What the Notifikasi page shows.
+pub struct NotifView<'a> {
+    /// The entries, newest first.
+    pub items: &'a [NotifEntry],
+    /// App logos by logo key (`NotifEntry::logo_key`).
+    pub logos: &'a std::collections::HashMap<String, Thumb>,
+    /// The selected row (an entry id): highlight and its buttons.
+    pub selected: Option<u64>,
+    /// Rows scrolled.
+    pub scroll: usize,
+    /// "Jumlah maksimal", for "n / max".
+    pub cap: u32,
+    /// "Simpan notifikasi" is on (off: a note under the header).
+    pub record: bool,
+    /// "Jeda" is on.
+    pub paused: bool,
+    /// The listener has no access: the message and its button replace the list.
+    pub no_access: bool,
+    /// "Hapus semua" waits for its second click ("Yakin?").
+    pub armed: bool,
+    /// "Now" for the times: the clock, or the demo's fixed time.
+    pub now: DateTime<Local>,
+}
+
 /// What the open folder menu lists, top to bottom (`cli_folders::menu_items`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FolderMenuView {
@@ -614,6 +641,9 @@ pub struct Renderer {
     /// Clipboard thumbnails as bitmaps of the current target, by entry id;
     /// entries no longer drawn are dropped each frame.
     clip_thumbs: std::cell::RefCell<Vec<(u64, ID2D1Bitmap)>>,
+    /// App logos of the Notifikasi page as bitmaps of the current target, by
+    /// logo key; keys no longer drawn are dropped each frame.
+    notif_logos: std::cell::RefCell<Vec<(String, ID2D1Bitmap)>>,
     /// The quick search's shell icons as bitmaps of the current target, by
     /// path; paths no longer shown are dropped each frame.
     search_icons: std::cell::RefCell<Vec<(std::path::PathBuf, ID2D1Bitmap)>>,
@@ -854,6 +884,7 @@ impl Renderer {
                 clip_caret: std::cell::Cell::new(None),
                 search_caret: std::cell::Cell::new(None),
                 clip_thumbs: std::cell::RefCell::new(Vec::new()),
+                notif_logos: std::cell::RefCell::new(Vec::new()),
                 search_icons: std::cell::RefCell::new(Vec::new()),
                 shot_thumb: std::cell::RefCell::new(None),
                 robot_later: std::cell::Cell::new(None),
@@ -890,6 +921,7 @@ impl Renderer {
             self.target = None;
             self.art.clear();
             self.clip_thumbs.borrow_mut().clear();
+            self.notif_logos.borrow_mut().clear();
             self.search_icons.borrow_mut().clear();
             self.shot_thumb.borrow_mut().take();
             self.regions = HitRegions::default();
@@ -1286,6 +1318,14 @@ impl Renderer {
     pub fn over_clip_list(&self, x: f32, y: f32) -> bool {
         self.regions
             .clip_list
+            .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
+    }
+
+    /// Whether the wheel at this client point (physical pixels) scrolls the
+    /// Notifikasi rows rather than the pages.
+    pub fn over_notif_list(&self, x: f32, y: f32) -> bool {
+        self.regions
+            .notif_list
             .is_some_and(|r| r.contains(x / self.scale, y / self.scale))
     }
 

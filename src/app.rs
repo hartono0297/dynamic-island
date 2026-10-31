@@ -133,6 +133,10 @@ use devices_page::{DevicesState, HOTKEY_DEVICES, TIMER_DEVICES};
 mod dock_page;
 use dock_page::DockState;
 
+#[path = "app_notif.rs"]
+mod notif_page;
+use notif_page::{NotifSetting, NotifState, TIMER_NOTIF_SAVE};
+
 #[path = "app_prtsc.rs"]
 mod prtsc;
 use prtsc::{PrtscState, WM_APP_PRTSC};
@@ -287,6 +291,7 @@ thread_local! {
     static DEFERRED_CLI: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_CLI_REDRAW: Cell<bool> = const { Cell::new(false) };
     static DEFERRED_CLIP: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_NOTIF: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     static DEFERRED_SEARCH: RefCell<Vec<InputKey>> = const { RefCell::new(Vec::new()) };
     /// The tray menu's modal loop is running; a second click must not nest another.
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
@@ -328,6 +333,10 @@ pub fn run(media_log_flag: bool) {
         CliInput::create_with(hwnd, cli_input::ID_SEARCH, QUERY_LIMIT, deliver_search_key)
             .inspect_err(|e| eprintln!("vale: no quick search: {e}"))
             .ok();
+    // Catches the Notifikasi page's keys only: nothing typed is kept.
+    let notif_input = CliInput::create_with(hwnd, cli_input::ID_NOTIF, 8, deliver_notif_key)
+        .inspect_err(|e| eprintln!("vale: no Notifikasi input: {e}"))
+        .ok();
     let (tx, rx) = mpsc::channel();
 
     let battery = BatteryMonitor::new(config.battery_threshold);
@@ -448,6 +457,8 @@ pub fn run(media_log_flag: bool) {
             clip: ClipState::default(),
             shots: Shots::default(),
             clip_input,
+            notif: NotifState::default(),
+            notif_input,
             search: SearchState::default(),
             search_input,
             cli_cursor: HistoryCursor::default(),
@@ -486,6 +497,8 @@ pub fn run(media_log_flag: bool) {
         app.check_fullscreen();
         app.check_battery();
         app.clip_start();
+        // The saved history, and the poller when the listener may run.
+        app.notif_start();
         app.sync_search_hotkey();
         app.devices_start();
         app.sync_prtsc_hook();
@@ -519,7 +532,6 @@ pub fn run(media_log_flag: bool) {
     });
 
     let wake = poster(hwnd, WM_APP_EVENT);
-    with_app(App::spawn_notifications);
     media::spawn_watcher(tx.clone(), wake);
     spawn_pipe_server(tx, wake);
 
@@ -766,6 +778,10 @@ struct App {
     shots: Shots,
     /// The hidden EDIT behind the Clipboard page's search field.
     clip_input: Option<CliInput>,
+    /// The Notifikasi page: its history and state, and the hidden EDIT that
+    /// catches its keys.
+    notif: NotifState,
+    notif_input: Option<CliInput>,
     /// The quick search's own state, and the hidden EDIT behind its field.
     search: SearchState,
     search_input: Option<CliInput>,
@@ -966,9 +982,11 @@ impl App {
         while let Ok(event) = self.rx.try_recv() {
             received += 1;
             // Background readings draw what they changed themselves.
+            // A toast redraws what it changed itself and raises its notice
+            // (`system.raised`) unless a muted app's.
             samples += usize::from(matches!(
                 event,
-                Event::SystemSample(_) | Event::Audio(..) | Event::Devices(_)
+                Event::SystemSample(_) | Event::Audio(..) | Event::Devices(_) | Event::Toast(_)
             ));
             self.apply(event, now);
         }
@@ -1047,6 +1065,11 @@ impl App {
                 }
                 Event::Devices(event) => {
                     self.on_devices_event(event, now);
+                    continue;
+                }
+                // The notch notice and the history entry are decided here.
+                Event::Toast(toast) => {
+                    self.on_toast(toast, now);
                     continue;
                 }
                 Event::SearchIndex(apps) => {
@@ -1138,6 +1161,7 @@ impl App {
             self.follow_closed_panel(shown_before);
             self.follow_cli_page(cli_was);
             self.follow_clip_page(cli_was.2);
+            self.follow_notif_page(cli_was.2);
             self.follow_shot();
         }
     }
@@ -1611,6 +1635,9 @@ impl App {
             Effect::CliFavorite { path, on } => self.set_cli_favorite(&path, on),
             Effect::FocusClipSearch => return self.focus_clip_search(),
             Effect::ReleaseClipFocus => self.return_keyboard(),
+            Effect::FocusNotifInput => return self.focus_notif_input(),
+            Effect::ReleaseNotifFocus => self.return_keyboard(),
+            Effect::Notif(action) => self.perform_notif(action),
             Effect::FocusSearch => return self.focus_search(),
             Effect::ReleaseSearchFocus => self.release_search(),
             Effect::SearchRun(i) => return self.run_search(i),
@@ -2087,6 +2114,7 @@ impl App {
             let input_has = |i: &Option<CliInput>| i.as_ref().is_some_and(CliInput::has_focus);
             if input_has(&self.cli_input)
                 || input_has(&self.clip_input)
+                || input_has(&self.notif_input)
                 || input_has(&self.search_input)
             {
                 let _ = SetFocus(None);
@@ -2188,6 +2216,8 @@ impl App {
                 }
             }
             InputKey::Stop => self.stop_cli(),
+            // Only the Notifikasi page's input sends Delete.
+            InputKey::Delete => {}
             // The folder menu closes first; the next Esc lets go.
             InputKey::Escape if self.state.cli_menu() => {
                 self.apply_now(Event::Click(Hit::CliMenuDismiss))
@@ -2229,6 +2259,7 @@ impl App {
     fn on_input_changed(&mut self) {
         self.on_cli_changed();
         self.on_clip_changed();
+        self.on_notif_changed();
         if self.state.search_open() {
             self.on_search_changed();
         }
@@ -3383,6 +3414,7 @@ impl App {
         self.sync_mixer();
         self.sync_shelf();
         self.sync_devices();
+        self.sync_notif();
         self.sync_outside_timer();
         self.sync_behind(now);
         self.sync_halo_timer();
@@ -3994,7 +4026,12 @@ impl App {
                     self.cli_prev = None;
                     self.apply_now(Event::ClipFocus(false));
                 }
+                if self.state.notif_focused() && !self.notif_has_keyboard() {
+                    self.cli_prev = None;
+                    self.apply_now(Event::NotifFocus(false));
+                }
             }
+            TIMER_NOTIF_SAVE => self.on_notif_timer(),
             clip::TIMER_CLIP_RETRY | clip::TIMER_CLIP_SAVE | clip::TIMER_CLIP_HOLD => {
                 self.on_clip_timer(id)
             }
@@ -4234,6 +4271,10 @@ impl App {
         if self.state.view() == View::Panel(Page::Clipboard) {
             let hit = self.hit_at(lparam);
             self.clip_hover(client_xy(lparam), hit.as_ref());
+        }
+        if self.state.view() == View::Panel(Page::Notifications) {
+            let hit = self.hit_at(lparam);
+            self.notif_hover(client_xy(lparam), hit.as_ref());
         }
         if !self.hover.needs_arming() {
             return;
@@ -4487,6 +4528,7 @@ impl App {
         let over = client && self.renderer.over_cli_output(pt.x as f32, pt.y as f32);
         let over_clips = client && self.renderer.over_clip_list(pt.x as f32, pt.y as f32);
         let over_devices = client && self.renderer.over_devices_list(pt.x as f32, pt.y as f32);
+        let over_notifs = client && self.renderer.over_notif_list(pt.x as f32, pt.y as f32);
         let over_art = client && self.renderer.over_media_art(pt.x as f32, pt.y as f32);
         if self.state.cli_menu() && self.state.view() == View::Panel(Page::Cli) {
             // The open folder menu scrolls, a row per notch (more rows
@@ -4510,6 +4552,12 @@ impl App {
         {
             // The device cards scrolled; with everything fitting, the notch
             // turns the page below.
+        } else if over_notifs
+            && self.state.view() == View::Panel(Page::Notifications)
+            && self.notif_wheel(delta)
+        {
+            // The rows scrolled (or an end spent the notch); with everything
+            // fitting, the notch turns the page below.
         } else if over && self.state.view() == View::Panel(Page::Cli) {
             // A notch away from the user scrolls up to older lines.
             let lines = (delta * WHEEL_LINES / 120).clamp(-60, 60);
@@ -4541,15 +4589,6 @@ impl App {
             Hit::MixerSlider(i) | Hit::MixerMute(i) => Some(i),
             _ => None,
         }
-    }
-
-    /// Starts the notification poller; it exits at once without listener access.
-    fn spawn_notifications(&mut self) {
-        notifications::spawn_poller(
-            self.tx.clone(),
-            poster(self.hwnd, WM_APP_EVENT),
-            self.config.muted_apps.clone(),
-        );
     }
 
     /// Writes the island's own settings into config.json as it is now, so
@@ -4602,6 +4641,8 @@ impl App {
             .monitor
             .set_limits(self.config.disk_warn_gb, self.config.ram_warn_percent);
         self.clip_follow_config();
+        // The cap, the file and the muted apps of the Notifikasi history.
+        self.notif_follow_config();
         // A hand edit of the hotkey is picked up too (once started).
         if self.search.hotkey.is_some() {
             self.sync_search_hotkey();
@@ -4874,6 +4915,16 @@ impl App {
             }
             SettingsAction::ClipNotice(on) => self.on_clip_setting(ClipSetting::CopyNotice(on)),
             SettingsAction::ClipClear => self.on_clip_setting(ClipSetting::Clear),
+            SettingsAction::NotifRecord(on) => self.on_notif_setting(NotifSetting::Record(on)),
+            SettingsAction::NotifItems(n) => self.on_notif_setting(NotifSetting::Items(n)),
+            SettingsAction::NotifPersist(on) => self.on_notif_setting(NotifSetting::Persist(on)),
+            SettingsAction::NotifMutedAdd(name) => {
+                self.on_notif_setting(NotifSetting::MutedAdd(name))
+            }
+            SettingsAction::NotifMutedRemove(i) => {
+                self.on_notif_setting(NotifSetting::MutedRemove(i))
+            }
+            SettingsAction::NotifClear => self.on_notif_setting(NotifSetting::Clear),
             SettingsAction::ShotTool(v) => self.on_shot_setting(ShotSetting::Tool(v)),
             SettingsAction::ShotPreview(on) => self.on_shot_setting(ShotSetting::Preview(on)),
             SettingsAction::ShotOnIgnore(v) => self.on_shot_setting(ShotSetting::OnIgnore(v)),
@@ -5003,6 +5054,11 @@ impl App {
             search_sel,
             clip_focused,
         );
+        let notif = notif_page::notif_view(
+            &self.notif,
+            self.config.notifications,
+            state.notif_armed(),
+        );
         let frame = Frame {
             view: &self.drawn,
             media: state.media(),
@@ -5077,6 +5133,7 @@ impl App {
                     .then_some(&self.cli_menu_view),
             },
             clip,
+            notif,
             search: SearchView {
                 query: &search_text,
                 selection: search_selection,
@@ -6382,6 +6439,9 @@ fn run_deferred() {
     for key in DEFERRED_CLIP.take() {
         deliver_clip_key(key);
     }
+    for key in DEFERRED_NOTIF.take() {
+        deliver_notif_key(key);
+    }
     for key in DEFERRED_SEARCH.take() {
         deliver_search_key(key);
     }
@@ -6405,6 +6465,19 @@ fn deliver_search_key(key: InputKey) {
     });
     if let Some(key) = pending {
         DEFERRED_SEARCH.with_borrow_mut(|queue| queue.push(key));
+    }
+}
+
+/// `deliver_cli_key` for the Notifikasi page's input.
+fn deliver_notif_key(key: InputKey) {
+    let mut pending = Some(key);
+    with_app(|app| {
+        if let Some(key) = pending.take() {
+            app.on_notif_key(key);
+        }
+    });
+    if let Some(key) = pending {
+        DEFERRED_NOTIF.with_borrow_mut(|queue| queue.push(key));
     }
 }
 
@@ -6717,6 +6790,7 @@ unsafe extern "system" fn wnd_proc(
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 deliver_cli_key(InputKey::Blur);
                 deliver_clip_key(InputKey::Blur);
+                deliver_notif_key(InputKey::Blur);
                 deliver_search_key(InputKey::Blur);
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -6775,6 +6849,7 @@ unsafe extern "system" fn wnd_proc(
                 flush_editor();
                 // A history change still waiting for its save is written now.
                 with_app(App::clip_shutdown);
+                with_app(App::notif_shutdown);
                 with_app(App::search_shutdown);
             }
             LRESULT(0)
@@ -6797,6 +6872,7 @@ unsafe extern "system" fn wnd_proc(
             drain_editor_results(hwnd);
             with_app(App::stop_sync);
             with_app(App::clip_shutdown);
+            with_app(App::notif_shutdown);
             with_app(App::search_shutdown);
             with_app(App::devices_shutdown);
             with_app(App::prtsc_shutdown);
@@ -7638,6 +7714,7 @@ mod tests {
             clip::TIMER_CLIP_RETRY,
             clip::TIMER_CLIP_SAVE,
             clip::TIMER_CLIP_HOLD,
+            TIMER_NOTIF_SAVE,
             shot::TIMER_SHOT_RETRY,
             shot::TIMER_SHOT_SHOW,
             TIMER_OUTSIDE,
@@ -7651,6 +7728,7 @@ mod tests {
             TIMER_POINTER,
         ];
         assert_eq!(TIMER_POINTER, 33);
+        assert_eq!(TIMER_NOTIF_SAVE, 34);
         for (i, a) in ids.iter().enumerate() {
             assert!(!ids[i + 1..].contains(a), "timer id {a} used twice");
         }

@@ -70,6 +70,7 @@ use super::settings_layout::{
     CLIENT_H, CLIENT_W, CatFace, Control, DragView, Field, GUIDE_URL, GoogleState, Group, Hit,
     Layout, List, PrtscRow, RELEASES_URL, REPO_URL, ROW_H, ReorderRow, Section, SliderId, State,
     TileForm, Tone, battery_step, clip_items_step, disk_warn_step, drop_index, layout,
+    notif_items_step,
     ram_warn_step, scroll_by, shot_secs_step, slider_value,
 };
 use crate::calendar::CalStatus;
@@ -77,7 +78,8 @@ use crate::claude::install::{self, InstallOutcome, UninstallOutcome};
 use crate::cli::Shell;
 use crate::cli_folders::CliStart;
 use crate::config::{
-    ClipHotkey, ClipboardSettings, Config, DevicesHotkey, NotchFill, OpenMode, ScreenshotSettings,
+    ClipHotkey, ClipboardSettings, Config, DevicesHotkey, NotchFill, NotifSettings, OpenMode,
+    ScreenshotSettings,
     SearchHotkey, ShotIgnore, ShotTool, Style,
 };
 use crate::google::client;
@@ -155,6 +157,15 @@ pub enum Action {
     ClipFeedbackAll(bool),
     /// "Hapus riwayat": every entry that is not pinned.
     ClipClear,
+    /// Settings → Fitur → Notifikasi.
+    NotifRecord(bool),
+    NotifItems(u32),
+    NotifPersist(bool),
+    /// A name for the excluded apps, and the one at this place removed.
+    NotifMutedAdd(String),
+    NotifMutedRemove(usize),
+    /// "Hapus riwayat notifikasi".
+    NotifClear,
     /// Settings → Clipboard → Screenshot.
     ShotTool(ShotTool),
     ShotPreview(bool),
@@ -316,6 +327,9 @@ pub struct Model {
     pub google_client_id: String,
     pub google_client_secret: String,
     pub clip: ClipboardSettings,
+    /// Settings → Fitur → Notifikasi and the excluded apps.
+    pub notif: NotifSettings,
+    pub muted: Vec<String>,
     /// The chosen Clipboard hotkey could not be registered.
     pub clip_hotkey_failed: bool,
     pub shot: ScreenshotSettings,
@@ -368,6 +382,8 @@ impl Model {
             google_client_id: cfg.google_client_id.clone(),
             google_client_secret: cfg.google_client_secret.clone(),
             clip: cfg.clipboard,
+            notif: cfg.notifications,
+            muted: cfg.muted_apps.clone(),
             clip_hotkey_failed: false,
             shot: cfg.screenshot,
             pages: PanelPages::from_saved(&cfg.panel_pages),
@@ -571,6 +587,8 @@ struct Settings {
     google_advanced: bool,
     /// "Hapus riwayat" waits for its second click.
     clip_confirm: bool,
+    /// "Hapus riwayat notifikasi" waits for its second click.
+    notif_confirm: bool,
     /// The own-shortcut form is open (Pintasan), and the message after the
     /// last tile added.
     tile_form: Option<TileForm>,
@@ -873,6 +891,7 @@ pub fn open(owner: HWND, model: Model, section: Option<Section>) -> Result<HWND>
         confirm: false,
         google_advanced,
         clip_confirm: false,
+        notif_confirm: false,
         tile_form: None,
         tile_note: None,
         drag: None,
@@ -1200,6 +1219,9 @@ impl Settings {
             },
             google_note: self.google_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             clip_confirm: self.clip_confirm,
+            notif: m.notif,
+            muted: m.muted.clone(),
+            notif_confirm: self.notif_confirm,
             hooks: self.hooks,
             hook_note: self.hook_note.as_ref().map(|(s, t)| (s.as_str(), *t)),
             clip: m.clip,
@@ -1404,6 +1426,16 @@ impl Settings {
                 Hit::ClipFeedbackAll,
                 oc.copied_feedback_all,
                 nc.copied_feedback_all,
+            ),
+            (
+                Hit::NotifRecord,
+                old.notif.record,
+                new.notif.record,
+            ),
+            (
+                Hit::NotifPersist,
+                old.notif.persist,
+                new.notif.persist,
             ),
             (Hit::ShotPreview, old.shot.preview, new.shot.preview),
             (
@@ -1720,6 +1752,12 @@ impl Settings {
                 let _ = KillTimer(Some(self.hwnd), TIMER_CONFIRM);
             }
         }
+        if hit != Hit::NotifClear && self.notif_confirm {
+            self.notif_confirm = false;
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_CONFIRM);
+            }
+        }
         let m = self.model.clone();
         let lang = m.lang;
         let post = |a: Action| vec![After::Post(a)];
@@ -1782,6 +1820,38 @@ impl Settings {
             }
             Hit::ClipClear => {
                 self.clip_confirm = true;
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_CONFIRM, CONFIRM_MS, None);
+                }
+                Vec::new()
+            }
+            Hit::NotifRecord => post(Action::NotifRecord(!m.notif.record)),
+            Hit::NotifItems(dir) => {
+                let n = notif_items_step(m.notif.max_items, dir);
+                if n == m.notif.max_items {
+                    Vec::new()
+                } else {
+                    post(Action::NotifItems(n))
+                }
+            }
+            Hit::NotifPersist => post(Action::NotifPersist(!m.notif.persist)),
+            Hit::NotifMutedRemove(i) => post(Action::NotifMutedRemove(i)),
+            // The typed name goes to the island (which trims, cuts, skips a
+            // repeat) and the field empties for the next one.
+            Hit::NotifMutedAdd => {
+                let name = self.field_text[2].trim().to_owned();
+                if name.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![After::Post(Action::NotifMutedAdd(name)), After::ResetForm]
+                }
+            }
+            Hit::NotifClear if self.notif_confirm => {
+                self.notif_confirm = false;
+                post(Action::NotifClear)
+            }
+            Hit::NotifClear => {
+                self.notif_confirm = true;
                 unsafe {
                     SetTimer(Some(self.hwnd), TIMER_CONFIRM, CONFIRM_MS, None);
                 }
@@ -2121,7 +2191,13 @@ fn shell_open(target: &str) {
 }
 
 fn set_section(hwnd: HWND, section: Section) {
+    let was = with(|st| st.section);
     if with(|st| st.switch_section(section)) == Some(true) {
+        // Fitur reuses the own-shortcut form's Nama field for the excluded
+        // apps: what was typed for one is not the other's.
+        if was == Some(Section::Features) || section == Section::Features {
+            reset_form();
+        }
         // A focused field is about to hide; keep the keyboard on the window.
         unsafe {
             let _ = SetFocus(Some(hwnd));
@@ -2281,6 +2357,8 @@ fn on_key(hwnd: HWND, key: u16) -> bool {
         let first = with(|st| match st.section {
             Section::Integrations => st.edits.as_ref().map(|e| e.id),
             Section::Panel if st.tile_form.is_some() => st.edits.as_ref().map(|e| e.name),
+            // The excluded apps' field (the form's Nama input, reused).
+            Section::Features => st.edits.as_ref().map(|e| e.name),
             _ => None,
         });
         if let Some(Some(edit)) = first {
@@ -2416,6 +2494,7 @@ fn on_timer(id: usize) {
             TIMER_CONFIRM => {
                 st.confirm = false;
                 st.clip_confirm = false;
+                st.notif_confirm = false;
             }
             TIMER_GOOGLE_NOTE => st.google_note = None,
             TIMER_HOOK_NOTE => st.hook_note = None,
@@ -2511,13 +2590,20 @@ unsafe extern "system" fn wnd_proc(
         WM_APP_FORM => {
             match wparam.0 {
                 0 | 1 => {
-                    let hit = if wparam.0 == 0 {
-                        Hit::TileFormAdd
+                    // On Fitur the field is the excluded apps': Enter adds
+                    // the name, Esc empties the field.
+                    let features = with(|st| st.section == Section::Features).unwrap_or(false);
+                    if features && wparam.0 == 1 {
+                        reset_form();
                     } else {
-                        Hit::TileFormCancel
-                    };
-                    if let Some((owner, after)) = with(|st| (st.owner, st.on_click(hit))) {
-                        run_after(hwnd, owner, after);
+                        let hit = match (features, wparam.0) {
+                            (true, _) => Hit::NotifMutedAdd,
+                            (false, 0) => Hit::TileFormAdd,
+                            (false, _) => Hit::TileFormCancel,
+                        };
+                        if let Some((owner, after)) = with(|st| (st.owner, st.on_click(hit))) {
+                            run_after(hwnd, owner, after);
+                        }
                     }
                     relayout_and_place();
                 }
@@ -2755,6 +2841,20 @@ pub fn run_demo(args: &[String]) {
             Action::ClipNotice(v) => m.clip.copy_notice = v,
             Action::ClipFeedbackAll(v) => m.clip.copied_feedback_all = v,
             Action::ClipClear => {}
+            Action::NotifRecord(v) => m.notif.record = v,
+            Action::NotifItems(v) => m.notif.max_items = v,
+            Action::NotifPersist(v) => m.notif.persist = v,
+            Action::NotifMutedAdd(name) => {
+                if let Some(list) = crate::config::with_muted(&m.muted, &name) {
+                    m.muted = list;
+                }
+            }
+            Action::NotifMutedRemove(i) => {
+                if let Some(list) = crate::config::without_muted(&m.muted, i) {
+                    m.muted = list;
+                }
+            }
+            Action::NotifClear => {}
             Action::ShotTool(v) => m.shot.tool = v,
             Action::ShotPreview(v) => m.shot.preview = v,
             Action::ShotPrintScreen(v) => m.shot.print_screen = v,
