@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -15,12 +16,13 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_LAYER_OPTIONS_NONE, D2D1_LAYER_PARAMETERS,
     D2D1_LINE_JOIN_ROUND, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
     D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
     D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION,
     D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,
     D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget,
-    ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    ID2D1Layer, ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL,
@@ -127,6 +129,8 @@ pub struct Gfx {
 struct Target {
     rt: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
+    /// The layer a faded cat is drawn through (`Painter::cat`).
+    layer: ID2D1Layer,
 }
 
 impl Gfx {
@@ -241,7 +245,8 @@ impl Gfx {
                 let rt = self.d2d.CreateHwndRenderTarget(&props, &hwnd_props)?;
                 rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
                 let brush = rt.CreateSolidColorBrush(&color(0, 1.0), None)?;
-                self.target = Some(Target { rt, brush });
+                let layer = rt.CreateLayer(None)?;
+                self.target = Some(Target { rt, brush, layer });
             }
         }
         Ok(self.target.as_ref().expect("target just made"))
@@ -261,6 +266,7 @@ impl Gfx {
         let painter = Painter {
             rt,
             brush: &target.brush,
+            layer: &target.layer,
             gfx: self,
             p: scene.p,
             alpha: 1.0,
@@ -309,6 +315,8 @@ impl Measure for Gfx {
 struct Painter<'a> {
     rt: &'a ID2D1RenderTarget,
     brush: &'a ID2D1SolidColorBrush,
+    /// Made on `rt`; `cat` fades the cat through it.
+    layer: &'a ID2D1Layer,
     gfx: &'a Gfx,
     p: WindowPalette,
     /// Multiplies every colour's alpha (the section crossfade).
@@ -746,6 +754,45 @@ impl Painter<'_> {
         }
     }
 
+    /// The cat filling the square `area` at this painter's alpha. The
+    /// passes (rim, silhouette, patches, face) overlap, so they are drawn
+    /// opaque and the whole cat is faded at once; at less than full alpha
+    /// each pass would show through the next.
+    fn cat(&self, area: Rect, expr: Expr, pose: Pose, look: CatLook) {
+        let paint = || {
+            self.gfx
+                .robot
+                .paint(self.rt, self.brush, area, expr, pose, 1.0, look);
+        };
+        if self.alpha >= 1.0 {
+            paint();
+            return;
+        }
+        if self.alpha <= 0.0 {
+            return;
+        }
+        // Half the cat's size round it: room for the ears, the accessories
+        // and the tilt, while the layer stays the size of the tile.
+        let m = area.w / 2.0;
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: D2D_RECT_F {
+                left: area.x - m,
+                top: area.y - m,
+                right: area.x + area.w + m,
+                bottom: area.y + area.h + m,
+            },
+            geometricMask: ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: self.alpha,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe { self.rt.PushLayer(&params, self.layer) };
+        paint();
+        unsafe { self.rt.PopLayer() };
+    }
+
     /// This painter, faded for a control that is off.
     fn dimmed(&self, enabled: bool) -> Painter<'_> {
         Painter {
@@ -934,13 +981,10 @@ impl Painter<'_> {
             w: size,
             h: size,
         };
-        self.gfx.robot.paint(
-            self.rt,
-            self.brush,
+        self.cat(
             area,
             Expr::Idle,
             Pose::default(),
-            self.alpha,
             CatLook {
                 color: s.cat.color,
                 accessory,
@@ -974,9 +1018,9 @@ impl Painter<'_> {
             w: 64.0,
             h: 64.0,
         };
-        self.gfx
-            .robot
-            .paint(self.rt, self.brush, cat, expr, pose, self.alpha, s.cat);
+        // With the cat off it is faded like the controls that are off, as
+        // the notch beside it drops the cat.
+        self.dimmed(s.robot).cat(cat, expr, pose, s.cat);
 
         // The screen sketch, with the notch at the top.
         let screen = Rect {
@@ -1029,9 +1073,7 @@ impl Painter<'_> {
         }
         let l = idle_layout(shape, s.robot, true);
         if let Some(area) = l.robot {
-            self.gfx
-                .robot
-                .paint(self.rt, self.brush, area, expr, pose, self.alpha, s.cat);
+            self.cat(area, expr, pose, s.cat);
         }
         if let Some(clock) = l.clock {
             let style = TextStyle {
@@ -1240,15 +1282,7 @@ impl Painter<'_> {
         let art = l.art;
         if s.robot {
             // The cat listening, as on the island.
-            self.gfx.robot.paint(
-                self.rt,
-                self.brush,
-                art,
-                Expr::Music,
-                Pose::default(),
-                self.alpha,
-                s.cat,
-            );
+            self.cat(art, Expr::Music, Pose::default(), s.cat);
         } else {
             // Album art: an accent tile, darker toward the bottom, with a note.
             self.fill_round(art, 5.0, mix(pal.accent, pal.surface, 0.35), 1.0);
@@ -1641,6 +1675,100 @@ mod tests {
             y: 0.0,
             w,
             h: 10.0,
+        }
+    }
+
+    /// `Painter::cat` at `alpha` on a 64 px `bg` square, as premultiplied
+    /// BGRA, drawn by Direct2D's software rasterizer into a WIC bitmap.
+    fn render_cat(alpha: f32, look: CatLook, bg: u32) -> Vec<u8> {
+        use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
+        use windows::Win32::Graphics::Imaging::{
+            CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+            WICBitmapCacheOnLoad,
+        };
+        use windows::Win32::System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        };
+        const SIZE: u32 = 64;
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let gfx = Gfx::new().expect("gfx");
+            let wic: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
+                    .expect("wic");
+            let bitmap = wic
+                .CreateBitmap(SIZE, SIZE, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)
+                .expect("bitmap");
+            let props = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                ..Default::default()
+            };
+            let rt = gfx
+                .d2d
+                .CreateWicBitmapRenderTarget(&bitmap, &props)
+                .expect("target");
+            let brush = rt.CreateSolidColorBrush(&color(0, 1.0), None).expect("brush");
+            let layer = rt.CreateLayer(None).expect("layer");
+            rt.BeginDraw();
+            rt.Clear(Some(&color(bg, 1.0)));
+            let painter = Painter {
+                rt: &rt,
+                brush: &brush,
+                layer: &layer,
+                gfx: &gfx,
+                p: theme::window(Accent::default(), theme::WindowTheme::Dark, false),
+                alpha,
+            };
+            let area = Rect {
+                x: 8.0,
+                y: 8.0,
+                w: 48.0,
+                h: 48.0,
+            };
+            painter.cat(area, Expr::Idle, Pose::default(), look);
+            rt.EndDraw(None, None).expect("end draw");
+            let mut out = vec![0u8; (SIZE * SIZE * 4) as usize];
+            bitmap
+                .CopyPixels(std::ptr::null(), SIZE * 4, &mut out)
+                .expect("pixels");
+            out
+        }
+    }
+
+    /// A faded cat is the opaque cat faded as one piece: every pixel is the
+    /// opaque picture mixed into the background, so no pass (the Black
+    /// cat's rim, the ears' stroke under the head, the calico patches'
+    /// cream) shows through the one drawn over it. The disabled accessory
+    /// tiles and the section fade-in draw the cat this way.
+    #[test]
+    fn a_faded_cat_fades_as_one_piece() {
+        let bg = 0x2A2140;
+        let alpha = 0.45;
+        let channel = |rgb: u32, s: u32| ((rgb >> s) & 0xFF) as f32;
+        for &color in CatColor::ALL.iter() {
+            for &accessory in CatAccessory::ALL.iter() {
+                let look = CatLook { color, accessory };
+                let opaque = render_cat(1.0, look, bg);
+                let faded = render_cat(alpha, look, bg);
+                let mut worst = 0.0f32;
+                for (o, f) in opaque.chunks(4).zip(faded.chunks(4)) {
+                    // BGRA, opaque everywhere (the background is).
+                    for (i, shift) in [(0, 0), (1, 8), (2, 16)] {
+                        let want = channel(bg, shift) + (o[i] as f32 - channel(bg, shift)) * alpha;
+                        worst = worst.max((f[i] as f32 - want).abs());
+                    }
+                }
+                assert!(
+                    worst <= 3.0,
+                    "{color:?} with {accessory:?}: a pixel is {worst} off the opaque cat faded"
+                );
+            }
         }
     }
 

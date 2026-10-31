@@ -845,7 +845,9 @@ impl Renderer {
                 round_cap,
                 dashed,
                 epoch: Instant::now(),
-                palette: theme::island(Accent::default(), theme::Surface::default()),
+                // A placeholder until the first paint sets the configured
+                // palette; a concrete surface, since Auto never reaches island().
+                palette: theme::island(Accent::default(), theme::Surface::Espresso),
                 cli_caret: std::cell::Cell::new(None),
                 clip_caret: std::cell::Cell::new(None),
                 search_caret: std::cell::Cell::new(None),
