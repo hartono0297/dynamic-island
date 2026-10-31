@@ -83,12 +83,26 @@ impl Http {
     /// a body that must stay under `max_bytes`: it is read in pieces and the
     /// call fails (`Err`) as soon as it grows past that, so a hostile server
     /// cannot make it hold more. The body is read as UTF-8.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn get_with_headers_capped(
         &self,
         url: &str,
         extra: &[(&str, &str)],
         max_bytes: usize,
     ) -> Result<(u16, String)> {
+        self.get_with_headers_capped_retry(url, extra, max_bytes)
+            .map(|(status, body, _)| (status, body))
+    }
+
+    /// `get_with_headers_capped` that also returns the `Retry-After` header
+    /// of the response as text (`None` when absent): a busy server (503, 429)
+    /// says there how long to wait.
+    pub fn get_with_headers_capped_retry(
+        &self,
+        url: &str,
+        extra: &[(&str, &str)],
+        max_bytes: usize,
+    ) -> Result<(u16, String, Option<String>)> {
         let request = self.request(&HttpMethod::Get()?, url, None)?;
         let headers = request.Headers()?;
         for (name, value) in extra {
@@ -103,6 +117,7 @@ impl Http {
             deadline
         )?;
         let status = response.StatusCode()?.0 as u16;
+        let retry_after = retry_after(&response);
         let stream = join_by!(response.Content()?.ReadAsInputStreamAsync()?, deadline)?;
         const CHUNK: u32 = 64 * 1024;
         let mut body = Vec::new();
@@ -122,7 +137,11 @@ impl Http {
             body.resize(start + len, 0);
             DataReader::FromBuffer(&buffer)?.ReadBytes(&mut body[start..])?;
         }
-        Ok((status, String::from_utf8_lossy(&body).into_owned()))
+        Ok((
+            status,
+            String::from_utf8_lossy(&body).into_owned(),
+            retry_after,
+        ))
     }
 
     /// `method` is "POST" or "PATCH"; `body` is sent as UTF-8 JSON.
@@ -209,6 +228,15 @@ impl Http {
     }
 }
 
+/// The `Retry-After` header as sent (seconds or an HTTP date); `None` when the
+/// response has none or it cannot be read.
+fn retry_after(response: &HttpResponseMessage) -> Option<String> {
+    let headers = response.Headers().ok()?;
+    let name = HSTRING::from("Retry-After");
+    headers.HasKey(&name).ok()?.then_some(())?;
+    Some(headers.Lookup(&name).ok()?.to_string_lossy())
+}
+
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
@@ -251,6 +279,24 @@ mod timeout_tests {
             "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
         );
         assert_eq!(http.get_json(&url, None).unwrap(), (200, "hi".to_owned()));
+    }
+
+    #[test]
+    fn the_retry_after_header_comes_back_with_the_answer() {
+        let http = Http::new().unwrap();
+        let url = serve_once(
+            Duration::ZERO,
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nContent-Length: 2\r\nConnection: close\r\n\r\nno",
+        );
+        let got = http.get_with_headers_capped_retry(&url, &[], 1024).unwrap();
+        assert_eq!(got, (503, "no".to_owned(), Some("2".to_owned())));
+
+        let url = serve_once(
+            Duration::ZERO,
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
+        );
+        let got = http.get_with_headers_capped_retry(&url, &[], 1024).unwrap();
+        assert_eq!(got, (200, "hi".to_owned(), None));
     }
 }
 

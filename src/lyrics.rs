@@ -51,12 +51,24 @@ const USER_AGENT: &str = concat!(
 );
 const API: &str = "https://lrclib.net/api/get";
 const SEARCH_API: &str = "https://lrclib.net/api/search";
-/// Not-found markers use this extension: ones written before the search
-/// fallback and the title clean-up (`.none`) are ignored, so a track they
-/// gave up on is asked again.
-const NONE_EXT: &str = "none2";
+/// Not-found markers use this extension: ones written by an older, weaker
+/// lookup (`.none`, `.none2`: no retry of a busy server, no free-text search,
+/// no "Artist - Title" split) are ignored, so a track they gave up on is
+/// asked again.
+const NONE_EXT: &str = "none3";
 /// A search result is the track only when its length is this close.
 const SEARCH_DURATION_MS: u64 = 3_000;
+/// The whole lookup (every step, retries and waits included) stops sending
+/// after this long; with nothing found that is a failure, not "no lyrics".
+const LOOKUP_BUDGET: Duration = Duration::from_secs(30);
+/// A busy server (429, 5xx) is asked again this many times per URL.
+const HTTP_RETRIES: u32 = 2;
+/// `pick_best` weighs at most this many candidates, and the first
+/// `MATCH_LINES` timed lines of each; a pair needs `MIN_MATCHED` shared lines
+/// to say how far apart two versions are.
+const MAX_CANDIDATES: usize = 20;
+const MATCH_LINES: usize = 300;
+const MIN_MATCHED: usize = 3;
 /// LRCLIB answers and cached `.lrc` files larger than this are refused
 /// unparsed: a song's synced lyrics are a few KB.
 pub const MAX_BODY_BYTES: usize = 512 * 1024;
@@ -431,37 +443,175 @@ fn lrclib_url_for(title: &str, artist: &str, duration_ms: u64) -> String {
 }
 
 /// The search fallback's URL: no length (a different version of the song has
-/// another one); `pick_search` chooses by it.
+/// another one); `pick_best` chooses by it.
 pub fn lrclib_search_url(title: &str, artist: &str) -> String {
     let query = form_encode(&[("track_name", title), ("artist_name", artist)]);
     format!("{SEARCH_API}?{query}")
 }
 
-/// The synced lyrics of the search result whose length is closest to
-/// `duration_ms`, within `SEARCH_DURATION_MS`; `None` when there is none or
-/// the body is over `MAX_BODY_BYTES`.
-pub fn pick_search(body: &str, duration_ms: u64) -> Option<String> {
-    if body.len() > MAX_BODY_BYTES {
-        return None;
-    }
-    let json: serde_json::Value = serde_json::from_str(body).ok()?;
-    json.as_array()?
-        .iter()
-        .filter_map(|item| {
-            let lrc = item.get("syncedLyrics")?.as_str()?;
-            if parse_lrc(lrc).is_empty() {
-                return None;
-            }
-            let secs = item.get("duration")?.as_f64()?;
-            let ms = (secs * 1000.0).round() as u64;
-            let gap = ms.abs_diff(duration_ms);
-            (gap <= SEARCH_DURATION_MS).then(|| (gap, lrc.to_owned()))
-        })
-        .min_by_key(|(gap, _)| *gap)
-        .map(|(_, lrc)| lrc)
+/// The free-text search URL (`q=<artist> <title>`): it finds a cover whose
+/// title carries the original's name, which the field search does not.
+fn lrclib_query_url(title: &str, artist: &str) -> String {
+    let query = form_encode(&[("q", &format!("{artist} {title}"))]);
+    format!("{SEARCH_API}?{query}")
 }
 
-/// What an LRCLIB answer means.
+/// `title` without a trailing "(...)" or "[...]" group ("Red (Taylor Swift)"
+/// is "Red"); `None` when it has none or nothing would be left.
+fn without_trailing_group(title: &str) -> Option<String> {
+    let t = title.trim_end();
+    let open = match t.chars().last()? {
+        ')' => '(',
+        ']' => '[',
+        _ => return None,
+    };
+    let head = t[..t.rfind(open)?].trim_end();
+    (!head.is_empty()).then(|| head.to_owned())
+}
+
+/// Letters and digits only, lowercase: "Avril Lavigne" and "AvrilLavigne"
+/// compare equal.
+fn alnum_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// YouTube videos name the song "Artist - Title" under a channel that is the
+/// artist ("AvrilLavigneVEVO", "Artist - Topic"): the artist and title that
+/// are meant, cleaned of decoration. `None` when the title is not of that form
+/// or its first part is not the artist.
+pub fn split_artist_title(title: &str, artist: &str) -> Option<(String, String)> {
+    let cleaned = clean_title(title);
+    let (head, tail) = cleaned.split_once(" - ")?;
+    let (head, tail) = (head.trim(), tail.trim());
+    if head.is_empty() || tail.is_empty() {
+        return None;
+    }
+    let raw_artist = artist.trim();
+    let channel = raw_artist.to_lowercase().ends_with("vevo") || raw_artist.ends_with(" - Topic");
+    if !channel && alnum_key(head) != alnum_key(&clean_artist(artist)) {
+        return None;
+    }
+    Some((clean_artist(head), clean_title(tail)))
+}
+
+/// The artist and title to search by: split out of "Artist - Title" when the
+/// title is of that form, else each cleaned of decoration.
+fn search_names(title: &str, artist: &str) -> (String, String) {
+    split_artist_title(title, artist).unwrap_or_else(|| (clean_artist(artist), clean_title(title)))
+}
+
+/// One LRCLIB entry with synced lyrics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Candidate {
+    pub lrc: String,
+    pub lines: Vec<LrcLine>,
+    /// The entry's length; `None` when LRCLIB did not say (a `/api/get` hit
+    /// already matched the length).
+    pub duration_ms: Option<u64>,
+}
+
+fn candidate_of(item: &serde_json::Value) -> Option<Candidate> {
+    let lrc = item.get("syncedLyrics")?.as_str()?;
+    let lines = parse_lrc(lrc);
+    if lines.is_empty() {
+        return None;
+    }
+    let duration_ms = item
+        .get("duration")
+        .and_then(|d| d.as_f64())
+        .filter(|d| d.is_finite() && *d >= 0.0)
+        .map(|d| (d * 1000.0).round() as u64);
+    Some(Candidate {
+        lrc: lrc.to_owned(),
+        lines,
+        duration_ms,
+    })
+}
+
+/// The entries of a search body that have synced lyrics, in order. A body
+/// that is over `MAX_BODY_BYTES` or not a list is read as none.
+pub fn candidates(body: &str) -> Vec<Candidate> {
+    if body.len() > MAX_BODY_BYTES {
+        return Vec::new();
+    }
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    json.as_array()
+        .map(|items| items.iter().filter_map(candidate_of).collect())
+        .unwrap_or_default()
+}
+
+/// Lower median (integers only); `values` is not empty.
+fn lower_median<T: Ord + Copy>(values: &mut [T]) -> T {
+    values.sort_unstable();
+    values[(values.len() - 1) / 2]
+}
+
+type Times = std::collections::HashMap<String, Vec<u64>>;
+
+/// Times of each distinct text (letters and digits, lowercase) among the
+/// first `MATCH_LINES` lines, in order; empty text (a gap) is left out.
+fn times_by_text(lines: &[LrcLine]) -> Times {
+    let mut map = Times::new();
+    for line in lines.iter().take(MATCH_LINES) {
+        let key = alnum_key(&line.text);
+        if !key.is_empty() {
+            map.entry(key).or_default().push(line.at_ms);
+        }
+    }
+    map
+}
+
+/// The median of `a - b` over the lines the two share (the k-th occurrence of
+/// a text in one with the k-th in the other); `None` under `MIN_MATCHED`.
+fn shift_between(a: &Times, b: &Times) -> Option<i64> {
+    let mut diffs: Vec<i64> = Vec::new();
+    for (text, at_a) in a {
+        if let Some(at_b) = b.get(text) {
+            diffs.extend(at_a.iter().zip(at_b).map(|(x, y)| *x as i64 - *y as i64));
+        }
+    }
+    (diffs.len() >= MIN_MATCHED).then(|| lower_median(&mut diffs))
+}
+
+/// The synced lyrics to show out of `cands`, for a track of `duration_ms`.
+/// LRCLIB entries are user uploads whose timing varies; copies of one
+/// timing agree, so among the entries within `SEARCH_DURATION_MS` of the
+/// length the one that is least shifted from the others wins (the median of
+/// its shifts to each of them), then the closest length, then the first.
+pub fn pick_best(cands: Vec<Candidate>, duration_ms: u64) -> Option<String> {
+    let gap = |c: &Candidate| c.duration_ms.map_or(0, |d| d.abs_diff(duration_ms));
+    let mut near: Vec<Candidate> = cands
+        .into_iter()
+        .filter(|c| gap(c) <= SEARCH_DURATION_MS)
+        .take(MAX_CANDIDATES)
+        .collect();
+    if near.len() <= 1 {
+        return near.pop().map(|c| c.lrc);
+    }
+    let times: Vec<Times> = near.iter().map(|c| times_by_text(&c.lines)).collect();
+    let score = |i: usize| -> u64 {
+        let mut away: Vec<u64> = (0..near.len())
+            .filter(|&j| j != i)
+            .filter_map(|j| shift_between(&times[i], &times[j]))
+            .map(i64::unsigned_abs)
+            .collect();
+        if away.is_empty() {
+            u64::MAX
+        } else {
+            lower_median(&mut away)
+        }
+    };
+    let best = (0..near.len()).min_by_key(|&i| (score(i), gap(&near[i]), i))?;
+    Some(near.swap_remove(best).lrc)
+}
+
+/// What the worker found out: the synced lyrics, nothing (every request was
+/// answered and none has them), or trouble on the way.
 #[derive(Debug, PartialEq)]
 pub enum Answer {
     /// The `syncedLyrics` LRC text.
@@ -472,22 +622,195 @@ pub enum Answer {
     Failed,
 }
 
-/// What a `/api/get` reply says. A body over `MAX_BODY_BYTES` is not read:
-/// it is a failure, asked again another time.
-pub fn read_answer(status: u16, body: &str) -> Answer {
+/// What one LRCLIB reply says.
+#[derive(Debug, PartialEq)]
+pub enum Reading {
+    /// Entries with synced lyrics.
+    Found(Vec<Candidate>),
+    /// Answered: nothing usable (404, a bad request, no synced lyrics).
+    Empty,
+    /// Not a usable answer (server trouble, a body that cannot be read, one
+    /// over `MAX_BODY_BYTES`): ask again another time.
+    Transient,
+}
+
+/// What a reply says: a JSON list when `many` (`/api/search`), else one
+/// entry (`/api/get`).
+pub fn read_reply(status: u16, body: &str, many: bool) -> Reading {
     match status {
-        200 if body.len() > MAX_BODY_BYTES => Answer::Failed,
+        200 if body.len() > MAX_BODY_BYTES => Reading::Transient,
         200 => {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
-                return Answer::Failed;
+                return Reading::Transient;
             };
-            match json.get("syncedLyrics").and_then(|v| v.as_str()) {
-                Some(lrc) if !parse_lrc(lrc).is_empty() => Answer::Synced(lrc.to_owned()),
-                _ => Answer::None,
+            let found: Vec<Candidate> = if many {
+                match json.as_array() {
+                    Some(items) => items.iter().filter_map(candidate_of).collect(),
+                    None => return Reading::Transient,
+                }
+            } else if json.is_object() {
+                candidate_of(&json).into_iter().collect()
+            } else {
+                return Reading::Transient;
+            };
+            if found.is_empty() {
+                Reading::Empty
+            } else {
+                Reading::Found(found)
             }
         }
-        404 => Answer::None,
-        _ => Answer::Failed,
+        // 404, 400 and the like: refused for good.
+        s if (400..500).contains(&s) && s != 429 => Reading::Empty,
+        _ => Reading::Transient,
+    }
+}
+
+/// How long to wait before asking again, from a `Retry-After` header: whole
+/// seconds, kept within 1..=3 (a missing, unreadable or date value is 1).
+pub fn retry_delay(header: Option<&str>) -> Duration {
+    let secs = header
+        .and_then(|h| h.trim().parse::<u64>().ok())
+        .unwrap_or(1);
+    Duration::from_secs(secs.clamp(1, 3))
+}
+
+/// A reply: status, body, `Retry-After`.
+type Reply = (u16, String, Option<String>);
+
+/// The network, the clock and sleeping, so the lookup can run without them.
+trait Net {
+    fn get(&mut self, url: &str) -> Result<Reply, ()>;
+    fn sleep(&mut self, how_long: Duration);
+    fn now(&self) -> Instant;
+}
+
+struct HttpNet<'a>(&'a Http);
+
+impl Net for HttpNet<'_> {
+    fn get(&mut self, url: &str) -> Result<Reply, ()> {
+        self.0
+            .get_with_headers_capped_retry(url, &[("User-Agent", USER_AGENT)], MAX_BODY_BYTES)
+            .map_err(|_| ())
+    }
+
+    fn sleep(&mut self, how_long: Duration) {
+        std::thread::sleep(how_long);
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// One URL's outcome after its retries.
+enum Fetched {
+    Done(u16, String),
+    Transient,
+}
+
+struct Chain<'a, N: Net> {
+    net: &'a mut N,
+    deadline: Instant,
+    duration_ms: u64,
+    /// Some request gave no definitive answer (or the budget ran out).
+    transient: bool,
+}
+
+impl<N: Net> Chain<'_, N> {
+    fn expired(&self) -> bool {
+        self.net.now() >= self.deadline
+    }
+
+    /// GET with retries: a 429 or 5xx waits `retry_delay` and asks again, at
+    /// most `HTTP_RETRIES` times; a network error is asked once more. Past
+    /// the budget nothing more is sent (or slept for).
+    fn fetch(&mut self, url: &str) -> Fetched {
+        let (mut busy, mut failed) = (0, 0);
+        loop {
+            if self.expired() {
+                return Fetched::Transient;
+            }
+            let wait = match self.net.get(url) {
+                Ok((status, body, _)) if status != 429 && status < 500 => {
+                    return Fetched::Done(status, body);
+                }
+                Ok((_, _, header)) => {
+                    busy += 1;
+                    if busy > HTTP_RETRIES {
+                        return Fetched::Transient;
+                    }
+                    retry_delay(header.as_deref())
+                }
+                Err(()) => {
+                    failed += 1;
+                    if failed > 1 {
+                        return Fetched::Transient;
+                    }
+                    retry_delay(None)
+                }
+            };
+            if self.expired() {
+                return Fetched::Transient;
+            }
+            self.net.sleep(wait);
+        }
+    }
+
+    /// One step: the synced lyrics `pick_best` takes from the reply to `url`.
+    fn step(&mut self, url: &str, many: bool) -> Option<String> {
+        let reading = match self.fetch(url) {
+            Fetched::Done(status, body) => read_reply(status, &body, many),
+            Fetched::Transient => Reading::Transient,
+        };
+        match reading {
+            Reading::Found(cands) => pick_best(cands, self.duration_ms),
+            Reading::Empty => None,
+            Reading::Transient => {
+                self.transient = true;
+                None
+            }
+        }
+    }
+}
+
+/// The lookup at LRCLIB, step by step until one has synced lyrics: a field
+/// search by the cleaned names, `/api/get` by the names as the player gives
+/// them and then cleaned, a free-text search ("artist title", then with the
+/// title's trailing group cut). A failed or empty step never stops the next.
+/// `None` only when every request was answered; any trouble (or the
+/// `LOOKUP_BUDGET` running out) with nothing found is `Failed`.
+fn lookup_chain(q: &Query, net: &mut impl Net) -> Answer {
+    let (artist, title) = search_names(&q.title, &q.artist);
+    let mut steps: Vec<(String, bool)> = vec![
+        (lrclib_search_url(&title, &artist), true),
+        (lrclib_url(q), false),
+    ];
+    if title != q.title || artist != q.artist {
+        steps.push((lrclib_url_for(&title, &artist, q.duration_ms), false));
+    }
+    let mut free_text = vec![lrclib_query_url(&title, &artist)];
+    free_text.extend(without_trailing_group(&title).map(|short| lrclib_query_url(&short, &artist)));
+    for url in free_text {
+        if !steps.iter().any(|(seen, _)| *seen == url) {
+            steps.push((url, true));
+        }
+    }
+    let deadline = net.now() + LOOKUP_BUDGET;
+    let mut chain = Chain {
+        net,
+        deadline,
+        duration_ms: q.duration_ms,
+        transient: false,
+    };
+    for (url, many) in &steps {
+        if let Some(lrc) = chain.step(url, *many) {
+            return Answer::Synced(lrc);
+        }
+    }
+    if chain.transient {
+        Answer::Failed
+    } else {
+        Answer::None
     }
 }
 
@@ -540,7 +863,7 @@ pub enum Cached {
     Miss,
 }
 
-/// `<dir>\<hash>.lrc` holds a track's LRC; `<hash>.none2` holds the Unix time
+/// `<dir>\<hash>.lrc` holds a track's LRC; `<hash>.none3` holds the Unix time
 /// a lookup found nothing, trusted for `NEGATIVE_TTL_SECS`.
 pub struct DiskCache {
     dir: PathBuf,
@@ -906,31 +1229,7 @@ fn lookup(
     let Some(client) = http.as_ref() else {
         return found(q, None, true);
     };
-    let get = |url: &str| {
-        client.get_with_headers_capped(url, &[("User-Agent", USER_AGENT)], MAX_BODY_BYTES)
-    };
-    let ask = |url: &str| match get(url) {
-        Ok((status, body)) => read_answer(status, &body),
-        Err(_) => Answer::Failed,
-    };
-    // The track as the player names it first; then as a streaming site
-    // decorates it ("(Official Video)", " - Topic"); then a search, picking
-    // the result whose length is closest (a video's length differs from the
-    // album's by seconds, which `/api/get` does not forgive).
-    let mut answer = ask(&lrclib_url(q));
-    let (title, artist) = (clean_title(&q.title), clean_artist(&q.artist));
-    if answer == Answer::None && (title != q.title || artist != q.artist) {
-        answer = ask(&lrclib_url_for(&title, &artist, q.duration_ms));
-    }
-    if answer == Answer::None {
-        answer = match get(&lrclib_search_url(&title, &artist)) {
-            Ok((200, body)) => {
-                pick_search(&body, q.duration_ms).map_or(Answer::None, Answer::Synced)
-            }
-            Ok((404, _)) => Answer::None,
-            _ => Answer::Failed,
-        };
-    }
+    let answer = lookup_chain(q, &mut HttpNet(client));
     keep_answer(q, answer, cache, memory, now)
 }
 
@@ -963,7 +1262,7 @@ fn keep_answer(
     now: i64,
 ) -> LyricsFound {
     match answer {
-        // Never anything else: `read_answer` and `pick_search` check it.
+        // Never anything else: `candidate_of` checks it.
         Answer::Synced(lrc) if !storable(&lrc) => found(q, None, true),
         Answer::Synced(lrc) => {
             cache.write_lrc(&q.key, &lrc);
@@ -1119,10 +1418,11 @@ mod tests {
     fn oversized_bodies_are_refused_unparsed() {
         let pad = "x".repeat(MAX_BODY_BYTES);
         let big = format!(r#"{{"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}"#);
-        assert_eq!(read_answer(200, &big), Answer::Failed);
+        assert_eq!(read_reply(200, &big, false), Reading::Transient);
         let list =
             format!(r#"[{{"duration":180.0,"syncedLyrics":"[00:01.00] hi","pad":"{pad}"}}]"#);
-        assert_eq!(pick_search(&list, 180_000), None);
+        assert_eq!(read_reply(200, &list, true), Reading::Transient);
+        assert!(candidates(&list).is_empty());
         assert!(storable("[00:01.00] hi"));
         assert!(!storable(&format!("[00:01.00] {pad}")));
         assert!(!storable("no tags"));
@@ -1398,6 +1698,10 @@ mod tests {
         assert_eq!(clean_artist("VEVO"), "VEVO");
     }
 
+    fn best(body: &str, duration_ms: u64) -> Option<String> {
+        pick_best(candidates(body), duration_ms)
+    }
+
     #[test]
     fn the_search_fallback_picks_the_closest_length_with_synced_lyrics() {
         let body = r#"[
@@ -1406,14 +1710,11 @@ mod tests {
             {"duration": 181.0, "syncedLyrics": "[00:01.00] near"},
             {"duration": 181.5, "syncedLyrics": "not a lrc"}
         ]"#;
-        assert_eq!(
-            pick_search(body, 180_000).as_deref(),
-            Some("[00:01.00] near")
-        );
+        assert_eq!(best(body, 180_000).as_deref(), Some("[00:01.00] near"));
         // Nothing within the tolerance, a non-list, junk: none.
-        assert_eq!(pick_search(body, 400_000), None);
-        assert_eq!(pick_search("{}", 180_000), None);
-        assert_eq!(pick_search("junk", 180_000), None);
+        assert_eq!(best(body, 400_000), None);
+        assert_eq!(best("{}", 180_000), None);
+        assert_eq!(best("junk", 180_000), None);
         let url = lrclib_search_url("Hello World", "A&B");
         assert!(
             url.starts_with(SEARCH_API) && !url.contains("duration"),
@@ -1495,19 +1796,28 @@ mod tests {
     #[test]
     fn answers_map_to_found_none_or_failed() {
         let ok = r#"{"id":1,"trackName":"t","artistName":"a","albumName":"x","duration":200,"instrumental":false,"plainLyrics":"hi","syncedLyrics":"[00:01.00] hi"}"#;
-        assert_eq!(read_answer(200, ok), Answer::Synced("[00:01.00] hi".into()));
+        let Reading::Found(got) = read_reply(200, ok, false) else {
+            panic!("not found");
+        };
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].lrc, "[00:01.00] hi");
+        assert_eq!(got[0].duration_ms, Some(200_000));
         let plain_only = r#"{"id":1,"plainLyrics":"hi","syncedLyrics":null}"#;
-        assert_eq!(read_answer(200, plain_only), Answer::None);
+        assert_eq!(read_reply(200, plain_only, false), Reading::Empty);
         let instrumental = r#"{"id":1,"instrumental":true,"plainLyrics":null,"syncedLyrics":null}"#;
-        assert_eq!(read_answer(200, instrumental), Answer::None);
+        assert_eq!(read_reply(200, instrumental, false), Reading::Empty);
         assert_eq!(
-            read_answer(200, r#"{"syncedLyrics":"no tags"}"#),
-            Answer::None
+            read_reply(200, r#"{"syncedLyrics":"no tags"}"#, false),
+            Reading::Empty
         );
-        assert_eq!(read_answer(404, r#"{"code":404}"#), Answer::None);
-        assert_eq!(read_answer(200, "<html>"), Answer::Failed);
-        assert_eq!(read_answer(500, ""), Answer::Failed);
-        assert_eq!(read_answer(429, ""), Answer::Failed);
+        assert_eq!(read_reply(404, r#"{"code":404}"#, false), Reading::Empty);
+        assert_eq!(read_reply(400, "", true), Reading::Empty);
+        assert_eq!(read_reply(200, "[]", true), Reading::Empty);
+        assert_eq!(read_reply(200, "<html>", false), Reading::Transient);
+        assert_eq!(read_reply(200, "{}", true), Reading::Transient);
+        assert_eq!(read_reply(500, "", false), Reading::Transient);
+        assert_eq!(read_reply(503, "", true), Reading::Transient);
+        assert_eq!(read_reply(429, "", false), Reading::Transient);
     }
 
     #[test]
@@ -1971,17 +2281,21 @@ mod tests {
             provisional: false,
         };
         let http = Http::new().unwrap();
-        let (status, body) = http
-            .get_with_headers_capped(
+        let (status, body, retry_after) = http
+            .get_with_headers_capped_retry(
                 &lrclib_url(&q),
                 &[("User-Agent", USER_AGENT)],
                 MAX_BODY_BYTES,
             )
             .unwrap();
-        println!("status {status}, {} bytes", body.len());
-        let Answer::Synced(lrc) = read_answer(status, &body) else {
+        println!(
+            "status {status}, {} bytes, retry-after {retry_after:?}",
+            body.len()
+        );
+        let Reading::Found(found) = read_reply(status, &body, false) else {
             panic!("no synced lyrics: status {status}");
         };
+        let lrc = found[0].lrc.clone();
         let lines = parse_lrc(&lrc);
         // Timing only: the lyrics themselves are not printed.
         println!(
@@ -1992,5 +2306,481 @@ mod tests {
         assert!(lines.len() > 20 && has_words(&lines));
         assert!(lines.windows(2).all(|w| w[0].at_ms <= w[1].at_ms));
         assert!(current_line(&lines, 60_000).is_some());
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+    use std::collections::{HashMap, VecDeque};
+
+    /// LRC of `n` lines three seconds apart, all shifted by `shift` ms.
+    fn lrc(shift: i64, n: u64) -> String {
+        (0..n)
+            .map(|k| {
+                let at = (1_000 + k as i64 * 3_000 + shift) as u64;
+                let (m, s, cs) = (at / 60_000, at / 1000 % 60, at % 1000 / 10);
+                format!("[{m:02}:{s:02}.{cs:02}] la la {k}\n")
+            })
+            .collect()
+    }
+
+    /// The LRC text of an entry; `tag` tells copies apart in the output.
+    fn tagged(tag: &str, shift: i64) -> String {
+        format!("[ar:{tag}]\n{}", lrc(shift, 12))
+    }
+
+    /// An entry as LRCLIB lists it.
+    fn entry(tag: &str, shift: i64, secs: f64) -> serde_json::Value {
+        serde_json::json!({"duration": secs, "syncedLyrics": tagged(tag, shift)})
+    }
+
+    fn list(items: &[serde_json::Value]) -> String {
+        serde_json::Value::Array(items.to_vec()).to_string()
+    }
+
+    fn cand(tag: &str, shift: i64, millis: Option<u64>) -> Candidate {
+        let lrc = tagged(tag, shift);
+        Candidate {
+            lines: parse_lrc(&lrc),
+            lrc,
+            duration_ms: millis,
+        }
+    }
+
+    fn query(title: &str, artist: &str, secs: u64) -> Query {
+        Query {
+            key: track_key(artist, title, secs * 1000),
+            artist: artist.into(),
+            title: title.into(),
+            duration_ms: secs * 1000,
+            provisional: false,
+        }
+    }
+
+    type Scripted = Result<Reply, ()>;
+
+    /// A network that answers from a script, with a clock that only moves
+    /// when told: every request costs `cost`, every sleep its length.
+    struct Fake {
+        replies: HashMap<String, VecDeque<Scripted>>,
+        fallback: Scripted,
+        asked: Vec<String>,
+        sleeps: Vec<Duration>,
+        base: Instant,
+        elapsed: Duration,
+        cost: Duration,
+    }
+
+    impl Fake {
+        fn new(fallback: Scripted) -> Self {
+            Fake {
+                replies: HashMap::new(),
+                fallback,
+                asked: Vec::new(),
+                sleeps: Vec::new(),
+                base: Instant::now(),
+                elapsed: Duration::ZERO,
+                cost: Duration::ZERO,
+            }
+        }
+
+        /// Answers to `url`, in order; the last one repeats.
+        fn on(mut self, url: &str, replies: Vec<Scripted>) -> Self {
+            self.replies.insert(url.to_owned(), replies.into());
+            self
+        }
+
+        fn times_asked(&self, url: &str) -> usize {
+            self.asked.iter().filter(|u| *u == url).count()
+        }
+    }
+
+    impl Net for Fake {
+        fn get(&mut self, url: &str) -> Result<Reply, ()> {
+            self.asked.push(url.to_owned());
+            self.elapsed += self.cost;
+            match self.replies.get_mut(url) {
+                Some(queue) if queue.len() > 1 => queue.pop_front().unwrap(),
+                Some(queue) => queue.front().cloned().unwrap(),
+                None => self.fallback.clone(),
+            }
+        }
+
+        fn sleep(&mut self, how_long: Duration) {
+            self.sleeps.push(how_long);
+            self.elapsed += how_long;
+        }
+
+        fn now(&self) -> Instant {
+            self.base + self.elapsed
+        }
+    }
+
+    fn ok(body: String) -> Scripted {
+        Ok((200, body, None))
+    }
+
+    fn status(code: u16, retry_after: Option<&str>) -> Scripted {
+        Ok((code, "{}".into(), retry_after.map(str::to_owned)))
+    }
+
+    #[test]
+    fn retry_delay_reads_whole_seconds_within_one_to_three() {
+        let s = Duration::from_secs;
+        assert_eq!(retry_delay(None), s(1));
+        assert_eq!(retry_delay(Some("1")), s(1));
+        assert_eq!(retry_delay(Some("2")), s(2));
+        assert_eq!(retry_delay(Some("10")), s(3));
+        assert_eq!(retry_delay(Some("0")), s(1));
+        assert_eq!(retry_delay(Some("soon")), s(1));
+        assert_eq!(retry_delay(Some("Wed, 21 Oct 2026 07:28:00 GMT")), s(1));
+        assert_eq!(retry_delay(Some(" 2 ")), s(2));
+        assert_eq!(retry_delay(Some("-5")), s(1));
+    }
+
+    #[test]
+    fn a_busy_server_is_asked_again_after_its_retry_after() {
+        let q = query("Song", "Band", 200);
+        let url = lrclib_search_url("Song", "Band");
+        let hit = list(&[entry("a", 0, 200.0)]);
+        let mut net = Fake::new(status(404, None)).on(
+            &url,
+            vec![status(503, Some("2")), status(503, Some("1")), ok(hit)],
+        );
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("a", 0)));
+        assert_eq!(net.times_asked(&url), 3);
+        assert_eq!(
+            net.sleeps,
+            vec![Duration::from_secs(2), Duration::from_secs(1)]
+        );
+    }
+
+    #[test]
+    fn a_url_is_retried_twice_at_most() {
+        let q = query("Song", "Band", 200);
+        let mut net = Fake::new(status(503, Some("1")));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+        let mut urls = net.asked.clone();
+        urls.sort();
+        urls.dedup();
+        assert_eq!(urls.len(), 3, "every step still ran: {urls:?}");
+        for url in &urls {
+            assert_eq!(net.times_asked(url), 3, "one try and two retries: {url}");
+        }
+        assert_eq!(net.sleeps.len(), 2 * urls.len());
+        assert!(net.sleeps.iter().all(|d| *d == Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_429_is_retried_like_a_503() {
+        let q = query("Song", "Band", 200);
+        let url = lrclib_search_url("Song", "Band");
+        let hit = list(&[entry("a", 0, 200.0)]);
+        let mut net = Fake::new(status(404, None)).on(&url, vec![status(429, None), ok(hit)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("a", 0)));
+        assert_eq!(net.sleeps, vec![Duration::from_secs(1)]);
+    }
+
+    #[test]
+    fn a_network_error_is_asked_once_more() {
+        let q = query("Song", "Band", 200);
+        let url = lrclib_search_url("Song", "Band");
+        let hit = list(&[entry("a", 0, 200.0)]);
+        let mut net = Fake::new(status(404, None)).on(&url, vec![Err(()), ok(hit)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("a", 0)));
+        assert_eq!(net.times_asked(&url), 2);
+
+        let mut net = Fake::new(Err(()));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+        assert_eq!(net.times_asked(&url), 2, "not asked a third time");
+    }
+
+    #[test]
+    fn a_503_on_the_first_step_still_runs_the_others() {
+        let q = query("Song", "Band", 200);
+        let search = lrclib_search_url("Song", "Band");
+        let get = lrclib_url(&q);
+        let free = lrclib_query_url("Song", "Band");
+        let hit = list(&[entry("q", 0, 200.0)]);
+        let mut net = Fake::new(status(404, None))
+            .on(&search, vec![status(503, Some("1"))])
+            .on(&free, vec![ok(hit)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("q", 0)));
+        assert!(net.asked.contains(&get), "the get step ran");
+        assert!(net.asked.contains(&free));
+    }
+
+    #[test]
+    fn a_get_hit_without_a_length_is_taken() {
+        let q = query("Song", "Band", 200);
+        let get = lrclib_url(&q);
+        let body = serde_json::json!({"syncedLyrics": tagged("g", 0)}).to_string();
+        let mut net = Fake::new(status(404, None)).on(&get, vec![ok(body)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("g", 0)));
+    }
+
+    #[test]
+    fn answered_but_empty_everywhere_is_none() {
+        let q = query("Song", "Band", 200);
+        let mut net = Fake::new(status(404, None));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::None);
+
+        let mut net = Fake::new(ok("[]".into())).on(&lrclib_url(&q), vec![status(404, None)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::None);
+
+        // Entries more than 3 s off the length are not the track.
+        let far = list(&[entry("a", 0, 190.0), entry("b", 0, 210.0)]);
+        let mut net = Fake::new(ok(far)).on(&lrclib_url(&q), vec![status(404, None)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::None);
+
+        // A refused request (400) is a definitive "nothing" too.
+        let mut net = Fake::new(status(400, None));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::None);
+    }
+
+    #[test]
+    fn trouble_that_never_clears_with_nothing_found_is_failed_not_none() {
+        let q = query("Song", "Band", 200);
+        let mut net = Fake::new(status(503, Some("1")));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+
+        // One transient request among definitive ones is enough.
+        let free = lrclib_query_url("Song", "Band");
+        let mut net = Fake::new(status(404, None)).on(&free, vec![status(503, None)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+
+        // An unreadable 200 is not an answer either.
+        let mut net = Fake::new(ok("<html>".into()));
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+    }
+
+    #[test]
+    fn the_budget_stops_the_chain_and_that_is_a_failure() {
+        let q = query("Song", "Band", 200);
+        let mut net = Fake::new(status(404, None));
+        net.cost = Duration::from_secs(20);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+        assert_eq!(net.asked.len(), 2, "the third request is past 30 s");
+
+        // Waiting counts: busy answers whose sleeps pass the budget.
+        let mut net = Fake::new(status(503, Some("3")));
+        net.cost = Duration::from_secs(5);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Failed);
+        assert!(net.elapsed <= LOOKUP_BUDGET + Duration::from_secs(5 + 3));
+    }
+
+    #[test]
+    fn the_budget_does_not_cut_a_found_answer() {
+        let q = query("Song", "Band", 200);
+        let url = lrclib_search_url("Song", "Band");
+        let hit = list(&[entry("a", 0, 200.0)]);
+        let mut net = Fake::new(status(404, None)).on(&url, vec![ok(hit)]);
+        net.cost = Duration::from_secs(29);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("a", 0)));
+    }
+
+    #[test]
+    fn artist_and_title_are_split_out_of_a_video_title() {
+        let pair = |a: &str, t: &str| Some((a.to_owned(), t.to_owned()));
+        assert_eq!(
+            split_artist_title(
+                "Avril Lavigne - When You're Gone (Official Video)",
+                "AvrilLavigneVEVO"
+            ),
+            pair("Avril Lavigne", "When You're Gone")
+        );
+        // The artist's own name in front, whatever the channel.
+        assert_eq!(
+            split_artist_title("Queen - Bohemian Rhapsody", "Queen"),
+            pair("Queen", "Bohemian Rhapsody")
+        );
+        // A Topic channel.
+        assert_eq!(
+            split_artist_title("Foo - Bar", "Baz - Topic"),
+            pair("Foo", "Bar")
+        );
+        // No " - ", or a first part that is not the artist.
+        assert_eq!(
+            split_artist_title("Red (Taylor Swift)", "Against The Current"),
+            None
+        );
+        assert_eq!(split_artist_title("Foo - Bar", "Someone"), None);
+        // Decoration is cut as `clean_title` does; nothing is left to split.
+        assert_eq!(split_artist_title("Some Song - Live", "Band"), None);
+        assert_eq!(
+            search_names("Some Song - Live", "Band"),
+            ("Band".into(), "Some Song".into())
+        );
+        assert_eq!(
+            search_names("Blinding Lights (Official Video)", "The Weeknd - Topic"),
+            ("The Weeknd".into(), "Blinding Lights".into())
+        );
+    }
+
+    #[test]
+    fn a_split_title_is_what_the_steps_search_for() {
+        let q = query(
+            "Avril Lavigne - When You're Gone (Official Video)",
+            "AvrilLavigneVEVO",
+            239,
+        );
+        let hit = list(&[entry("v", 0, 239.0)]);
+        let free = lrclib_query_url("When You're Gone", "Avril Lavigne");
+        let mut net = Fake::new(status(404, None)).on(&free, vec![ok(hit)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("v", 0)));
+        let search = lrclib_search_url("When You're Gone", "Avril Lavigne");
+        assert!(net.asked.contains(&search));
+        assert!(net.asked.contains(&lrclib_url(&q)), "the raw names too");
+        let cleaned = lrclib_url_for("When You're Gone", "Avril Lavigne", 239_000);
+        assert!(net.asked.contains(&cleaned));
+    }
+
+    #[test]
+    fn a_cover_is_found_by_the_free_text_search_without_the_trailing_group() {
+        let q = query("Red (Taylor Swift)", "Against The Current", 197);
+        let only = lrclib_query_url("Red", "Against The Current");
+        let hit = list(&[entry("c", 0, 197.0)]);
+        let mut net = Fake::new(ok("[]".into()))
+            .on(&only, vec![ok(hit)])
+            .on(&lrclib_url(&q), vec![status(404, None)]);
+        assert_eq!(lookup_chain(&q, &mut net), Answer::Synced(tagged("c", 0)));
+        assert_eq!(
+            only,
+            format!("{SEARCH_API}?q=Against%20The%20Current%20Red")
+        );
+        // The whole title was tried first, and nothing is asked twice.
+        let whole = lrclib_query_url("Red (Taylor Swift)", "Against The Current");
+        assert!(net.asked.contains(&whole));
+        let mut seen = net.asked.clone();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), net.asked.len());
+    }
+
+    #[test]
+    fn the_trailing_group_is_cut_only_when_there_is_one() {
+        let cut = |t: &str| without_trailing_group(t);
+        assert_eq!(cut("Red (Taylor Swift)").as_deref(), Some("Red"));
+        assert_eq!(cut("Red [Live]").as_deref(), Some("Red"));
+        assert_eq!(cut("Red"), None);
+        assert_eq!(cut("(Red)"), None);
+        assert_eq!(cut("Red (a) b"), None);
+    }
+
+    #[test]
+    fn identical_copies_give_the_closest_length() {
+        let cands = vec![
+            cand("far", 0, Some(199_000)),
+            cand("near", 0, Some(197_400)),
+            cand("mid", 0, Some(195_000)),
+        ];
+        assert_eq!(pick_best(cands, 197_000), Some(tagged("near", 0)));
+    }
+
+    #[test]
+    fn a_shifted_version_is_never_chosen_even_with_the_closest_length() {
+        let cands = vec![
+            cand("a", 0, Some(196_000)),
+            cand("b", 0, Some(198_500)),
+            cand("c", 0, Some(195_500)),
+            cand("odd", 2_000, Some(197_000)),
+        ];
+        // Of the agreeing three, the closest length (1.0 s, 1.5 s, 1.5 s).
+        assert_eq!(pick_best(cands, 197_000), Some(tagged("a", 0)));
+    }
+
+    #[test]
+    fn the_majority_timing_wins_over_a_shifted_one() {
+        let cands = vec![
+            cand("late", 1_500, Some(197_000)),
+            cand("x", 0, Some(198_000)),
+            cand("y", 0, Some(198_500)),
+        ];
+        assert_eq!(pick_best(cands, 197_000), Some(tagged("x", 0)));
+    }
+
+    #[test]
+    fn candidates_more_than_three_seconds_off_are_ignored() {
+        let cands = vec![
+            cand("off", 0, Some(190_000)),
+            cand("edge", 0, Some(200_100)),
+            cand("ok", 0, Some(199_000)),
+        ];
+        assert_eq!(pick_best(cands, 197_000), Some(tagged("ok", 0)));
+        let far = vec![cand("off", 0, Some(190_000))];
+        assert_eq!(pick_best(far, 197_000), None);
+        assert_eq!(pick_best(Vec::new(), 197_000), None);
+    }
+
+    #[test]
+    fn a_single_candidate_is_returned_even_without_a_length() {
+        let one = cand("only", 0, None);
+        assert_eq!(pick_best(vec![one], 197_000), Some(tagged("only", 0)));
+    }
+
+    #[test]
+    fn versions_with_nothing_in_common_fall_back_to_the_closer_length() {
+        let make = |text: &str, millis: u64| Candidate {
+            lrc: text.into(),
+            lines: parse_lrc(text),
+            duration_ms: Some(millis),
+        };
+        let a = make("[00:01.00] one\n", 196_000);
+        let b = make("[00:01.00] two\n", 197_100);
+        assert_eq!(
+            pick_best(vec![a, b], 197_000),
+            Some("[00:01.00] two\n".into())
+        );
+    }
+
+    #[test]
+    fn repeated_lines_are_matched_in_order() {
+        // A chorus sung twice: each occurrence is compared with its own.
+        let text = |shift: i64| {
+            format!(
+                "[00:{:02}.00] verse\n[00:{:02}.00] chorus\n[00:{:02}.00] bridge\n[00:{:02}.00] chorus\n",
+                10 + shift,
+                20 + shift,
+                30 + shift,
+                40 + shift
+            )
+        };
+        let a = times_by_text(&parse_lrc(&text(0)));
+        let b = times_by_text(&parse_lrc(&text(1)));
+        assert_eq!(shift_between(&a, &b), Some(-1000));
+        assert_eq!(shift_between(&a, &a), Some(0));
+        // Under three shared lines there is no value.
+        let few = times_by_text(&parse_lrc("[00:01.00] verse\n[00:02.00] chorus\n"));
+        assert_eq!(shift_between(&a, &few), None);
+    }
+
+    #[test]
+    fn candidates_skip_entries_without_synced_lyrics() {
+        let body = list(&[
+            serde_json::json!({"duration": 1.0, "syncedLyrics": null}),
+            serde_json::json!({"duration": 1.0, "syncedLyrics": "no tags"}),
+            entry("a", 0, 197.0),
+        ]);
+        let got = candidates(&body);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].duration_ms, Some(197_000));
+        assert!(candidates("junk").is_empty());
+    }
+
+    #[test]
+    fn markers_of_the_older_lookups_are_ignored() {
+        assert_eq!(NONE_EXT, "none3");
+        let dir = std::env::temp_dir().join(format!("vale-lookup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = DiskCache::new(dir.clone());
+        let now = 1_800_000_000;
+        let old = dir.join(format!("{}.none2", key_hash("old")));
+        std::fs::write(old, now.to_string()).unwrap();
+        assert_eq!(cache.read("old", now), Cached::Miss);
+        cache.write_nothing("new", now);
+        assert_eq!(cache.read("new", now), Cached::Nothing(now));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
