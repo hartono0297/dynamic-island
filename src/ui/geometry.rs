@@ -1271,6 +1271,8 @@ mod tests {
 
     #[test]
     fn the_looking_cat_stays_in_the_idle_island() {
+        use crate::theme::CatAccessory;
+        use crate::ui::cat_style::accessory_corners;
         use crate::ui::robot::{EAR_STROKE, Expr, GRID, Pose, Side, ear_drawn, face, mark_bounds};
         // Every face the idle view shows (`choose_expr`), open-eyed and blinking.
         let faces = [Expr::Idle, Expr::Happy, Expr::Think, Expr::Sad, Expr::Sleep];
@@ -1332,6 +1334,29 @@ mod tests {
                                             "{style:?} {size:?} {expr:?} blink {blink} v {v}: ({x}, {y}) reaches the clock at {}",
                                             c.x
                                         );
+                                    }
+                                }
+                            }
+                            // Every accessory's boxes (a piece's corners, the ear ones
+                            // turned and lifted with their ear, the glasses on the eyes)
+                            // under the same pose: inside the island, left of the clock.
+                            for acc in CatAccessory::ALL {
+                                let corners = accessory_corners(*acc, f.ears);
+                                for v in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+                                    let pose = Pose::default().looking_as(expr, v);
+                                    for &(p, eyes) in &corners {
+                                        let (x, y) = drawn(area, &f, pose, p, eyes);
+                                        assert!(
+                                            shape_contains(style, s, x, y),
+                                            "{style:?} {size:?} {acc:?} {expr:?} v {v}: ({x}, {y}) leaves the island"
+                                        );
+                                        if let Some(c) = l.clock {
+                                            assert!(
+                                                x < c.x,
+                                                "{style:?} {size:?} {acc:?} {expr:?} v {v}: ({x}, {y}) reaches the clock at {}",
+                                                c.x
+                                            );
+                                        }
                                     }
                                 }
                             }

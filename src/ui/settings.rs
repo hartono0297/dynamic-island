@@ -1451,6 +1451,7 @@ impl Settings {
                 self.model.notch_opacity,
             ),
             robot: self.model.robot,
+            cat: super::cat_style::CatLook::default(),
             lang: self.model.lang,
             hover: self.hover,
             pressed: self.pressed,

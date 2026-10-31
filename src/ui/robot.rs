@@ -11,6 +11,7 @@
 //! and arms the timers it asks for.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, NaiveTime};
@@ -28,14 +29,14 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::core::Result as WinResult;
 use windows_numerics::{Matrix3x2, Vector2};
 
+use super::cat_style::{CatLook, Placed, RIM_WIDTH};
 use super::geometry::Rect;
 use crate::i18n::Key;
 use crate::model::{NoticeKind, View};
+use crate::theme::{CatAccessory, CatColor};
 
-/// Head and ears (the logo's tile).
+/// The brand colour: the logo, and the Terracotta coat (`cat_style::CatLook`).
 pub const TERRACOTTA: u32 = 0xE2683C;
-/// Eyes (the logo's island).
-pub const ESPRESSO: u32 = 0x17120F;
 /// The marks beside the head (the logo's dot).
 pub const CREAM: u32 = 0xF4EDE4;
 
@@ -173,14 +174,6 @@ pub enum Ink {
     Cream,
 }
 
-impl Ink {
-    fn rgb(self) -> u32 {
-        match self {
-            Ink::Espresso => ESPRESSO,
-            Ink::Cream => CREAM,
-        }
-    }
-}
 
 /// A stroked line of the face, with round caps and joins.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -198,7 +191,7 @@ pub enum Line {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Seg {
+pub(crate) enum Seg {
     Move(f32, f32),
     Line(f32, f32),
     /// Control point, then end point (an SVG `q`, made absolute).
@@ -219,7 +212,7 @@ impl Line {
         }
     }
 
-    fn ink(self) -> Ink {
+    pub(super) fn ink(self) -> Ink {
         match self {
             Line::Zz | Line::Note { .. } => Ink::Cream,
             _ => Ink::Espresso,
@@ -509,7 +502,7 @@ pub enum Side {
 
 impl Side {
     /// The point an ear turns around when it droops.
-    fn pivot(self) -> Vector2 {
+    pub(super) fn pivot(self) -> Vector2 {
         match self {
             Side::Left => Vector2::new(17.0, 30.0),
             Side::Right => Vector2::new(47.0, 30.0),
@@ -517,7 +510,7 @@ impl Side {
     }
 
     /// Degrees (clockwise) an ear turns for `droop`: both turn outward.
-    fn turn(self, droop: f32) -> f32 {
+    pub(super) fn turn(self, droop: f32) -> f32 {
         match self {
             Side::Left => -droop * 3.0,
             Side::Right => droop * 3.0,
@@ -597,7 +590,7 @@ fn heart(x: f32, y: f32) -> Vec<Seg> {
 
 /// A path the painter builds once and keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Shape {
+pub(super) enum Shape {
     Line(Line),
     Ear(Side, f32),
     Head,
@@ -626,9 +619,13 @@ impl Shape {
 /// The cat's paths in grid units, built on first use and kept. The render
 /// target's transform scales them (and their widths) to any size.
 pub struct RobotPainter {
-    factory: ID2D1Factory,
+    pub(super) factory: ID2D1Factory,
     paths: RefCell<Vec<(Shape, ID2D1PathGeometry)>>,
-    round: ID2D1StrokeStyle,
+    /// The calico patches cut to the silhouette, per ear state (`cat_style`).
+    pub(super) calico: RefCell<Vec<((u32, u32), [ID2D1PathGeometry; 2])>>,
+    /// Each accessory's pieces and their paths (`cat_style`).
+    pub(super) extras: RefCell<Vec<(CatAccessory, Rc<Vec<Placed>>)>>,
+    pub(super) round: ID2D1StrokeStyle,
 }
 
 impl RobotPainter {
@@ -650,12 +647,14 @@ impl RobotPainter {
         Ok(Self {
             factory: factory.clone(),
             paths: RefCell::new(Vec::new()),
+            calico: RefCell::new(Vec::new()),
+            extras: RefCell::new(Vec::new()),
             round,
         })
     }
 
     /// `shape`'s path, built the first time it is asked for.
-    fn path(&self, shape: Shape) -> Option<ID2D1PathGeometry> {
+    pub(super) fn path(&self, shape: Shape) -> Option<ID2D1PathGeometry> {
         if let Some((_, g)) = self.paths.borrow().iter().find(|(s, _)| *s == shape) {
             return Some(g.clone());
         }
@@ -667,6 +666,12 @@ impl RobotPainter {
     /// Draws the cat filling the square `area` (its 64-unit grid scaled to
     /// `area.w`), raised by the pose's lift and bounce, at `alpha`. The
     /// render target's transform is restored; the brush colour is not.
+    ///
+    /// `look` is the coat and accessory. The order is one silhouette (see
+    /// `cat_style`): the Black cat's rim, the ears and head in one colour,
+    /// the calico patches, the face marks, the accessory. A caller that
+    /// fades the cat does it with a layer round this call, as the renderer
+    /// does, so the passes do not show through one another.
     pub fn paint(
         &self,
         rt: &ID2D1RenderTarget,
@@ -675,6 +680,7 @@ impl RobotPainter {
         expr: Expr,
         pose: Pose,
         alpha: f32,
+        look: CatLook,
     ) {
         if area.w <= 0.0 {
             return;
@@ -717,8 +723,27 @@ impl RobotPainter {
             let mut previous = Matrix3x2::default();
             rt.GetTransform(&mut previous);
             let world = local * previous;
-            // Ears behind the head: a triangle with a fat round stroke.
-            brush.SetColor(&color(TERRACOTTA, 1.0));
+            // 1. The Black cat's rim, under everything: the ears stroked
+            // wider than their own stroke and the head stroked wider than
+            // its outline, so it reaches `RIM_WIDTH` past the silhouette.
+            if let Some(rim) = look.rim() {
+                brush.SetColor(&color(rim, 1.0));
+                for side in [Side::Left, Side::Right] {
+                    if let Some(g) = self.path(Shape::Ear(side, face.ears.up)) {
+                        let turn =
+                            Matrix3x2::rotation_around(side.turn(face.ears.droop), side.pivot());
+                        rt.SetTransform(&(turn * world));
+                        rt.DrawGeometry(&g, brush, EAR_STROKE + 2.0 * RIM_WIDTH, &self.round);
+                    }
+                }
+                rt.SetTransform(&world);
+                if let Some(g) = self.path(Shape::Head) {
+                    rt.DrawGeometry(&g, brush, 2.0 * RIM_WIDTH, &self.round);
+                }
+            }
+            // 2. The silhouette in one colour: ears behind the head, a
+            // triangle with a fat round stroke, then the head.
+            brush.SetColor(&color(look.head_rgb(), 1.0));
             for side in [Side::Left, Side::Right] {
                 if let Some(g) = self.path(Shape::Ear(side, face.ears.up)) {
                     let turn = Matrix3x2::rotation_around(side.turn(face.ears.droop), side.pivot());
@@ -731,11 +756,17 @@ impl RobotPainter {
             if let Some(g) = self.path(Shape::Head) {
                 rt.FillGeometry(&g, brush, None);
             }
-            rt.SetTransform(&(Matrix3x2::translation(pose.eye_dx_dip / k, 0.0) * world));
+            // 3. Calico: the patches, cut to the whole silhouette.
+            if look.color == CatColor::Calico {
+                self.paint_patches(rt, brush, &world, face.ears, alpha);
+            }
+            // 4. The face marks.
+            let eyes = Matrix3x2::translation(pose.eye_dx_dip / k, 0.0) * world;
+            rt.SetTransform(&eyes);
             for part in &face.parts {
                 match *part {
                     Part::Pill { x, y, w, h, rx, ry } => {
-                        brush.SetColor(&color(ESPRESSO, 1.0));
+                        brush.SetColor(&color(look.eye_rgb(), 1.0));
                         rt.FillRoundedRectangle(
                             &D2D1_ROUNDED_RECT {
                                 radiusX: rx,
@@ -746,12 +777,12 @@ impl RobotPainter {
                         );
                     }
                     Part::Dot { cx, cy, r, ink } => {
-                        brush.SetColor(&color(ink.rgb(), 1.0));
+                        brush.SetColor(&color(look.ink_rgb(ink), 1.0));
                         rt.FillEllipse(&circle(cx, cy, r), brush);
                     }
                     Part::Stroke(line) => {
                         if let Some(g) = self.path(Shape::Line(line)) {
-                            brush.SetColor(&color(line.ink().rgb(), line.alpha()));
+                            brush.SetColor(&color(look.ink_rgb(line.ink()), line.alpha()));
                             rt.DrawGeometry(&g, brush, line.width(), &self.round);
                         }
                     }
@@ -763,6 +794,8 @@ impl RobotPainter {
                     }
                 }
             }
+            // 5. The accessory, on top of everything.
+            self.paint_accessory(rt, brush, look, face.ears, (&world, &eyes), alpha);
             rt.SetTransform(&previous);
         }
     }
@@ -820,7 +853,7 @@ impl RobotPainter {
 
 /// Figures from `segs`: each `Move` starts one, `Close` closes it; figures
 /// left open are drawn as lines and never filled.
-fn path(factory: &ID2D1Factory, segs: &[Seg]) -> WinResult<ID2D1PathGeometry> {
+pub(super) fn path(factory: &ID2D1Factory, segs: &[Seg]) -> WinResult<ID2D1PathGeometry> {
     unsafe {
         let path = factory.CreatePathGeometry()?;
         let sink = path.Open()?;

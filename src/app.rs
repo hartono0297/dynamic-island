@@ -107,6 +107,7 @@ use crate::ui::motion::{
     FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
     content_alpha_from, fade_floor, mole_code, morph_ease, page_fade_frame, panel_fade, transition,
 };
+use crate::ui::cat_style::CatLook;
 use crate::ui::notch_fill;
 use crate::ui::panel_layout::{CliHead, cli_layout};
 use crate::ui::render::{
@@ -5010,6 +5011,7 @@ impl App {
             dock: self.dock.frame(),
             tiles: state.tiles(),
             palette: theme::island_palette(&self.config),
+            cat: CatLook::of(&self.config),
             fill_alpha,
             legibility: notch_fill::legibility(fill_alpha),
             clock: (self.config.idle_clock && self.drawn == View::Idle)

@@ -40,6 +40,7 @@ use super::geometry::{
 };
 use super::icons::{Icon, IconSet};
 use super::notch_fill::legibility;
+use super::cat_style::CatLook;
 use super::robot::{Expr, Pose, RobotPainter};
 use super::settings_layout::{
     Align, Button, ButtonKind, CARD_RADIUS, CONTROL_RADIUS, Chip, Control, EXTERNAL_GLYPH,
@@ -73,6 +74,8 @@ pub struct Scene<'a> {
     pub notch_alpha: f32,
     /// Bata is on: the preview shows it in the album art's place.
     pub robot: bool,
+    /// The cat's colour and accessory in the preview.
+    pub cat: CatLook,
     pub lang: Lang,
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
@@ -1013,6 +1016,7 @@ impl Painter<'_> {
                 Expr::Music,
                 Pose::default(),
                 self.alpha,
+                s.cat,
             );
         } else {
             // Album art: an accent tile, darker toward the bottom, with a note.

@@ -56,6 +56,7 @@ use super::geometry::{
 };
 use super::icons::{Icon, IconSet};
 use super::motion::Transit;
+use super::cat_style::CatLook;
 use super::robot::{Expr, Pose, RobotPainter, eyes_area};
 use super::shelf_motion::ShelfMotion;
 use super::window::IslandWindow;
@@ -152,6 +153,8 @@ pub struct Frame<'a> {
     pub tiles: Vec<Tile>,
     /// Island colours (surface and accent).
     pub palette: Palette,
+    /// The notch cat's colour and accessory (Settings -> Kucing).
+    pub cat: CatLook,
     /// The surface fill's alpha this frame (`notch_fill`): 1 for a solid
     /// island and always for the open panel; less for a see-through closed
     /// island, blended with the morph.
@@ -386,6 +389,15 @@ pub struct RobotFrame {
     pub pose: Pose,
 }
 
+/// Which of the demo's cat sheets `draw_robot_sheet` draws.
+#[cfg(debug_assertions)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SheetKind {
+    Faces,
+    Colors,
+    Accessories,
+}
+
 /// The playback position within a track of known length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Progress {
@@ -613,6 +625,8 @@ pub struct Renderer {
     /// text, icons, equalizer, lyric and Bata are drawn with
     /// (`Frame::legibility`); 0 everywhere else, always for the panel.
     legible: std::cell::Cell<f32>,
+    /// The cat's colour and accessory for this frame (`Frame::cat`).
+    cat: std::cell::Cell<CatLook>,
 }
 
 struct Fonts {
@@ -840,6 +854,7 @@ impl Renderer {
                 shot_thumb: std::cell::RefCell::new(None),
                 robot_later: std::cell::Cell::new(None),
                 legible: std::cell::Cell::new(0.0),
+                cat: std::cell::Cell::new(CatLook::default()),
             })
         }
     }
@@ -856,6 +871,7 @@ impl Renderer {
     ) -> Result<()> {
         let opacity = opacity.clamp(0.0, 1.0);
         self.palette = frame.palette;
+        self.cat.set(frame.cat);
         self.scale = win.scale();
         self.regions = HitRegions::default();
         self.cli_caret.set(None);
@@ -909,7 +925,13 @@ impl Renderer {
     /// 48 px with their names, then a blink, the notch sizes (48, 32, 26,
     /// 20 px) and three faces at 26 px, on a dark card filling the window.
     #[cfg(debug_assertions)]
-    pub fn draw_robot_sheet(&mut self, win: &IslandWindow, palette: Palette) -> Result<()> {
+    pub fn draw_robot_sheet(
+        &mut self,
+        win: &IslandWindow,
+        palette: Palette,
+        kind: SheetKind,
+        look: CatLook,
+    ) -> Result<()> {
         self.palette = palette;
         self.scale = win.scale();
         self.regions = HitRegions::default();
@@ -929,10 +951,139 @@ impl Renderer {
             target.rt.BeginDraw();
             target.rt.Clear(Some(&color(0, 0.0)));
         }
-        self.paint_robot_sheet();
+        self.cat.set(look);
+        match kind {
+            SheetKind::Faces => self.paint_robot_sheet(),
+            SheetKind::Colors => self.paint_colors_sheet(),
+            SheetKind::Accessories => self.paint_accessories_sheet(look),
+        }
         let target = self.target.as_ref().expect("target ensured above");
         unsafe { target.rt.EndDraw(None, None) }?;
         self.present(win, 1.0)
+    }
+
+    /// `bata-colors`: the four coats, each on the surface `Auto` gives it,
+    /// as the faces of the idle island and at the notch's 26 px.
+    #[cfg(debug_assertions)]
+    fn paint_colors_sheet(&self) {
+        use super::geometry::ROBOT_COMPACT;
+        use super::robot::Expr;
+        use crate::theme::{CatColor, Surface};
+        let card = Rect {
+            x: 20.0,
+            y: 8.0,
+            w: 580.0,
+            h: 440.0,
+        };
+        self.set_color(self.palette.surface, 1.0);
+        self.fill_round(card, radius::PANEL);
+        let col = (card.w - 40.0) / 4.0;
+        let faces = [Expr::Idle, Expr::Happy, Expr::Sleep, Expr::Alert];
+        for (c, color) in CatColor::ALL.iter().copied().enumerate() {
+            let surface = Surface::Auto.resolve(color, true);
+            let pal = theme::island(Accent::default(), surface);
+            let look = CatLook {
+                color,
+                accessory: self.cat.get().accessory,
+            };
+            let cell = Rect {
+                x: card.x + 20.0 + c as f32 * col + 4.0,
+                y: card.y + 16.0,
+                w: col - 8.0,
+                h: card.h - 32.0,
+            };
+            self.set_color(pal.surface, 1.0);
+            self.fill_round(cell, radius::NOTICE / 1.5);
+            self.cat.set(look);
+            for (row, expr) in faces.into_iter().enumerate() {
+                let size = 64.0;
+                let area = Rect {
+                    x: cell.x + (cell.w - size) / 2.0,
+                    y: cell.y + 12.0 + row as f32 * 84.0,
+                    w: size,
+                    h: size,
+                };
+                self.paint_robot(area, RobotFrame { expr, pose: Pose::default() });
+            }
+            // The notch's own size, idle and blinking.
+            for (i, blink) in [false, true].into_iter().enumerate() {
+                let area = Rect {
+                    x: cell.x + cell.w / 2.0 - 34.0 + i as f32 * 42.0,
+                    y: cell.y + 12.0 + 4.0 * 84.0 + 4.0,
+                    w: ROBOT_COMPACT,
+                    h: ROBOT_COMPACT,
+                };
+                let pose = Pose { blink, ..Pose::default() };
+                self.paint_robot(area, RobotFrame { expr: Expr::Idle, pose });
+            }
+            let label = Rect {
+                y: cell.bottom() - 28.0,
+                h: 18.0,
+                ..cell
+            };
+            let name = format!("{} / {}", color.name(), surface.name());
+            self.text_colored(&name, &self.fonts.small_center, label, pal.secondary, 1.0);
+        }
+
+    }
+
+    /// `bata-accessories`: every accessory on the cat in the chosen colour
+    /// (`DI_CAT_COLOR`), the idle, sad (ears turned), alert (ears up) and
+    /// sleeping faces, and at the notch's 26 px.
+    #[cfg(debug_assertions)]
+    fn paint_accessories_sheet(&self, base: CatLook) {
+        use super::geometry::ROBOT_COMPACT;
+        use super::robot::Expr;
+        use crate::theme::{CatAccessory, Surface};
+        let card = Rect {
+            x: 20.0,
+            y: 8.0,
+            w: 580.0,
+            h: 440.0,
+        };
+        let pal = theme::island(
+            Accent::default(),
+            Surface::Auto.resolve(base.color, true),
+        );
+        self.set_color(pal.surface, 1.0);
+        self.fill_round(card, radius::PANEL);
+        let n = CatAccessory::ALL.len() as f32;
+        let col = (card.w - 24.0) / n;
+        let faces = [Expr::Idle, Expr::Sad, Expr::Alert, Expr::Sleep, Expr::Happy];
+        for (c, accessory) in CatAccessory::ALL.iter().copied().enumerate() {
+            let cell = Rect {
+                x: card.x + 12.0 + c as f32 * col + 3.0,
+                y: card.y + 14.0,
+                w: col - 6.0,
+                h: card.h - 28.0,
+            };
+            self.set_color(pal.raised, 1.0);
+            self.fill_round(cell, radius::NOTICE / 1.5);
+            self.cat.set(CatLook { accessory, ..base });
+            for (row, expr) in faces.into_iter().enumerate() {
+                let size = 56.0;
+                let area = Rect {
+                    x: cell.x + (cell.w - size) / 2.0,
+                    y: cell.y + 10.0 + row as f32 * 66.0,
+                    w: size,
+                    h: size,
+                };
+                self.paint_robot(area, RobotFrame { expr, pose: Pose::default() });
+            }
+            let area = Rect {
+                x: cell.x + (cell.w - ROBOT_COMPACT) / 2.0,
+                y: cell.y + 10.0 + 5.0 * 66.0 + 6.0,
+                w: ROBOT_COMPACT,
+                h: ROBOT_COMPACT,
+            };
+            self.paint_robot(area, RobotFrame { expr: Expr::Idle, pose: Pose::default() });
+            let label = Rect {
+                y: cell.bottom() - 26.0,
+                h: 18.0,
+                ..cell
+            };
+            self.text_colored(accessory.name(), &self.fonts.small_center, label, pal.secondary, 1.0);
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -1444,7 +1595,15 @@ impl Renderer {
             }
         }
         self.robot
-            .paint(&target.rt, &target.brush, area, robot.expr, robot.pose, 1.0);
+            .paint(
+                &target.rt,
+                &target.brush,
+                area,
+                robot.expr,
+                robot.pose,
+                1.0,
+                self.cat.get(),
+            );
     }
 
     fn paint_compact(
