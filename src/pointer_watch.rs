@@ -446,7 +446,12 @@ mod tests {
             let mut peek = Peek { state: from };
             assert_eq!(peek.step(off, now), PeekState::Normal, "{from:?}");
         }
-        assert!(Peek { state: PeekState::Restored }.reset());
+        assert!(
+            Peek {
+                state: PeekState::Restored
+            }
+            .reset()
+        );
         assert!(!Peek::default().reset());
     }
 
@@ -620,11 +625,20 @@ mod tests {
             })
         };
         assert!(!get(&mut cache, t0, false));
-        assert!(!get(&mut cache, t0 + ms(500), true), "the first answer holds");
-        assert!(get(&mut cache, t0 + ms(1000), true), "a second on, asked again");
+        assert!(
+            !get(&mut cache, t0 + ms(500), true),
+            "the first answer holds"
+        );
+        assert!(
+            get(&mut cache, t0 + ms(1000), true),
+            "a second on, asked again"
+        );
         assert!(get(&mut cache, t0 + ms(1500), false));
         cache.clear();
-        assert!(!get(&mut cache, t0 + ms(1600), false), "a new approach reads");
+        assert!(
+            !get(&mut cache, t0 + ms(1600), false),
+            "a new approach reads"
+        );
         assert_eq!(reads, 3);
     }
 
@@ -667,7 +681,11 @@ mod tests {
         let mut last = 0.0;
         for _ in 0..200 {
             look.advance(ms(16));
-            assert!(look.value() >= last && look.value() <= 1.0, "{}", look.value());
+            assert!(
+                look.value() >= last && look.value() <= 1.0,
+                "{}",
+                look.value()
+            );
             last = look.value();
             if !look.moving() {
                 break;
@@ -698,7 +716,10 @@ mod tests {
         };
         // 240 ms: 4 x 60 ms, 15 x 16 ms, one jump, all the same ease.
         let (a, b, c) = (at(4, 60), at(15, 16), at(1, 240));
-        assert!((a - c).abs() < 0.001 && (b - c).abs() < 0.001, "{a} {b} {c}");
+        assert!(
+            (a - c).abs() < 0.001 && (b - c).abs() < 0.001,
+            "{a} {b} {c}"
+        );
         // About 1 - e^-2 after two time constants.
         assert!((c - 0.865).abs() < 0.01, "{c}");
     }

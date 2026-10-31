@@ -438,7 +438,12 @@ pub fn mark_bounds(part: &Part) -> (f32, f32, f32, f32) {
     let points = |segs: Vec<Seg>, pad: f32| {
         let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         let mut add = |x: f32, y: f32| {
-            b = (b.0.min(x - pad), b.1.min(y - pad), b.2.max(x + pad), b.3.max(y + pad));
+            b = (
+                b.0.min(x - pad),
+                b.1.min(y - pad),
+                b.2.max(x + pad),
+                b.3.max(y + pad),
+            );
         };
         for seg in segs {
             match seg {
@@ -536,7 +541,10 @@ pub fn ear_drawn(side: Side, ears: Ears) -> [(f32, f32); 3] {
     let a = side.turn(ears.droop).to_radians();
     ear(side, ears.up).map(|(x, y)| {
         let (dx, dy) = (x - p.X, y - p.Y);
-        (p.X + dx * a.cos() - dy * a.sin(), p.Y + dx * a.sin() + dy * a.cos())
+        (
+            p.X + dx * a.cos() - dy * a.sin(),
+            p.Y + dx * a.sin() + dy * a.cos(),
+        )
     })
 }
 

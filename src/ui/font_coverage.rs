@@ -7,11 +7,26 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 const FONTS: [(&str, &[u8]); 5] = [
-    ("DMSans-400", include_bytes!("../../assets/fonts/DMSans-400.ttf")),
-    ("DMSans-500", include_bytes!("../../assets/fonts/DMSans-500.ttf")),
-    ("DMSans-600", include_bytes!("../../assets/fonts/DMSans-600.ttf")),
-    ("DMMono-400", include_bytes!("../../assets/fonts/DMMono-400.ttf")),
-    ("DMMono-500", include_bytes!("../../assets/fonts/DMMono-500.ttf")),
+    (
+        "DMSans-400",
+        include_bytes!("../../assets/fonts/DMSans-400.ttf"),
+    ),
+    (
+        "DMSans-500",
+        include_bytes!("../../assets/fonts/DMSans-500.ttf"),
+    ),
+    (
+        "DMSans-600",
+        include_bytes!("../../assets/fonts/DMSans-600.ttf"),
+    ),
+    (
+        "DMMono-400",
+        include_bytes!("../../assets/fonts/DMMono-400.ttf"),
+    ),
+    (
+        "DMMono-500",
+        include_bytes!("../../assets/fonts/DMMono-500.ttf"),
+    ),
 ];
 
 /// Characters the UI draws that are NOT in the subset. They have always come
@@ -107,7 +122,8 @@ fn cmap(font: &[u8]) -> BTreeSet<u32> {
             12 => {
                 for g in 0..be32(font, sub + 12) {
                     let at = sub + 16 + 12 * g;
-                    let (start, end, gid) = (be32(font, at), be32(font, at + 4), be32(font, at + 8));
+                    let (start, end, gid) =
+                        (be32(font, at), be32(font, at + 4), be32(font, at + 8));
                     for cp in start..=end {
                         if gid + (cp - start) != 0 {
                             set.insert(cp as u32);
@@ -156,7 +172,9 @@ fn item_len(s: &str) -> usize {
                 if b.get(i + 1 + hashes) == Some(&b'"') {
                     let close = format!("\"{}", "#".repeat(hashes));
                     let body = i + 2 + hashes;
-                    i = s[body..].find(&close).map_or(s.len(), |e| body + e + close.len());
+                    i = s[body..]
+                        .find(&close)
+                        .map_or(s.len(), |e| body + e + close.len());
                     continue;
                 }
             }
@@ -202,10 +220,16 @@ fn live_source(source: &str) -> (String, Vec<String>) {
     // The attribute on its own line, so the text in a comment or literal is
     // not taken for it.
     let own_line = |s: &str, at: usize| {
-        s[..at].rsplit('\n').next().is_some_and(|l| l.trim().is_empty())
+        s[..at]
+            .rsplit('\n')
+            .next()
+            .is_some_and(|l| l.trim().is_empty())
             && s[at + CFG_TEST.len()..].starts_with(['\r', '\n'])
     };
-    while let Some((at, _)) = rest.match_indices(CFG_TEST).find(|&(at, _)| own_line(rest, at)) {
+    while let Some((at, _)) = rest
+        .match_indices(CFG_TEST)
+        .find(|&(at, _)| own_line(rest, at))
+    {
         live.push_str(&rest[..at]);
         let item = &rest[at + CFG_TEST.len()..];
         let len = item_len(item);
@@ -236,7 +260,9 @@ fn drawn_chars(source: &str) -> BTreeSet<char> {
         while let Some(i) = rest.find("\\u{") {
             rest = &rest[i + 3..];
             if let Some(end) = rest.find('}')
-                && let Some(c) = u32::from_str_radix(&rest[..end], 16).ok().and_then(char::from_u32)
+                && let Some(c) = u32::from_str_radix(&rest[..end], 16)
+                    .ok()
+                    .and_then(char::from_u32)
                 && !c.is_ascii()
             {
                 set.insert(c);
@@ -250,7 +276,11 @@ fn drawn_chars(source: &str) -> BTreeSet<char> {
 fn test_module_files(file: &Path, source: &str) -> Vec<std::path::PathBuf> {
     let dir = file.parent().expect("parent");
     let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let base = if matches!(stem, "mod" | "main" | "lib") { dir.to_path_buf() } else { dir.join(stem) };
+    let base = if matches!(stem, "mod" | "main" | "lib") {
+        dir.to_path_buf()
+    } else {
+        dir.join(stem)
+    };
     live_source(source)
         .1
         .into_iter()
@@ -271,7 +301,10 @@ const SUBSET_COUNTS: [(&str, usize); 5] = [
 ];
 
 fn in_subset(map: &BTreeSet<u32>) -> usize {
-    SUBSET_RANGES.iter().map(|&(lo, hi)| map.range(lo..=hi).count()).sum()
+    SUBSET_RANGES
+        .iter()
+        .map(|&(lo, hi)| map.range(lo..=hi).count())
+        .sum()
 }
 
 #[test]
@@ -285,7 +318,11 @@ fn every_font_keeps_its_latin_subset() {
                 assert!(map.contains(&cp), "{name} lost U+{cp:04X}");
             }
         }
-        assert_eq!(in_subset(&map), count, "{name}: glyph count in the subset changed");
+        assert_eq!(
+            in_subset(&map),
+            count,
+            "{name}: glyph count in the subset changed"
+        );
     }
 }
 
@@ -298,9 +335,17 @@ fn the_fonts_have_the_symbols_the_ui_draws() {
     let mono = "\u{B7}\u{D7}\u{2026}\u{203A}\u{2013}\u{2014}\u{2212}%";
     for (name, bytes) in FONTS {
         let map = cmap(bytes);
-        let want = if name.starts_with("DMSans") { sans } else { mono };
+        let want = if name.starts_with("DMSans") {
+            sans
+        } else {
+            mono
+        };
         for c in want.chars() {
-            assert!(map.contains(&(c as u32)), "{name} lacks U+{:04X} {c}", c as u32);
+            assert!(
+                map.contains(&(c as u32)),
+                "{name} lacks U+{:04X} {c}",
+                c as u32
+            );
         }
     }
 }
@@ -314,8 +359,11 @@ fn every_character_the_sources_draw_is_covered() {
     // Only the sans is required here. The mono draws terminal and clipboard
     // text (its symbols are checked above); a literal the mono lacks falls
     // back to a system font like any user character does.
-    let sans: Vec<BTreeSet<u32>> =
-        FONTS.iter().filter(|(n, _)| n.starts_with("DMSans")).map(|(_, b)| cmap(b)).collect();
+    let sans: Vec<BTreeSet<u32>> = FONTS
+        .iter()
+        .filter(|(n, _)| n.starts_with("DMSans"))
+        .map(|(_, b)| cmap(b))
+        .collect();
     let sources: Vec<(std::path::PathBuf, String)> = files
         .into_iter()
         .map(|f| {
@@ -323,8 +371,10 @@ fn every_character_the_sources_draw_is_covered() {
             (f, text)
         })
         .collect();
-    let test_only: Vec<std::path::PathBuf> =
-        sources.iter().flat_map(|(f, text)| test_module_files(f, text)).collect();
+    let test_only: Vec<std::path::PathBuf> = sources
+        .iter()
+        .flat_map(|(f, text)| test_module_files(f, text))
+        .collect();
     assert!(
         test_only.iter().any(|f| f.ends_with("font_coverage.rs")),
         "test-only modules not found: {test_only:?}"
@@ -343,15 +393,25 @@ fn every_character_the_sources_draw_is_covered() {
             }
         }
     }
-    assert!(missing.is_empty(), "uncovered glyphs:\n{}", missing.join("\n"));
+    assert!(
+        missing.is_empty(),
+        "uncovered glyphs:\n{}",
+        missing.join("\n")
+    );
     // The scan reaches live code past a test-only helper near the top of a
     // file (i18n.rs `mod current`, mole.rs `argv`).
     let drawn_in = |name: &str| {
         let (_, text) = sources.iter().find(|(f, _)| f.ends_with(name)).expect(name);
         drawn_chars(text)
     };
-    assert!(drawn_in("i18n.rs").contains(&'\u{21B3}'), "i18n.rs not scanned past `mod current`");
-    assert!(drawn_in("mole.rs").contains(&'\u{201B}'), "mole.rs not scanned past `argv`");
+    assert!(
+        drawn_in("i18n.rs").contains(&'\u{21B3}'),
+        "i18n.rs not scanned past `mod current`"
+    );
+    assert!(
+        drawn_in("mole.rs").contains(&'\u{201B}'),
+        "mole.rs not scanned past `argv`"
+    );
 }
 
 #[test]

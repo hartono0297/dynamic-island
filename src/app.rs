@@ -100,10 +100,9 @@ use crate::ui::editor::{self, EditorKind, EditorResult, WM_APP_EDITOR_RESULT};
 use crate::ui::frame_clock::{FrameClock, WM_APP_FRAME};
 use crate::ui::geometry::{
     AA_MARGIN, ANIM_MS, LYRIC_HOLD_MS, LYRIC_MAX_W, LYRIC_MIN_W, LYRIC_RESIZE_MS, NOTCH_H_DEFAULT,
-    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, WINDOW_W, island_contains,
-    lerp_shape, lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset,
-    lyric_shape_sized, lyric_target_w, lyric_width_min, panel_kind, shape_for, shape_sized,
-    shape_with_robot_sized,
+    NOTCH_W_DEFAULT, NotchSize, ShapeKind, ShapeRect, Under, WINDOW_W, island_contains, lerp_shape,
+    lyric_box_w, lyric_max_w, lyric_scroll_end_ms, lyric_scroll_offset, lyric_shape_sized,
+    lyric_target_w, lyric_width_min, panel_kind, shape_for, shape_sized, shape_with_robot_sized,
 };
 use crate::ui::motion::{
     FadeStart, PAGE_FADE_MS, Reveal, SlideStrip, Snap, SubView, Transit, Transition,
@@ -3828,10 +3827,7 @@ impl App {
         else {
             return;
         };
-        let (x, y) = (
-            (pt.x - origin.0) as f32 / k,
-            (pt.y - origin.1) as f32 / k,
-        );
+        let (x, y) = ((pt.x - origin.0) as f32 / k, (pt.y - origin.1) as f32 / k);
         let style = self.config.style;
         let pill = shape_sized(style, self.notch_size(), ShapeKind::Eyes);
         let in_zone = pointer_watch::peek_zone(normal).contains(x, y);
@@ -3844,8 +3840,10 @@ impl App {
         // The walk over the windows only when a shrink is possible, once on
         // the approach and at most once a second while the pointer stays.
         let candidate = before == PeekState::Normal && in_zone && !over_normal;
-        let window_under =
-            candidate && self.under_cache.get(now, || window_under_notch(origin, k, normal));
+        let window_under = candidate
+            && self
+                .under_cache
+                .get(now, || window_under_notch(origin, k, normal));
         let inputs = PeekInputs {
             eligible: true,
             in_zone,

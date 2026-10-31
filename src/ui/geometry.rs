@@ -1374,7 +1374,8 @@ mod tests {
                         }
                         // The open eyes slide on inside the head, with room to spare.
                         let pose = Pose::default().looking(1.0);
-                        let (eye_l, eye_r) = (21.2 - pose.eye_dx_dip / k, 42.8 + pose.eye_dx_dip / k);
+                        let (eye_l, eye_r) =
+                            (21.2 - pose.eye_dx_dip / k, 42.8 + pose.eye_dx_dip / k);
                         assert!(eye_l > 11.0 && eye_r < 53.0, "eyes {eye_l}..{eye_r}");
                     }
                 }
@@ -1401,10 +1402,27 @@ mod tests {
                 let r = EYES_H / 2.0;
                 let (bx, by) = (eyes.x + 0.5, eyes.y + eyes.h - 0.5);
                 assert!(!shape_contains(style, eyes, bx, by));
-                assert!(shape_contains(style, eyes, eyes.x + r, eyes.y + eyes.h - 0.5));
+                assert!(shape_contains(
+                    style,
+                    eyes,
+                    eyes.x + r,
+                    eyes.y + eyes.h - 0.5
+                ));
                 // The shoulders still curve in from the screen edge.
-                assert!(island_contains(style, eyes, eyes.x - 1.0, eyes.y + 0.5, 0.0));
-                assert!(!island_contains(style, eyes, eyes.x - 1.0, eyes.y + r - 0.5, 0.0));
+                assert!(island_contains(
+                    style,
+                    eyes,
+                    eyes.x - 1.0,
+                    eyes.y + 0.5,
+                    0.0
+                ));
+                assert!(!island_contains(
+                    style,
+                    eyes,
+                    eyes.x - 1.0,
+                    eyes.y + r - 0.5,
+                    0.0
+                ));
                 // The notch it shrinks from keeps its 12 dip shoulders.
                 assert_eq!(shoulder_depth(normal), SHOULDER);
             }
