@@ -1,0 +1,11 @@
+//! The notification history (the Notifikasi page): a capped list of the
+//! Windows toasts the island already catches, optionally kept in an
+//! encrypted file. The pure parts (`store`, `time`, the `persist` format) are
+//! tested without Windows; `app_notif` is the island's side. See
+//! docs/memory/notification-history.md.
+
+pub mod persist;
+pub mod store;
+pub mod time;
+
+pub use store::{NotifEntry, NotifHistory, clamp_cap, logo_key, route_toast};

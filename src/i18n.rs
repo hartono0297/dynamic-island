@@ -500,6 +500,7 @@ keys! {
     PageMedia => "Musik", "Music";
     PageMixer => "Mixer", "Mixer";
     PageClipboard => "Clipboard", "Clipboard";
+    PageNotifications => "Notifikasi", "Notifications";
     MixerMaster => "Volume utama", "Master volume";
     MixerSystemSounds => "Suara sistem", "System sounds";
     MixerEmpty => "Belum ada aplikasi yang bersuara", "No app is playing sound";
@@ -715,6 +716,42 @@ keys! {
     ClipClear => "Hapus riwayat", "Clear history";
     ClipClearDesc => "Item tersemat tetap disimpan", "Pinned items are kept";
     ClipClearButton => "Hapus", "Clear";
+
+    // The Notifikasi page and Settings → Fitur → Notifikasi.
+    NotifJustNow => "baru saja", "just now";
+    NotifYesterday => "Kemarin", "Yesterday";
+    NotifPause => "Jeda", "Pause";
+    NotifClearAll => "Hapus semua", "Clear all";
+    NotifSure => "Yakin?", "Sure?";
+    NotifOpen => "Buka", "Open";
+    NotifMute => "Kecualikan app ini", "Exclude this app";
+    NotifRemove => "Hapus dari Vale", "Remove from Vale";
+    NotifOff => "Simpan notifikasi mati", "Saving notifications is off";
+    NotifEmpty => "Belum ada notifikasi", "No notifications yet";
+    NotifEmptyHint => "Notifikasi Windows yang masuk muncul di sini",
+        "New Windows notifications show up here";
+    NotifPaused => "Dijeda, notifikasi baru tidak disimpan",
+        "Paused, new notifications are not kept";
+    NotifNoAccess => "Izin notifikasi belum diberikan", "Notification access not granted";
+    NotifOpenSettings => "Buka pengaturan", "Open settings";
+    SecNotifications => "Notifikasi", "Notifications";
+    NotifRecord => "Simpan notifikasi", "Save notifications";
+    NotifRecordDesc => "Riwayat notifikasi Windows di halaman Notifikasi",
+        "Windows notifications, kept on the Notifications page";
+    NotifMax => "Jumlah maksimal", "Most kept";
+    NotifMaxDesc => "Yang paling lama keluar duluan", "The oldest go first";
+    NotifPersist => "Simpan setelah restart", "Keep after restart";
+    NotifPersistDesc => "Terenkripsi DPAPI, hanya akun ini",
+        "Encrypted with DPAPI, this account only";
+    NotifMuted => "Aplikasi dikecualikan", "Excluded apps";
+    NotifMutedDesc => "Tidak muncul di notch maupun riwayat",
+        "Shown in neither the notch nor the history";
+    NotifMutedHint => "Nama aplikasi", "App name";
+    NotifMutedAdd => "Tambah", "Add";
+    NotifMutedNone => "Belum ada yang dikecualikan", "None excluded yet";
+    NotifClearHistory => "Hapus riwayat notifikasi", "Clear notification history";
+    NotifClearHistoryDesc => "Daftar notifikasi di Windows tidak disentuh",
+        "Windows' own list is left alone";
 
     // The screenshot preview, its notices and Settings → Clipboard → Screenshot.
     ShotTitle => "Screenshot", "Screenshot";

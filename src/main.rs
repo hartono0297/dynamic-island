@@ -26,6 +26,7 @@ mod media_log;
 mod model;
 mod mole;
 mod notes;
+mod notif;
 mod pages;
 mod pointer_watch;
 mod pomodoro;
